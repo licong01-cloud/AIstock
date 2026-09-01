@@ -247,14 +247,18 @@ class HistoricalRangeOutcomePlanner:
                         )
                         if seed.exit_trade_date is None:
                             raise ValueError("episode seed lacks exact EXIT/range-end decision date")
-                        exit_date = (
-                            self._calendar.next_trading_day(
-                                policy_bundle_hash=str(request.policy_bundle_hash),
-                                current_trade_date=seed.exit_trade_date,
+                        if seed.episode_closed:
+                            projected_exit_date = (
+                                self._calendar.next_trading_day(
+                                    policy_bundle_hash=str(request.policy_bundle_hash),
+                                    current_trade_date=seed.exit_trade_date,
+                                )
+                                if projection is HistoricalRangeOutcomeProjection.EXECUTABLE
+                                else seed.exit_trade_date
                             )
-                            if seed.episode_closed and projection is HistoricalRangeOutcomeProjection.EXECUTABLE
-                            else seed.exit_trade_date
-                        )
+                            exit_date = max(projected_exit_date, earliest_sell)
+                        else:
+                            exit_date = seed.exit_trade_date
                         timeline = (
                             seed.decision_trade_date,
                             intended_entry,

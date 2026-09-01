@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import is_vnpy_style_algo
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandleStatus
+from backend.services.simulation_execution.broker import BrokerBackend, OrderHandleStatus
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     IntentPreflightStatus,

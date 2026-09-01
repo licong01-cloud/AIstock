@@ -1,5 +1,23 @@
 schema_version: aistock_validation_plans_v1
 plans:
+  - plan_key: platform_api_backend
+    title: Shared Platform API contract tests
+    module: platform.api
+    level: L2
+    command_key: nox_platform_api_backend
+    nox_session: platform_api_backend
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 120
+    evidence_kinds: [pytest]
   - plan_key: advisory_historical_range_backend
     title: Advisory historical range foundation regressions
     module: advisory.historical_range
@@ -18,6 +36,42 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: advisory_phase0b_backend
+    title: Advisory Phase 0B candidate-quality regressions
+    module: advisory.candidate_quality
+    level: L2
+    command_key: nox_advisory_phase0b_backend
+    nox_session: advisory_phase0b_backend
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
+  - plan_key: advisory_modeling_backend
+    title: Advisory short-rebound modeling contract regressions
+    module: advisory.modeling
+    level: L2
+    command_key: nox_advisory_modeling_backend
+    nox_session: advisory_modeling_backend
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 180
+    evidence_kinds: [pytest]
   - plan_key: advisory_dev_input_onboarding_backend
     title: Advisory DEV input onboarding backend regressions
     module: advisory.dev_input_onboarding
@@ -26,6 +80,8 @@ plans:
     nox_session: advisory_dev_input_onboarding_backend
     ci_lane: backend
     enabled: true
+    execution_mode: delegated
+    requires_dev_db: true
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -36,16 +92,7 @@ plans:
     runner_enabled: false
     max_duration_seconds: 300
     evidence_kinds: [pytest]
-    resource_policy:
-      resource_mode: isolated_write
-      creates_validation_resources: true
-      resource_types: [temporary_postgresql_database]
-      allowed_db_targets: [dev_db]
-      forbidden_db_targets: [prod_db]
-      cleanup_required: true
-      cleanup_policy:
-        strategy: pytest_finalizer_drop_database
-        cleanup_failure_severity: P0
+    resource_policy: existing_dev_db
   - plan_key: l0
     title: L0 static guardrail gate
     module: validation_center
@@ -82,6 +129,43 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: qe_long_trend_phase3_platform
+    title: QE F-014 long-trend Phase 3 persistence and operator contracts
+    module: qe.long_trend_evaluation
+    level: L2
+    command_key: nox_qe_long_trend_phase3_platform
+    nox_session: qe_long_trend_phase3_platform
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, schema, api, mcp]
+  - plan_key: qe_long_trend_phase4_ui
+    title: QE F-014 long-trend Phase 4 Loop and Archive UI contracts
+    module: qe.long_trend_evaluation
+    level: L2
+    command_key: nox_qe_long_trend_phase4_ui
+    nox_session: qe_long_trend_phase4_ui
+    ci_lane: frontend
+    frontend_test_path: tests/quantevolver/qe_long_trend_evaluation.spec.ts
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: []
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [tsc, playwright]
   - plan_key: qe_sector_risk_overlay_backend
     title: QE sector-risk overlay backend contracts
     module: qe.sector_risk_overlay
@@ -101,7 +185,7 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [pytest]
   - plan_key: guardrail_changed_files
-    title: Development guardrail staged/changed files gate
+    title: Development guardrail and unauthorized backend process-control changed-files gate
     module: development_guardrails
     level: L0
     command_key: nox_guardrail_changed_files
@@ -314,6 +398,7 @@ plans:
     command_key: nox_validation_center_ui
     nox_session: validation_center_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8011, 8012]
@@ -332,6 +417,7 @@ plans:
     command_key: nox_validation_center_live_readonly
     nox_session: validation_center_live_readonly
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: false
     allowed_backend_ports: [8011, 8012]
@@ -349,6 +435,7 @@ plans:
     command_key: nox_validation_center_real_port_ui
     nox_session: validation_center_real_port_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011, 8012]
@@ -386,6 +473,7 @@ plans:
     command_key: nox_qe_archive_data_quality
     nox_session: qe_archive_data_quality
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -460,6 +548,7 @@ plans:
     command_key: nox_qe_archive_l3
     nox_session: qe_archive_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011]
@@ -513,6 +602,7 @@ plans:
     ci_lane: frontend
     frontend_test_path: tests/market-regime
     enabled: true
+    execution_mode: ci
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -568,6 +658,7 @@ plans:
     command_key: nox_rl_execution_ui
     nox_session: rl_execution_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -585,6 +676,7 @@ plans:
     command_key: nox_qe_read_l3
     nox_session: qe_read_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011]
@@ -961,6 +1053,7 @@ plans:
     command_key: nox_research_assistant_ui
     nox_session: research_assistant_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: []
@@ -980,6 +1073,7 @@ plans:
     nox_session: paper_v2_backend
     ci_lane: backend
     enabled: true
+    execution_mode: ci
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -996,6 +1090,7 @@ plans:
     command_key: nox_paper_v2_l3
     nox_session: paper_v2_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -1023,6 +1118,39 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
+  - plan_key: localsim_successor_core_dev_db
+    title: LocalSIM successor account lineage replay DEV PostgreSQL validation
+    module: simulation.localsim_successor_core
+    level: L4
+    command_key: nox_localsim_successor_core_dev_db
+    nox_session: localsim_successor_core_dev_db
+    ci_lane: backend
+    enabled: true
+    execution_mode: delegated
+    requires_dev_db: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: true
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: false
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, ddl_idempotency, catalog_integrity]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 300
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
+      required_fields: [validation_run_id, final_head_commit, ddl_idempotency, transaction_readback, cleanup_readback, production_gates]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 6000
+    resource_policy: existing_dev_db
   - plan_key: miniqmt_execution_runtime_l2
     title: Canonical MiniQMT event-loop runtime and durable tick-driver validation
     module: miniqmt_execution_runtime
@@ -1066,6 +1194,7 @@ plans:
     command_key: nox_localsim_unattended_l3
     nox_session: localsim_unattended_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1091,6 +1220,7 @@ plans:
     command_key: nox_miniqmt_sim_stub_l3
     nox_session: miniqmt_sim_stub_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1116,6 +1246,7 @@ plans:
     command_key: nox_simulation_runtime_ops_ui
     nox_session: simulation_runtime_ops_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: []
@@ -1141,6 +1272,7 @@ plans:
     command_key: nox_simulation_dual_backend_l4
     nox_session: simulation_dual_backend_l4
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1171,6 +1303,7 @@ plans:
     command_key: nox_miniqmt_sim_trading_hours_l5
     nox_session: miniqmt_sim_trading_hours_l5
     enabled: true
+    execution_mode: operator
     requires_backend: true
     requires_frontend: false
     allowed_backend_ports: [8012]

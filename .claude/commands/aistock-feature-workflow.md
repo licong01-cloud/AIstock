@@ -8,6 +8,8 @@ Use this Claude Code command only for real AIstock feature delivery or architect
 
 Read project rules once, then this command plus the approved Feature Card/design. Use stable `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design or unrelated standards/commands.
 
+- Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
+
 For F1 work, start with graph/UA refs or exact-symbol search before broad `rg`. Pause and summarize before expanding if exploration reaches about 25 commands or 30 minutes.
 
 ## Feature Workflow
@@ -26,6 +28,8 @@ python scripts/aistock_feature_workflow.py validate --design <design-or-card-pat
 5. Stop if any row has an unapproved gap, simplified/POC/mock-only/static success, partial implementation, or silent fallback.
 
 ## Local Gate And Delegation
+
+Feature validation, merge, delegation and aftercare never authorize control of a user backend. Runtime-affecting delivery must persist across restart, prove fresh-process loading, and remain pending until the user's restart is followed by read-only identity and business-smoke verification.
 
 Keep the minimal local gate: changed-file lint/compile, direct contract or fix-point tests, `git diff --check`, scope check, and production gates. Delegate broad UI/API/business-flow, cross-module, LLM design-drift, and long-running validation through `.claude/commands/aistock-validation-delegation.md` or nightly; consume compact receipts first.
 

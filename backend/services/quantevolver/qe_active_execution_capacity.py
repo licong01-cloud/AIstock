@@ -21,8 +21,8 @@ from backend.services.qe_archive.models import normalize_json
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
+    QEExecutionCapacityObservation,
     QEExecutionReservationAcquireResult,
-    QEExecutionReservationError,
     QEExecutionReservationRepository,
     QEExecutionReservationSpec,
     QEExecutionReservationToken,
@@ -39,9 +39,19 @@ from .qe_workspace_client import (
 
 
 DEFAULT_WSL_NODE_ID = "wsl2-5080"
-WSL_HARD_CAPACITY = 2
+NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
+# One local WSL training slot is the host-responsiveness contract.  A single
+# GeneralPTNN Loop can own a large dataset/GPU working set; cross-task overlap
+# previously drove Windows into memory compression and paging stalls.  Remote
+# CPU execution remains independently parallel.
+WSL_HARD_CAPACITY = 1
 REMOTE_HARD_CAPACITY = 4
-DEFAULT_RESERVATION_LEASE_SECONDS = 120
+# The coordinator starts immediately and performs a safety sweep at most every
+# 60 seconds.  Keeping durable execution leases below that bound guarantees a
+# replacement backend can take over by its first post-start safety sweep while
+# fencing still prevents a live owner from being overwritten.
+MAX_RESTART_SAFE_LEASE_SECONDS = 45
+DEFAULT_RESERVATION_LEASE_SECONDS = MAX_RESTART_SAFE_LEASE_SECONDS
 _PROCESS_SUBMISSION_OWNER_ID = (
     f"qe_submit_{socket.gethostname()}_{os.getpid()}_{uuid.uuid4().hex[:12]}"
 )
@@ -94,6 +104,18 @@ class QEWorkspaceSubmissionSource:
     requested_node_capacity: int | None = None
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
 
+    def __post_init__(self) -> None:
+        lease_seconds = int(self.lease_seconds)
+        if not 1 <= lease_seconds <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE submission lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": lease_seconds,
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
+
 
 @dataclass(frozen=True)
 class QEWorkspaceSubmissionOutcome:
@@ -140,17 +162,30 @@ class QEActiveExecutionCapacityService:
                 "QE node hard capacities must be positive",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
-        self._wsl_node_id = str(wsl_node_id).strip()
+        self._wsl_node_id = str(wsl_node_id).strip().casefold()
         self._wsl_hard_capacity = int(wsl_hard_capacity)
         self._remote_hard_capacity = int(remote_hard_capacity)
 
-    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+    def canonical_node_id(self, node_id: str) -> str:
         normalized_node_id = str(node_id or "").strip()
         if not normalized_node_id:
             raise QEWorkspaceSubmissionCoordinatorError(
                 "QE node identity must not be empty",
                 reason_code="qe_execution_capacity_node_invalid",
             )
+        folded = normalized_node_id.casefold()
+        if folded in NONCANONICAL_LOCAL_WSL_NODE_ALIASES:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "local WSL capacity requires the canonical node identity",
+                reason_code="qe_execution_capacity_node_alias_noncanonical",
+                context={"node_id": normalized_node_id, "canonical_node_id": self._wsl_node_id},
+            )
+        if folded == self._wsl_node_id:
+            return self._wsl_node_id
+        return normalized_node_id
+
+    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+        normalized_node_id = self.canonical_node_id(node_id)
         hard_cap = (
             self._wsl_hard_capacity
             if normalized_node_id == self._wsl_node_id
@@ -612,7 +647,7 @@ class QEExecutionSourceClaimFactory:
                 SET status = 'running',
                     node_id = %s,
                     agent_analysis = CASE
-                        WHEN agent_analysis LIKE '{"_qe_execution_capacity"%%'
+                        WHEN agent_analysis::text LIKE '{"_qe_execution_capacity"%%'
                         THEN NULL
                         ELSE agent_analysis
                     END,
@@ -643,6 +678,20 @@ class QEExecutionSourceClaimFactory:
                 sort_keys=True,
                 separators=(",", ":"),
             )
+            cur.execute(
+                """
+                SELECT loop_id, task_id, status, node_id, agent_analysis
+                FROM qe_evolution_loops
+                WHERE loop_id = %s
+                  AND status = 'pending'
+                  AND node_id IS NOT DISTINCT FROM %s
+                  AND agent_analysis IS NOT DISTINCT FROM %s::jsonb
+                """,
+                (normalized_loop_id, normalized_node_id, evidence),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
             cur.execute(
                 """
                 UPDATE qe_evolution_loops
@@ -702,6 +751,26 @@ class QEExecutionSourceClaimFactory:
             _active_count: int,
             _node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            cur.execute(
+                """
+                SELECT experiment_id, status, qe_task_id, qe_loop_id
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                  AND status = 'pending'
+                  AND qe_task_id IS NOT DISTINCT FROM %s
+                  AND qe_loop_id IS NOT DISTINCT FROM %s
+                  AND custom_params ->> 'execution_node_id' = %s
+                """,
+                (
+                    normalized_experiment_id,
+                    normalized_task_id,
+                    normalized_loop_id,
+                    normalized_node_id,
+                ),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
             cur.execute(
                 """
                 UPDATE qe_experiments
@@ -796,6 +865,37 @@ class QEExecutionSourceClaimFactory:
             _active_count: int,
             _node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS exact_count
+                FROM qe_multi_alpha_groups
+                WHERE parent_experiment_id = %s
+                  AND group_name = ANY(%s)
+                  AND assigned_node_id IS NOT DISTINCT FROM %s
+                  AND qe_loop_id IS NOT DISTINCT FROM %s
+                  AND status = 'pending'
+                """,
+                (
+                    normalized_experiment_id,
+                    list(normalized_group_names),
+                    normalized_node_id,
+                    normalized_loop_id,
+                ),
+            )
+            exact = cur.fetchone()
+            exact_count = (
+                int(exact.get("exact_count") or 0)
+                if isinstance(exact, Mapping)
+                else int(exact[0] or 0) if exact else 0
+            )
+            if exact_count == len(normalized_group_names):
+                return {
+                    "parent_experiment_id": normalized_experiment_id,
+                    "status": "pending",
+                    "node_id": normalized_node_id,
+                    "qe_loop_id": normalized_loop_id,
+                    "group_names": list(normalized_group_names),
+                }
             return _update(cur, status="pending")
 
         return claim_source, record_waiting
@@ -853,6 +953,31 @@ class QEExecutionSourceClaimFactory:
             active_count: int,
             node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            progress = {
+                "qe_submission": {
+                    "phase": "waiting_capacity",
+                    "backtest_name": normalized_backtest_name,
+                    "node_id": normalized_node_id,
+                    "active_count": int(active_count),
+                    "node_capacity": int(node_capacity),
+                }
+            }
+            cur.execute(
+                """
+                SELECT id, status, phase, progress_json
+                FROM strategy_pkg.multi_alpha_combine_backtest_run
+                WHERE id = %s
+                  AND phase = 'waiting_capacity'
+                  AND progress_json -> 'qe_submission' = %s::jsonb -> 'qe_submission'
+                """,
+                (
+                    normalized_run_id,
+                    json.dumps(progress, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
             return _update(
                 cur,
                 phase="waiting_capacity",
@@ -879,6 +1004,48 @@ class QEWorkspaceSubmissionCoordinator:
         self._repository = reservation_repository or QEExecutionReservationRepository()
         self._capacity_service = capacity_service or QEActiveExecutionCapacityService()
 
+    def observe_capacity(
+        self,
+        *,
+        node_id: str,
+        requested_node_capacity: int | None,
+        source_kind: str,
+        source_execution_id: str,
+        qe_task_id: str,
+        qe_loop_id: str,
+        submission_intent_hash: str,
+    ) -> QEExecutionCapacityObservation:
+        """Return a read-only admission snapshot for a durable waiting source."""
+
+        capacity = self._capacity_service.resolve_node_capacity(
+            node_id,
+            requested_node_capacity,
+        )
+        spec = QEExecutionReservationSpec(
+            node_id=self._capacity_service.canonical_node_id(node_id),
+            source_kind=source_kind,
+            source_execution_id=source_execution_id,
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            submission_intent_hash=submission_intent_hash,
+        )
+        observation = self._repository.observe_execution_capacity(
+            spec,
+            node_capacity=capacity,
+        )
+        if (
+            self._capacity_service.queue_only_diagnostics(spec.node_id)
+            and not observation.duplicate_replay
+        ):
+            return QEExecutionCapacityObservation(
+                available=False,
+                duplicate_replay=False,
+                active_count=observation.active_count,
+                node_capacity=observation.node_capacity,
+                reservation=None,
+            )
+        return observation
+
     async def submit(
         self,
         *,
@@ -892,8 +1059,9 @@ class QEWorkspaceSubmissionCoordinator:
             source.node_id,
             source.requested_node_capacity,
         )
+        capacity_node_id = self._capacity_service.canonical_node_id(source.node_id)
         spec = QEExecutionReservationSpec(
-            node_id=source.node_id,
+            node_id=capacity_node_id,
             source_kind=source.source_kind,
             source_execution_id=source.source_execution_id,
             qe_task_id=payload.task_id,
@@ -901,7 +1069,7 @@ class QEWorkspaceSubmissionCoordinator:
             submission_intent_hash=source.submission_intent_hash,
         )
         queue_only_diagnostics = self._capacity_service.queue_only_diagnostics(
-            source.node_id
+            capacity_node_id
         )
         if queue_only_diagnostics:
             queued = self._repository.record_queue_only_wait_if_unreserved(
@@ -1026,6 +1194,15 @@ class QEWorkspaceSubmissionCoordinator:
         lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS,
         expected_reservation_id: str | None = None,
     ) -> Mapping[str, Any]:
+        if not 1 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE reconciliation lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": int(lease_seconds),
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
         normalized_owner_id = str(owner_id or qe_submission_owner_id()).strip()
         reservation = self._repository.get_reservation_for_source(
             source_kind=source_kind,
@@ -1571,11 +1748,27 @@ class QEExecutionReservationReconciler:
     ) -> None:
         self._repository = repository or QEExecutionReservationRepository()
         self._owner_id = str(owner_id or qe_submission_owner_id()).strip()
-        self._lease_seconds = max(1, int(lease_seconds))
+        if not 1 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE reservation reconciler lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": int(lease_seconds),
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
+        self._lease_seconds = int(lease_seconds)
         self._post_grace_seconds = max(1, int(post_grace_seconds))
+        self._initialized = False
+
+    def initialize(self) -> None:
+        if self._initialized:
+            return
+        self._repository.preflight_schema(raise_on_error=True)
+        self._initialized = True
 
     async def scan_once(self) -> dict[str, int]:
-        self._repository.preflight_schema(raise_on_error=True)
+        self.initialize()
         counters = {
             "checked": 0,
             "transitioned": 0,
@@ -1606,22 +1799,30 @@ class QEExecutionReservationReconciler:
         return counters
 
     async def _reconcile_one(self, reservation: Mapping[str, Any]) -> str | None:
-        owned = self._claim_or_reuse(reservation)
-        if owned is None:
-            return "owned_elsewhere"
-
-        node_id = str(owned.get("node_id") or "").strip()
-        task_id = str(owned.get("qe_task_id") or "").strip()
-        loop_id = str(owned.get("qe_loop_id") or "").strip()
+        # Remote inspection is read-only.  Acquire/heartbeat the fenced row only
+        # after the observation requires a durable transition.
+        node_id = str(reservation.get("node_id") or "").strip()
+        task_id = str(reservation.get("qe_task_id") or "").strip()
+        loop_id = str(reservation.get("qe_loop_id") or "").strip()
         client = QEWorkspaceClient.for_node(node_id)
         async with client:
             inspection = await client.inspect_loop_submission(
                 task_id,
                 loop_id,
-                submission_intent_hash=str(owned.get("submission_intent_hash") or ""),
+                submission_intent_hash=str(
+                    reservation.get("submission_intent_hash") or ""
+                ),
             )
 
         if inspection.status == "not_reserved":
+            if (
+                str(reservation.get("status") or "") == "reconciling"
+                and str(reservation.get("remote_status") or "") == "not_reserved"
+            ):
+                return None
+            owned = self._claim_or_reuse(reservation)
+            if owned is None:
+                return "owned_elsewhere"
             updated = self._transition_if_needed(
                 owned,
                 next_status="reconciling",
@@ -1630,13 +1831,13 @@ class QEExecutionReservationReconciler:
             )
             return "transitioned" if updated else "not_reserved"
 
-        expected_intent = str(owned.get("submission_intent_hash") or "")
+        expected_intent = str(reservation.get("submission_intent_hash") or "")
         if inspection.submission_intent_hash != expected_intent:
             raise QEWorkspaceSubmissionCoordinatorError(
                 "QE receipt intent does not match the active reservation",
                 reason_code="qe_workspace_submission_identity_mismatch",
                 context={
-                    "reservation_id": owned.get("reservation_id"),
+                    "reservation_id": reservation.get("reservation_id"),
                     "expected_submission_intent_hash": expected_intent,
                     "actual_submission_intent_hash": inspection.submission_intent_hash,
                 },
@@ -1645,6 +1846,14 @@ class QEExecutionReservationReconciler:
         next_status, release_reason = QEWorkspaceSubmissionCoordinator._reservation_state_for_remote(
             inspection.status
         )
+        if (
+            str(reservation.get("status") or "") == next_status
+            and str(reservation.get("remote_status") or "") == inspection.status
+        ):
+            return None
+        owned = self._claim_or_reuse(reservation)
+        if owned is None:
+            return "owned_elsewhere"
         updated = self._transition_if_needed(
             owned,
             next_status=next_status,
@@ -1661,29 +1870,12 @@ class QEExecutionReservationReconciler:
         self,
         reservation: Mapping[str, Any],
     ) -> Mapping[str, Any] | None:
-        current_owner = str(reservation.get("owner_id") or "")
-        if current_owner == self._owner_id:
-            if self._post_is_inside_grace_period(reservation):
-                return reservation
-            try:
-                return self._repository.heartbeat_execution_reservation(
-                    str(reservation["reservation_id"]),
-                    token=QEWorkspaceSubmissionCoordinator._token_for(reservation),
-                    lease_seconds=self._lease_seconds,
-                )
-            except QEExecutionReservationError as exc:
-                if exc.reason_code not in {
-                    "qe_execution_reservation_stale_owner",
-                    "qe_execution_reservation_stale_row_version",
-                    "qe_execution_reservation_lease_expired",
-                    "qe_execution_reservation_cas_failed",
-                }:
-                    raise
         return self._repository.claim_reservation_for_source(
             source_kind=str(reservation.get("source_kind") or ""),
             source_execution_id=str(reservation.get("source_execution_id") or ""),
             owner_id=self._owner_id,
             lease_seconds=self._lease_seconds,
+            expected_row_version=int(reservation.get("row_version") or 0),
         )
 
     def _transition_if_needed(
@@ -1707,6 +1899,23 @@ class QEExecutionReservationReconciler:
             remote_status=remote_status,
             release_reason_code=release_reason_code,
         )
+        if next_status in {"released", "failed", "cancelled"}:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            wake_key = str(reservation.get("reservation_id") or "").strip()
+            notify_qe_reconciliation(
+                QEReconciliationScope.EXPERIMENT,
+                key=wake_key,
+                force=True,
+            )
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=wake_key,
+                force=True,
+            )
         return True
 
     def _post_is_inside_grace_period(self, reservation: Mapping[str, Any]) -> bool:

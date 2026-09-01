@@ -41,6 +41,7 @@ from backend.services.miniqmt_execution_runtime.models import (
     MiniQMTExecutionEvent,
     MiniQMTExecutionEventType,
 )
+from backend.services.miniqmt_execution_runtime.plugin_contracts import bounded_exception_summary_v1
 from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     ActionQuoteEvaluator,
     ActionQuoteRequest,
@@ -111,6 +112,20 @@ class B0QuoteV2RuntimePort(Protocol):
         child_order_id: str,
         metadata: dict[str, Any],
     ) -> tuple[MiniQMTChildOrder, MiniQMTExecutionEvent]: ...
+
+
+class B0QuoteV2RegistryRollbackError(RuntimeError):
+    """Preserve both a registry operation failure and its exact rollback failure."""
+
+    def __init__(self, *, operation: str, primary: Exception, rollback: Exception) -> None:
+        self.reason_code = "B0_QUOTE_V2_REGISTRY_ROLLBACK_FAILED"
+        self.context = {
+            "operation": operation,
+            "primary_failure": bounded_exception_summary_v1(primary),
+            "rollback_failure": bounded_exception_summary_v1(rollback),
+            "broker_side_effect_state": "UNKNOWN",
+        }
+        super().__init__("B0_QUOTE_V2 registry operation and its exact rollback both failed")
 
 
 def _required_text(value: Any, *, field_name: str) -> str:
@@ -1841,6 +1856,15 @@ class B0QuoteV2Controller:
         )
 
 
+@dataclass
+class _B0QuoteV2IngressOwner:
+    controller: B0QuoteV2Controller
+    symbols: tuple[str, ...]
+    sink: Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None]
+    release_state: str = "ACTIVE"
+    last_release_failure: dict[str, Any] | None = None
+
+
 class B0QuoteV2ControllerFactory:
     """Scheduler-owned construction root and `(data_session_key, runtime_id)` registry."""
 
@@ -1858,6 +1882,7 @@ class B0QuoteV2ControllerFactory:
         self.config = config
         self.data_session_key = _required_text(data_session_key, field_name="data_session_key")
         self._controllers: dict[tuple[str, str], B0QuoteV2Controller] = {}
+        self._ingress_owners: dict[tuple[str, str], _B0QuoteV2IngressOwner] = {}
         self._assignment_conflict_count = 0
         self._accept_new_assignments = True
         self._invalid_revision_ids: set[str] = set()
@@ -1920,16 +1945,87 @@ class B0QuoteV2ControllerFactory:
             clock_sample_provider=self._clock_sample_provider,
         )
         consumer_id = f"b0qv2:{key[1]}"
-        self.supervisor.register_observation_sink(consumer_id=consumer_id, sink=controller.observe)
+        observation_sink = controller.observe
+        ingress_owner = _B0QuoteV2IngressOwner(
+            controller=controller,
+            symbols=exact_symbols,
+            sink=observation_sink,
+        )
+        self.supervisor.register_observation_sink(
+            consumer_id=consumer_id,
+            symbols=exact_symbols,
+            sink=observation_sink,
+        )
         try:
             self.supervisor.acquire_consumer(
                 consumer_id=consumer_id,
                 symbols=list(exact_symbols),
             )
-        except Exception:
-            self.supervisor.unregister_observation_sink(consumer_id=consumer_id)
+        except Exception as primary:
+            rollback_failure: Exception | None = None
+            try:
+                unregistered = self.supervisor.unregister_observation_sink(
+                    consumer_id=consumer_id,
+                    symbols=exact_symbols,
+                    sink=observation_sink,
+                )
+                if unregistered is not True:
+                    remaining_sink = self._read_exact_observation_sink(
+                        consumer_id=consumer_id,
+                        symbols=exact_symbols,
+                    )
+                    if remaining_sink is not None:
+                        raise RuntimeError(
+                            "B0_QUOTE_V2 create rollback did not unregister the exact observation sink"
+                        )
+            except Exception as sink_rollback:
+                try:
+                    remaining_sink = self._read_exact_observation_sink(
+                        consumer_id=consumer_id,
+                        symbols=exact_symbols,
+                    )
+                except Exception as readback:
+                    rollback_failure = B0QuoteV2RegistryRollbackError(
+                        operation="CREATE_ROLLBACK_SINK_READBACK",
+                        primary=sink_rollback,
+                        rollback=readback,
+                    )
+                else:
+                    rollback_failure = None if remaining_sink is None else sink_rollback
+            primary_context = getattr(primary, "context", None)
+            consumer_lease_retained = bool(
+                isinstance(primary_context, Mapping)
+                and primary_context.get("consumer_lease_retained") is True
+            )
+            if rollback_failure is None and consumer_lease_retained:
+                try:
+                    released = self.supervisor.release_consumer(consumer_id=consumer_id)
+                    if released is not True:
+                        outcome = self._exact_consumer_lease_outcome(
+                            consumer_id=consumer_id,
+                            symbols=exact_symbols,
+                        )
+                        if outcome != "ABSENT":
+                            raise RuntimeError(
+                                "B0_QUOTE_V2 create rollback did not release the retained consumer lease"
+                            )
+                except Exception as lease_rollback:
+                    rollback_failure = lease_rollback
+            if rollback_failure is not None:
+                aggregate = B0QuoteV2RegistryRollbackError(
+                    operation="CREATE_ACQUIRE_CONSUMER",
+                    primary=primary,
+                    rollback=rollback_failure,
+                )
+                controller._closed = True
+                ingress_owner.release_state = "RELEASE_UNKNOWN"
+                ingress_owner.last_release_failure = bounded_exception_summary_v1(aggregate)
+                self._controllers[key] = controller
+                self._ingress_owners[key] = ingress_owner
+                raise aggregate from primary
             raise
         self._controllers[key] = controller
+        self._ingress_owners[key] = ingress_owner
         return controller
 
     def get(self, runtime_id: str) -> B0QuoteV2Controller | None:
@@ -2046,14 +2142,235 @@ class B0QuoteV2ControllerFactory:
 
     def release(self, runtime_id: str) -> None:
         key = (self.data_session_key, str(runtime_id))
-        controller = self._controllers.pop(key, None)
+        controller = self._controllers.get(key)
         if controller is None:
             return
+        ingress_owner = self._ingress_owners.get(key)
+        if ingress_owner is None or ingress_owner.controller is not controller:
+            raise RuntimeError("B0_QUOTE_V2 controller registry lacks its exact ingress owner")
+        retrying_unknown_release = ingress_owner.release_state == "RELEASE_UNKNOWN"
+        controller._closed = True
         consumer_id = f"b0qv2:{runtime_id}"
-        self.supervisor.release_consumer(consumer_id=consumer_id)
-        self.supervisor.unregister_observation_sink(consumer_id=consumer_id)
+        self._unregister_release_sink(
+            consumer_id=consumer_id,
+            ingress_owner=ingress_owner,
+        )
+        ingress_owner.release_state = "RELEASING"
+        try:
+            released = self.supervisor.release_consumer(consumer_id=consumer_id)
+        except Exception as primary:
+            try:
+                outcome = self._release_failure_outcome(
+                    primary=primary,
+                    consumer_id=consumer_id,
+                    symbols=ingress_owner.symbols,
+                )
+            except Exception as readback:
+                aggregate = B0QuoteV2RegistryRollbackError(
+                    operation="RELEASE_CONSUMER_READBACK",
+                    primary=primary,
+                    rollback=readback,
+                )
+                self._mark_release_unknown(ingress_owner=ingress_owner, failure=aggregate)
+                raise aggregate from primary
+            if outcome == "ACTIVE":
+                self._rollback_release_sink(
+                    consumer_id=consumer_id,
+                    ingress_owner=ingress_owner,
+                    primary=primary,
+                    operation="RELEASE_CONSUMER",
+                )
+            else:
+                self._mark_release_unknown(ingress_owner=ingress_owner, failure=primary)
+            raise
+        if released is not True:
+            primary = RuntimeError("B0_QUOTE_V2 release did not release the exact physical consumer lease")
+            try:
+                outcome = self._exact_consumer_lease_outcome(
+                    consumer_id=consumer_id,
+                    symbols=ingress_owner.symbols,
+                )
+            except Exception as readback:
+                aggregate = B0QuoteV2RegistryRollbackError(
+                    operation="RELEASE_CONSUMER_READBACK",
+                    primary=primary,
+                    rollback=readback,
+                )
+                self._mark_release_unknown(ingress_owner=ingress_owner, failure=aggregate)
+                raise aggregate from primary
+            if outcome == "ABSENT" and retrying_unknown_release:
+                released = True
+            elif outcome == "ACTIVE":
+                self._rollback_release_sink(
+                    consumer_id=consumer_id,
+                    ingress_owner=ingress_owner,
+                    primary=primary,
+                    operation="RELEASE_CONSUMER",
+                )
+                raise primary
+            else:
+                self._mark_release_unknown(ingress_owner=ingress_owner, failure=primary)
+                raise primary
+        removed_controller = self._controllers.pop(key)
+        removed_owner = self._ingress_owners.pop(key)
+        if removed_controller is not controller or removed_owner is not ingress_owner:
+            raise RuntimeError("B0_QUOTE_V2 release removed a different registry owner")
         if self._context_release_callback is not None:
             self._context_release_callback(str(runtime_id))
+
+    def _unregister_release_sink(
+        self,
+        *,
+        consumer_id: str,
+        ingress_owner: _B0QuoteV2IngressOwner,
+    ) -> None:
+        try:
+            current_sink = self._read_exact_observation_sink(
+                consumer_id=consumer_id,
+                symbols=ingress_owner.symbols,
+            )
+        except Exception as failure:
+            self._mark_release_unknown(ingress_owner=ingress_owner, failure=failure)
+            raise
+        if current_sink is None:
+            if ingress_owner.release_state == "RELEASE_UNKNOWN":
+                return
+            primary = RuntimeError("B0_QUOTE_V2 release lacks its exact active observation sink")
+            self._rollback_release_sink(
+                consumer_id=consumer_id,
+                ingress_owner=ingress_owner,
+                primary=primary,
+                operation="RELEASE_UNREGISTER_SINK",
+            )
+            raise primary
+        if current_sink is not ingress_owner.sink:
+            failure = RuntimeError("B0_QUOTE_V2 release observation-sink owner changed")
+            self._mark_release_unknown(ingress_owner=ingress_owner, failure=failure)
+            raise failure
+        try:
+            unregistered = self.supervisor.unregister_observation_sink(
+                consumer_id=consumer_id,
+                symbols=ingress_owner.symbols,
+                sink=ingress_owner.sink,
+            )
+        except Exception as primary:
+            self._rollback_release_sink(
+                consumer_id=consumer_id,
+                ingress_owner=ingress_owner,
+                primary=primary,
+                operation="RELEASE_UNREGISTER_SINK",
+            )
+            raise
+        if unregistered is not True:
+            primary = RuntimeError("B0_QUOTE_V2 release did not unregister the exact observation sink")
+            try:
+                remaining_sink = self._read_exact_observation_sink(
+                    consumer_id=consumer_id,
+                    symbols=ingress_owner.symbols,
+                )
+            except Exception as readback:
+                aggregate = B0QuoteV2RegistryRollbackError(
+                    operation="RELEASE_UNREGISTER_SINK_READBACK",
+                    primary=primary,
+                    rollback=readback,
+                )
+                self._mark_release_unknown(ingress_owner=ingress_owner, failure=aggregate)
+                raise aggregate from primary
+            if remaining_sink is None:
+                return
+            self._rollback_release_sink(
+                consumer_id=consumer_id,
+                ingress_owner=ingress_owner,
+                primary=primary,
+                operation="RELEASE_UNREGISTER_SINK",
+            )
+            raise primary
+
+    def _read_exact_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None] | None:
+        sink_reader = getattr(self.supervisor, "get_observation_sink", None)
+        if not callable(sink_reader):
+            raise RuntimeError("B0_QUOTE_V2 quote supervisor lacks exact observation-sink readback")
+        return sink_reader(consumer_id=consumer_id, symbols=symbols)
+
+    def _rollback_release_sink(
+        self,
+        *,
+        consumer_id: str,
+        ingress_owner: _B0QuoteV2IngressOwner,
+        primary: Exception,
+        operation: str,
+    ) -> None:
+        try:
+            current_sink = self._read_exact_observation_sink(
+                consumer_id=consumer_id,
+                symbols=ingress_owner.symbols,
+            )
+            if current_sink is None:
+                self.supervisor.register_observation_sink(
+                    consumer_id=consumer_id,
+                    symbols=ingress_owner.symbols,
+                    sink=ingress_owner.sink,
+                )
+            elif current_sink is not ingress_owner.sink:
+                raise RuntimeError("B0_QUOTE_V2 observation-sink owner changed during release rollback")
+        except Exception as rollback:
+            aggregate = B0QuoteV2RegistryRollbackError(
+                operation=operation,
+                primary=primary,
+                rollback=rollback,
+            )
+            self._mark_release_unknown(ingress_owner=ingress_owner, failure=aggregate)
+            raise aggregate from primary
+        ingress_owner.release_state = "ACTIVE"
+        ingress_owner.last_release_failure = bounded_exception_summary_v1(primary)
+        ingress_owner.controller._closed = False
+
+    def _release_failure_outcome(
+        self,
+        *,
+        primary: Exception,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> str:
+        context = getattr(primary, "context", None)
+        if isinstance(context, Mapping):
+            release_outcome = context.get("release_outcome")
+            if release_outcome in {"ACTIVE", "UNKNOWN"}:
+                return str(release_outcome)
+        return self._exact_consumer_lease_outcome(consumer_id=consumer_id, symbols=symbols)
+
+    def _exact_consumer_lease_outcome(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> str:
+        snapshot_reader = getattr(self.supervisor, "consumer_lease_owner_snapshot", None)
+        if not callable(snapshot_reader):
+            return "UNKNOWN"
+        snapshot = snapshot_reader(consumer_id=consumer_id, symbols=symbols)
+        if not isinstance(snapshot, Mapping) or snapshot.get("readback_current") is not True:
+            return "UNKNOWN"
+        state = snapshot.get("state")
+        if state == "ABSENT":
+            return "ABSENT"
+        if state == "ACTIVE" and snapshot.get("exact_owner") is True:
+            return "ACTIVE"
+        return "UNKNOWN"
+
+    @staticmethod
+    def _mark_release_unknown(
+        *,
+        ingress_owner: _B0QuoteV2IngressOwner,
+        failure: Exception,
+    ) -> None:
+        ingress_owner.release_state = "RELEASE_UNKNOWN"
+        ingress_owner.last_release_failure = bounded_exception_summary_v1(failure)
 
     def health(self) -> dict[str, Any]:
         return {
@@ -2065,6 +2382,14 @@ class B0QuoteV2ControllerFactory:
             "b0_quote_v2_assignment_conflicts_total": self._assignment_conflict_count,
             "b0_quote_v2_parity_violations_total": self._parity_violation_count,
             "invalid_revision_ids": sorted(self._invalid_revision_ids),
+            "ingress_owners": {
+                runtime_id: {
+                    "symbols": list(owner.symbols),
+                    "release_state": owner.release_state,
+                    "last_release_failure": owner.last_release_failure,
+                }
+                for (_, runtime_id), owner in sorted(self._ingress_owners.items())
+            },
             "controllers": {
                 runtime_id: controller.health() for (_, runtime_id), controller in sorted(self._controllers.items())
             },

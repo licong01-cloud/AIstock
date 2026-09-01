@@ -1,0 +1,234 @@
+{
+  "schema_version": "pit_v2_source_freeze_receipt_v2",
+  "observed_at": "2026-08-21T19:14:04.7963816Z",
+  "mode": "read_only_w7_source_audit_failure",
+  "source": {
+    "branch": "docs/qe-pit-v2-w6-source-freeze-20260821",
+    "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
+    "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "w6_source_base_tree": "088090e8d3b44391544b7ca78c5d50980f9cd2b2",
+    "observed_origin_main": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
+    "observed_origin_main_tree": "42f5ad8569f3abc586eb57b104cd237e7bc37f6b",
+    "observed_origin_main_descends_w6": true,
+    "worktree_clean": true,
+    "receipt_metadata_changes_excluded_from_source_freeze": true,
+    "master_design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+    "master_design_sha256": "c76ee888ab3679ade8e597445dcbbb30a18f4e2f8c9f03f2dc37bd2414f728fc",
+    "w6_scope_receipt_sha256": "9ce8cc793dce69a84db5fc79f60176f410a5589ddffc8a7be86ef85803099a23",
+    "design_compliance_receipt": "tests/aistock_validation/pit_v2/design_compliance_receipt.json",
+    "design_compliance_receipt_sha256": "4a2c8941cc048785262e1463f9638b1acef4e13f9886670aa0a926e65357c3c3"
+  },
+  "initial_migration": {
+    "plan_path": "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+    "file_sha256": "23ac3b6872a87768b1d555c6c985560455f420a19b8aec1925801cf2d80d1931",
+    "plan_id": "pit_v2_initial_20260731_v1",
+    "plan_digest": "995a268c6e982d433737c661fddbbbed26d59852f37c716c42e940bc5323d442",
+    "requested_cutoff": "2026-07-31",
+    "effective_cutoff": "2026-07-31",
+    "allowed_scopes": ["sample", "full"],
+    "sample_instruments": ["000001.SZ", "300379.SZ", "600462.SH", "600930.SH", "688981.SH"],
+    "sample_is_validation_only": true,
+    "full_requires_sample_terminal_pass": true,
+    "candidate_only": true
+  },
+  "profiles": {
+    "legacy_v1": {
+      "path": "configs/datasets/qe_backtest_monthly_v1.yaml",
+      "file_sha256": "c2a9a2b14ae3d1b1eb9468ae5b26d05470d61185e93fd824d7d8381eaca3ed9e",
+      "profile": "qe_hmm_full_v1",
+      "config_digest": "aef6dff42371e0891cec0d73e8495551119f4601a614e85acfb4f8f43aed139c",
+      "semantic_profile_digest": "fa75a5bec2251d9a39146789fd5c898caeb72c8400d02b4bb92037fdc8a100d5",
+      "universe_key": "shsz_st_pit_active_v1",
+      "rule_version": "st_pub_next_trade_restore_active_l_v1",
+      "declared_authority_status": "DEPLOYED_LEGACY_PENDING_MIGRATION"
+    },
+    "canonical_v2": {
+      "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+      "file_sha256": "4ae6137dcfbdd2e54c88b0c55fc32def24312aefdb6319cb325427025f46e74d",
+      "profile": "qe_hmm_full_v2",
+      "config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
+      "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
+      "universe_key": "aistock_equity_pit_canonical_v2",
+      "rule_version": "shsz_a_252td_st_delist_asof_v2",
+      "declared_target_authority_status": "ACTIVE_CANONICAL",
+      "candidate_root_id": "aistock-x-candidate-v1",
+      "candidate_root": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates",
+      "control_root": "X:\\AIstock_dataset_release_control"
+    },
+    "nested_digest_method": "sha256(canonical_json(dataclasses.asdict))",
+    "resource_policy_digest": "0a056c5b810d85066b4b1439df7cb6b1ddba5cd9ce0eedcf603d9d23f6fc680a",
+    "qlib_toolchain_profile_digest": "7df2d592b9abc90da18f2c8006090197e29f2d80eccc0bf9dfd328b6ba71361e",
+    "index_codes": [
+      "000001.SH", "000016.SH", "000300.SH", "000688.SH", "000852.SH", "000905.SH",
+      "000985.CSI", "932000.CSI", "399001.SZ", "399006.SZ", "399102.SZ", "399107.SZ"
+    ],
+    "hmm_benchmark": "000300.SH"
+  },
+  "operator_contract_files": {
+    ".codex/skills/update-backtest-dataset/SKILL.md": "2dfead9b2293af69fbbaedc58c56bc503cd337e47e4101b1769379901b6c19ad",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md": "51f164290fe377177470afb6c6fecf937e7a9451d610a210ff5bfd506fab3692",
+    ".codex/skills/update-backtest-dataset/references/resource-and-worker.md": "bc8da4d9cf56b39aa095374826fe1d94e5986b00b5e1f0ceaab7416eb60f3be7",
+    ".codex/skills/update-backtest-dataset/references/release-receipt.md": "055e7f1c07c51ca539806ea635890a2fcd1348062f4b479c7608b241f530e071",
+    ".codex/skills/update-backtest-dataset/references/index-hmm-contract.md": "3f1503e797a84821fe5c3d1b1680352ae51400e5f733a18d49fbed9c699126c3",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md": "052593b54a6e463b5e479bd31a47445251c5e0ed9dacea775e985f9a9be0b66b"
+  },
+  "worker_source_policy": {
+    "schema_version": "pit_v2_worker_source_policy_v1",
+    "worker_dependency_paths": [
+      "backend/services/dataset_release",
+      "scripts/dataset_release_worker.py",
+      "scripts/dataset_release_build_stage.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "scripts/dataset_release_source_recheck.py",
+      "scripts/dataset_release_source_stage.py",
+      "configs/datasets/qe_backtest_monthly_v1.yaml",
+      "configs/datasets/qe_backtest_monthly_v2.yaml"
+    ],
+    "dependency_tree_digest_method": "sha256(canonical_json(path_and_git_object_id_list))",
+    "w6_source_base_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+    "observed_origin_main_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+    "dependency_tree_matches_w6_source_base": true,
+    "required_worker_code_sha_policy": "equals_current_origin_main_at_execution",
+    "required_worker_ancestry_policy": "w6_merge_commit_is_ancestor",
+    "required_dependency_policy": "dependency_tree_digest_matches_frozen_digest",
+    "metadata_only_descendants_allowed": true,
+    "build_dependency_drift_allowed": false
+  },
+  "control_plane": {
+    "control_store": {
+      "control_store_id": "dsc_6defc25f3e0d4fdda73c1a3431259cc0",
+      "schema_version": 1,
+      "integrity": "PASS",
+      "quick_check": "ok",
+      "journal_mode": "wal"
+    },
+    "catalog_activity": {
+      "attempt_count": 0,
+      "run_count": 0,
+      "lease_state_counts": {"FREE": 3},
+      "active_claim_count": 0,
+      "read_mode": "sqlite_uri_mode_ro"
+    },
+    "fresh_process_preflight": {
+      "status": "PASS",
+      "repository_root": "F:\\Dev\\AIstock",
+      "repository_root_role": "canonical_w7_execution_root",
+      "code_sha": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
+      "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
+      "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
+      "qlib_toolchain_digest": "f8cd9009f8de84add9748e2c02b09d174bda08e7d11692551ba95e4ff34e79eb",
+      "qlib_toolchain_digest_includes_absolute_repo_helper_paths": true,
+      "task_worktree_preflight_digest_is_authoritative": false,
+      "dump_bin_sha256": "b8f34c57ce1ef4b1772f3909735e66058f21b25bd7ab8a5f16318822401fe53f",
+      "subprocess_runner_sha256": "251e68e500eb17f9376641710e444618c1650acdb824e19d4707f997e161b956",
+      "wsl_resource_guardian_sha256": "df28234794ec29ac98a1f554c773c4e738776cef9238820af230f247d619ea95",
+      "claims": 0,
+      "heartbeat_writes": 0,
+      "data_process_started": false,
+      "database_writes": 0,
+      "production_writes": 0,
+      "process_controls": 0
+    },
+    "registered_worker": {
+      "instance_id": "dsw_a138c86db2b94df5badfc6cd7b851c42",
+      "status": "IDLE",
+      "claim_kind": null,
+      "claim_id": null,
+      "code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "execution_origin_main": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "origin_main_at_receipt_update": "8d82f9c7f91ee87e95248bbade50d3a993f97c21",
+      "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
+      "last_poll_at": "2026-08-21T18:44:02.659899+00:00",
+      "code_matches_source_freeze": true,
+      "code_matched_origin_main_at_execution": true,
+      "code_matches_origin_main_at_receipt_update": false,
+      "credential_location": "F:\\Dev\\AIstock\\.env",
+      "credential_values_recorded": false,
+      "restart_performed": true
+    }
+  },
+  "w7_real_sample": {
+    "status": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
+    "submission_id": "dss_9ee507ff0e48bd4eb5826a20e4d97f3c",
+    "resolution_attempt_id": "dsra_b7fa30434f144c2dbf596627be118a93",
+    "run_id": null,
+    "release_id": null,
+    "plan_id": "pit_v2_initial_20260731_v1",
+    "plan_digest": "995a268c6e982d433737c661fddbbbed26d59852f37c716c42e940bc5323d442",
+    "fixed_cutoff": "2026-07-31",
+    "scope": "sample",
+    "candidate_only": true,
+    "worker_code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+    "source_audit_missing_dates": {
+      "trading_calendar": 1940,
+      "kline_minute_raw": 562,
+      "adj_factor": 1874,
+      "bak_basic": 1874,
+      "cyq_perf": 1878,
+      "margin_detail": 1873,
+      "index_daily": 2,
+      "sector_data": 1
+    },
+    "data_process_started": false,
+    "candidate_writes": 0,
+    "database_writes": 0,
+    "production_pointer_changes": 0,
+    "bug_id": "BUG-1150",
+    "github_issue": "https://github.com/licong01-cloud/AIstock/issues/3669"
+  },
+  "runtime_and_production_readback": {
+    "backend": {
+      "health": "ok",
+      "runtime_identity": "f8b9d16106a7841a153d1504ba73022f34b176b5",
+      "contains_w6_merge": false,
+      "restart_owner": "user",
+      "restart_performed": false,
+      "backend_restart_required_for_w7_cli": false
+    },
+    "paper_canonical_pit": {
+      "production_activation_performed": false,
+      "activation_ready": false,
+      "activation_blocker_count": 16,
+      "canonical_profile_version_count": 0,
+      "legacy_profile_version_count": 1,
+      "unfinished_run_count": 13
+    },
+    "production_dataset_read": false,
+    "historical_candidate_read": false,
+    "dataset_files_modified": 0,
+    "production_database_writes": 0,
+    "production_pointer_changes": 0,
+    "service_process_controls": 2
+  },
+  "entry_gate": {
+    "w6_source_ready": true,
+    "source_and_origin_main_equal": true,
+    "profile_and_plan_loaded": true,
+    "control_store_ready": true,
+    "fresh_process_preflight_ready": true,
+    "registered_worker_source_identity_ready": true,
+    "source_data_audit_ready": false,
+    "w7_sample_submission_allowed": false,
+    "blocker": {
+      "code": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
+      "expected_code_sha_policy": "equals_current_origin_main_at_execution",
+      "minimum_required_ancestor": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "required_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+      "observed_code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "required_owner_action": "fix BUG-1150, run separately authorized DEV audit seed apply/readback, then separately authorized production apply/readback before a fresh W7 sample",
+      "owner": "local_data",
+      "database_dml_authorized": false
+    }
+  },
+  "exit_gate": {
+    "consumer_inventory_unknown_count": 0,
+    "historical_paths_read_only": true,
+    "active_dataset_build_claims": 0,
+    "source_freeze_status": "INVALIDATED_W7_SOURCE_AUDIT_INCOMPLETE",
+    "w7_execution_status": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
+    "w8_status": "not_started",
+    "production_activation": "not_requested"
+  }
+}

@@ -1,0 +1,295 @@
+{
+  "actual": "One unrelated stale verify-aistock-feature Skill blocked MA-E02 submission and prompted a broad repeated install-client --apply request even though doctor treats stale global skills as warnings.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".claude/commands/aistock-task-router.md",
+    "tests/aistock_validation/bugs/20260802_BUG-952-client-workflow-gate-overblocks-unrelated-stale-lanes-and-install-sync-i.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-952",
+  "closed_at": "2026-08-02T18:31:37Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-02T05:46:03.462988Z",
+  "description": "One unrelated stale verify-aistock-feature Skill blocked MA-E02 submission and prompted a broad repeated install-client --apply request even though doctor treats stale global skills as warnings.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260802-418e6c088776",
+      "timestamp": "2026-08-02T05:46:03.462981Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Client verification blocks only when the router or selected lane is stale; unrelated lanes are warning-only. Client installation is target-scoped, idempotent, staged and lock-protected, and skips current entries. Standards, skills, and CLI report consistent continuation and restart semantics.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".claude/commands/aistock-task-router.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".claude/commands/aistock-task-router.md"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage",
+        "docs.standards"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": ".codex/skills/aistock-task-router/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-task-router.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".claude/commands/aistock-task-router.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".claude/commands/aistock-task-router.md"
+    ]
+  },
+  "first_seen_at": "2026-08-02T05:46:03.462988Z",
+  "fix_branch": null,
+  "fix_commit": "67d93cc6b063688f1e044110678b0b4097f7ec50",
+  "fixed_at": "2026-08-02T18:31:37Z",
+  "github_issue_number": 3041,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3041",
+  "last_seen_at": "2026-08-02T05:46:03.462988Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3043",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py verify-clients --workflow-only --codex-home <profile> --skip-claude --output-format full-json",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "client",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Client workflow gate overblocks unrelated stale lanes and install sync is non-atomic",
+  "trigger_condition": {
+    "fingerprint": "418e6c08877672fb09d72678",
+    "source_event_id": "FE-20260802-418e6c088776"
+  },
+  "validation_evidence": [
+    "workflow fast lane -> 301 passed",
+    "nox l0 -> successful, blocking=0",
+    "validation_catalog_integrity -> 6 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

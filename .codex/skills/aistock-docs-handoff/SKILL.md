@@ -19,6 +19,8 @@ Use this lane for documentation and handoff work. Keep the path classification, 
 
 ## Rules
 
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
+- Docs work never authorizes backend start/stop/restart. User backend process control remains user-owned even when a runbook or restart contract is being documented.
 - Use an isolated worktree/branch for tracked docs changes.
 - For docs-fast, use `git diff --check` as the validation step.
 - For cleanup-fast, keep the change mechanical: relocate/delete only the named files, preserve executable behavior by default, and use `git diff --check`; add focused `py_compile`/`--help` only when the user asks to retain executable scripts.

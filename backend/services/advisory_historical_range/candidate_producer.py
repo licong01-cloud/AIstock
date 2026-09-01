@@ -26,6 +26,7 @@ from backend.services.advisory_historical_range.models import (
     build_candidate_input_hash,
     derive_day_run_id,
     derive_prefixed_id,
+    normalize_hmm_binding_metadata,
 )
 from backend.services.advisory_historical_range.source_roles import CANDIDATE_SOURCE_ROLES_V2
 from backend.services.strategy_package.selection_computation import (
@@ -514,17 +515,32 @@ def _resolved_runtime_config_for_day(
     by_date = runtime_config.get("phase0a_hmm_metadata_by_date")
     by_date = deepcopy(by_date) if isinstance(by_date, dict) else {}
     existing = by_date.get(day_key)
-    if isinstance(existing, dict) and canonical_json_sha256(existing) != canonical_json_sha256(
-        binding.phase0a_hmm_metadata
-    ):
-        raise RuntimeConfigInvalidError(
-            "sealed HMM binding conflicts with base Program evidence",
-            context={
-                "reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
-                "research_program_id": program.research_program_id,
-                "decision_trade_date": day_key,
-            },
-        )
+    if isinstance(existing, dict):
+        try:
+            normalized_existing = normalize_hmm_binding_metadata(
+                existing,
+                decision_trade_date=decision_trade_date,
+            )
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "base Program HMM evidence is invalid",
+                context={
+                    "reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+                    "research_program_id": program.research_program_id,
+                    "decision_trade_date": day_key,
+                },
+            ) from exc
+        if canonical_json_sha256(normalized_existing) != canonical_json_sha256(
+            binding.phase0a_hmm_metadata
+        ):
+            raise RuntimeConfigInvalidError(
+                "sealed HMM binding conflicts with base Program evidence",
+                context={
+                    "reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+                    "research_program_id": program.research_program_id,
+                    "decision_trade_date": day_key,
+                },
+            )
     by_date[day_key] = deepcopy(binding.phase0a_hmm_metadata)
     runtime_config["phase0a_hmm_metadata_by_date"] = by_date
     snapshot_id = binding.phase0a_hmm_metadata["model_snapshot_id"]

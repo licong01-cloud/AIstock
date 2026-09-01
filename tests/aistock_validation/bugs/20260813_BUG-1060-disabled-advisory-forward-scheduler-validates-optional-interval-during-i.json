@@ -1,0 +1,291 @@
+{
+  "actual": "Optional interval configuration is parsed during module import and can become an unauthorized backend startup gate.",
+  "allowed_write_scope": [
+    "backend/services/advisory_forward/scheduler.py",
+    "backend/tests/advisory_model_first/test_forward_scheduler.py",
+    "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md",
+    "tests/aistock_validation/bugs/20260813_BUG-1060-disabled-advisory-forward-scheduler-validates-optional-interval-during-i.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1060",
+  "closed_at": "2026-08-17T17:05:06.713643Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-13T04:25:02.976549Z",
+  "description": "Optional interval configuration is parsed during module import and can become an unauthorized backend startup gate.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260813-9255dae298f5",
+      "timestamp": "2026-08-13T04:25:02.976540Z"
+    },
+    {
+      "action": "source_fix_verified",
+      "actor": "codex",
+      "note": "Disabled scheduler construction and status no longer parse optional interval or construct the runtime service; explicit activation validates configuration visibly before starting a thread.",
+      "timestamp": "2026-08-13T05:03:00Z"
+    },
+    {
+      "action": "shared_feature_pr_gate_reconciled",
+      "actor": "codex",
+      "note": "This BUG adds no DDL, but its source fix is carried by Feature PR #3366, whose pre-existing Advisory forward migration remains pending explicit authorization; metadata records the aggregate PR gate without authorizing execution.",
+      "timestamp": "2026-08-13T05:03:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Disabled scheduler import and status are stable; interval validation occurs only when explicit start/autostart activation is attempted and fails visibly there.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_forward/scheduler.py",
+      "backend/tests/advisory_model_first/test_forward_scheduler.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_forward/scheduler.py",
+        "backend/tests/advisory_model_first/test_forward_scheduler.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_forward/scheduler.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_scheduler.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_forward/scheduler.py",
+        "backend/tests/advisory_model_first/test_forward_scheduler.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_forward/scheduler.py",
+      "backend/tests/advisory_model_first/test_forward_scheduler.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+    ]
+  },
+  "first_seen_at": "2026-08-13T04:25:02.976549Z",
+  "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
+  "fix_commit": "ab9ca737d2c13f50461ecedc0bc6626016e47282",
+  "fixed_at": "2026-08-13T05:03:00Z",
+  "github_issue_number": 3389,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3389",
+  "last_seen_at": "2026-08-13T04:25:02.976549Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Set invalid AISTOCK_ADVISORY_FORWARD_POLL_SECONDS with scheduler disabled and import backend.services.advisory_forward.scheduler",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "2026-08-18 fresh Python process loaded the merged Advisory forward source and ran python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 30 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/validation/BUG-1060/post_restart_receipt_20260818.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1060",
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "8b0ef7ec7cb95d444a965236c1b91c43dd7b68dc6bba09a6f67e27bfacbcfe03",
+      "expected_identity": "ab9ca737d2c13f50461ecedc0bc6626016e47282",
+      "generated_at": "2026-08-17T17:03:55.305150Z",
+      "mode": "read_only",
+      "observed_identity": "9a7a2718026f6d62f218fbe09d8b82f3d697b6c3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "642e54e00b528c84fc449f2f37f28499fbe691ffb750099e477c507796b4d998",
+      "receipt_sha256": "6b5dbbd67bf08b56848d15ac2b682c74546055f380cf3bba8ab203d4067c2a77",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f9dab65320c0790a9f7ff16d02eaa7fe190056fa4b6042fe7e2bb9fd793a5d33",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Disabled Advisory forward scheduler validates optional interval during import",
+  "trigger_condition": {
+    "fingerprint": "9255dae298f5acec6af3ea1e",
+    "source_event_id": "FE-20260813-9255dae298f5"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 25 passed",
+    "rtk nox -s advisory_modeling_backend -> passed (final related module matrix)",
+    "rtk nox -s paper_v2_backend -> 1051 passed, 2 skipped, 2 xfailed",
+    "rtk nox -s advisory_historical_range_backend platform_api_backend validation_module_registry_l0 -> 351 passed, 5 skipped; 13 passed; 8 passed with ownership 14/14",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings",
+    "fresh-process Advisory forward matrix -> 30 passed; post-restart-verify 2026-08-18 -> workflow_gate=verified; runtime 9a7a2718 includes source fix ab9ca737"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

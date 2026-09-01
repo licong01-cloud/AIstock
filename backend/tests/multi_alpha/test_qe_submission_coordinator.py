@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import pytest
 
 from backend.services.quantevolver.qe_active_execution_capacity import (
+    MAX_RESTART_SAFE_LEASE_SECONDS,
     QEActiveExecutionCapacityService,
     QEExecutionReservationReconciler,
     QEWorkspaceSubmissionCoordinator,
@@ -267,16 +268,45 @@ def _source(
     )
 
 
-def test_capacity_contract_is_wsl_two_remote_four_and_request_can_only_lower() -> None:
+def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -> None:
     service = QEActiveExecutionCapacityService()
-    assert service.resolve_node_capacity("wsl2-5080") == 2
+    assert service.resolve_node_capacity("wsl2-5080") == 1
+    assert service.resolve_node_capacity("WSL2-5080") == 1
+    for alias in ("wsl", "LOCAL"):
+        with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
+            service.resolve_node_capacity(alias)
+        assert excinfo.value.reason_code == "qe_execution_capacity_node_alias_noncanonical"
     assert service.resolve_node_capacity("wsl2-5080", 1) == 1
-    assert service.resolve_node_capacity("wsl2-5080", 8) == 2
+    assert service.resolve_node_capacity("wsl2-5080", 8) == 1
     assert service.resolve_node_capacity("rdagent-node1") == 4
     assert service.resolve_node_capacity("rdagent-node1", 3) == 3
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError):
         service.resolve_node_capacity("rdagent-node1", 0)
+
+
+def test_submission_lease_is_bounded_for_first_minute_restart_takeover() -> None:
+    source, _evidence = _source(_payload())
+
+    assert source.lease_seconds == MAX_RESTART_SAFE_LEASE_SECONDS == 45
+    with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
+        replace(source, lease_seconds=46)
+    assert excinfo.value.reason_code == "qe_execution_reservation_lease_not_restart_safe"
+
+
+def test_wsl_capacity_identity_is_canonicalized_before_reservation() -> None:
+    payload = _payload()
+    source, _evidence = _source(payload)
+    source = replace(source, node_id="WSL2-5080")
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["spec"].node_id == "wsl2-5080"
+    assert repository.reserve_calls[0]["node_capacity"] == 1
 
 
 def test_full_capacity_persists_waiting_and_never_posts() -> None:
@@ -289,9 +319,10 @@ def test_full_capacity_persists_waiting_and_never_posts() -> None:
     outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
 
     assert outcome.state == "waiting_capacity"
-    assert outcome.active_count == outcome.node_capacity == 2
+    assert outcome.active_count == 2
+    assert outcome.node_capacity == 1
     assert client.submit_calls == 0
-    assert evidence == {"claimed": 0, "waiting": 1, "active_count": 2, "node_capacity": 2}
+    assert evidence == {"claimed": 0, "waiting": 1, "active_count": 2, "node_capacity": 1}
 
 
 def test_activation_unresolved_node_is_queue_only_without_failing_source() -> None:
@@ -672,8 +703,10 @@ def test_reconciler_releases_terminal_receipt_and_keeps_capacity_auditable(
             assert lease_seconds > 0
             return {**reservation, "row_version": token.row_version + 1}
 
-        def claim_reservation_for_source(self, **_kwargs: Any) -> None:
-            pytest.fail("live owner must not be replaced during reconciliation")
+        def claim_reservation_for_source(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["owner_id"] == source.owner_id
+            assert kwargs["expected_row_version"] == reservation["row_version"]
+            return {**reservation, "row_version": 2}
 
         def transition_execution_reservation(
             self,
@@ -724,3 +757,85 @@ def test_reconciler_releases_terminal_receipt_and_keeps_capacity_auditable(
     assert repository.transitions[0]["release_reason_code"] == (
         "qe_workspace_remote_completed"
     )
+
+
+def test_reconciler_unchanged_running_observation_never_claims_or_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, _evidence = _source(_payload())
+    reservation = {
+        "reservation_id": "qer_" + "c" * 64,
+        "node_id": "wsl2-5080",
+        "source_kind": source.source_kind,
+        "source_execution_id": source.source_execution_id,
+        "qe_task_id": "task-unchanged",
+        "qe_loop_id": "Loop1",
+        "submission_intent_hash": source.submission_intent_hash,
+        "status": "running",
+        "remote_status": "running",
+        "owner_id": "old-owner",
+        "fencing_token": 4,
+        "row_version": 9,
+    }
+
+    class Repository:
+        def __init__(self) -> None:
+            self.preflight_calls = 0
+            self.claim_calls = 0
+            self.transition_calls = 0
+
+        def preflight_schema(self, *, raise_on_error: bool) -> object:
+            assert raise_on_error is True
+            self.preflight_calls += 1
+            return object()
+
+        def list_active_reservations(self) -> list[dict[str, Any]]:
+            return [dict(reservation)]
+
+        def claim_reservation_for_source(self, **_kwargs: Any) -> None:
+            self.claim_calls += 1
+            return None
+
+        def transition_execution_reservation(self, *_args: Any, **_kwargs: Any) -> None:
+            self.transition_calls += 1
+
+    class InspectClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def inspect_loop_submission(
+            self,
+            task_id: str,
+            loop_id: str,
+            **_kwargs: Any,
+        ) -> QEWorkspaceSubmissionInspection:
+            return QEWorkspaceSubmissionInspection(
+                schema_version="qe_submission_receipt_v1",
+                task_id=task_id,
+                loop_id=loop_id,
+                status="running",
+                submission_intent_hash=source.submission_intent_hash,
+                request_digest="d" * 64,
+            )
+
+    repository = Repository()
+    monkeypatch.setattr(
+        QEWorkspaceClient,
+        "for_node",
+        classmethod(lambda _cls, _node_id: InspectClient()),
+    )
+    reconciler = QEExecutionReservationReconciler(
+        repository=repository,  # type: ignore[arg-type]
+        owner_id="new-owner",
+    )
+
+    for _ in range(100):
+        stats = asyncio.run(reconciler.scan_once())
+        assert stats["transitioned"] == 0
+
+    assert repository.preflight_calls == 1
+    assert repository.claim_calls == 0
+    assert repository.transition_calls == 0

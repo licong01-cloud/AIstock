@@ -608,6 +608,7 @@ def init_database():
                         base_experiment_id TEXT REFERENCES qe_experiments(experiment_id),
                         node_id TEXT,
                         label_horizon INTEGER NOT NULL DEFAULT 1,
+                        long_trend_profile_id TEXT,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
                         CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN ({label_horizons_sql}))
@@ -884,6 +885,7 @@ def init_database():
                 ("fork_from_loop_index", "INTEGER"),
                 ("inherit_history", "BOOLEAN DEFAULT FALSE"),
                 ("label_horizon", "INTEGER NOT NULL DEFAULT 1"),
+                ("long_trend_profile_id", "TEXT"),
             ]
             for col_name, col_type in evo_task_migrations:
                 cur.execute(
@@ -1068,7 +1070,7 @@ def init_database():
                  '{1m,5m,15m,30m}', 20, 30),
 
                 ('AC_OPTIMAL', 'Almgren-Chriss 最优执行', 'qlib',
-                 '基于市场波动率计算最优执行计划。高波动期间减少交易量（降低市场冲击），低波动期间加大执行。无信号时降级为 TWAP。来源: Qlib ACStrategy。',
+                 '基于市场波动率计算最优执行计划。高波动期间减少交易量（降低市场冲击），低波动期间加大执行。无信号时执行显式 TWAP 分支。来源: Qlib ACStrategy。',
                  'sigma = rolling_std(returns, vol_window)\nkappa = sqrt(lambda / eta)\nratio[t] = sinh(kappa*(T-t)) / sinh(kappa*T)\nstep_qty[t] = total_quantity * ratio[t]\n# lambda: 时间风险厌恶, eta: 市场冲击系数',
                  '{"lambda": 1e-6, "eta": 2.5e-6, "vol_window": 20}',
                  '{"type": "object", "properties": {"lambda": {"type": "number", "minimum": 1e-8, "maximum": 1e-3, "default": 1e-6}, "eta": {"type": "number", "minimum": 1e-8, "maximum": 1e-3, "default": 2.5e-6}, "vol_window": {"type": "integer", "minimum": 5, "maximum": 60, "default": 20}}}',

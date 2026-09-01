@@ -13,13 +13,18 @@ import json
 import math
 import re
 from dataclasses import dataclass, field, is_dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence, TypeVar, runtime_checkable
 
 from .reasons import QuoteContractReasonCode, QuoteContractStage, failure_definition, quote_contract_error
+
+# Python 3.10 compatibility: ``datetime.UTC`` exists only in 3.11+ and is the
+# identical singleton ``datetime.timezone.utc`` (same tzinfo object, offset,
+# and isoformat output).
+UTC = timezone.utc
 
 
 QUOTE_CONTRACT_SCHEMA_VERSION = "miniqmt_quote_contract_v2"

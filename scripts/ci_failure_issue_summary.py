@@ -7,11 +7,20 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
+GITHUB_TRANSPORT_MARKERS = (
+    "post graphql: eof",
+    "tls handshake timeout",
+    "schannel",
+    "connection reset",
+    "connection timed out",
+    "unexpected eof",
+)
 CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
 NIGHTLY_STATUS_KEYS = (
     "runner_preflight",
@@ -193,6 +202,77 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _github_transport_failure(value: Any) -> bool:
+    text = str(value or "").casefold()
+    return any(marker in text for marker in GITHUB_TRANSPORT_MARKERS)
+
+
+def _github_read_with_transport_retry(
+    args: list[str],
+    *,
+    timeout: int = 60,
+    attempts: int = 2,
+    provider: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    read_provider = provider or _run
+    last: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "not run"}
+    for attempt in range(max(1, attempts)):
+        last = read_provider(args, timeout=timeout)
+        if last.get("ok") or not _github_transport_failure(last.get("stderr") or last.get("stdout")):
+            return {**last, "attempts": attempt + 1}
+    return {**last, "attempts": max(1, attempts)}
+
+
+def _rest_actions_run_payload(repo: str, run_id: str) -> dict[str, Any]:
+    run_result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}"],
+        timeout=60,
+    )
+    jobs_result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+        timeout=60,
+    )
+    if not run_result.get("ok") or not jobs_result.get("ok"):
+        raise RuntimeError(
+            str(
+                run_result.get("stderr")
+                or jobs_result.get("stderr")
+                or run_result.get("stdout")
+                or jobs_result.get("stdout")
+                or "GitHub REST Actions readback failed"
+            )
+        )
+    try:
+        run = json.loads(str(run_result.get("stdout") or "{}"))
+        jobs_payload = json.loads(str(jobs_result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GitHub REST Actions readback returned invalid JSON: {exc}") from exc
+    jobs = [item for item in jobs_payload.get("jobs") or [] if isinstance(item, dict)]
+    if int(jobs_payload.get("total_count") or len(jobs)) > len(jobs):
+        raise RuntimeError("GitHub REST Actions jobs readback exceeds the supported single page")
+    return {
+        "databaseId": run.get("id"),
+        "name": run.get("name"),
+        "workflowName": run.get("name"),
+        "displayTitle": run.get("display_title"),
+        "event": run.get("event"),
+        "headBranch": run.get("head_branch"),
+        "headSha": run.get("head_sha"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "url": run.get("html_url"),
+        "jobs": [
+            {
+                "databaseId": job.get("id"),
+                "name": job.get("name"),
+                "conclusion": job.get("conclusion"),
+                "url": job.get("html_url"),
+            }
+            for job in jobs
+        ],
+    }
+
+
 def _runtime_failure_kind(summary: dict[str, Any]) -> str:
     """Classify whether a failure payload is a real Actions event or a local smoke fixture."""
     run_id = str(summary.get("run_id") or "").strip().lower()
@@ -219,10 +299,11 @@ def _llm_guarded_rollout_gate(
         from scripts import llm_provider_adapter
 
         config = llm_provider_adapter.load_config()
+        provider = str(config.get("default_provider") or "deepseek_api")
         advice = summary.get("llm_triage_advice") if isinstance(summary.get("llm_triage_advice"), dict) else {}
         llm_workflow_gate = str(advice.get("workflow_gate") or "ready")
         return llm_provider_adapter.build_guarded_rollout_gate(
-            "github_models",
+            provider,
             config,
             mode=mode,
             opt_in=opt_in,
@@ -250,7 +331,7 @@ def _llm_guarded_rollout_gate(
             "fallback_reason": str(exc),
             "llm_invocation_evidence": {
                 "schema_version": "aistock_llm_invocation_evidence_v1",
-                "provider": "github_models",
+                "provider": "deepseek_api",
                 "model": "unknown",
                 "invoked": False,
                 "reason": "guarded_rollout_gate_unavailable_no_network",
@@ -304,7 +385,7 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
             },
         }
     issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
-    if summary.get("diagnostic_status") != "complete" and issue_policy.get("allowed") is False:
+    if issue_policy.get("allowed") is False:
         return {
             "mode": "triage_only",
             "needs_bug_json": False,
@@ -477,7 +558,7 @@ def locate_last_green_run(
     current_run_id = str(summary.get("run_id") or "")
     if not branch or not workflow:
         return _last_green_payload(summary, status="unavailable", warning="missing branch or workflow")
-    result = run_provider(
+    result = _github_read_with_transport_retry(
         [
             "gh",
             "run",
@@ -492,17 +573,53 @@ def locate_last_green_run(
             "databaseId,workflowName,headSha,headBranch,conclusion,status,url,createdAt,displayTitle",
         ],
         timeout=120,
+        provider=run_provider,
     )
     if not result.get("ok"):
-        return _last_green_payload(
-            summary,
-            status="unavailable",
-            warning=str(result.get("stderr") or result.get("stdout") or "gh run list failed")[:240],
+        message = str(result.get("stderr") or result.get("stdout") or "gh run list failed")
+        if not _github_transport_failure(message):
+            return _last_green_payload(summary, status="unavailable", warning=message[:240])
+        encoded_branch = urllib.parse.quote(str(branch), safe="")
+        rest_result = _github_read_with_transport_retry(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/actions/runs?branch={encoded_branch}&status=success&per_page=50",
+            ],
+            timeout=120,
+            provider=run_provider,
         )
-    try:
-        runs = json.loads(str(result.get("stdout") or "[]"))
-    except json.JSONDecodeError as exc:
-        return _last_green_payload(summary, status="unavailable", warning=f"invalid gh run list JSON: {exc}")
+        if not rest_result.get("ok"):
+            return _last_green_payload(
+                summary,
+                status="unavailable",
+                warning=str(rest_result.get("stderr") or rest_result.get("stdout") or message)[:240],
+            )
+        try:
+            rest_payload = json.loads(str(rest_result.get("stdout") or "{}"))
+            rest_runs = rest_payload.get("workflow_runs") or []
+        except (json.JSONDecodeError, AttributeError) as exc:
+            return _last_green_payload(summary, status="unavailable", warning=f"invalid REST run list JSON: {exc}")
+        runs = [
+            {
+                "databaseId": run.get("id"),
+                "workflowName": run.get("name"),
+                "headSha": run.get("head_sha"),
+                "headBranch": run.get("head_branch"),
+                "conclusion": run.get("conclusion"),
+                "status": run.get("status"),
+                "url": run.get("html_url"),
+                "createdAt": run.get("created_at"),
+                "displayTitle": run.get("display_title"),
+            }
+            for run in rest_runs
+            if isinstance(run, dict)
+        ]
+    else:
+        try:
+            runs = json.loads(str(result.get("stdout") or "[]"))
+        except json.JSONDecodeError as exc:
+            return _last_green_payload(summary, status="unavailable", warning=f"invalid gh run list JSON: {exc}")
     if not isinstance(runs, list):
         return _last_green_payload(summary, status="unavailable", warning="gh run list JSON root was not a list")
     current_number = _run_id_number(current_run_id)
@@ -704,99 +821,6 @@ def _job_actionable_score(job: dict[str, Any]) -> int:
     if job.get("error_signature"):
         value += 10
     return value
-
-
-def _restore_nightly_identity(summary: dict[str, Any], nightly_summary: dict[str, Any]) -> dict[str, Any]:
-    for key in ("nightly_statuses", "nightly_fingerprint", "nightly_failed_stages"):
-        if key in nightly_summary:
-            summary[key] = nightly_summary[key]
-    summary["fingerprint_source"] = nightly_summary.get("nightly_fingerprint") or summary.get("fingerprint_source")
-    if nightly_summary.get("nightly_fingerprint"):
-        summary["fingerprint"] = "ci-" + hashlib.sha256(str(nightly_summary["nightly_fingerprint"]).encode("utf-8")).hexdigest()[:16]
-    return summary
-
-
-def _merge_nightly_actions_details(nightly_summary: dict[str, Any], actions_summary: dict[str, Any]) -> dict[str, Any]:
-    """Prefer compact failed-log details over status-only Nightly placeholders."""
-    concrete_jobs = [
-        job
-        for job in actions_summary.get("failed_jobs") or []
-        if job.get("failed_tests") or job.get("error_signature") or job.get("command")
-    ]
-    if not concrete_jobs:
-        extraction_errors = [str(item) for item in actions_summary.get("extraction_errors") or [] if item]
-        if extraction_errors:
-            merged = dict(nightly_summary)
-            merged["extraction_errors"] = _unique([*(nightly_summary.get("extraction_errors") or []), *extraction_errors])
-            merged["nightly_detail_enrichment"] = {
-                "source": "github_actions_failed_job_logs",
-                "workflow_gate": "warning",
-                "reason": "failed_job_log_details_unavailable",
-            }
-            merged = finalize_summary(merged)
-            merged = _restore_nightly_identity(merged, nightly_summary)
-            merged["llm_triage_advice"] = _build_nightly_llm_triage_advice(merged)
-            return merged
-        return nightly_summary
-    merged_jobs = sorted(concrete_jobs, key=_job_actionable_score, reverse=True)
-    extraction_errors = _unique(
-        [str(item) for item in [*(nightly_summary.get("extraction_errors") or []), *(actions_summary.get("extraction_errors") or [])] if item]
-    )
-    merged = dict(nightly_summary)
-    merged["failed_jobs"] = merged_jobs
-    merged["extraction_errors"] = extraction_errors
-    merged["nightly_detail_enrichment"] = {
-        "source": "github_actions_failed_job_logs",
-        "workflow_gate": "enriched",
-        "failed_job_count": len(merged_jobs),
-    }
-    enriched = finalize_summary(merged)
-    enriched = _restore_nightly_identity(enriched, nightly_summary)
-    enriched["last_green_locator"] = actions_summary.get("last_green_locator") or nightly_summary.get("last_green_locator")
-    enriched["failure_event"] = build_failure_event(enriched)
-    enriched["agent_handoff"] = build_agent_handoff(enriched)
-    enriched["llm_triage_advice"] = _build_nightly_llm_triage_advice(enriched)
-    return enriched
-
-
-def _maybe_enrich_nightly_status_from_actions(
-    nightly_summary: dict[str, Any],
-    *,
-    repo: str,
-    run_id: str | None,
-    run_url: str | None = None,
-    severity: str = "P1",
-    log_attempts: int = 1,
-    log_wait_seconds: float = 10.0,
-) -> dict[str, Any]:
-    effective_run_id = str(run_id or nightly_summary.get("run_id") or "").strip()
-    if not effective_run_id or effective_run_id.lower() in SYNTHETIC_RUN_IDS:
-        return nightly_summary
-    try:
-        actions_summary = summarize_actions_run(
-            repo=repo,
-            run_id=effective_run_id,
-            run_url=run_url or nightly_summary.get("run_url"),
-            severity=severity,
-            wait_for_completion=False,
-            log_attempts=log_attempts,
-            log_wait_seconds=log_wait_seconds,
-        )
-    except Exception as exc:
-        merged = dict(nightly_summary)
-        merged["extraction_errors"] = _unique(
-            [
-                *(nightly_summary.get("extraction_errors") or []),
-                f"failed to enrich Nightly status with failed job logs: {str(exc)[:240]}",
-            ]
-        )
-        merged["nightly_detail_enrichment"] = {
-            "source": "github_actions_failed_job_logs",
-            "workflow_gate": "warning",
-            "reason": "failed_job_log_enrichment_exception",
-        }
-        return _restore_nightly_identity(finalize_summary(merged), nightly_summary)
-    return _merge_nightly_actions_details(nightly_summary, actions_summary)
 
 
 def _github_issue_url(issue_number: int | str | None, repo: str = DEFAULT_REPO) -> str | None:
@@ -1337,20 +1361,80 @@ def _nightly_fingerprint(statuses: dict[str, str]) -> str:
     return "nightly-" + "-".join(statuses.get(key, "unknown") for key in NIGHTLY_STATUS_KEYS)
 
 
-def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None = None) -> dict[str, Any]:
+def _failed_nightly_sessions(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("nightly_session_results")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    return _unique(
+        [
+            str(row.get("session") or "").strip()
+            for row in rows
+            if isinstance(row, dict)
+            and _status_value(row.get("result")) in NIGHTLY_FAILURE_STATUSES
+            and str(row.get("session") or "").strip()
+        ]
+    )
+
+
+def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: dict[str, list[str]] = {}
+    for session in _failed_nightly_sessions(payload):
+        module = _test_plan_module_for_nox_session(session) or "validation.runner"
+        groups.setdefault(module, []).append(session)
+    return [
+        {"module": module, "sessions": sorted(set(sessions)), "session_count": len(set(sessions))}
+        for module, sessions in sorted(groups.items())
+    ]
+
+
+def _test_plan_module_for_nox_session(session: str) -> str | None:
+    catalog = Path(__file__).resolve().parents[1] / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
+    try:
+        lines = catalog.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    module: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("- plan_key:"):
+            module = None
+        elif line.startswith("module:"):
+            module = line.split(":", 1)[1].strip().strip("'\"") or None
+        elif line.startswith("nox_session:"):
+            nox_session = line.split(":", 1)[1].strip().strip("'\"")
+            if nox_session == session:
+                return module
+    return None
+
+
+def _nightly_job_from_statuses(
+    statuses: dict[str, str],
+    *,
+    run_url: str | None = None,
+    failed_sessions: list[str] | None = None,
+    failure_groups: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     failed_keys = _nightly_failed_keys(statuses)
+    failed_sessions = _unique(failed_sessions or [])
+    failure_groups = failure_groups or []
+    heterogeneous_sessions = len(failure_groups) > 1
     if statuses.get("runner_preflight") == "failure":
         error = "self-hosted Windows runner unavailable"
         module = "validation"
         files = [".github/workflows/nightly.yml", "scripts/aistock_runner_health.py"]
     elif "nightly_l3" in failed_keys:
-        error = "Nightly failed: " + ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
-        module = "paper_v2"
+        session_detail = ", ".join(f"{session}=failure" for session in failed_sessions)
+        error = "Nightly failed: " + (
+            session_detail or ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
+        )
+        module = (
+            "validation.runner"
+            if heterogeneous_sessions
+            else ((_test_plan_module_for_nox_session(failed_sessions[0]) if failed_sessions else None) or "validation.runner")
+        )
         files = [
             ".github/workflows/nightly.yml",
             "noxfile.py",
-            "scripts/aistock_data_quality_smoke.py",
-            "scripts/aistock_validate.py",
+            "tests/aistock_validation/catalog/test_plans.yaml",
         ]
     elif failed_keys == ["code_intelligence"]:
         error = "Nightly code intelligence failed: code_intelligence=" + statuses.get("code_intelligence", "unknown")
@@ -1372,13 +1456,14 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
     return {
         "job_name": "AIstock Nightly status",
         "job_url": run_url,
-        "failed_step": failed_keys[0] if failed_keys else "nightly_status",
-        "command": "gh run view <run-id> --workflow nightly.yml",
-        "nox_session": None,
+        "failed_step": None if heterogeneous_sessions else (failed_sessions[0] if failed_sessions else failed_keys[0] if failed_keys else "nightly_status"),
+        "command": None if heterogeneous_sessions else (f"python -m nox -s {failed_sessions[0]}" if failed_sessions else "gh run view <run-id> --workflow nightly.yml"),
+        "nox_session": None if heterogeneous_sessions else (failed_sessions[0] if failed_sessions else None),
         "pytest_summary": None,
         "failed_tests": [],
         "error_signature": error,
-        "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS],
+        "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS]
+        + [f"session {session}: failure" for session in failed_sessions],
         "key_log_excerpt_omitted_count": 0,
         "suspected_module": module,
         "suspected_files": files,
@@ -1388,7 +1473,7 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
 def _build_nightly_llm_triage_advice(
     summary: dict[str, Any],
     *,
-    provider: str = "github_models",
+    provider: str | None = None,
     invoke_llm: bool = False,
 ) -> dict[str, Any]:
     """Attach schema-checked triage advice and optionally live LLM test-plan advice."""
@@ -1400,12 +1485,13 @@ def _build_nightly_llm_triage_advice(
         from scripts import llm_provider_adapter
 
         config = llm_provider_adapter.load_config()
+        effective_provider = provider or str(config.get("default_provider") or "deepseek_api")
         code_intelligence_refs = (
             summary.get("code_intelligence_refs") if isinstance(summary.get("code_intelligence_refs"), dict) else {}
         )
-        advice = llm_provider_adapter.build_triage_quality_smoke(provider, config)
+        advice = llm_provider_adapter.build_triage_quality_smoke(effective_provider, config)
         test_plan_advice = llm_provider_adapter.build_test_plan_advice(
-            provider,
+            effective_provider,
             config,
             changed_files=list(summary.get("suspected_files") or []),
             module=(summary.get("suspected_modules") or [None])[0],
@@ -1413,16 +1499,17 @@ def _build_nightly_llm_triage_advice(
             invoke_llm=invoke_llm,
         )
     except Exception as exc:
+        effective_provider = provider or "deepseek_api"
         return {
             "schema_version": "aistock_deepseek_triage_advice_v1",
-            "provider": provider,
+            "provider": effective_provider,
             "workflow_gate": "warning",
             "blocking_for_issue_creation": False,
             "fallback_used": True,
             "fallback_reason": str(exc),
             "llm_invocation_evidence": {
                 "schema_version": "aistock_llm_invocation_evidence_v1",
-                "provider": provider,
+                "provider": effective_provider,
                 "model": "unknown",
                 "invoked": False,
                 "reason": "triage_advice_unavailable",
@@ -1505,7 +1592,14 @@ def summarize_nightly_status(
             ]
         )
     )
-    job = _nightly_job_from_statuses(statuses, run_url=effective_run_url)
+    failed_sessions = _failed_nightly_sessions(payload)
+    failure_groups = _nightly_failure_groups(payload)
+    job = _nightly_job_from_statuses(
+        statuses,
+        run_url=effective_run_url,
+        failed_sessions=failed_sessions,
+        failure_groups=failure_groups,
+    )
     summary = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",
@@ -1523,6 +1617,8 @@ def summarize_nightly_status(
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,
             "nightly_failed_stages": failed_keys,
+            "nightly_failed_sessions": failed_sessions,
+            "nightly_failure_groups": failure_groups,
         }
     )
     summary["fingerprint_source"] = fingerprint
@@ -1533,6 +1629,16 @@ def summarize_nightly_status(
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
     summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
+    if len(failure_groups) > 1:
+        summary["issue_creation_policy"] = {
+            "allowed": False,
+            "reason": "nightly_heterogeneous_failures_require_group_triage",
+            "next_command": "inspect nightly_failure_groups and promote only one confirmed root-cause group",
+        }
+        summary["suspected_modules"] = ["validation.runner"]
+        summary["issue_title"] = f"P1 Nightly triage required: {len(failure_groups)} heterogeneous failure groups"
+        summary["failure_event"] = build_failure_event(summary)
+        summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
 
 
@@ -1562,14 +1668,23 @@ def summarize_actions_run(
     attempts = max(1, wait_attempts if wait_for_completion else 1)
     result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "run view not attempted"}
     run_payload: dict[str, Any] = {}
+    read_fallbacks: list[dict[str, Any]] = []
     for attempt in range(attempts):
-        result = _run(run_view_args, timeout=120)
-        if result.get("ok"):
-            run_payload = json.loads(str(result.get("stdout") or "{}"))
-            if not wait_for_completion or _status_value(run_payload.get("status")) == "completed":
-                break
+        result = _github_read_with_transport_retry(run_view_args, timeout=120)
+        if not result.get("ok"):
+            break
+        run_payload = json.loads(str(result.get("stdout") or "{}"))
+        if not wait_for_completion or _status_value(run_payload.get("status")) == "completed":
+            break
         if wait_for_completion and attempt + 1 < attempts:
             time.sleep(max(0.0, wait_seconds))
+    if not result.get("ok") and _github_transport_failure(result.get("stderr") or result.get("stdout")):
+        try:
+            run_payload = _rest_actions_run_payload(repo, str(run_id))
+            result = {"ok": True, "stdout": json.dumps(run_payload), "stderr": "", "source": "github_rest"}
+            read_fallbacks.append({"stage": "actions_run", "source": "github_rest"})
+        except RuntimeError as exc:
+            result = {"ok": False, "stdout": "", "stderr": str(exc), "source": "github_rest"}
     extraction_errors: list[str] = []
     if not result.get("ok"):
         extraction_errors.append(result.get("stderr") or result.get("stdout") or "gh run view failed")
@@ -1620,7 +1735,10 @@ def summarize_actions_run(
         else:
             log_result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "log fetch not attempted"}
             for attempt in range(max(1, log_attempts)):
-                log_result = _run(["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"], timeout=180)
+                log_result = _github_read_with_transport_retry(
+                    ["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"],
+                    timeout=180,
+                )
                 if log_result.get("ok") or not _logs_not_ready_error(log_result.get("stderr") or log_result.get("stdout")):
                     break
                 if attempt + 1 < max(1, log_attempts):
@@ -1628,7 +1746,19 @@ def summarize_actions_run(
             if log_result.get("ok"):
                 log_text = str(log_result.get("stdout") or "")
             else:
-                extraction_errors.append(f"{job.get('name')}: {log_result.get('stderr') or log_result.get('stdout')}")
+                log_error = str(log_result.get("stderr") or log_result.get("stdout") or "job log fetch failed")
+                if _github_transport_failure(log_error):
+                    rest_log = _github_read_with_transport_retry(
+                        ["gh", "api", f"repos/{repo}/actions/jobs/{job_id}/logs"],
+                        timeout=180,
+                    )
+                    if rest_log.get("ok"):
+                        log_text = str(rest_log.get("stdout") or "")
+                        read_fallbacks.append({"stage": "job_log", "source": "github_rest", "job_id": job_id})
+                    else:
+                        extraction_errors.append(f"{job.get('name')}: {rest_log.get('stderr') or rest_log.get('stdout')}")
+                else:
+                    extraction_errors.append(f"{job.get('name')}: {log_error}")
         parsed = parse_job_log(log_text, job_name=str(job.get("name") or ""), job_url=job.get("url"))
         parsed["conclusion"] = job.get("conclusion")
         parsed["database_id"] = job.get("databaseId")
@@ -1648,6 +1778,7 @@ def summarize_actions_run(
             "conclusion": run_payload.get("conclusion"),
             "failed_jobs": failed_jobs,
             "extraction_errors": extraction_errors,
+            "read_fallbacks": read_fallbacks,
         }
     )
     finalized["last_green_locator"] = locate_last_green_run(finalized, repo=repo)
@@ -2097,6 +2228,11 @@ def main(argv: list[str] | None = None) -> int:
         payload = json.loads(Path(args.nightly_status_json).read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict):
             raise SystemExit("--nightly-status-json must contain a JSON object")
+        session_results_path = Path(args.nightly_status_json).resolve().parent.parent / "nightly_l3" / "session-results.json"
+        if session_results_path.exists():
+            session_results = json.loads(session_results_path.read_text(encoding="utf-8-sig"))
+            if isinstance(session_results, (list, dict)):
+                payload["nightly_session_results"] = session_results
         summary = summarize_nightly_status(
             payload,
             repo=args.repo,
@@ -2106,16 +2242,11 @@ def main(argv: list[str] | None = None) -> int:
             branch=args.branch,
             commit=args.commit,
         )
-        if args.run_id:
-            summary = _maybe_enrich_nightly_status_from_actions(
-                summary,
-                repo=args.repo,
-                run_id=args.run_id,
-                run_url=args.run_url,
-                severity=args.severity,
-                log_attempts=args.log_attempts,
-                log_wait_seconds=args.log_wait_seconds,
-            )
+        summary["nightly_detail_enrichment"] = {
+            "source": "local_completed_job_and_session_receipts",
+            "workflow_gate": "not_required",
+            "reason": "same_run_github_actions_read_prohibited",
+        }
     elif args.run_id:
         summary = summarize_actions_run(
             repo=args.repo,

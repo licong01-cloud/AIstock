@@ -29,19 +29,25 @@ from backend.services.paper_trading_v2.models import (
     PortfolioStatus,
 )
 from backend.services.paper_trading_v2.broker import (
+    MiniQMTSimBackend,
+)
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBindCapacity,
     MarketDataChannel,
-    MiniQMTSimBackend,
     OrderHandle,
     OrderHandleStatus,
     SubscriptionHandle,
 )
 from backend.services.paper_trading_v2.broker.minqmtsim import _OrderRecord
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, quote_tradability_evidence
+from backend.services.simulation_data.tdx_causal_minute import quote_tradability_evidence
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
 from backend.services.strategy_package.selection_artifact import (
@@ -58,6 +64,7 @@ from backend.services.trading_core.errors import (
 from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import (
+    ActiveCanonicalPitResolver,
     FakeCalendar,
     FakeSuspendLookup,
     make_paper_enabled_manifest,
@@ -582,6 +589,7 @@ class _FakeXtDataForQuoteHeal:
         self.subscribe_calls: list[dict[str, Any]] = []
         self.full_tick_calls = 0
         self.unsubscribe_calls: list[int] = []
+        self.instrument_detail_calls: list[str] = []
         self.run_calls = 0
         self.seq = 700
         self.rows = [
@@ -634,6 +642,7 @@ class _FakeXtDataForQuoteHeal:
 
     def get_instrument_detail(self, symbol: str, *, iscomplete: bool) -> dict[str, object]:
         assert iscomplete is True
+        self.instrument_detail_calls.append(symbol)
         code, exchange = symbol.split(".", 1)
         return {
             "InstrumentID": code,
@@ -708,7 +717,42 @@ def test_xtquant_get_instrument_detail_reads_complete_authority_without_order_si
     }
 
 
-def test_xtquant_get_full_tick_still_returns_stale_payload_after_loud_self_heal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_xtquant_get_instrument_details_uses_one_ordered_bounded_exact_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+
+    payload = client.get_instrument_details(["000001.SZ", "600000.SH"], total_timeout_seconds=1.0)
+
+    assert list(payload) == ["000001.SZ", "600000.SH"]
+    assert fake_xtdata.instrument_detail_calls == ["000001.SZ", "600000.SH"]
+    assert payload["600000.SH"]["InstrumentID"] == "600000"
+    with pytest.raises(QMTNotAvailableError, match="BATCH_IDENTITY_INVALID"):
+        client.get_instrument_details(["000001.SZ", "000001.SZ"])
+
+
+def test_xtquant_get_instrument_details_enforces_one_total_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.infra.qmt_client as qmt_client_module
+
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+    ticks = iter((0.0, 2.0))
+    monkeypatch.setattr(qmt_client_module.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(QMTNotAvailableError, match="BATCH_TIMEOUT"):
+        client.get_instrument_details(["000001.SZ"], total_timeout_seconds=1.0)
+
+    assert fake_xtdata.instrument_detail_calls == []
+
+
+def test_xtquant_get_full_tick_still_returns_stale_payload_after_loud_self_heal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_xtdata = _FakeXtDataForQuoteHeal()
     fake_xtdata.rows[1]["000001.SZ"]["time"] = "20240102093010"
     _install_fake_xtdata(monkeypatch, fake_xtdata)
@@ -1114,7 +1158,9 @@ class _SnapshotOnlyRepository:
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict | None = None) -> None:
         self.events.append({"run_id": run_id, "event_type": event_type, "message": message, "context": context or {}})
 
-    def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
+    def save_positions(
+        self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]
+    ) -> None:
         self.saved_positions.append(
             {"run_id": run_id, "trade_date": trade_date, "positions": positions, "prices": prices}
         )
@@ -1129,7 +1175,9 @@ class _SnapshotOnlyRepository:
     def list_orders_for_run(self, run_id: str) -> list[Any]:
         return list(self.orders)
 
-    def save_fill(self, run_id: str, fill, *, intended_price: float | None = None, fill_market_context: dict | None = None) -> None:
+    def save_fill(
+        self, run_id: str, fill, *, intended_price: float | None = None, fill_market_context: dict | None = None
+    ) -> None:
         self.fills.append(
             {
                 "run_id": run_id,
@@ -1170,7 +1218,9 @@ class _SnapshotOnlyRepository:
         return self.portfolio
 
 
-def _minqmt_account_group_binding(portfolio: PaperPortfolio, *, account_id: str = "acct-a") -> PaperBrokerAccountBinding:
+def _minqmt_account_group_binding(
+    portfolio: PaperPortfolio, *, account_id: str = "acct-a"
+) -> PaperBrokerAccountBinding:
     account_group_id = miniqmt_account_group_id(account_id)
     if not account_group_id:
         raise AssertionError("test MiniQMT account id must generate account_group_id")
@@ -1320,10 +1370,15 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
         config_json=runtime_config,
         created_by="unit_test",
     )
+    canonical_version = profile_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     activation = profile_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="MiniQMT readiness runtime profile",
     )
@@ -1337,6 +1392,7 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
         refresh_audit=NoopRefreshAudit(),
         risk_policy_service=risk_policy,
         minqmt_broker_factory=_portfolio_backend_factory(FakeQMTClient(connected=True)),
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     ).check_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
@@ -1344,13 +1400,16 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
     )
 
     assert "runtime_profile_activation" in readiness.runtime_config_keys
-    assert paper_repo.runtime_config_activations[activation.activation_id].profile_version_id == version.profile_version_id
+    assert paper_repo.runtime_config_activations[activation.activation_id].profile_version_id == (
+        canonical_version.profile_version_id
+    )
     assert risk_policy.profile_seen is not None
     assert risk_policy.profile_seen.enabled is True
     selection_check = next(check for check in readiness.checks if check.check_name == "selection_runtime")
     assert selection_check.context["runtime_profile"]["hmm"]["enabled"] is False
     assert selection_check.context["runtime_profile"]["hmm"]["model_snapshot_id"] is None
-    assert {check.check_name for check in readiness.checks} >= {"miniqmt_broker_authority", "miniqmt_execution_authority"}
+    assert {check.check_name for check in readiness.checks} >= {
+        "miniqmt_broker_authority",
+        "miniqmt_execution_authority",
+    }
     assert "minute_market_data" not in {check.check_name for check in readiness.checks}
-
-

@@ -302,6 +302,30 @@ def _algo_instance_id_v2(
     )
 
 
+def algo_transition_id_v1(
+    *,
+    delivery_id: str,
+    event_id: str,
+    runtime_id: str,
+    algo_instance_id: str,
+    transition_sequence: int,
+) -> str:
+    identity_payload = {
+        "delivery_id": require_identity_v1(delivery_id, field_name="delivery_id"),
+        "event_id": require_identity_v1(event_id, field_name="event_id"),
+        "runtime_id": require_identity_v1(runtime_id, field_name="runtime_id"),
+        "algo_instance_id": require_identity_v1(algo_instance_id, field_name="algo_instance_id"),
+        "transition_sequence": transition_sequence,
+    }
+    if type(transition_sequence) is not int or transition_sequence <= 0:
+        raise TypeError("transition_sequence must be a positive strict integer")
+    return _prefixed_identity_v1(
+        prefix="mqtransition_",
+        domain="miniqmt_algo_transition_identity_v1",
+        payload=identity_payload,
+    )
+
+
 def _submit_local_order_id_v1(
     *,
     runtime_id: str,
@@ -425,6 +449,7 @@ class OrderTypeV1(StrEnum):
 
 class EventTypeV2(StrEnum):
     ALGO_START = "ALGO_START"
+    COMMAND_OUTCOME = "COMMAND_OUTCOME"
     TICK = "TICK"
     TIMER = "TIMER"
     ORDER = "ORDER"
@@ -484,6 +509,36 @@ class DeliveryStatusV1(StrEnum):
 class BrokerCommandTypeV2(StrEnum):
     SUBMIT_LIMIT = "SUBMIT_LIMIT"
     CANCEL_ORDER = "CANCEL_ORDER"
+
+
+class NormalizedOrderStatusV1(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+
+
+class KernelCommandOutcomeV1(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    PRE_CALL_TERMINAL = "PRE_CALL_TERMINAL"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+    CONFLICT = "CONFLICT"
+
+
+class KernelCommandOutcomeMappingClosureModeV1(StrEnum):
+    ADVANCE_MAPPING = "ADVANCE_MAPPING"
+    VERIFY_CALLBACK_PRECEDENCE = "VERIFY_CALLBACK_PRECEDENCE"
+
+
+class CurrentThreeActiveOrderStatusV3(StrEnum):
+    COMMAND_PENDING = "COMMAND_PENDING"
+    SUBMITTED = "SUBMITTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    CANCEL_PENDING = "CANCEL_PENDING"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+    TERMINAL_TRADE_PENDING = "TERMINAL_TRADE_PENDING"
 
 
 class TimerMutationTypeV1(StrEnum):
@@ -1052,10 +1107,194 @@ class ExecutionAlgoPluginManifestV2(FrozenStrictModel):
         return self
 
 
-_EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] = {
+def _validate_fact_sha256_v1(model: FrozenStrictModel, *, domain: str, field_name: str = "fact_sha256") -> None:
+    supplied = getattr(model, field_name)
+    expected = hash_hex_v1(domain, model.canonical_payload_v1(exclude={field_name}))
+    if supplied != expected:
+        raise ValueError(f"{field_name} does not match strict payload closure")
+
+
+class KernelOrderEventPayloadV1(FrozenStrictModel):
+    order_event_id: IdentityV1
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    parent_intent_id: IdentityV1
+    strategy_slot_id: IdentityV1
+    mapping_id: IdentityV1
+    command_id: IdentityV1
+    local_vt_orderid: IdentityV1
+    broker_order_id: IdentityV1
+    symbol: IdentityV1
+    side: SideV1
+    normalized_order_status: NormalizedOrderStatusV1
+    observed_cumulative_filled_quantity: NonNegativeIntV1 | None
+    observed_remaining_quantity: NonNegativeIntV1 | None
+    terminal: StrictBool
+    source_payload_sha256: Sha256V1
+    fact_sha256: Sha256V1
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> Self:
+        if _A_SHARE_SYMBOL_RE.fullmatch(self.symbol) is None:
+            raise ValueError("symbol must be a canonical A-share symbol")
+        if (self.observed_cumulative_filled_quantity is None) != (self.observed_remaining_quantity is None):
+            raise ValueError("ORDER observed cumulative and remaining quantities must be null or present together")
+        expected_terminal = self.normalized_order_status in {
+            NormalizedOrderStatusV1.FILLED,
+            NormalizedOrderStatusV1.CANCELLED,
+            NormalizedOrderStatusV1.REJECTED,
+        }
+        if self.terminal is not expected_terminal:
+            raise ValueError("ORDER terminal flag conflicts with normalized status")
+        _validate_fact_sha256_v1(self, domain="miniqmt_kernel_order_event_payload_v1")
+        return self
+
+
+class KernelTradeEventPayloadV1(FrozenStrictModel):
+    trade_id: IdentityV1
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    parent_intent_id: IdentityV1
+    strategy_slot_id: IdentityV1
+    mapping_id: IdentityV1
+    command_id: IdentityV1
+    local_vt_orderid: IdentityV1
+    broker_order_id: IdentityV1
+    symbol: IdentityV1
+    side: SideV1
+    trade_quantity: PositiveIntV1
+    trade_price_decimal: PositiveCanonicalDecimalV1
+    source_payload_sha256: Sha256V1
+    fact_sha256: Sha256V1
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> Self:
+        if _A_SHARE_SYMBOL_RE.fullmatch(self.symbol) is None:
+            raise ValueError("symbol must be a canonical A-share symbol")
+        _validate_fact_sha256_v1(self, domain="miniqmt_kernel_trade_event_payload_v1")
+        return self
+
+
+class KernelCommandOutcomeEventPayloadV1(FrozenStrictModel):
+    receipt_id: IdentityV1
+    receipt_sha256: Sha256V1
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    parent_intent_id: IdentityV1
+    strategy_slot_id: IdentityV1
+    mapping_id: IdentityV1
+    command_id: IdentityV1
+    command_type: BrokerCommandTypeV2
+    local_vt_orderid: IdentityV1
+    broker_order_id: IdentityV1 | None
+    outcome: KernelCommandOutcomeV1
+    outbox_status: IdentityV1
+    outbox_row_version: PositiveIntV1
+    outcome_receipt_sha256: Sha256V1
+    outbox_terminal: StrictBool
+    order_terminal: StrictBool
+    fact_sha256: Sha256V1
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> Self:
+        terminal_statuses = {"ACKED", "ACKED_REJECTED", "FAILED_TERMINAL"}
+        if self.outbox_terminal is not (self.outbox_status in terminal_statuses):
+            raise ValueError("COMMAND_OUTCOME outbox_terminal conflicts with outbox status")
+        status_outcomes = {
+            "ACKED": {KernelCommandOutcomeV1.ACCEPTED},
+            "ACKED_REJECTED": {KernelCommandOutcomeV1.REJECTED},
+            "OUTCOME_UNKNOWN": {KernelCommandOutcomeV1.OUTCOME_UNKNOWN},
+            "FAILED_TERMINAL": {
+                KernelCommandOutcomeV1.ACCEPTED,
+                KernelCommandOutcomeV1.REJECTED,
+                KernelCommandOutcomeV1.PRE_CALL_TERMINAL,
+                KernelCommandOutcomeV1.CONFLICT,
+            },
+        }
+        allowed_outcomes = status_outcomes.get(self.outbox_status)
+        if allowed_outcomes is None or self.outcome not in allowed_outcomes:
+            raise ValueError("COMMAND_OUTCOME outcome conflicts with durable outbox status")
+        expected_order_terminal = self.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT and self.outcome in {
+            KernelCommandOutcomeV1.REJECTED,
+            KernelCommandOutcomeV1.PRE_CALL_TERMINAL,
+        }
+        if self.order_terminal is not expected_order_terminal:
+            raise ValueError("COMMAND_OUTCOME order_terminal conflicts with command/outcome")
+        if self.command_type is BrokerCommandTypeV2.CANCEL_ORDER and self.broker_order_id is None:
+            raise ValueError("CANCEL COMMAND_OUTCOME requires the owned broker order identity")
+        if (
+            self.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+            and self.outcome is KernelCommandOutcomeV1.ACCEPTED
+            and self.broker_order_id is None
+        ):
+            raise ValueError("accepted SUBMIT COMMAND_OUTCOME requires broker order identity")
+        _validate_fact_sha256_v1(self, domain="miniqmt_kernel_command_outcome_payload_v1")
+        return self
+
+
+class KernelTradeFactRefV1(FrozenStrictModel):
+    trade_id: IdentityV1
+    trade_fact_sha256: Sha256V1
+
+
+class KernelOrderReconcileEventPayloadV1(FrozenStrictModel):
+    receipt_id: IdentityV1
+    receipt_sha256: Sha256V1
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    parent_intent_id: IdentityV1
+    strategy_slot_id: IdentityV1
+    mapping_id: IdentityV1
+    local_vt_orderid: IdentityV1
+    broker_order_id: IdentityV1
+    symbol: IdentityV1
+    side: SideV1
+    normalized_order_status: NormalizedOrderStatusV1
+    authoritative_cumulative_filled_quantity: NonNegativeIntV1
+    authoritative_remaining_quantity: NonNegativeIntV1
+    ordered_trade_refs: tuple[KernelTradeFactRefV1, ...]
+    trade_set_sha256: Sha256V1
+    callback_watermark: IdentityV1
+    snapshot_sha256: Sha256V1
+    terminal: StrictBool
+    fact_sha256: Sha256V1
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> Self:
+        if _A_SHARE_SYMBOL_RE.fullmatch(self.symbol) is None:
+            raise ValueError("symbol must be a canonical A-share symbol")
+        trade_ids = tuple(item.trade_id for item in self.ordered_trade_refs)
+        if trade_ids != tuple(sorted(trade_ids)) or len(trade_ids) != len(set(trade_ids)):
+            raise ValueError("ordered_trade_refs must be unique and sorted by trade identity")
+        expected_trade_set = hash_hex_v1(
+            "miniqmt_kernel_order_reconcile_trade_set_v1",
+            [item.model_dump(mode="json") for item in self.ordered_trade_refs],
+        )
+        if self.trade_set_sha256 != expected_trade_set:
+            raise ValueError("trade_set_sha256 does not match ordered trade closure")
+        expected_terminal = self.normalized_order_status in {
+            NormalizedOrderStatusV1.FILLED,
+            NormalizedOrderStatusV1.CANCELLED,
+            NormalizedOrderStatusV1.REJECTED,
+        }
+        if self.terminal is not expected_terminal:
+            raise ValueError("RECONCILE terminal flag conflicts with normalized status")
+        _validate_fact_sha256_v1(self, domain="miniqmt_kernel_order_reconcile_payload_v1")
+        return self
+
+
+_STRICT_EVENT_PAYLOAD_MODELS: dict[EventTypeV2, type[FrozenStrictModel]] = {
+    EventTypeV2.ORDER: KernelOrderEventPayloadV1,
+    EventTypeV2.TRADE: KernelTradeEventPayloadV1,
+    EventTypeV2.RECONCILE: KernelOrderReconcileEventPayloadV1,
+    EventTypeV2.COMMAND_OUTCOME: KernelCommandOutcomeEventPayloadV1,
+}
+
+
+_EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str | tuple[str, ...], tuple[str, ...]]] = {
     EventTypeV2.ALGO_START: (
         EventSourceV2.MINIQMT_EXECUTION_KERNEL,
-        "miniqmt_algo_start_v1",
+        ("miniqmt_algo_start_v1", "miniqmt_algo_start_v2"),
         (
             "algo_instance_id",
             "runtime_id",
@@ -1067,6 +1306,11 @@ _EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] 
             "plugin_manifest_sha256",
             "plugin_config_sha256",
         ),
+    ),
+    EventTypeV2.COMMAND_OUTCOME: (
+        EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+        "miniqmt_command_outcome_v1",
+        ("receipt_id", "receipt_sha256"),
     ),
     EventTypeV2.TICK: (EventSourceV2.B0_QUOTE_V2, "miniqmt_market_data_view_v2", ("market_data_id",)),
     EventTypeV2.TIMER: (EventSourceV2.EXCHANGE_SESSION_CLOCK, "miniqmt_timer_due_v1", ("timer_occurrence_id",)),
@@ -1094,6 +1338,82 @@ _EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] 
         ("operator_command_id",),
     ),
 }
+
+
+_ALGO_START_V2_PAYLOAD_FIELDS = frozenset(
+    {
+        "parent_intent_id",
+        "strategy_slot_id",
+        "target_quantity",
+        "execution_plan_id",
+        "execution_plan_sha256",
+        "release_id",
+        "release_sha256",
+        "policy_id",
+        "policy_sha256",
+        "gateway_capability_catalog",
+        "plugin_catalog_sha256",
+        "plugin_route_compatibility_receipt_sha256",
+        "plugin_route_compatibility_receipt",
+        "product_route_cutover_receipt_sha256",
+        "product_route_owner_sha256",
+        "product_route_epoch",
+        "effective_new_instance_sequence",
+        "binding_id",
+        "creation_request_sha256",
+    }
+)
+
+
+def _validate_algo_start_v2_payload_v1(payload: dict[str, Any]) -> None:
+    """Validate the final product ALGO_START payload without admitting a V1 route alias."""
+
+    actual_fields = set(payload)
+    if actual_fields != _ALGO_START_V2_PAYLOAD_FIELDS:
+        raise ValueError(
+            "ALGO_START V2 payload must contain its exact final route fields; "
+            f"missing={sorted(_ALGO_START_V2_PAYLOAD_FIELDS - actual_fields)}, "
+            f"extra={sorted(actual_fields - _ALGO_START_V2_PAYLOAD_FIELDS)}"
+        )
+    for field_name in (
+        "parent_intent_id",
+        "strategy_slot_id",
+        "execution_plan_id",
+        "release_id",
+        "policy_id",
+        "binding_id",
+    ):
+        require_identity_v1(payload[field_name], field_name=f"payload.{field_name}")
+    for field_name in (
+        "execution_plan_sha256",
+        "release_sha256",
+        "policy_sha256",
+        "plugin_catalog_sha256",
+        "plugin_route_compatibility_receipt_sha256",
+        "product_route_cutover_receipt_sha256",
+        "product_route_owner_sha256",
+        "creation_request_sha256",
+    ):
+        require_sha256_v1(payload[field_name], field_name=f"payload.{field_name}")
+    if type(payload["target_quantity"]) is not int or payload["target_quantity"] <= 0:
+        raise ValueError("ALGO_START V2 target_quantity must be a positive strict integer")
+    for field_name in ("product_route_epoch", "effective_new_instance_sequence"):
+        if type(payload[field_name]) is not int or payload[field_name] <= 0:
+            raise ValueError(f"ALGO_START V2 {field_name} must be a positive strict integer")
+    try:
+        gateway = GatewayCapabilityCatalogV1.model_validate_json(
+            json.dumps(payload["gateway_capability_catalog"], sort_keys=True, separators=(",", ":"))
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ALGO_START V2 gateway capability catalog is not strict") from exc
+    if gateway.quote_source != "B0_QUOTE_V2":
+        raise ValueError("ALGO_START V2 requires B0_QUOTE_V2 gateway authority")
+    receipt = payload["plugin_route_compatibility_receipt"]
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("receipt_sha256") != payload["plugin_route_compatibility_receipt_sha256"]
+    ):
+        raise ValueError("ALGO_START V2 plugin route receipt does not close to its explicit hash")
 
 
 class RuntimeEventEnvelopeV2(FrozenStrictModel):
@@ -1159,7 +1479,10 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
     @model_validator(mode="after")
     def _validate_event(self) -> Self:
         expected_source, expected_schema, required_identity_fields = _EVENT_COMPOSITE[self.event_type]
-        if self.source is not expected_source or self.payload_schema_version != expected_schema:
+        accepted_schemas = (
+            frozenset(expected_schema) if isinstance(expected_schema, tuple) else frozenset((expected_schema,))
+        )
+        if self.source is not expected_source or self.payload_schema_version not in accepted_schemas:
             raise ValueError("event/source/payload schema combination is not registered")
         identity = thaw_json_v1(self.source_identity)
         expected_identity_fields = set(required_identity_fields)
@@ -1182,10 +1505,31 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
                     require_sha256_v1(identity[field], field_name=f"source_identity.{field}")
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"source_identity.{field} is not a strict identity") from exc
+        payload_model = _STRICT_EVENT_PAYLOAD_MODELS.get(self.event_type)
+        if payload_model is not None:
+            strict_payload = payload_model.model_validate_json(
+                json.dumps(thaw_json_v1(self.payload), sort_keys=True, separators=(",", ":"))
+            )
+            if strict_payload.runtime_id != self.runtime_id:
+                raise ValueError("strict event payload runtime_id conflicts with envelope")
+            if hasattr(strict_payload, "symbol") and strict_payload.symbol != self.symbol:
+                raise ValueError("strict event payload symbol conflicts with envelope")
+            payload_identity = strict_payload.model_dump(mode="json")
+            for field in required_identity_fields:
+                if payload_identity.get(field) != identity[field]:
+                    raise ValueError(f"strict event payload {field} conflicts with source_identity")
         if "trade_date" in identity and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", identity["trade_date"]) is None:
             raise ValueError("source_identity.trade_date must be YYYY-MM-DD")
         if (
-            self.event_type in (EventTypeV2.ALGO_START, EventTypeV2.TICK, EventTypeV2.ORDER, EventTypeV2.TRADE)
+            self.event_type
+            in (
+                EventTypeV2.ALGO_START,
+                EventTypeV2.COMMAND_OUTCOME,
+                EventTypeV2.TICK,
+                EventTypeV2.ORDER,
+                EventTypeV2.TRADE,
+                EventTypeV2.RECONCILE,
+            )
             and self.symbol is None
         ):
             raise ValueError("symbol is required for symbol-scoped runtime events")
@@ -1214,6 +1558,8 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
             )
             if identity["algo_instance_id"] != expected_algo_instance_id:
                 raise ValueError("ALGO_START algo_instance_id does not match complete source identity closure")
+            if self.payload_schema_version == "miniqmt_algo_start_v2":
+                _validate_algo_start_v2_payload_v1(thaw_json_v1(self.payload))
         expected_payload_hash = hash_hex_v1("miniqmt_runtime_event_payload_v2", thaw_json_v1(self.payload))
         if self.payload_sha256 != expected_payload_hash:
             raise ValueError("payload_sha256 does not match payload closure")
@@ -1228,6 +1574,18 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
         if self.event_key_sha256 != expected_key or self.event_id != f"mqrtevt_{expected_key}":
             raise ValueError("event identity does not match source identity closure")
         return self
+
+
+def strict_readback_kernel_event_payload_v1(event: RuntimeEventEnvelopeV2) -> FrozenStrictModel:
+    """Read one callback/outcome payload through the envelope's strict model authority."""
+
+    if not isinstance(event, RuntimeEventEnvelopeV2):
+        raise TypeError("event must be RuntimeEventEnvelopeV2")
+    try:
+        model = _STRICT_EVENT_PAYLOAD_MODELS[event.event_type]
+    except KeyError as exc:
+        raise ValueError("runtime event does not use a strict callback/outcome payload schema") from exc
+    return model.model_validate_json(json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":")))
 
 
 class AlgoEventDeliveryV1(FrozenStrictModel):
@@ -1329,6 +1687,199 @@ class AlgoEventDeliveryV1(FrozenStrictModel):
                 raise ValueError("last_error_json.context must be a JSON object")
         if self.updated_at_utc < self.created_at_utc:
             raise ValueError("updated_at_utc cannot precede created_at_utc")
+        return self
+
+
+class CurrentThreeActiveOrderStateV3(FrozenStrictModel):
+    local_vt_orderid: IdentityV1
+    submit_command_id: IdentityV1
+    broker_order_id: IdentityV1 | None
+    symbol: IdentityV1
+    side: SideV1
+    status: CurrentThreeActiveOrderStatusV3
+    pending_command_type: BrokerCommandTypeV2 | None
+    pending_command_id: IdentityV1 | None
+    requested_price_decimal: PositiveCanonicalDecimalV1
+    requested_quantity: PositiveIntV1
+    cumulative_filled_quantity: NonNegativeIntV1
+    remaining_quantity: NonNegativeIntV1
+    last_order_event_id: IdentityV1 | None
+    last_trade_event_id: IdentityV1 | None
+    last_command_outcome_event_id: IdentityV1 | None
+    last_oms_reconcile_event_id: IdentityV1 | None
+    terminal_order_status: NormalizedOrderStatusV1 | None
+    terminal_observed_cumulative_filled_quantity: NonNegativeIntV1 | None
+    market_data_lineage: FrozenJsonObjectFieldV1
+    active_order_state_sha256: Sha256V1
+
+    @classmethod
+    def create(cls, **values: Any) -> Self:
+        payload = {key: value for key, value in values.items() if key != "active_order_state_sha256"}
+        model_payload = {
+            **payload,
+            "side": SideV1(payload["side"]),
+            "status": CurrentThreeActiveOrderStatusV3(payload["status"]),
+            "pending_command_type": (
+                None
+                if payload.get("pending_command_type") is None
+                else BrokerCommandTypeV2(payload["pending_command_type"])
+            ),
+            "terminal_order_status": (
+                None
+                if payload.get("terminal_order_status") is None
+                else NormalizedOrderStatusV1(payload["terminal_order_status"])
+            ),
+        }
+        hash_payload = {
+            **model_payload,
+            "side": model_payload["side"].value,
+            "status": model_payload["status"].value,
+            "pending_command_type": (
+                None if model_payload["pending_command_type"] is None else model_payload["pending_command_type"].value
+            ),
+            "terminal_order_status": (
+                None if model_payload["terminal_order_status"] is None else model_payload["terminal_order_status"].value
+            ),
+        }
+        return cls(
+            **model_payload,
+            active_order_state_sha256=hash_hex_v1("miniqmt_plugin_active_order_state_v3", hash_payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_active_order(self) -> Self:
+        if _A_SHARE_SYMBOL_RE.fullmatch(self.symbol) is None:
+            raise ValueError("symbol must be a canonical A-share symbol")
+        if self.cumulative_filled_quantity + self.remaining_quantity != self.requested_quantity:
+            raise ValueError("active-order cumulative and remaining quantities must close to requested quantity")
+        pending_pair = (self.pending_command_type is None, self.pending_command_id is None)
+        if pending_pair[0] != pending_pair[1]:
+            raise ValueError("pending command type and identity must be null or present together")
+        if self.status is CurrentThreeActiveOrderStatusV3.COMMAND_PENDING:
+            if (
+                self.pending_command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT
+                or self.pending_command_id != self.submit_command_id
+                or self.broker_order_id is not None
+                or self.cumulative_filled_quantity != 0
+                or self.remaining_quantity != self.requested_quantity
+            ):
+                raise ValueError("COMMAND_PENDING active order violates pre-ACK closure")
+        elif self.status in {
+            CurrentThreeActiveOrderStatusV3.SUBMITTED,
+            CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED,
+        }:
+            if self.pending_command_id is not None or self.broker_order_id is None:
+                raise ValueError("broker-active order requires broker identity and no pending command")
+        elif self.status is CurrentThreeActiveOrderStatusV3.CANCEL_PENDING:
+            if self.pending_command_type is not BrokerCommandTypeV2.CANCEL_ORDER or self.broker_order_id is None:
+                raise ValueError("CANCEL_PENDING requires exact cancel command and broker identity")
+        elif self.status is CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN:
+            if self.pending_command_type is None:
+                raise ValueError("OUTCOME_UNKNOWN requires the exact pending command")
+            if self.pending_command_type is BrokerCommandTypeV2.CANCEL_ORDER and self.broker_order_id is None:
+                raise ValueError("unknown CANCEL outcome requires the owned broker identity")
+        elif self.status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING:
+            if (
+                self.pending_command_id is not None
+                or self.broker_order_id is None
+                or self.last_order_event_id is None
+                or self.terminal_order_status
+                not in {
+                    NormalizedOrderStatusV1.FILLED,
+                    NormalizedOrderStatusV1.CANCELLED,
+                    NormalizedOrderStatusV1.REJECTED,
+                }
+            ):
+                raise ValueError("TERMINAL_TRADE_PENDING violates terminal order lineage closure")
+            observed = self.terminal_observed_cumulative_filled_quantity
+            if observed is not None and observed <= self.cumulative_filled_quantity:
+                raise ValueError("TERMINAL_TRADE_PENDING requires missing or ahead-of-trade observed cumulative")
+        if self.status is not CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING:
+            if self.terminal_order_status is not None or self.terminal_observed_cumulative_filled_quantity is not None:
+                raise ValueError("nonterminal active order cannot carry terminal ORDER facts")
+        expected = hash_hex_v1(
+            "miniqmt_plugin_active_order_state_v3",
+            self.canonical_payload_v1(exclude={"active_order_state_sha256"}),
+        )
+        if self.active_order_state_sha256 != expected:
+            raise ValueError("active_order_state_sha256 does not match active-order closure")
+        return self
+
+
+class KernelCommandLifecycleProjectionItemV1(FrozenStrictModel):
+    mapping_id: IdentityV1
+    mapping_version: PositiveIntV1
+    mapping_payload_sha256: Sha256V1
+    local_vt_orderid: IdentityV1
+    submit_command_id: IdentityV1
+    broker_order_id: IdentityV1 | None
+    mapping_status: CommandChildMappingStatusV1
+    current_outbox_command_id: IdentityV1
+    current_outbox_command_type: BrokerCommandTypeV2
+    current_outbox_status: BrokerCommandOutboxStatusV1
+    current_outbox_row_version: PositiveIntV1
+    current_outbox_payload_sha256: Sha256V1
+    outcome_receipt_sha256: Sha256V1 | None
+    latest_command_outcome_event_id: IdentityV1 | None
+    latest_command_outcome_payload_sha256: Sha256V1 | None
+    command_outcome_delivery_id: IdentityV1 | None
+    command_outcome_delivery_status: DeliveryStatusV1 | None
+
+    @model_validator(mode="after")
+    def _validate_projection_item(self) -> Self:
+        outcome_fields = (
+            self.outcome_receipt_sha256,
+            self.latest_command_outcome_event_id,
+            self.latest_command_outcome_payload_sha256,
+            self.command_outcome_delivery_id,
+            self.command_outcome_delivery_status,
+        )
+        if any(item is None for item in outcome_fields) and any(item is not None for item in outcome_fields):
+            raise ValueError("command outcome event/delivery projection must be entirely null or complete")
+        if (
+            self.current_outbox_command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+            and self.current_outbox_command_id != self.submit_command_id
+        ):
+            raise ValueError("SUBMIT lifecycle projection must reference the mapping's submit command")
+        return self
+
+
+class KernelCommandLifecycleProjectionV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_kernel_command_lifecycle_projection_v1"]
+    runtime_id: IdentityV1
+    algo_instance_id: IdentityV1
+    event_id: IdentityV1
+    delivery_id: IdentityV1
+    ordered_items: tuple[KernelCommandLifecycleProjectionItemV1, ...]
+    projection_sha256: Sha256V1
+
+    @classmethod
+    def create(cls, **values: Any) -> Self:
+        items = tuple(values.get("ordered_items", ()))
+        payload = {
+            "schema_version": "miniqmt_kernel_command_lifecycle_projection_v1",
+            "runtime_id": values["runtime_id"],
+            "algo_instance_id": values["algo_instance_id"],
+            "event_id": values["event_id"],
+            "delivery_id": values["delivery_id"],
+            "ordered_items": [item.model_dump(mode="json") for item in items],
+        }
+        return cls(
+            **{**payload, "ordered_items": items},
+            projection_sha256=hash_hex_v1("miniqmt_kernel_command_lifecycle_projection_v1", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_projection(self) -> Self:
+        local_ids = tuple(item.local_vt_orderid for item in self.ordered_items)
+        if local_ids != tuple(sorted(local_ids)) or len(local_ids) != len(set(local_ids)):
+            raise ValueError("lifecycle projection items must be unique and sorted by local order identity")
+        expected = hash_hex_v1(
+            "miniqmt_kernel_command_lifecycle_projection_v1",
+            self.canonical_payload_v1(exclude={"projection_sha256"}),
+        )
+        if self.projection_sha256 != expected:
+            raise ValueError("projection_sha256 does not match lifecycle projection closure")
         return self
 
 
@@ -2513,6 +3064,48 @@ def safe_exception_summary_v1(error: BaseException) -> dict[str, str]:
     }
 
 
+def bounded_exception_summary_v1(
+    error: BaseException,
+    *,
+    max_message_chars: int = 2048,
+    redacted_values: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Render stable, bounded failure evidence without hiding omitted bytes."""
+
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+    if type(max_message_chars) is not int or isinstance(max_message_chars, bool) or max_message_chars <= 0:
+        raise TypeError("max_message_chars must be a positive strict integer")
+    if type(redacted_values) is not tuple or any(type(item) is not str or not item for item in redacted_values):
+        raise TypeError("redacted_values must be a tuple of non-empty strict strings")
+    error_type = _qualified_exception_type_v1(error)
+    try:
+        rendered = str(error) or type(error).__name__
+    except Exception as renderer_error:
+        return {
+            "exception_type": error_type,
+            "exception_message": f"<{type(error).__name__}: unrenderable>",
+            "renderer_error_type": _qualified_exception_type_v1(renderer_error),
+            "message_truncated": False,
+            "observed_message_chars": None,
+            "omitted_message_sha256": None,
+        }
+    for value in sorted(set(redacted_values), key=lambda item: (-len(item), item)):
+        rendered = rendered.replace(value, "<repository_root>")
+    observed_chars = len(rendered)
+    omitted = rendered[max_message_chars:]
+    return {
+        "exception_type": error_type,
+        "exception_message": rendered[:max_message_chars],
+        "renderer_error_type": None,
+        "message_truncated": bool(omitted),
+        "observed_message_chars": observed_chars,
+        "omitted_message_sha256": (
+            None if not omitted else hash_hex_v1("miniqmt_exception_message_omitted_v1", omitted)
+        ),
+    }
+
+
 def stable_exception_reason_code_v1(error: BaseException, *, default: str) -> str:
     """Read a typed reason code without invoking an arbitrary renderer."""
 
@@ -3292,11 +3885,13 @@ class AlgoTransitionReceiptV1(FrozenStrictModel):
 
     @classmethod
     def create(cls, **values: Any) -> Self:
-        identity_payload = {
-            key: values[key]
-            for key in ("delivery_id", "event_id", "runtime_id", "algo_instance_id", "transition_sequence")
-        }
-        transition_id = "mqtransition_" + hash_hex_v1("miniqmt_algo_transition_identity_v1", identity_payload)
+        transition_id = algo_transition_id_v1(
+            delivery_id=values["delivery_id"],
+            event_id=values["event_id"],
+            runtime_id=values["runtime_id"],
+            algo_instance_id=values["algo_instance_id"],
+            transition_sequence=values["transition_sequence"],
+        )
         command_ids = _require_unique_identities_v1(
             tuple(values["ordered_command_ids"]), field_name="ordered_command_ids"
         )
@@ -3377,15 +3972,12 @@ class AlgoTransitionReceiptV1(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> Self:
-        expected_id = "mqtransition_" + hash_hex_v1(
-            "miniqmt_algo_transition_identity_v1",
-            {
-                "delivery_id": self.delivery_id,
-                "event_id": self.event_id,
-                "runtime_id": self.runtime_id,
-                "algo_instance_id": self.algo_instance_id,
-                "transition_sequence": self.transition_sequence,
-            },
+        expected_id = algo_transition_id_v1(
+            delivery_id=self.delivery_id,
+            event_id=self.event_id,
+            runtime_id=self.runtime_id,
+            algo_instance_id=self.algo_instance_id,
+            transition_sequence=self.transition_sequence,
         )
         if self.transition_id != expected_id:
             raise ValueError("transition_id does not match transition identity closure")
@@ -4144,6 +4736,7 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
         allowed = {
             CommandChildMappingStatusV1.RESERVED: {
                 CommandChildMappingStatusV1.DISPATCHING,
+                CommandChildMappingStatusV1.BROKER_REJECTED,
                 CommandChildMappingStatusV1.TERMINAL,
             },
             CommandChildMappingStatusV1.DISPATCHING: {
@@ -4152,14 +4745,24 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
                 CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
             },
             CommandChildMappingStatusV1.OUTCOME_UNKNOWN: {
+                CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
                 CommandChildMappingStatusV1.DISPATCHING,
                 CommandChildMappingStatusV1.BROKER_ACCEPTED,
                 CommandChildMappingStatusV1.BROKER_REJECTED,
                 CommandChildMappingStatusV1.TERMINAL,
             },
-            CommandChildMappingStatusV1.BROKER_ACCEPTED: {CommandChildMappingStatusV1.TERMINAL},
-            CommandChildMappingStatusV1.BROKER_REJECTED: {CommandChildMappingStatusV1.TERMINAL},
-            CommandChildMappingStatusV1.TERMINAL: set(),
+            CommandChildMappingStatusV1.BROKER_ACCEPTED: {
+                CommandChildMappingStatusV1.BROKER_ACCEPTED,
+                CommandChildMappingStatusV1.TERMINAL,
+            },
+            CommandChildMappingStatusV1.BROKER_REJECTED: {
+                CommandChildMappingStatusV1.BROKER_REJECTED,
+                CommandChildMappingStatusV1.TERMINAL,
+            },
+            # Terminal economic ownership is irreversible, but later distinct
+            # broker callback facts may extend ORDER/TRADE lineage while the
+            # mapping remains terminal.  This is not a route/state reopening.
+            CommandChildMappingStatusV1.TERMINAL: {CommandChildMappingStatusV1.TERMINAL},
         }
         if self.mapping_status not in allowed[previous.mapping_status]:
             raise ValueError("illegal command-child mapping status transition")
@@ -4276,6 +4879,79 @@ class KernelCallbackMappingUpdateV1(FrozenStrictModel):
         )
         if self.update_sha256 != expected:
             raise ValueError("callback mapping update hash does not match strict carrier")
+        return self
+
+
+class KernelCommandOutcomeMappingClosureV1(FrozenStrictModel):
+    schema_version: Literal["miniqmt_kernel_command_outcome_mapping_closure_v1"]
+    mode: KernelCommandOutcomeMappingClosureModeV1
+    mapping: ExecutionCommandChildMappingV1
+    reference_command_id: IdentityV1
+    expected_mapping_version: PositiveIntV1
+    expected_algo_row_version: PositiveIntV1
+    preceding_callback_event_id: IdentityV1 | None
+    preceding_callback_payload_sha256: Sha256V1 | None
+    preceding_callback_delivery_id: IdentityV1 | None
+    preceding_callback_delivery_status: DeliveryStatusV1 | None
+    closure_sha256: Sha256V1
+
+    @classmethod
+    def create(cls, **values: Any) -> Self:
+        mode = KernelCommandOutcomeMappingClosureModeV1(values["mode"])
+        mapping = values["mapping"]
+        if not isinstance(mapping, ExecutionCommandChildMappingV1):
+            raise TypeError("mapping must be ExecutionCommandChildMappingV1")
+        payload = {
+            "schema_version": "miniqmt_kernel_command_outcome_mapping_closure_v1",
+            **values,
+            "mode": mode.value,
+            "mapping": mapping.model_dump(mode="json"),
+            "preceding_callback_delivery_status": (
+                None
+                if values.get("preceding_callback_delivery_status") is None
+                else DeliveryStatusV1(values["preceding_callback_delivery_status"]).value
+            ),
+        }
+        return cls(
+            **{
+                **payload,
+                "mode": mode,
+                "mapping": mapping,
+                "preceding_callback_delivery_status": (
+                    None
+                    if values.get("preceding_callback_delivery_status") is None
+                    else DeliveryStatusV1(values["preceding_callback_delivery_status"])
+                ),
+                "closure_sha256": hash_hex_v1(
+                    "miniqmt_kernel_command_outcome_mapping_closure_v1",
+                    {key: value for key, value in payload.items() if key != "closure_sha256"},
+                ),
+            }
+        )
+
+    @model_validator(mode="after")
+    def _validate_closure(self) -> Self:
+        callback_fields = (
+            self.preceding_callback_event_id,
+            self.preceding_callback_payload_sha256,
+            self.preceding_callback_delivery_id,
+            self.preceding_callback_delivery_status,
+        )
+        if self.mode is KernelCommandOutcomeMappingClosureModeV1.ADVANCE_MAPPING:
+            if self.mapping.mapping_version != self.expected_mapping_version + 1 or any(
+                item is not None for item in callback_fields
+            ):
+                raise ValueError("ADVANCE_MAPPING requires one exact successor and no callback precedence fields")
+        elif self.mapping.mapping_version != self.expected_mapping_version or any(
+            item is None for item in callback_fields
+        ):
+            raise ValueError("VERIFY_CALLBACK_PRECEDENCE requires unchanged mapping and complete callback fields")
+        expected = hash_hex_v1(
+            "miniqmt_kernel_command_outcome_mapping_closure_v1",
+            self.canonical_payload_v1(exclude={"closure_sha256"}),
+        )
+        if self.closure_sha256 != expected:
+            raise ValueError("closure_sha256 does not match command-outcome mapping closure")
         return self
 
 
@@ -5145,6 +5821,8 @@ __all__ = [
     "CommandChildMappingStatusV1",
     "ConsumedLineageRefV1",
     "ConsumedLineageTypeV1",
+    "CurrentThreeActiveOrderStateV3",
+    "CurrentThreeActiveOrderStatusV3",
     "DeliveryStatusV1",
     "DeterministicExecutionContextV1",
     "DiagnosticObservationV1",
@@ -5171,13 +5849,24 @@ __all__ = [
     "GatewayCapabilityCatalogV1",
     "KernelErrorEvidenceV1",
     "KernelCallbackMappingUpdateV1",
+    "KernelCommandLifecycleProjectionItemV1",
+    "KernelCommandLifecycleProjectionV1",
+    "KernelCommandOutcomeMappingClosureModeV1",
+    "KernelCommandOutcomeMappingClosureV1",
+    "KernelCommandOutcomeEventPayloadV1",
+    "KernelCommandOutcomeV1",
     "KernelProjectionTypeV1",
+    "KernelOrderEventPayloadV1",
+    "KernelOrderReconcileEventPayloadV1",
+    "KernelTradeEventPayloadV1",
+    "KernelTradeFactRefV1",
     "KernelWorkerStartupReceiptV1",
     "MarketDataCapabilityV1",
     "MarketDataRequirementV1",
     "MiniQMTPluginContractError",
     "MiniQMTPluginReasonCode",
     "MiniQMTRiskDecisionReceiptV1",
+    "NormalizedOrderStatusV1",
     "OMSPreflightDecisionV1",
     "OMSPreflightProjectionReceiptV1",
     "ObjectFieldRequirementV1",
@@ -5206,12 +5895,15 @@ __all__ = [
     "VnpyUpstreamSourceV2",
     "compatibility_component_hashes_v2",
     "compatibility_component_hashes_v1",
+    "algo_transition_id_v1",
     "command_child_mapping_id_v1",
     "deterministic_client_order_ref_v1",
     "execution_child_order_id_v1",
     "kernel_lease_fence_token_v1",
     "safe_exception_summary_v1",
+    "bounded_exception_summary_v1",
     "stable_exception_reason_code_v1",
+    "strict_readback_kernel_event_payload_v1",
     "transaction_commit_identity_v1",
     "validate_json_schema_instance_v1",
 ]

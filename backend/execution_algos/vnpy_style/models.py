@@ -54,7 +54,7 @@ class VnpyTick:
 class VnpyOrderUpdate:
     vt_orderid: str
     active: bool
-    traded: int = 0
+    traded: int | None = 0
     price: float | None = None
     raw_status: str | None = None
     status_msg: str | None = None

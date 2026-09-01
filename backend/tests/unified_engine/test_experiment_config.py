@@ -17,6 +17,7 @@ from backend.services.quantevolver.experiment_config import (
     HmmConfig,
     default_qe_risk_policy,
 )
+from backend.services.quantevolver.long_trend_evaluation_contract import QELongTrendError
 from backend.services.quantevolver.experiment_config_builders import (
     _build_hmm_config_from_fields,
     _pop_hmm_fields,
@@ -282,6 +283,19 @@ class TestBuildConfigFromExpRecord:
         assert cfg.label_type == "Ref($close, -2)/Ref($close, -1) - 1"
         assert cfg.hmm is None
 
+    def test_registered_long_trend_profile_is_carried_from_task(self):
+        task = {**EVOLUTION_TASK_MINIMAL, "long_trend_profile_id": "qe_long_trend_v1"}
+        cfg = build_config_from_evolution_loop(EVOLUTION_CONFIG_MINIMAL, task)
+
+        assert cfg.long_trend_profile_id == "qe_long_trend_v1"
+        assert cfg.long_trend_evaluation is None
+
+    def test_unknown_long_trend_profile_fails_closed(self):
+        task = {**EVOLUTION_TASK_MINIMAL, "long_trend_profile_id": "caller_override_v9"}
+
+        with pytest.raises(QELongTrendError, match="unregistered long-trend profile"):
+            build_config_from_evolution_loop(EVOLUTION_CONFIG_MINIMAL, task)
+
     def test_task_level_hmm_applies_to_auto_evolution_loop(self):
         cfg = build_config_from_evolution_loop(
             EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_WITH_HMM
@@ -365,6 +379,16 @@ class TestBuildConfigFromStrategyEvoLoop:
         assert params["sector_blacklist"] == ["SW_Coal", "SW_Steel"]
         assert params["topk"] == 30  # strategy_params override
 
+    def test_registered_long_trend_profile_is_carried_from_task(self):
+        task = {**STRATEGY_EVO_TASK, "long_trend_profile_id": "qe_long_trend_v1"}
+        cfg = build_config_from_strategy_evo_loop(
+            STRATEGY_EVO_BASE_CONFIG,
+            STRATEGY_EVO_LOOP_NO_HMM,
+            task,
+        )
+
+        assert cfg.long_trend_profile_id == "qe_long_trend_v1"
+
     def test_with_hmm(self):
         mock_snapshot = HMM_SNAPSHOT.copy()
         with patch(
@@ -389,6 +413,12 @@ class TestBuildConfigFromCustomEvoLoop:
         assert cfg.hmm is None
         params = cfg.build_custom_params()
         assert params.get("topk") == 50
+
+    def test_registered_long_trend_profile_is_carried_from_task(self):
+        task = {**CUSTOM_EVO_TASK, "long_trend_profile_id": "qe_long_trend_v1"}
+        cfg = build_config_from_custom_evo_loop(CUSTOM_EVO_LOOP_MINIMAL, task)
+
+        assert cfg.long_trend_profile_id == "qe_long_trend_v1"
 
     def test_full_config(self):
         mock_path = HMM_SNAPSHOT["model_path"]

@@ -811,7 +811,23 @@
   .ahr-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+@media (max-width: 900px) {
+  body:has(.pv2-shell-advisory) .app-shell { display: block; }
+  body:has(.pv2-shell-advisory) .sidebar {
+    width: 100%;
+    max-height: 280px;
+    padding: 14px 16px;
+  }
+  body:has(.pv2-shell-advisory) .sidebar-nav { overflow-y: auto; }
+  body:has(.pv2-shell-advisory) .app-main { min-width: 0; padding: 12px; }
+  .pv2-shell-advisory { width: 100%; min-width: 0; margin: 0; padding: 0; overflow-x: hidden; }
+}
+
 @media (max-width: 600px) {
+  .pv2-shell-advisory .pv2-hero { padding: 16px; }
+  .pv2-shell-advisory .pv2-card { padding: 14px; }
+  .pv2-shell-advisory .pv2-card-head { align-items: stretch; flex-direction: column; }
+  .pv2-shell-advisory .pv2-row-actions { justify-content: flex-start; }
   .ahr-view-switch { display: grid; width: 100%; }
   .ahr-view-switch button { min-width: 0; }
   .ahr-section { padding: 14px; }

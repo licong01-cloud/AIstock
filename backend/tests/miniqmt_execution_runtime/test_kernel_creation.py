@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from types import SimpleNamespace
 
 import pytest
@@ -46,6 +47,7 @@ class _CapturingRepository:
         }
 
 
+@lru_cache(maxsize=1)
 def _catalog():
     return build_plugin_catalog_v2(
         descriptors=current_three_descriptors_v2(),
@@ -148,7 +150,7 @@ def _request() -> KernelAlgoCreationRequestV1:
     )
 
 
-def test_creation_coordinator_persists_pre_k4_binding_failure_without_legacy_fallback() -> None:
+def test_creation_coordinator_accepts_current_three_frozen_config_without_legacy_fallback() -> None:
     config = {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
     contract = {"symbol": "600000.SH", "min_volume": 100, "volume_increment": 100}
     account = {"account_projection_id": "account_k2b", "available_cash_decimal": "100000.000000"}
@@ -222,10 +224,10 @@ def test_creation_coordinator_persists_pre_k4_binding_failure_without_legacy_fal
         gateway_catalog=_gateway(),
     ).create(request)
 
-    assert result["algo"].status.value == "FAILED"
-    assert result["algo"].state_json is None
-    assert result["delivery"].status.value == "FAILED_TERMINAL"
-    assert result["receipt"].stable_reason_code == "MINIQMT_ALGO_PLUGIN_BINDING_INVALID"
+    assert result["algo"].status.value == "ACTIVE"
+    assert result["algo"].state_json is not None
+    assert result["delivery"].status.value == "APPLIED"
+    assert result["receipt"].schema_version == "miniqmt_algo_transition_receipt_v1"
     assert repository.bundle.transition_bundle.command_outboxes == ()
     projection_types = {
         item.projection_type for item in repository.bundle.transition_bundle.projection_set.ordered_projection_refs

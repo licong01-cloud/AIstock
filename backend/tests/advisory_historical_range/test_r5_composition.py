@@ -10,6 +10,23 @@ from backend.services.advisory_historical_range.composition import (
     explicit_historical_range_connection_factory,
 )
 from backend.services.advisory_historical_range.service import HistoricalRangeServiceError
+from backend.services.advisory_historical_range import runtime_factories
+
+
+def test_outcome_producer_identity_includes_planner_semantics(tmp_path: Path) -> None:
+    planner_path = "backend/services/advisory_historical_range/outcome_planner.py"
+    tracked_paths = runtime_factories._OUTCOME_SOURCE_FILES  # noqa: SLF001 - producer identity contract
+    for relative_path in set((*tracked_paths, planner_path)):
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"source:{relative_path}\n", encoding="utf-8")
+
+    before = runtime_factories._code_set_hash(tmp_path, tracked_paths)  # noqa: SLF001
+    (tmp_path / planner_path).write_text("changed planner timeline semantics\n", encoding="utf-8")
+    after = runtime_factories._code_set_hash(tmp_path, tracked_paths)  # noqa: SLF001
+
+    assert planner_path in tracked_paths
+    assert after != before
 
 
 def test_explicit_db_configuration_has_no_legacy_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

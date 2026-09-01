@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
 
 QE_MINUTE_RUNTIME_CONTRACT_VERSION = "qe_minute_runtime_contract_v1"
 QE_DEFAULT_MINUTE_EXECUTION_ALGO = "TWAP"
@@ -114,6 +115,13 @@ def build_qe_minute_runtime_contract(
     algo = normalize_qe_execution_algo(raw_algo)
     if algo is None and allow_default_execution_algo:
         algo = QE_DEFAULT_MINUTE_EXECUTION_ALGO
+    if algo is not None:
+        algo = require_execution_algo_active(
+            algo,
+            operation="qe_minute_runtime_contract_build",
+            semantic_path="qe_runtime_contract.execution_algo",
+            context={"source": source},
+        )
 
     if not algo:
         if require_minute:

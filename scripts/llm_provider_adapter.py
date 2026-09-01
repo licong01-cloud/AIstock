@@ -26,7 +26,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.infra.deepseek_config import (  # noqa: E402
-    DEFAULT_DEEPSEEK_MODEL,
     DeepSeekConfigError,
     redact_secret_text,
     resolve_deepseek_config,
@@ -39,6 +38,7 @@ from backend.services.validation.plan_catalog import (  # noqa: E402
 
 GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY = "deepseek-r1"
 GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
+VALIDATION_DEEPSEEK_MODEL = "deepseek-v4-flash"
 TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
 TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
 NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_advice_v1"
@@ -46,6 +46,7 @@ DISCOVERY_HYPOTHESIS_SCHEMA_VERSION = "aistock_llm_discovery_hypothesis_v1"
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+LLM_FAILURE_RECEIPT_SCHEMA_VERSION = "aistock_llm_failure_receipt_v1"
 ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice", "nightly_discovery_hypothesis"}
 NON_PLAN_ADVISORY_LLM_PURPOSES = {"design_drift_audit", "silent_degradation_audit"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
@@ -251,12 +252,19 @@ def validate_config(config: dict[str, Any]) -> None:
     providers = config.get("providers")
     if not isinstance(providers, dict):
         raise ProviderAdapterError("providers must be configured")
+    if config.get("default_provider") != "deepseek_api":
+        raise ProviderAdapterError("default_provider must be deepseek_api")
     deepseek_api = providers.get("deepseek_api") or {}
-    if deepseek_api.get("model") != DEFAULT_DEEPSEEK_MODEL:
-        raise ProviderAdapterError("deepseek_api.model must be deepseek-v4-pro")
-    if not isinstance(deepseek_api.get("enabled"), bool):
-        raise ProviderAdapterError("deepseek_api.enabled must be a boolean")
+    if deepseek_api.get("model") != VALIDATION_DEEPSEEK_MODEL:
+        raise ProviderAdapterError("deepseek_api.model must be deepseek-v4-flash")
+    if deepseek_api.get("enabled") is not True:
+        raise ProviderAdapterError("deepseek_api.enabled must be true")
+    deepseek_model_id = str(((deepseek_api.get("auth") or {}).get("model_id") or ""))
+    if deepseek_model_id != f"deepseek/{VALIDATION_DEEPSEEK_MODEL}":
+        raise ProviderAdapterError("deepseek_api.auth.model_id must be deepseek/deepseek-v4-flash")
     github_models = providers.get("github_models") or {}
+    if github_models.get("enabled") is not False:
+        raise ProviderAdapterError("retired github_models fallback must remain disabled")
     selector = (github_models.get("model_selector") or {})
     if selector.get("required_model_family") != GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY:
         raise ProviderAdapterError("github_models required_model_family must be deepseek-r1")
@@ -559,11 +567,13 @@ def _provider_chat_endpoint(config: dict[str, Any], provider: str) -> tuple[str,
         return f"{base_url}/inference/chat/completions", model, auth_token, credential_source
     if provider == "deepseek_api":
         _bootstrap_deepseek_env()
+        deepseek_api = config["providers"]["deepseek_api"]
+        configured_model = str(deepseek_api.get("model") or VALIDATION_DEEPSEEK_MODEL)
         try:
             # Some DB fallback paths print connection diagnostics to stdout;
             # keep JSON-mode CLI output parseable and report sanitized errors.
             with contextlib.redirect_stdout(io.StringIO()):
-                resolved = resolve_deepseek_config(model=DEFAULT_DEEPSEEK_MODEL, require_api_key=True)
+                resolved = resolve_deepseek_config(model=configured_model, require_api_key=True)
         except DeepSeekConfigError as exc:
             raise ProviderAdapterError(str(exc)) from exc
         return (
@@ -650,7 +660,7 @@ def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool)
     _bootstrap_deepseek_env()
     with contextlib.redirect_stdout(io.StringIO()):
         resolved = resolve_deepseek_config(
-            model=str(provider.get("model") or DEFAULT_DEEPSEEK_MODEL),
+            model=str(provider.get("model") or VALIDATION_DEEPSEEK_MODEL),
             require_api_key=require_api_key,
         )
     summary = resolved.as_safe_dict()
@@ -1581,7 +1591,14 @@ def _maybe_invoke_advisory_llm(
             )
     else:
         if not fallback_on_error:
-            raise last_error or ProviderAdapterError(f"{kind} live provider failed")
+            provider_errors = "; ".join(
+                f"{item.get('provider')}: {item.get('error')}"
+                for item in attempts
+                if item.get("status") == "failed"
+            )
+            raise ProviderAdapterError(
+                f"{kind} provider chain failed: {provider_errors or str(last_error or 'unknown provider failure')}"
+            )
         return None, _llm_evidence(
             provider_summary=provider_summary,
             invoked=False,
@@ -2654,6 +2671,18 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
 
     llm_summary = llm_invocation_public_summary(payload.get("llm_invocation_evidence"))
+    if payload.get("schema_version") == LLM_FAILURE_RECEIPT_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "workflow_gate": payload.get("workflow_gate"),
+            "planner_status": payload.get("planner_status"),
+            "command": payload.get("command"),
+            "provider": payload.get("provider"),
+            "error": redact_secret_text(str(payload.get("error") or "")),
+            "warning_only": bool(payload.get("warning_only")),
+            "selected_plan_keys": payload.get("selected_plan_keys") or [],
+            "selected_plans": payload.get("selected_plans") or [],
+        }
     if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
         gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
         return {
@@ -3197,8 +3226,30 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args))
     except (ProviderAdapterError, DeepSeekConfigError) as exc:
         message = _redact_llm_error(exc)
+        failure_receipt = {
+            "schema_version": LLM_FAILURE_RECEIPT_SCHEMA_VERSION,
+            "workflow_gate": "failed",
+            "planner_status": "failed",
+            "command": getattr(args, "command", None),
+            "provider": getattr(args, "provider", None),
+            "error": message,
+        }
+        output = getattr(args, "output", None)
+        if output:
+            _write_public_json_artifact(output, failure_receipt)
+        selected_plans_output = getattr(args, "selected_plans_output", None)
+        if selected_plans_output:
+            _write_public_json_artifact(
+                selected_plans_output,
+                {
+                    **failure_receipt,
+                    "warning_only": True,
+                    "selected_plan_keys": [],
+                    "selected_plans": [],
+                },
+            )
         if args.json:
-            print(json.dumps({"gate": "failed", "error": message}, ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(failure_receipt, ensure_ascii=False), file=sys.stderr)
         else:
             print(f"gate=failed error={message}", file=sys.stderr)
         return 2

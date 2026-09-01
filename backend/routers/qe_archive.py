@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -15,6 +16,11 @@ from backend.services.qe_archive.backfill_service import (
     WRITE_CONFIRM_TEXT,
 )
 from backend.services.qe_archive.repository import QEArchiveRepository
+from backend.services.qe_archive.long_trend_repository import (
+    QELongTrendEvaluationResultRepository,
+    QELongTrendResultQueryError,
+    QELongTrendResultRepositoryError,
+)
 from backend.services.qe_archive.worker_service import QEArchiveWorkerService, WORKER_CONFIRM_TEXT
 from backend.services.quantevolver.qe_resource_phase_service import (
     QEResourcePhaseError,
@@ -111,6 +117,105 @@ def get_qe_archive_health():
         "status": "success",
         "data": get_repository().get_archive_summary(),
     }
+
+
+@router.get("/analytics/long-trend-quality")
+def query_qe_archive_long_trend_quality(
+    evaluation_id: str | None = Query(None, max_length=200),
+    run_id: str | None = Query(None, max_length=200),
+    task_id: str | None = Query(None, max_length=200),
+    loop_index: int | None = Query(None, ge=1),
+    model_type: str | None = Query(None, min_length=1, max_length=128),
+    label_horizon: int | None = Query(None),
+    evaluation_asof: date | None = Query(None),
+    outcome_dataset_snapshot_id: str | None = Query(None, max_length=200),
+    metric_key: str | None = Query(None, min_length=1, max_length=128),
+    horizon: int | None = Query(None),
+    sector_code: str | None = Query(None, min_length=1, max_length=128),
+    family_status: Literal["COMPUTED", "COMPUTED_WITH_LIMITATIONS", "NOT_COMPUTABLE", "NOT_VERIFIABLE"]
+    | None = Query(None),
+    entry_execution_status: Literal[
+        "filled_t1", "partial_fill_t1", "delayed_fill", "never_filled",
+        "not_attempted_by_strategy", "not_verifiable",
+    ]
+    | None = Query(None),
+    exit_execution_status: Literal[
+        "filled_on_exit_signal_day", "delayed_exit", "never_exited",
+        "not_attempted_by_strategy", "not_verifiable",
+    ]
+    | None = Query(None),
+    entry_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "reconciled_trade",
+        "indicator_and_trade_reconciled", "qlib_indicator_object",
+        "explicit_order_intent", "position_transition_only",
+    ]
+    | None = Query(None),
+    exit_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "exit_signal_only", "reconciled_trade",
+        "position_transition", "qlib_indicator_object", "indicator_and_exit_reconciled",
+        "explicit_order_intent", "position_transition_only",
+    ]
+    | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=4096),
+):
+    try:
+        return QELongTrendEvaluationResultRepository().query_quality(
+            evaluation_id=evaluation_id,
+            run_id=run_id,
+            task_id=task_id,
+            loop_index=loop_index,
+            model_type=model_type,
+            label_horizon=label_horizon,
+            evaluation_asof=evaluation_asof,
+            outcome_dataset_snapshot_id=outcome_dataset_snapshot_id,
+            metric_key=metric_key,
+            horizon=horizon,
+            sector_code=sector_code,
+            family_status=family_status,
+            entry_execution_status=entry_execution_status,
+            exit_execution_status=exit_execution_status,
+            entry_execution_evidence_level=entry_execution_evidence_level,
+            exit_execution_evidence_level=exit_execution_evidence_level,
+            limit=limit,
+            cursor=cursor,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        if isinstance(exc, QELongTrendResultQueryError):
+            status_code = 400
+        elif exc.reason_code == "QELT_RESULT_PERSISTENCE_CONFLICT":
+            status_code = 409
+        else:
+            status_code = 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
+
+
+@router.get("/analytics/long-trend-options", summary="Bounded business choices for long-trend comparison")
+def query_qe_archive_long_trend_options(
+    search: str | None = Query(None, max_length=120),
+    task_id: str | None = Query(None, max_length=200),
+    outcome_dataset_snapshot_id: str | None = Query(None, max_length=200),
+    evaluation_asof_from: date | None = Query(None),
+    evaluation_asof_to: date | None = Query(None),
+    limit: int = Query(30, ge=1, le=50),
+):
+    try:
+        return QELongTrendEvaluationResultRepository().query_operator_options(
+            search=search,
+            task_id=task_id,
+            outcome_dataset_snapshot_id=outcome_dataset_snapshot_id,
+            evaluation_asof_from=evaluation_asof_from,
+            evaluation_asof_to=evaluation_asof_to,
+            limit=limit,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
 
 
 @router.get(
@@ -274,6 +379,30 @@ def list_qe_archive_runs(
             status=status,
             run_type=run_type,
             search=search,
+            limit=limit,
+        ),
+    }
+
+
+@router.get("/operator-options/runs", summary="Bounded business-labelled archived Run choices")
+def query_qe_archive_operator_run_options(
+    search: str | None = Query(None, max_length=120),
+    run_type: str | None = Query(None, max_length=80),
+    model_type: str | None = Query(None, max_length=128),
+    label_horizon: int | None = Query(None),
+    completed_from: date | None = Query(None),
+    completed_to: date | None = Query(None),
+    limit: int = Query(30, ge=1, le=50),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_operator_run_options(
+            search=search,
+            run_type=run_type,
+            model_type=model_type,
+            label_horizon=label_horizon,
+            completed_from=completed_from,
+            completed_to=completed_to,
             limit=limit,
         ),
     }

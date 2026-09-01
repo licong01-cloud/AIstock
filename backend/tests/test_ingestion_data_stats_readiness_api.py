@@ -262,7 +262,9 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
         def execute(self, sql, params=()):
             normalized = " ".join(sql.split())
             executed.append((normalized, params))
-            if "FROM market.data_stats_config" in sql:
+            if "SET statement_timeout" in sql:
+                self._row = None
+            elif "FROM market.data_stats_config" in sql:
                 self.description = [
                     ("data_kind",),
                     ("table_name",),
@@ -327,6 +329,84 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
     assert '"stats_scope": "recent_window"' in insert_params[-1]
     assert '"window_months": 3' in insert_params[-1]
     assert '"full_history_count": false' in insert_params[-1]
+
+
+def test_refresh_data_stats_isolates_per_dataset_failure(monkeypatch):
+    """BUG-960: one failing dataset must not abort the remaining datasets."""
+    executed: list[tuple[str, tuple]] = []
+
+    class _Cursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.split())
+            executed.append((normalized, params))
+            if "SET statement_timeout" in sql:
+                self._row = None
+            elif "FROM market.data_stats_config" in sql:
+                self.description = [
+                    ("data_kind",),
+                    ("table_name",),
+                    ("date_column",),
+                    ("updated_column",),
+                    ("extra_info",),
+                ]
+                self._rows = [
+                    ("aaa_broken", "market.aaa_broken", "trade_date", "", {}),
+                    ("zzz_ok", "market.zzz_ok", "trade_date", "", {}),
+                ]
+            elif "FROM \"market\".\"aaa_broken\"" in sql or "FROM market.aaa_broken" in sql:
+                raise RuntimeError("canceling statement due to statement timeout")
+            elif "COUNT(*)" in sql and "zzz_ok" in sql:
+                self.description = [("count",), ("min",), ("max",)]
+                self._row = (7, dt.date(2026, 6, 1), dt.date(2026, 7, 1))
+            elif "pg_total_relation_size" in sql:
+                self.description = [("table_bytes",), ("index_bytes",)]
+                self._row = (1000, 200)
+            elif "INSERT INTO market.data_stats" in sql:
+                self.description = None
+                self._row = None
+            else:
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+        def fetchall(self):
+            return self._rows
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _Cursor()
+
+    monkeypatch.setattr(ingestion, "get_conn", lambda: _Conn())
+
+    response = ingestion.refresh_data_stats()
+
+    assert response["success"] is False
+    assert response["items_refreshed"] == 1
+    assert response["items_failed"] == 1
+    assert [item["data_kind"] for item in response["items"]] == ["zzz_ok"]
+    assert response["failures"][0]["data_kind"] == "aaa_broken"
+    assert "statement timeout" in response["failures"][0]["error"]
+    stats_inserts = [params for sql, params in executed if "INSERT INTO market.data_stats" in sql]
+    # success upsert for zzz_ok + failure marker upsert for aaa_broken
+    assert any(params[0] == "zzz_ok" for params in stats_inserts)
+    failure_markers = [params for params in stats_inserts if params[0] == "aaa_broken"]
+    assert failure_markers
+    assert '"reason_code": "data_stats_refresh_failed"' in failure_markers[0][-1]
 
 
 def test_list_data_stats_exposes_recent_window_scope_label(monkeypatch):

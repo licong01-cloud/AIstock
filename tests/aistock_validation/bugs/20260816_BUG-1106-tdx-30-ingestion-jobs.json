@@ -1,0 +1,307 @@
+{
+  "actual": "35秒生产只读表级统计：seq_scan_delta=5、seq_tup_read_delta=59870，表估算11915行/约15MB且仅有 ingestion_jobs_pkey；同窗口行情表无扫描、业务DML为0。",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+    "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py",
+    "tests/aistock_validation/bugs/20260816_BUG-1106-tdx-30-ingestion-jobs.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1106",
+  "closed_at": "2026-08-16T18:54:27.843864Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-16T08:57:16.529641Z",
+  "description": "35秒生产只读表级统计：seq_scan_delta=5、seq_tup_read_delta=59870，表估算11915行/约15MB且仅有 ingestion_jobs_pkey；同窗口行情表无扫描、业务DML为0。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260816-36002cf10906",
+      "timestamp": "2026-08-16T08:57:16.529628Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Bound scheduler reconciliation scans, added four partial indexes, passed targeted, DEV PostgreSQL, autonomy, registry, catalog, lint, compile, diff, and fresh-process gates; production DDL and user-owned backend restart remain pending.",
+      "timestamp": "2026-08-16T11:00:52.286020Z"
+    },
+    {
+      "action": "production_ddl_applied_and_verified",
+      "actor": "codex",
+      "note": "Applied merged migration backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql to 127.0.0.1:5432/aistock after post-merge DEV validation; readback confirmed four BUG-1106 indexes, four comments, and four expected EXPLAIN index paths with no business DML.",
+      "timestamp": "2026-08-16T14:09:11.734206Z"
+    }
+  ],
+  "evidence_uris": [
+    "production read-only sample 2026-08-16 after backend restart; /api/ingestion/jobs?active_only=true returned 0 jobs"
+  ],
+  "expected": "空闲调度周期只执行有界索引查询；无任务时不全表扫描 ingestion_jobs，且不产生业务写入。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
+    ],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "platform.db",
+        "qe.archive",
+        "selection_center",
+        "strategy_package",
+        "validation.center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
+    ]
+  },
+  "first_seen_at": "2026-08-16T08:57:16.529641Z",
+  "fix_branch": "bug/BUG-1106-tdx-30-ingestion-jobs-20260816",
+  "fix_commit": "025b88fb746350ed6021345bbe93a90eaa981c75",
+  "fixed_at": "2026-08-16T11:00:52.286020Z",
+  "github_issue_number": 3526,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3526",
+  "last_seen_at": "2026-08-16T11:00:52.286020Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3530",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "compare pg_stat_user_tables for market.ingestion_jobs across 35 seconds while no ingestion jobs are active",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "http://127.0.0.1:8001/api/ingestion/jobs?active_only=true",
+    "fresh_process_evidence": [
+      "isolated Python process imported TDXScheduler and asserted the BUG-1106 bounded queued predicate -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1106\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1106",
+      "catalog_sha256": "b5bd59f2d31c7ef5688f7dc062c7d6214045f8411c5eb25da58b589719f39238",
+      "contract_digest": "d694e790ab4f95051f77b41eb112b35f7a42dfdcd819deb5da8cb107d826ca0a",
+      "expected_identity": "025b88fb746350ed6021345bbe93a90eaa981c75",
+      "generated_at": "2026-08-16T18:52:39.353442Z",
+      "mode": "read_only",
+      "observed_identity": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "45608062df28949e26d5f4a527e14834411216c81a8f8f8881d47ed35503c838",
+      "receipt_sha256": "0515fd0f3c173a718c888d1e8136634b6b94fc3b2c4090d79bd8b8a9356a3819",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6ec94eff3a0a7626194ad9ccba53eb164e620df02527b25ac192d7ada7cbb155",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX 30秒刷新周期对 ingestion_jobs 执行多次全表扫描",
+  "trigger_condition": {
+    "fingerprint": "36002cf10906f8b9fe226af9",
+    "source_event_id": "FE-20260816-36002cf10906"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
+    "python -m nox -s data_sync_autonomy_backend -> 162 passed and 1 guarded DEV test skipped",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
+    "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
+    "ruff check changed Python files; compileall changed Python files; git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

@@ -15,11 +15,26 @@ import pandas as pd
 from psycopg2.extras import RealDictCursor
 
 from backend.db.pg_pool import get_conn
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SNAPSHOT_PREFIX,
+)
+from backend.services.canonical_pit_dataset_consumer import (
+    CanonicalPitDatasetConsumerError,
+    CanonicalPitDatasetIdentity,
+    FormalDatasetUsage,
+    require_formal_dataset_pit_identity,
+)
+from backend.services.dataset_release.pit import DatasetPitBinding, PitSnapshotError
 from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
     LegacyQESTPITCompatibilityReceipt,
     find_legacy_qe_artifact_manifest,
 )
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
+from backend.services.quantevolver.qe_dataset_contract import (
+    QE_FORMAL_DATASET_REQUEST_PARAM as HMM_FORMAL_DATASET_REQUEST_PARAM,
+    require_qe_formal_dataset_request,
+)
 from backend.services.quantevolver.stock_pool_sync import (
     StockPoolInterval,
     StockPoolSnapshot,
@@ -51,6 +66,27 @@ class SourceLoopUniverseContract:
     risk_policy: Mapping[str, Any]
     risk_policy_origin: str = "persisted_source_loop"
     st_pit_compatibility: LegacyQESTPITCompatibilityReceipt | None = None
+    formal_dataset_binding: HMMFormalDatasetBinding | None = None
+
+
+@dataclass(frozen=True)
+class HMMFormalDatasetBinding:
+    """HMM projection of one W3-A validated sealed dataset request."""
+
+    usage_mode: str
+    identity: CanonicalPitDatasetIdentity
+    frozen_universe_key: str
+    artifact_root: str
+    qlib_instruments_sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            **self.identity.as_dict(),
+            "usage_mode": self.usage_mode,
+            "frozen_universe_key": self.frozen_universe_key,
+            "artifact_root": self.artifact_root,
+            "qlib_instruments_sha256": self.qlib_instruments_sha256,
+        }
 
 
 @dataclass(frozen=True)
@@ -75,6 +111,7 @@ class SourceLoopRiskPolicySnapshot:
     artifact_size_bytes: int
     artifact_source_task_id: str
     artifact_source_loop_name: str
+    physical_universe_key: str | None = None
 
 
 class SourceLoopUniverseRepository(Protocol):
@@ -87,6 +124,56 @@ class StockPoolSnapshotLoader(Protocol):
 
 class SourceRiskPolicySnapshotLoader(Protocol):
     def __call__(self, task_id: str, loop_name: str) -> SourceLoopRiskPolicySnapshot: ...
+
+
+def require_hmm_formal_dataset_binding(value: Mapping[str, Any]) -> HMMFormalDatasetBinding:
+    """Revalidate the sealed QE source request through the neutral W3-A adapter."""
+
+    try:
+        # Parse through the owning QE request contract first.  Besides validating
+        # the complete runtime-pin graph, ``as_dict`` gives both downstream
+        # projections one detached canonical snapshot instead of rereading a
+        # caller-owned mutable mapping.
+        qe_request = require_qe_formal_dataset_request(value)
+        detached = qe_request.as_dict()
+        usage_mode = detached["usage_mode"]
+        expected_digest = detached["expected_manifest_digest"]
+        release_manifest = detached["release_manifest"]
+        runtime_pins = detached["runtime_pins"]
+        artifact_root = runtime_pins["artifact_root"]
+        instruments_digest = runtime_pins["qlib_instruments_sha256"]
+        usage = FormalDatasetUsage(usage_mode)
+        identity = require_formal_dataset_pit_identity(
+            release_manifest,
+            usage_mode=usage,
+            expected_manifest_digest=expected_digest,
+        )
+        dataset_binding = DatasetPitBinding.from_release_manifest(release_manifest)
+    except (
+        CanonicalPitDatasetConsumerError,
+        KeyError,
+        PitSnapshotError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise InvalidSpecError(
+            "source QE formal dataset request cannot prove a canonical frozen identity",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if (
+        dataset_binding.release_id != identity.release_id
+        or dataset_binding.rule_version != identity.rule_version
+        or dataset_binding.rule_parameters_digest != identity.rule_parameters_digest
+        or dataset_binding.frozen_snapshot_digest != identity.frozen_snapshot_digest
+    ):
+        raise InvalidSpecError("source QE formal dataset request identity projection drifted")
+    return HMMFormalDatasetBinding(
+        usage_mode=usage.value,
+        identity=identity,
+        frozen_universe_key=dataset_binding.frozen_universe_key,
+        artifact_root=artifact_root,
+        qlib_instruments_sha256=instruments_digest,
+    )
 
 
 class QELoopUniverseRepository:
@@ -120,6 +207,28 @@ class QELoopUniverseRepository:
                 if isinstance(config.get(key), Mapping)
             ),
         ]
+        formal_requests = [
+            section[HMM_FORMAL_DATASET_REQUEST_PARAM]
+            for section in config_sections
+            if HMM_FORMAL_DATASET_REQUEST_PARAM in section
+        ]
+        formal_dataset_binding: HMMFormalDatasetBinding | None = None
+        if formal_requests:
+            if any(not isinstance(item, Mapping) for item in formal_requests):
+                raise InvalidSpecError("source QE formal dataset request must be an object")
+            try:
+                canonical_requests = {_canonical_json_sha256(item) for item in formal_requests}
+            except (TypeError, ValueError) as exc:
+                raise InvalidSpecError(
+                    "source QE formal dataset request is not canonical JSON",
+                    context={"base_loop_ref": base_loop_ref, "error_type": type(exc).__name__},
+                ) from exc
+            if len(canonical_requests) != 1:
+                raise InvalidSpecError(
+                    "source QE loop contains conflicting formal dataset requests",
+                    context={"base_loop_ref": base_loop_ref},
+                )
+            formal_dataset_binding = require_hmm_formal_dataset_binding(formal_requests[0])
         stock_pools = {
             str(section.get("stock_pool") or "").strip()
             for section in config_sections
@@ -144,6 +253,11 @@ class QELoopUniverseRepository:
         compatibility: LegacyQESTPITCompatibilityReceipt | None = None
         risk_policy_origin = "persisted_source_loop"
         if not risk_candidates:
+            if formal_dataset_binding is not None:
+                raise InvalidSpecError(
+                    "formal source QE loop does not declare an ST-PIT risk policy",
+                    context={"base_loop_ref": base_loop_ref},
+                )
             legacy_manifest = find_legacy_qe_artifact_manifest(base_loop_ref)
             compatibility = (
                 legacy_manifest.st_pit_compatibility if legacy_manifest is not None else None
@@ -196,6 +310,18 @@ class QELoopUniverseRepository:
                 "source QE loop does not persist its ST-PIT universe key",
                 context={"base_loop_ref": base_loop_ref},
             )
+        if formal_dataset_binding is not None:
+            expected_key = f"{DATASET_QE_ST_PIT_PREFIX}{formal_dataset_binding.identity.release_id}"
+            if configured_universe_key != expected_key:
+                raise InvalidSpecError(
+                    "formal source QE loop risk policy differs from its sealed dataset request",
+                    context={
+                        "base_loop_ref": base_loop_ref,
+                        "expected_universe_key": expected_key,
+                        "actual_universe_key": configured_universe_key,
+                    },
+                )
+            risk_policy_origin = "formal_frozen_dataset_v2"
         return SourceLoopUniverseContract(
             task_id=task_id,
             loop_name=loop_name,
@@ -203,6 +329,7 @@ class QELoopUniverseRepository:
             risk_policy=risk_policy,
             risk_policy_origin=risk_policy_origin,
             st_pit_compatibility=compatibility,
+            formal_dataset_binding=formal_dataset_binding,
         )
 
 
@@ -290,7 +417,7 @@ def _parse_source_risk_policy_snapshot(
     universe_key = str(payload.get("st_universe_key") or "").strip()
     state_universe_key = str(state.get("universe_key") or "").strip()
     dataset_contract_id = str(payload.get("dataset_contract_id") or "").strip() or None
-    if not universe_key or state_universe_key != universe_key:
+    if not universe_key or not state_universe_key:
         raise InvalidSpecError(
             "source QE runtime ST-PIT artifact has inconsistent universe identity",
             context={
@@ -301,15 +428,19 @@ def _parse_source_risk_policy_snapshot(
             },
         )
     if dataset_contract_id is None:
-        if universe_key != LEGACY_QE_ST_PIT_UNIVERSE_KEY:
+        if universe_key != LEGACY_QE_ST_PIT_UNIVERSE_KEY or state_universe_key != universe_key:
             raise InvalidSpecError(
                 "legacy source QE runtime ST-PIT artifact uses an unknown universe key",
                 context={"task_id": task_id, "loop_name": loop_name, "universe_key": universe_key},
             )
         binding_mode = "legacy_frozen_runtime_artifact_v1"
+        expected_rule_version = DEFAULT_ST_PIT_RULE_VERSION
+        expected_state_status = "ready"
+        expected_scope = "st_only_active"
     else:
         expected_key = f"{DATASET_QE_ST_PIT_PREFIX}{dataset_contract_id}"
-        if universe_key != expected_key:
+        expected_physical_key = f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{dataset_contract_id}"
+        if universe_key != expected_key or state_universe_key != expected_physical_key:
             raise InvalidSpecError(
                 "source QE runtime ST-PIT dataset identity is inconsistent",
                 context={
@@ -318,19 +449,26 @@ def _parse_source_risk_policy_snapshot(
                     "dataset_contract_id": dataset_contract_id,
                     "expected_universe_key": expected_key,
                     "actual_universe_key": universe_key,
+                    "expected_physical_universe_key": expected_physical_key,
+                    "actual_physical_universe_key": state_universe_key,
                 },
             )
-        binding_mode = "immutable_dataset_runtime_artifact_v1"
+        binding_mode = "canonical_frozen_dataset_runtime_artifact_v2"
+        expected_rule_version = CANONICAL_PIT_RULE_VERSION
+        expected_state_status = "frozen"
+        expected_scope = "frozen_dataset_file"
 
     rule_version = str(state.get("rule_version") or "").strip()
     scope = str(state.get("scope") or "").strip()
-    fingerprint = str(state.get("source_fingerprint_sha256") or "").strip().lower()
+    raw_fingerprint = str(state.get("source_fingerprint_sha256") or "").strip()
+    fingerprint = raw_fingerprint.lower()
     if (
-        state.get("status") != "ready"
+        state.get("status") != expected_state_status
         or state.get("dirty") is not False
-        or rule_version != DEFAULT_ST_PIT_RULE_VERSION
-        or not scope
+        or rule_version != expected_rule_version
+        or scope != expected_scope
         or not _SHA256_RE.fullmatch(fingerprint)
+        or (dataset_contract_id is not None and raw_fingerprint != fingerprint)
     ):
         raise InvalidSpecError(
             "source QE runtime ST-PIT artifact state is not immutable and ready",
@@ -398,7 +536,7 @@ def _parse_source_risk_policy_snapshot(
     return SourceLoopRiskPolicySnapshot(
         snapshot=StockPoolSnapshot(
             filename=SOURCE_RISK_POLICY_ARTIFACT,
-            instrument_name=universe_key,
+            instrument_name=state_universe_key,
             sha256=artifact_sha256,
             intervals=tuple(intervals),
         ),
@@ -414,6 +552,7 @@ def _parse_source_risk_policy_snapshot(
         artifact_size_bytes=len(raw),
         artifact_source_task_id=task_id,
         artifact_source_loop_name=loop_name,
+        physical_universe_key=state_universe_key,
     )
 
 
@@ -504,6 +643,46 @@ def _verify_persisted_policy_matches_runtime_artifact(
         )
 
 
+def _verify_formal_dataset_matches_runtime_artifact(
+    *,
+    base_loop_ref: str,
+    formal: HMMFormalDatasetBinding,
+    runtime_snapshot: SourceLoopRiskPolicySnapshot,
+) -> None:
+    identity = formal.identity
+    expected = {
+        "dataset_contract_id": identity.release_id,
+        "universe_key": f"{DATASET_QE_ST_PIT_PREFIX}{identity.release_id}",
+        "physical_universe_key": formal.frozen_universe_key,
+        "rule_version": identity.rule_version,
+        "binding_mode": "canonical_frozen_dataset_runtime_artifact_v2",
+        "source_fingerprint_sha256": formal.qlib_instruments_sha256,
+    }
+    actual = {
+        "dataset_contract_id": runtime_snapshot.dataset_contract_id,
+        "universe_key": runtime_snapshot.universe_key,
+        "physical_universe_key": runtime_snapshot.physical_universe_key,
+        "rule_version": runtime_snapshot.rule_version,
+        "binding_mode": runtime_snapshot.binding_mode,
+        "source_fingerprint_sha256": runtime_snapshot.source_fingerprint_sha256,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": actual[key]}
+        for key, value in expected.items()
+        if actual[key] != value
+    }
+    if runtime_snapshot.end_date > identity.cutoff:
+        mismatches["cutoff"] = {
+            "expected_max": identity.cutoff.isoformat(),
+            "actual_end": runtime_snapshot.end_date.isoformat(),
+        }
+    if mismatches:
+        raise InvalidSpecError(
+            "source QE runtime ST-PIT artifact differs from its canonical frozen dataset request",
+            context={"base_loop_ref": base_loop_ref, "mismatches": mismatches},
+        )
+
+
 class QEExecutionUniverseResolver:
     """Intersect the source pool with the exact frozen ST-PIT runtime artifact."""
 
@@ -584,6 +763,15 @@ class QEExecutionUniverseResolver:
             persisted_policy=contract.risk_policy,
             runtime_snapshot=risk_snapshot,
         )
+        formal_dataset_binding = contract.formal_dataset_binding
+        if formal_dataset_binding is not None:
+            if compatibility is not None:
+                raise InvalidSpecError("formal source QE loop cannot use a legacy compatibility receipt")
+            _verify_formal_dataset_matches_runtime_artifact(
+                base_loop_ref=evaluation_spec.base_loop_ref,
+                formal=formal_dataset_binding,
+                runtime_snapshot=risk_snapshot,
+            )
         if (
             risk_snapshot.start_date > evaluation_spec.window_start
             or risk_snapshot.end_date < evaluation_spec.window_end
@@ -676,10 +864,16 @@ class QEExecutionUniverseResolver:
                 "coverage_semantics": (
                     "allowlisted_cross_loop_immutable_artifact_v1"
                     if compatibility is not None
+                    else "canonical_frozen_dataset_v2"
+                    if formal_dataset_binding is not None
                     else "exact_source_loop_runtime_artifact_v1"
                 ),
             },
         }
+        if formal_dataset_binding is not None:
+            evidence["st_pit"]["canonical_pit_dataset_identity"] = (
+                formal_dataset_binding.as_dict()
+            )
         if compatibility is not None:
             evidence["st_pit"]["compatibility_receipt"] = {
                 "source_loop_config_sha256": compatibility.source_config_sha256,

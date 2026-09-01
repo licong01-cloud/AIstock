@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Event, Lock, Thread
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -17,15 +18,27 @@ from .api_models import (
     HistoricalRangeRefreshOutcomesRequest,
 )
 from .canonical import canonical_json_sha256
-from .dataset_bridge import HistoricalRangeDatasetBridgeApplicationService
-from .executor import HistoricalRangeBatchExecutionService
+from .dataset_bridge import (
+    HistoricalRangeDatasetBridgeApplicationService,
+    HistoricalRangeDatasetBridgeArtifactV1,
+)
+from .executor import (
+    DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+    HistoricalRangeBatchExecutionService,
+    validate_candidate_prefetch_per_program,
+)
 from .artifact_store import HistoricalRangeArtifactStore
 from .models import (
     OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+    SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION,
+    REASON_DATABASE_CAPACITY_EXHAUSTED,
+    REASON_DATABASE_UNAVAILABLE,
     HistoricalRangeArtifactKind,
+    HistoricalRangeCatalogPhase,
     ExistingProgramSpecV1,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBackgroundDispatchFailureV1,
+    HistoricalRangeBridgeResultStatus,
     HistoricalRangeDatasetBridgeRequestV1,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
@@ -35,16 +48,102 @@ from .models import (
     HistoricalRangeOutcomeRefreshRequestV1,
     HistoricalRangeOutcomeRefreshReceiptV1,
     HistoricalRangeResearchBatchRequestV1,
+    HistoricalRangeSourceCatalogCheckpointV1,
+    HistoricalRangeUnresolvedRequirementV1,
     ResearchProgramSpecV1,
     derive_prefixed_id,
 )
 from .outcome_service import HistoricalRangeOutcomeApplicationService
-from .planning_service import HistoricalRangePlanningService
-from .query_repository import PostgresHistoricalRangeQueryRepository
+from .planning_service import PLANNING_PRODUCER_CONTRACT_VERSION, HistoricalRangePlanningService
+from .query_repository import (
+    HistoricalRangeNotFoundError,
+    PostgresHistoricalRangeQueryRepository,
+)
 from .repository import PostgresHistoricalRangeRepository
 from .runtime_factories import HistoricalRangeOutcomeCommandPlan
 
 LOGGER = logging.getLogger(__name__)
+
+_BRIDGE_PARENT_LEASE_DURATION = timedelta(minutes=30)
+_OUTCOME_PARENT_LEASE_DURATION = timedelta(minutes=30)
+# Live catalog workers renew this lease; the duration bounds orphan takeover latency.
+_CATALOG_LEASE_DURATION = timedelta(minutes=5)
+
+
+def _renewed_lease_expiry(operation: Mapping[str, Any], duration: timedelta) -> datetime:
+    """Advance a lease from the later of durable expiry and current UTC time."""
+
+    now = datetime.now(UTC)
+    raw_expiry = operation.get("lease_expires_at")
+    if raw_expiry is None:
+        return now + duration
+    current_expiry = raw_expiry if isinstance(raw_expiry, datetime) else datetime.fromisoformat(str(raw_expiry))
+    if current_expiry.tzinfo is None:
+        current_expiry = current_expiry.replace(tzinfo=UTC)
+    return max(now, current_expiry.astimezone(UTC)) + duration
+
+
+class _OutcomeParentLeaseHeartbeatSupervisor:
+    """Renew an outcome parent claim while its child operation is active."""
+
+    def __init__(
+        self,
+        *,
+        repository: PostgresHistoricalRangeRepository,
+        operation: Mapping[str, Any],
+        lease_duration: timedelta,
+    ) -> None:
+        self._repository = repository
+        self._operation = dict(operation)
+        self._lease_duration = lease_duration
+        self._interval_seconds = min(
+            60.0,
+            max(0.1, lease_duration.total_seconds() / 3),
+        )
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._error: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"ahr-outcome-parent-heartbeat-{operation['operation_id']}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> dict[str, Any]:
+        self._stop_event.set()
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        with self._lock:
+            return dict(self._operation)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_seconds):
+            try:
+                with self._lock:
+                    current = dict(self._operation)
+                refreshed = self._repository.transition_operation(
+                    operation_id=str(current["operation_id"]),
+                    expected_row_version=int(current["row_version"]),
+                    target_status=HistoricalRangeOperationStatus.RUNNING,
+                    attempt_no=int(current["attempt_no"]),
+                    worker_id=str(current["worker_id"]),
+                    lease_token=str(current["lease_token"]),
+                    lease_expires_at=datetime.now(UTC) + self._lease_duration,
+                    fencing_token=int(current["fencing_token"]),
+                    stable_keyset_cursor_json=current.get(
+                        "stable_keyset_cursor_json"
+                    ),
+                )
+                with self._lock:
+                    self._operation = dict(refreshed)
+            except BaseException as exc:  # surfaced synchronously by stop()
+                self._error = exc
+                self._stop_event.set()
+                return
 
 
 class BackgroundTaskRegistrar(Protocol):
@@ -80,6 +179,10 @@ class HistoricalRangeOutcomeRequestFactory(Protocol):
 
 class HistoricalRangeBridgeRequestFactory(Protocol):
     def build(self, batch_id: str, request: HistoricalRangeBuildBridgeRequest) -> HistoricalRangeDatasetBridgeRequestV1: ...
+
+    def register_frozen_policy_refs(
+        self, request: HistoricalRangeDatasetBridgeRequestV1
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -134,10 +237,14 @@ class ResponseBoundHistoricalRangeDispatcher:
         *,
         runtime_factory: RuntimeFactory,
         failure_recorder_factory: FailureRecorderFactory | None = None,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
     ) -> None:
         if runtime_factory is None:
             raise ValueError("historical-range dispatcher requires runtime_factory")
         self._runtime_factory = runtime_factory
+        self._candidate_prefetch_per_program = validate_candidate_prefetch_per_program(
+            candidate_prefetch_per_program
+        )
         self._failure_recorder_factory = failure_recorder_factory or (
             lambda: _RuntimePreclaimFailureRecorder(runtime_factory)
         )
@@ -176,6 +283,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     worker_id=worker_id,
                     operation_idempotency_key=str(payload["operation_idempotency_key"]),
                     expected_batch_row_version=int(payload["expected_row_version"]),
+                    candidate_prefetch_per_program=self._candidate_prefetch_per_program,
                 )
             elif command == "CANCEL":
                 stage = "CLAIM_AND_EXECUTION"
@@ -199,14 +307,27 @@ class ResponseBoundHistoricalRangeDispatcher:
                     worker_id=worker_id,
                 )
             elif command == "BUILD_DATASET_BRIDGE":
-                request = runtime.bridge_requests.build(
-                    batch_id,
-                    HistoricalRangeBuildBridgeRequest.model_validate(payload["command_payload"]),
+                api_request = HistoricalRangeBuildBridgeRequest.model_validate(
+                    payload["command_payload"]
                 )
+                if payload.get("domain_request_payload") is None:
+                    request = runtime.bridge_requests.build(batch_id, api_request)
+                else:
+                    request = HistoricalRangeDatasetBridgeRequestV1.model_validate(
+                        payload["domain_request_payload"]
+                    )
+                    _validate_bridge_api_scope(
+                        batch_id=batch_id,
+                        api_request=api_request,
+                        domain_request=request,
+                    )
+                runtime.bridge_requests.register_frozen_policy_refs(request)
                 stage = "CLAIM_AND_EXECUTION"
-                runtime.bridge.build_until_stable_boundary(
+                self._run_bridge_request(
+                    runtime=runtime,
                     request=request,
-                    resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
+                    operation_id=operation_id,
+                    batch_id=batch_id,
                     worker_id=worker_id,
                 )
             else:
@@ -269,6 +390,252 @@ class ResponseBoundHistoricalRangeDispatcher:
                 stage,
             )
 
+    def _run_bridge_request(
+        self,
+        *,
+        runtime: HistoricalRangeRuntime,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        operation_id: str,
+        batch_id: str,
+        worker_id: str,
+    ) -> None:
+        operation = runtime.query.get_operation_internal(operation_id)
+        if str(operation.get("request_payload_sha256")) != str(request.request_hash):
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+                "bridge worker request differs from the durable parent operation identity",
+                http_status=409,
+                context={"operation_id": operation_id},
+            )
+        if operation["status"] in {
+            HistoricalRangeOperationStatus.COMPLETED.value,
+            HistoricalRangeOperationStatus.FAILED.value,
+        }:
+            return
+        if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value and not operation.get("lease_expired"):
+            return
+        resolved_request_hash = runtime.query.resolved_request_hash(batch_id)
+        claimed = self._claim_bridge_parent(
+            runtime=runtime,
+            operation=operation,
+            request=request,
+            resolved_request_hash=resolved_request_hash,
+            worker_id=worker_id,
+        )
+        try:
+            child_receipt, child_receipt_ref = runtime.bridge.build_until_stable_boundary(
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                worker_id=worker_id,
+            )
+            claimed = self._heartbeat_bridge_parent(
+                runtime=runtime,
+                operation=claimed,
+                phase="CHILD_TERMINAL",
+            )
+            parent_receipt, parent_receipt_ref = runtime.bridge.publish_parent_receipt(
+                operation_id=operation_id,
+                child_receipt=child_receipt,
+                child_receipt_ref=child_receipt_ref,
+                resolved_request_hash=resolved_request_hash,
+            )
+            claimed = self._heartbeat_bridge_parent(
+                runtime=runtime,
+                operation=claimed,
+                phase="PARENT_RECEIPT_PUBLISHED",
+            )
+            target_status = _bridge_parent_operation_status(parent_receipt.result_status)
+            error_json = (
+                None
+                if target_status is HistoricalRangeOperationStatus.COMPLETED
+                else {
+                    "reason_codes": list(parent_receipt.reason_codes),
+                    "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                    "error_type": "DomainSubOperationFailure",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - the parent owns the durable failure boundary.
+            LOGGER.exception(
+                "historical-range bridge sub-operation failed operation_id=%s batch_id=%s",
+                operation_id,
+                batch_id,
+            )
+            reason_code = str(getattr(exc, "reason_code", None) or "ADVISORY_HR_DATASET_BRIDGE_PARENT_FAILED")
+            retryable = bool(getattr(exc, "retryable", False)) or reason_code in {
+                REASON_DATABASE_CAPACITY_EXHAUSTED,
+                REASON_DATABASE_UNAVAILABLE,
+            }
+            parent_receipt, parent_receipt_ref = runtime.bridge.publish_failed_parent_receipt(
+                operation_id=operation_id,
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                reason_code=reason_code,
+                result_status=(
+                    HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED
+                    if retryable
+                    else HistoricalRangeBridgeResultStatus.FAILED
+                ),
+            )
+            target_status = (
+                HistoricalRangeOperationStatus.RETRYABLE_FAILED if retryable else HistoricalRangeOperationStatus.FAILED
+            )
+            error_json = {
+                "reason_codes": [reason_code],
+                "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                "error_type": type(exc).__name__,
+            }
+        self._finish_bridge_parent(
+            runtime=runtime,
+            operation=claimed,
+            request=request,
+            receipt=parent_receipt,
+            receipt_ref=parent_receipt_ref,
+            target_status=target_status,
+            error_json=error_json,
+        )
+
+    @staticmethod
+    def _claim_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        resolved_request_hash: str,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        expired_attempt = None
+        if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value:
+            expired_receipt, expired_ref = runtime.bridge.publish_failed_parent_receipt(
+                operation_id=str(operation["operation_id"]),
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                reason_code="ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+                result_status=HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED,
+            )
+            expired_at = datetime.now(UTC)
+            expired_attempt = HistoricalRangeOperationAttemptV1(
+                attempt_id=derive_prefixed_id(
+                    "ahroba",
+                    {
+                        "operation_id": operation["operation_id"],
+                        "attempt_no": operation["attempt_no"],
+                        "fencing_token": operation["fencing_token"],
+                    },
+                ),
+                operation_id=str(operation["operation_id"]),
+                attempt_no=int(operation["attempt_no"]),
+                worker_id=str(operation["worker_id"]),
+                lease_token=str(operation["lease_token"]),
+                fencing_token=int(operation["fencing_token"]),
+                status=HistoricalRangeOperationStatus.RETRYABLE_FAILED.value,
+                input_cursor_json=operation.get("stable_keyset_cursor_json"),
+                result_cursor_json={"phase": "LEASE_EXPIRED"},
+                input_hash=str(request.request_hash),
+                result_hash=expired_ref.semantic_content_hash,
+                attempt_receipt_ref=expired_ref,
+                reason_codes=expired_receipt.reason_codes,
+                error_json={
+                    "reason_codes": list(expired_receipt.reason_codes),
+                    "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                    "error_type": "LeaseExpired",
+                },
+                started_at=operation.get("started_at") or expired_at,
+                finished_at=expired_at,
+            )
+        return runtime.repository.transition_operation(
+            operation_id=str(operation["operation_id"]),
+            expected_row_version=int(operation["row_version"]),
+            target_status=HistoricalRangeOperationStatus.RUNNING,
+            attempt_no=int(operation.get("attempt_no") or 0) + 1,
+            worker_id=worker_id,
+            lease_token=uuid4().hex,
+            lease_expires_at=datetime.now(UTC) + _BRIDGE_PARENT_LEASE_DURATION,
+            fencing_token=int(operation.get("fencing_token") or 0) + 1,
+            started_at=datetime.now(UTC),
+            expired_attempt=expired_attempt,
+        )
+
+    @staticmethod
+    def _heartbeat_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        phase: str,
+    ) -> dict[str, Any]:
+        """Extend the exact parent claim before authoritative closure work."""
+
+        return runtime.repository.transition_operation(
+            operation_id=str(operation["operation_id"]),
+            expected_row_version=int(operation["row_version"]),
+            target_status=HistoricalRangeOperationStatus.RUNNING,
+            attempt_no=int(operation["attempt_no"]),
+            worker_id=str(operation["worker_id"]),
+            lease_token=str(operation["lease_token"]),
+            lease_expires_at=_renewed_lease_expiry(operation, _BRIDGE_PARENT_LEASE_DURATION),
+            fencing_token=int(operation["fencing_token"]),
+            stable_keyset_cursor_json={"phase": phase},
+        )
+
+    @staticmethod
+    def _finish_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        receipt: HistoricalRangeDatasetBridgeReceiptV1,
+        receipt_ref: HistoricalRangeArtifactRefV1,
+        target_status: HistoricalRangeOperationStatus,
+        error_json: dict[str, Any] | None,
+    ) -> None:
+        finished_at = datetime.now(UTC)
+        cursor = {
+            "phase": target_status.value,
+            "dataset_build_id": receipt.dataset_build_id,
+            "sealed_snapshot_id": receipt.sealed_snapshot_id,
+        }
+        attempt = HistoricalRangeOperationAttemptV1(
+            attempt_id=derive_prefixed_id(
+                "ahroba",
+                {
+                    "operation_id": receipt.operation_id,
+                    "attempt_no": operation["attempt_no"],
+                    "fencing_token": operation["fencing_token"],
+                },
+            ),
+            operation_id=receipt.operation_id,
+            attempt_no=int(operation["attempt_no"]),
+            worker_id=str(operation["worker_id"]),
+            lease_token=str(operation["lease_token"]),
+            fencing_token=int(operation["fencing_token"]),
+            status=target_status.value,
+            input_cursor_json=operation.get("stable_keyset_cursor_json"),
+            result_cursor_json=cursor,
+            input_hash=str(request.request_hash),
+            result_hash=receipt_ref.semantic_content_hash,
+            attempt_receipt_ref=receipt_ref,
+            reason_codes=receipt.reason_codes,
+            error_json=error_json,
+            started_at=operation.get("started_at") or finished_at,
+            finished_at=finished_at,
+        )
+        terminal = target_status in {
+            HistoricalRangeOperationStatus.COMPLETED,
+            HistoricalRangeOperationStatus.FAILED,
+        }
+        runtime.repository.transition_operation(
+            operation_id=receipt.operation_id,
+            expected_row_version=int(operation["row_version"]),
+            target_status=target_status,
+            attempt_no=int(operation["attempt_no"]),
+            fencing_token=int(operation["fencing_token"]),
+            stable_keyset_cursor_json=cursor,
+            result_status=receipt.result_status.value if terminal else None,
+            result_ref=receipt_ref if terminal else None,
+            error_json=error_json,
+            finished_at=finished_at if terminal else None,
+            attempt=attempt,
+        )
+
     def _run_outcome_plan(
         self,
         *,
@@ -301,6 +668,12 @@ class ResponseBoundHistoricalRangeDispatcher:
             plan=plan,
             worker_id=worker_id,
         )
+        parent_heartbeat = _OutcomeParentLeaseHeartbeatSupervisor(
+            repository=runtime.repository,
+            operation=claimed,
+            lease_duration=_OUTCOME_PARENT_LEASE_DURATION,
+        )
+        parent_heartbeat.start()
         outcome_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         summary_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         receipts = []
@@ -360,41 +733,51 @@ class ResponseBoundHistoricalRangeDispatcher:
                     }
                 )
             )
-        aggregate = HistoricalRangeOutcomeRefreshReceiptV1(
-            operation_id=operation_id,
-            request_hash=plan.request_hash,
-            status=receipt_status,
-            processed_count=len(outcome_refs),
-            outcome_refs=tuple(
-                sorted(
-                    outcome_refs.values(),
-                    key=lambda ref: (
-                        ref.artifact_kind.value,
-                        ref.semantic_content_hash,
-                        ref.relative_path,
-                    ),
-                )
-            ),
-            summary_refs=tuple(
-                sorted(
-                    summary_refs.values(),
-                    key=lambda ref: (
-                        ref.artifact_kind.value,
-                        ref.semantic_content_hash,
-                        ref.relative_path,
-                    ),
-                )
-            ),
-            reason_codes=reasons or (() if receipt_status == "COMPLETED" else ("ADVISORY_HR_SUB_OPERATION_INCOMPLETE",)),
-        )
-        stored = runtime.artifact_store.publish_payload(
-            artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
-            producer_contract_version="advisory_phase1r_r5_outcome_command_v1",
-            payload_schema_version=OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
-            resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
-            payload=aggregate.model_dump(mode="json"),
-            upstream_refs=tuple((*aggregate.outcome_refs, *aggregate.summary_refs)),
-        )
+        try:
+            aggregate = HistoricalRangeOutcomeRefreshReceiptV1(
+                operation_id=operation_id,
+                request_hash=plan.request_hash,
+                status=receipt_status,
+                processed_count=len(outcome_refs),
+                outcome_refs=tuple(
+                    sorted(
+                        outcome_refs.values(),
+                        key=lambda ref: (
+                            ref.artifact_kind.value,
+                            ref.semantic_content_hash,
+                            ref.relative_path,
+                        ),
+                    )
+                ),
+                summary_refs=tuple(
+                    sorted(
+                        summary_refs.values(),
+                        key=lambda ref: (
+                            ref.artifact_kind.value,
+                            ref.semantic_content_hash,
+                            ref.relative_path,
+                        ),
+                    )
+                ),
+                reason_codes=reasons
+                or (
+                    ()
+                    if receipt_status == "COMPLETED"
+                    else ("ADVISORY_HR_SUB_OPERATION_INCOMPLETE",)
+                ),
+            )
+            stored = runtime.artifact_store.publish_payload(
+                artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+                producer_contract_version="advisory_phase1r_r5_outcome_command_v1",
+                payload_schema_version=OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+                resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
+                payload=aggregate.model_dump(mode="json"),
+                upstream_refs=tuple(
+                    (*aggregate.outcome_refs, *aggregate.summary_refs)
+                ),
+            )
+        finally:
+            claimed = parent_heartbeat.stop()
         finished_at = datetime.now(UTC)
         error_json = (
             {
@@ -509,7 +892,7 @@ class ResponseBoundHistoricalRangeDispatcher:
             attempt_no=int(operation.get("attempt_no") or 0) + 1,
             worker_id=worker_id,
             lease_token=uuid4().hex,
-            lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
+            lease_expires_at=datetime.now(UTC) + _OUTCOME_PARENT_LEASE_DURATION,
             fencing_token=int(operation.get("fencing_token") or 0) + 1,
             started_at=datetime.now(UTC),
             expired_attempt=expired_attempt,
@@ -527,7 +910,11 @@ class ResponseBoundHistoricalRangeDispatcher:
         operation = runtime.query.get_operation_internal(operation_id)
         if operation["status"] == HistoricalRangeOperationStatus.COMPLETED.value:
             runtime.planning.seal_completed_catalog(operation_id=operation_id)
-            runtime.execution.execute_until_blocked(batch_id=batch_id, worker_id=worker_id)
+            runtime.execution.execute_until_blocked(
+                batch_id=batch_id,
+                worker_id=worker_id,
+                candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+            )
             return
         if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value and not operation.get("lease_expired"):
             return
@@ -542,7 +929,7 @@ class ResponseBoundHistoricalRangeDispatcher:
             lease_token=derive_prefixed_id(
                 "ahrclease", {"operation_id": operation_id, "worker_id": worker_id, "attempt_no": attempt_no}
             ),
-            lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            lease_expires_at=datetime.now(UTC) + _CATALOG_LEASE_DURATION,
             expired_attempt=expired_attempt,
         )
         while True:
@@ -557,11 +944,15 @@ class ResponseBoundHistoricalRangeDispatcher:
                     "ahrclease",
                     {"operation_id": operation_id, "worker_id": worker_id, "row_version": next_row_version + 1},
                 ),
-                next_lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                next_lease_duration=_CATALOG_LEASE_DURATION,
             )
             claimed = result.operation
             if result.sealed_batch is not None:
-                runtime.execution.execute_until_blocked(batch_id=batch_id, worker_id=worker_id)
+                runtime.execution.execute_until_blocked(
+                    batch_id=batch_id,
+                    worker_id=worker_id,
+                    candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+                )
                 return
             if str(claimed["status"]) != HistoricalRangeOperationStatus.RUNNING.value:
                 return
@@ -570,16 +961,57 @@ class ResponseBoundHistoricalRangeDispatcher:
     def _expired_catalog_attempt(
         *, runtime: HistoricalRangeRuntime, operation: Mapping[str, Any]
     ) -> HistoricalRangeOperationAttemptV1:
-        batch = runtime.query.get_batch(str(operation["batch_id"]))
-        ref_payload = operation.get("latest_checkpoint_ref") or batch.get("requirement_plan_ref")
-        if not isinstance(ref_payload, dict):
+        if runtime.artifact_store is None:
             raise HistoricalRangeServiceError(
                 "ADVISORY_HR_OPERATION_LEASE_IDENTITY_MISSING",
-                "expired catalog operation has no durable checkpoint",
+                "expired catalog operation requires an artifact store",
                 retryable=True,
                 context={"operation_id": operation["operation_id"]},
             )
-        ref = HistoricalRangeArtifactRefV1.model_validate(ref_payload)
+        state = runtime.repository.load_catalog_planning_state(operation_id=str(operation["operation_id"]))
+        if state.checkpoint_chain:
+            ref = state.checkpoint_chain[-1][0]
+        else:
+            cursor = int(
+                (operation.get("stable_keyset_cursor_json") or {}).get("next_requirement_ordinal") or 1
+            )
+            if cursor > len(state.plan.requirements):
+                raise HistoricalRangeServiceError(
+                    "ADVISORY_HR_OPERATION_LEASE_IDENTITY_MISSING",
+                    "expired catalog operation cursor is outside the requirement plan",
+                    retryable=True,
+                    context={"operation_id": operation["operation_id"], "cursor": cursor},
+                )
+            checkpoint = HistoricalRangeSourceCatalogCheckpointV1(
+                requirement_plan_hash=state.plan.requirement_plan_hash,
+                catalog_generation=int(operation["catalog_generation"]),
+                phase=HistoricalRangeCatalogPhase(str(operation["catalog_phase"])),
+                ordinal_start=cursor,
+                ordinal_end=cursor,
+                next_requirement_ordinal=cursor,
+                unresolved_requirement_delta=(
+                    HistoricalRangeUnresolvedRequirementV1(
+                        ordinal=cursor,
+                        requirement_id=state.plan.requirements[cursor - 1].requirement_id,
+                        reason_code="ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+                        context={
+                            "operation_id": operation["operation_id"],
+                            "attempt_no": operation["attempt_no"],
+                        },
+                    ),
+                ),
+                cumulative_resolved_count=int(operation["cumulative_resolved_count"]),
+                cumulative_member_chain_hash=str(operation["cumulative_member_chain_hash"]),
+            )
+            ref = runtime.artifact_store.publish_planning_payload(
+                artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+                planning_identity_hash=str(operation["planning_identity_hash"]),
+                batch_id=str(operation["batch_id"]),
+                catalog_generation=int(operation["catalog_generation"]),
+                producer_contract_version=PLANNING_PRODUCER_CONTRACT_VERSION,
+                payload_schema_version=SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION,
+                payload=checkpoint.model_dump(mode="json"),
+            ).ref
         lease_expires_at = datetime.fromisoformat(str(operation["lease_expires_at"]))
         return HistoricalRangeOperationAttemptV1(
             attempt_id=derive_prefixed_id(
@@ -620,6 +1052,7 @@ class HistoricalRangeApplicationService:
         query_runtime_factory: RuntimeFactory | None = None,
         mutation_runtime_factory: RuntimeFactory | None = None,
         failure_recorder_factory: FailureRecorderFactory | None = None,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
     ) -> None:
         query_factory = query_runtime_factory or runtime_factory
         mutation_factory = mutation_runtime_factory or runtime_factory
@@ -627,12 +1060,27 @@ class HistoricalRangeApplicationService:
             raise ValueError("historical-range application service requires query and mutation runtime factories")
         self._query_runtime_factory = query_factory
         self._mutation_runtime_factory = mutation_factory
-        failure_recorder_factory = failure_recorder_factory or (
+        self._candidate_prefetch_per_program = validate_candidate_prefetch_per_program(
+            candidate_prefetch_per_program
+        )
+        self._failure_recorder_factory = failure_recorder_factory or (
             lambda: _RuntimePreclaimFailureRecorder(mutation_factory)
         )
         self._dispatcher = ResponseBoundHistoricalRangeDispatcher(
             runtime_factory=mutation_factory,
-            failure_recorder_factory=failure_recorder_factory,
+            failure_recorder_factory=self._failure_recorder_factory,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+        )
+
+    def with_candidate_prefetch_per_program(
+        self, candidate_prefetch_per_program: int
+    ) -> "HistoricalRangeApplicationService":
+        """Return an equivalent service with an explicit candidate prefetch width."""
+        return HistoricalRangeApplicationService(
+            query_runtime_factory=self._query_runtime_factory,
+            mutation_runtime_factory=self._mutation_runtime_factory,
+            failure_recorder_factory=self._failure_recorder_factory,
+            candidate_prefetch_per_program=candidate_prefetch_per_program,
         )
 
     def list_batch_options(self) -> dict[str, Any]:
@@ -785,6 +1233,7 @@ class HistoricalRangeApplicationService:
             batch_id=batch_id,
             request=request,
             operation_type=HistoricalRangeOperationType.RESUME,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
         )
         scheduled = _operation_dispatchable(operation)
         if scheduled:
@@ -814,6 +1263,7 @@ class HistoricalRangeApplicationService:
             batch_id=batch_id,
             request=request,
             operation_type=HistoricalRangeOperationType.CANCEL,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
         )
         scheduled = _operation_dispatchable(operation)
         if scheduled:
@@ -869,7 +1319,24 @@ class HistoricalRangeApplicationService:
     ) -> dict[str, Any]:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
-        domain_request = runtime.bridge_requests.build(batch_id, request)
+        operation_id = _domain_operation_id(
+            batch_id=batch_id,
+            operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+            operation_idempotency_key=request.operation_idempotency_key,
+        )
+        try:
+            existing_operation = runtime.query.get_operation_internal(operation_id)
+        except HistoricalRangeNotFoundError:
+            existing_operation = None
+        if existing_operation is None:
+            domain_request = runtime.bridge_requests.build(batch_id, request)
+        else:
+            domain_request = _bridge_request_for_exact_retry(
+                runtime=runtime,
+                batch_id=batch_id,
+                api_request=request,
+                parent_operation=existing_operation,
+            )
         operation, exact_retry = _persist_domain_operation(
             runtime=runtime,
             batch_id=batch_id,
@@ -887,6 +1354,7 @@ class HistoricalRangeApplicationService:
                     "batch_id": batch_id,
                     "operation_id": operation["operation_id"],
                     "command_payload": request.model_dump(mode="json"),
+                    "domain_request_payload": domain_request.model_dump(mode="json"),
                 },
             )
         return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
@@ -902,6 +1370,7 @@ def _domain_program_spec(value: Any) -> ExistingProgramSpecV1 | ResearchProgramS
 def _persist_execution_operation(
     *, runtime: HistoricalRangeRuntime, batch_id: str, request: HistoricalRangeCommandRequest,
     operation_type: HistoricalRangeOperationType,
+    candidate_prefetch_per_program: int,
 ) -> tuple[dict[str, Any], bool]:
     schema = "resume" if operation_type is HistoricalRangeOperationType.RESUME else "cancel"
     payload: dict[str, Any] = {
@@ -913,7 +1382,9 @@ def _persist_execution_operation(
     if operation_type is HistoricalRangeOperationType.RESUME:
         payload.update({
             "max_program_concurrency": 2,
-            "candidate_prefetch_per_program": 2,
+            "candidate_prefetch_per_program": validate_candidate_prefetch_per_program(
+                candidate_prefetch_per_program
+            ),
             "day_slice_size": 4,
             "lease_seconds": 3600,
         })
@@ -935,10 +1406,11 @@ def _persist_domain_operation(
     operation_idempotency_key: str, request_hash: str, expected_row_version: int,
     executor_identity: bool = False,
 ) -> tuple[dict[str, Any], bool]:
-    identity_key = "operation_idempotency_key" if executor_identity else "idempotency_key"
-    operation_id = derive_prefixed_id(
-        "ahrop",
-        {"batch_id": batch_id, "operation_type": operation_type.value, identity_key: operation_idempotency_key},
+    operation_id = _domain_operation_id(
+        batch_id=batch_id,
+        operation_type=operation_type,
+        operation_idempotency_key=operation_idempotency_key,
+        executor_identity=executor_identity,
     )
     operation, exact_retry = runtime.repository.get_or_create_operation(
         HistoricalRangeOperationRequestV1(
@@ -951,6 +1423,253 @@ def _persist_domain_operation(
         )
     )
     return runtime.query.get_operation(str(operation["operation_id"])), exact_retry
+
+
+def _domain_operation_id(
+    *,
+    batch_id: str,
+    operation_type: HistoricalRangeOperationType,
+    operation_idempotency_key: str,
+    executor_identity: bool = False,
+) -> str:
+    identity_key = "operation_idempotency_key" if executor_identity else "idempotency_key"
+    return derive_prefixed_id(
+        "ahrop",
+        {
+            "batch_id": batch_id,
+            "operation_type": operation_type.value,
+            identity_key: operation_idempotency_key,
+        },
+    )
+
+
+def _bridge_request_for_exact_retry(
+    *,
+    runtime: HistoricalRangeRuntime,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    parent_operation: Mapping[str, Any],
+) -> HistoricalRangeDatasetBridgeRequestV1:
+    _validate_bridge_parent_operation(
+        batch_id=batch_id,
+        api_request=api_request,
+        operation=parent_operation,
+    )
+    evidence_operation = _bridge_replay_evidence_operation(
+        runtime=runtime,
+        batch_id=batch_id,
+        api_request=api_request,
+        parent_operation=parent_operation,
+    )
+    if evidence_operation is None:
+        current = runtime.bridge_requests.build(batch_id, api_request)
+        if str(current.request_hash) != str(parent_operation["request_payload_sha256"]):
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_UNAVAILABLE",
+                "bridge exact retry requires frozen evidence after request identity rotation",
+                http_status=409,
+                context={"operation_id": parent_operation["operation_id"]},
+            )
+        return current
+    frozen = _load_frozen_bridge_request(
+        runtime=runtime,
+        parent_operation=parent_operation,
+        evidence_operation=evidence_operation,
+    )
+    _validate_bridge_api_scope(
+        batch_id=batch_id,
+        api_request=api_request,
+        domain_request=frozen,
+    )
+    return frozen
+
+
+def _validate_bridge_parent_operation(
+    *,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    operation: Mapping[str, Any],
+) -> None:
+    expected = {
+        "batch_id": batch_id,
+        "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE.value,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_row_version": api_request.expected_row_version,
+    }
+    if any(operation.get(key) != value for key, value in expected.items()):
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+            "bridge exact retry differs from the durable parent operation",
+            http_status=409,
+            context={"operation_id": operation.get("operation_id")},
+        )
+
+
+def _bridge_replay_evidence_operation(
+    *,
+    runtime: HistoricalRangeRuntime,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    parent_operation: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if parent_operation.get("result_ref") is not None:
+        return parent_operation
+    child_id = _domain_operation_id(
+        batch_id=batch_id,
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        operation_idempotency_key=api_request.operation_idempotency_key,
+    )
+    try:
+        child = runtime.query.get_operation_internal(child_id)
+    except HistoricalRangeNotFoundError:
+        return None
+    expected = {
+        "batch_id": batch_id,
+        "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN.value,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_row_version": api_request.expected_row_version,
+        "request_payload_sha256": parent_operation.get("request_payload_sha256"),
+    }
+    if any(child.get(key) != value for key, value in expected.items()):
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+            "bridge child operation differs from its durable parent identity",
+            http_status=409,
+            context={"operation_id": parent_operation.get("operation_id"), "child_operation_id": child_id},
+        )
+    if child.get("status") not in {
+        HistoricalRangeOperationStatus.COMPLETED.value,
+        HistoricalRangeOperationStatus.FAILED.value,
+    }:
+        return None
+    if child.get("result_ref") is None:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_INVALID",
+            "terminal bridge child operation is missing its result receipt",
+            http_status=409,
+            context={"child_operation_id": child_id},
+        )
+    return child
+
+
+def _load_frozen_bridge_request(
+    *,
+    runtime: HistoricalRangeRuntime,
+    parent_operation: Mapping[str, Any],
+    evidence_operation: Mapping[str, Any],
+) -> HistoricalRangeDatasetBridgeRequestV1:
+    if runtime.artifact_store is None:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_UNAVAILABLE",
+            "bridge exact retry requires the configured historical artifact store",
+            http_status=503,
+            retryable=True,
+            context={"operation_id": parent_operation.get("operation_id")},
+        )
+    try:
+        receipt_ref = HistoricalRangeArtifactRefV1.model_validate(evidence_operation["result_ref"])
+        if receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT:
+            raise ValueError("bridge replay result ref is not a DATASET_BRIDGE_RECEIPT")
+        if evidence_operation.get("result_hash") != receipt_ref.semantic_content_hash:
+            raise ValueError("bridge replay result hash differs from its receipt ref")
+        receipt_envelope = runtime.artifact_store.load(receipt_ref)
+        receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(receipt_envelope.payload)
+        bridge_envelope = runtime.artifact_store.load(receipt.bridge_artifact_ref)
+        bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(bridge_envelope.payload)
+        frozen = bridge.request
+        expected_hash = str(parent_operation["request_payload_sha256"])
+        expected_upstream = tuple(
+            sorted(
+                (
+                    *frozen.successful_day_refs,
+                    *frozen.candidate_refs,
+                    *frozen.outcome_refs,
+                    *frozen.summary_refs,
+                    *frozen.policy_bundle_refs,
+                ),
+                key=lambda item: (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                ),
+            )
+        )
+        if (
+            evidence_operation.get("request_payload_sha256") != expected_hash
+            or receipt.operation_id != evidence_operation.get("operation_id")
+            or receipt.request_hash != expected_hash
+            or receipt_envelope.upstream_refs != (receipt.bridge_artifact_ref,)
+            or bridge.operation_id != evidence_operation.get("operation_id")
+            or bridge.request_hash != expected_hash
+            or str(frozen.request_hash) != expected_hash
+            or bridge_envelope.upstream_refs != expected_upstream
+            or frozen.artifact_root_identity_hash
+            != runtime.artifact_store.root_identity_hash
+        ):
+            raise ValueError("bridge replay artifacts do not close the durable request identity")
+    except HistoricalRangeServiceError:
+        raise
+    except Exception as exc:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_INVALID",
+            "bridge exact retry evidence is missing, unreadable, or inconsistent",
+            http_status=422,
+            context={
+                "operation_id": parent_operation.get("operation_id"),
+                "evidence_operation_id": evidence_operation.get("operation_id"),
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
+    return frozen
+
+
+def _validate_bridge_api_scope(
+    *,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    domain_request: HistoricalRangeDatasetBridgeRequestV1,
+) -> None:
+    expected = {
+        "batch_id": batch_id,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_batch_row_version": api_request.expected_row_version,
+        "requested_horizons": tuple(api_request.requested_horizons),
+        "requested_maturity_statuses": tuple(api_request.requested_maturity_statuses),
+    }
+    actual = {
+        "batch_id": domain_request.batch_id,
+        "operation_idempotency_key": domain_request.operation_idempotency_key,
+        "expected_batch_row_version": domain_request.expected_batch_row_version,
+        "requested_horizons": domain_request.requested_horizons,
+        "requested_maturity_statuses": tuple(
+            item.value for item in domain_request.requested_maturity_statuses
+        ),
+    }
+    explicit_runs_conflict = bool(api_request.range_run_ids) and domain_request.range_run_ids != tuple(
+        api_request.range_run_ids
+    )
+    if actual != expected or explicit_runs_conflict:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_SCOPE_CONFLICT",
+            "bridge exact retry request differs from the frozen business scope",
+            http_status=409,
+            context={"batch_id": batch_id},
+        )
+
+
+def _bridge_parent_operation_status(
+    result_status: HistoricalRangeBridgeResultStatus,
+) -> HistoricalRangeOperationStatus:
+    if result_status in {
+        HistoricalRangeBridgeResultStatus.SEALED,
+        HistoricalRangeBridgeResultStatus.VALID_EMPTY,
+    }:
+        return HistoricalRangeOperationStatus.COMPLETED
+    if result_status is HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED:
+        return HistoricalRangeOperationStatus.RETRYABLE_FAILED
+    if result_status is HistoricalRangeBridgeResultStatus.FAILED:
+        return HistoricalRangeOperationStatus.FAILED
+    raise ValueError(f"unsupported bridge result status: {result_status.value}")
 
 
 def _operation_dispatchable(operation: Mapping[str, Any]) -> bool:

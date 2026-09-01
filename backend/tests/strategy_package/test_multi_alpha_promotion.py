@@ -40,6 +40,7 @@ from backend.services.strategy_package.multi_alpha_promotion import (
 from backend.services.strategy_package import multi_alpha_promotion as promotion_module
 from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_multi_alpha_base_schema import _single_manifest
 
@@ -361,7 +362,7 @@ def _seed_repos():
             "stock_pool": "V25_1_SMALL_CAP",
             "filtered_pool": "filtered_pool_20260428",
             "label_horizon": 20,
-            "execution_algo": "V25_1_SMALL_CAP",
+            "execution_algo": "TWAP",
             "n_drop": 2,
             "topk": 50,
         },
@@ -574,12 +575,13 @@ def test_missing_local_prediction_ref_fails_loud_without_parent_half_package(tmp
     assert package_repo.components == {}
 
 
-def test_backtest_config_strategy_field_fills_stock_pool_and_execution_algo() -> None:
+def test_v25_stock_pool_label_does_not_retire_explicit_twap_execution() -> None:
     combine_repo, package_repo, child_a1, child_fund = _seed_repos()
     combine_repo.runs[RUN_ID]["backtest_config_json"] = {
-        "strategy": "V25_1_SMALL_CAP",
+        "stock_pool": "V25_1_SMALL_CAP",
         "filtered_pool": "filtered_pool_20260428",
         "label_horizon": 20,
+        "execution_algo": "TWAP",
         "n_drop": 2,
         "topk": 50,
     }
@@ -588,7 +590,29 @@ def test_backtest_config_strategy_field_fills_stock_pool_and_execution_algo() ->
 
     context = result.package.current_manifest().backtest_context
     assert context["universe"]["stock_pool"] == "V25_1_SMALL_CAP"
-    assert context["execution"]["execution_algo"] == "V25_1_SMALL_CAP"
+    assert context["execution"]["execution_algo"] == "TWAP"
+
+
+def test_strategy_alias_v25_is_rejected_before_parent_asset_resolution(monkeypatch) -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    combine_repo.runs[RUN_ID]["backtest_config_json"] = {
+        "strategy": "V25_1_SMALL_CAP",
+        "filtered_pool": "filtered_pool_20260428",
+        "label_horizon": 20,
+        "n_drop": 2,
+        "topk": 50,
+    }
+    service = _service(combine_repo, package_repo)
+
+    def unexpected_asset_resolution(**_kwargs):
+        raise AssertionError("retired V25 must fail before parent asset resolution")
+
+    monkeypatch.setattr(service, "_prepare_parent_leg_asset_plan", unexpected_asset_resolution)
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        _promote(service, child_a1, child_fund)
+
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert exc_info.value.context["side_effect_started"] is False
 
 
 def test_auto_path_inlines_parent_leg_assets_without_child_packages_and_is_idempotent() -> None:

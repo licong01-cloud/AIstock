@@ -22,7 +22,8 @@ from backend.services.advisory_program import (
     normalize_advisory_review_policy,
 )
 from backend.services.strategy_package.advisory_input_projection import (
-    StrategyPackageHistoricalRangeInputProjectionV1,
+    StrategyPackageHistoricalRangeInputProjection,
+    StrategyPackageHistoricalRangeInputProjectionV2,
     get_strategy_package_inference_required_window,
     project_historical_range_inputs,
 )
@@ -45,7 +46,7 @@ class AdvisoryProgramIdentityReader(Protocol):
 class HistoricalRangeResolvedPackageV1:
     record: StrategyPackageRecord
     manifest: StrategyPackageManifest
-    historical_projection: StrategyPackageHistoricalRangeInputProjectionV1
+    historical_projection: StrategyPackageHistoricalRangeInputProjection
     admitted_projection: HistoricalRangeAdmittedPackageProjectionV1
 
 
@@ -94,6 +95,16 @@ class HistoricalRangeAdmittedPackageResolver:
                         "pit_universe_policy": historical.pit_universe_policy,
                         "pit_universe_ensure": historical.pit_universe_ensure,
                         "leg": leg.model_dump(mode="json"),
+                        **(
+                            {
+                                "pit_universe_key": historical.pit_universe_key,
+                                "canonical_pit_binding": historical.canonical_pit_binding.model_dump(
+                                    mode="json"
+                                ),
+                            }
+                            if isinstance(historical, StrategyPackageHistoricalRangeInputProjectionV2)
+                            else {}
+                        ),
                     }
                 ),
                 lookback_contract_hash=canonical_json_sha256(
@@ -114,6 +125,11 @@ class HistoricalRangeAdmittedPackageResolver:
             manifest_sha256=str(manifest.manifest_sha256),
             alpha_mode=HistoricalRangeAlphaMode(manifest.alpha_mode.value),
             components=components,
+            canonical_pit_binding=(
+                historical.canonical_pit_binding
+                if isinstance(historical, StrategyPackageHistoricalRangeInputProjectionV2)
+                else None
+            ),
         )
         return HistoricalRangeResolvedPackageV1(
             record=record,
@@ -145,7 +161,7 @@ class HistoricalRangeProgramResolver:
         list_semantics_hash: str,
     ) -> tuple[HistoricalRangeFrozenProgramV1, ...]:
         resolved_packages: dict[str, HistoricalRangeResolvedPackageV1] = {}
-        return tuple(
+        frozen = tuple(
             self._freeze_one(
                 spec=spec,
                 code_release_id=code_release_id,
@@ -158,6 +174,18 @@ class HistoricalRangeProgramResolver:
             )
             for spec in request.program_specs
         )
+        for program in frozen:
+            binding = program.admitted_package_projection.canonical_pit_binding
+            if binding is not None and request.end_trade_date > binding.release_cutoff:
+                raise RuntimeConfigInvalidError(
+                    "historical range exceeds the canonical package release cutoff",
+                    context={
+                        "package_id": program.package_id,
+                        "requested_end_trade_date": request.end_trade_date.isoformat(),
+                        "release_cutoff": binding.release_cutoff.isoformat(),
+                    },
+                )
+        return frozen
 
     def _freeze_one(
         self,

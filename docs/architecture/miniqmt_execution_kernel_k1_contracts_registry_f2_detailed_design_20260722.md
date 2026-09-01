@@ -458,7 +458,7 @@ error context 至少包含 catalog build identity、plugin/algo/version、stage�
 
 三个 plugin 均为 `provider=AISTOCK_DERIVED`、`plugin_version=2.0.0`、`restart_policy=DURABLE_RESTORE`、`supported_sides=[BUY,SELL]`、`supported_order_types=[LIMIT]`、`supported_broker_backends=[minqmt_sim]`。它们引用 §1.2 pinned source lock，并使用 `DERIVED_SOURCE_EXACT_CHARACTERIZATION` compatibility mode；K1 不把 derived core 虚称为任意第三方 plugin 通用兼容。
 
-`SourceAttributionV1` exact schema 为：`schema_version=source_attribution_v1`、`upstream_repo`、`upstream_commit`（40-char lowercase git SHA）、`upstream_files`（按 path 排序的 frozen `{path,sha256}` tuple）、`upstream_license`、`upstream_copyright`、`aistock_asset_version`、`aistock_files`（按 path 排序的 frozen `{path,sha256}` tuple）、`derivation_summary`、`attribution_sha256`。`attribution_sha256 = hash_hex_v1("miniqmt_source_attribution_v1", exact preceding fields)`；空 file set、重复 path、非 lowercase SHA 或 source map 与 manifest `implementation_ref` 不闭合均拒绝。
+`SourceAttributionV1` exact schema 为：`schema_version=source_attribution_v1`、`upstream_repo`、`upstream_commit`（40-char lowercase git SHA）、`upstream_files`（按 path 排序的 frozen `{path,sha256}` tuple）、`upstream_license`、`upstream_copyright`、`aistock_asset_version`、`aistock_files`（按 path 排序的 frozen `{path,sha256}` tuple）、`derivation_summary`、`attribution_sha256`。AIstock-owned Python source bytes在计算`aistock_files.sha256`与process-binding source readback前必须统一执行`CRLF/CR -> LF`，使同一Git blob在Windows/Linux checkout得到byte-identical identity；禁止接受两套平台hash、信任工作树原始EOL或以installed/latest source回退。`attribution_sha256 = hash_hex_v1("miniqmt_source_attribution_v1", exact preceding fields)`；空 file set、重复 path、非 lowercase SHA 或 source map 与 manifest `implementation_ref` 不闭合均拒绝。
 
 ### 8.2 Manifest facts
 

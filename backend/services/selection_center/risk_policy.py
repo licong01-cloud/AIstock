@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.pg_pool import get_conn
+from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, TargetPosition
 from backend.services.selection_center.prospective_evidence import (
     CandidateStageName,
@@ -87,8 +88,7 @@ class RiskDecisionProvider(Protocol):
         trade_date: date,
         profile: RuntimeRiskPolicyProfile,
         current_positions: dict[str, PositionLot] | None = None,
-    ) -> dict[str, RiskDecision]:
-        ...
+    ) -> dict[str, RiskDecision]: ...
 
 
 class StPitRiskDecisionProvider:
@@ -111,14 +111,22 @@ class StPitRiskDecisionProvider:
         normalized = _normalize_symbols(symbols)
         if not normalized:
             return {}
-        universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
-        if profile.strict_data_ready and self._require_ready_state:
+        authority_lease = (
+            SelectionPitRuntimeLease.from_mapping(profile.canonical_pit_runtime_lease)
+            if profile.canonical_pit_runtime_lease is not None
+            else None
+        )
+        if authority_lease is not None:
+            authority_lease.require_trade_date(trade_date)
+            universe_key = authority_lease.universe_key
+        else:
+            universe_key = require_live_st_pit_universe_key(profile.st_universe_key)
+        if authority_lease is None and profile.strict_data_ready and self._require_ready_state:
             self._require_ready_pit_state(universe_key=universe_key, trade_date=trade_date)
         try:
             with self._conn_factory() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
+                    sql = """
                         SELECT ts_code, eligible_start, eligible_end, entry_reason,
                                exit_reason, rule_version, metadata
                           FROM market.stock_universe_pit_spans
@@ -126,9 +134,12 @@ class StPitRiskDecisionProvider:
                            AND ts_code = ANY(%s)
                            AND eligible_start <= %s
                            AND eligible_end >= %s
-                        """,
-                        (universe_key, normalized, trade_date, trade_date),
-                    )
+                    """
+                    params: tuple[Any, ...] = (universe_key, normalized, trade_date, trade_date)
+                    if authority_lease is not None:
+                        sql += " AND rule_version = %s"
+                        params = (*params, authority_lease.rule_version)
+                    cur.execute(sql, params)
                     rows = cur.fetchall()
         except Exception as exc:
             raise DataUnavailableError(
@@ -144,6 +155,10 @@ class StPitRiskDecisionProvider:
             str(row[0]): {
                 "source_table": self.source_name,
                 "universe_key": universe_key,
+                "authority_id": authority_lease.authority_id if authority_lease is not None else None,
+                "activation_generation": (
+                    authority_lease.activation_generation if authority_lease is not None else None
+                ),
                 "visible_trade_date": trade_date.isoformat(),
                 "eligible_start": row[1].isoformat() if row[1] else None,
                 "eligible_end": row[2].isoformat() if row[2] else None,
@@ -176,11 +191,17 @@ class StPitRiskDecisionProvider:
                     {
                         "source_table": self.source_name,
                         "universe_key": universe_key,
+                        "authority_id": authority_lease.authority_id if authority_lease is not None else None,
+                        "activation_generation": (
+                            authority_lease.activation_generation if authority_lease is not None else None
+                        ),
                         "visible_trade_date": trade_date.isoformat(),
                         "event_type": "st_pit_not_eligible",
                         "risk_level": "P0_BLOCK",
                         "action": sorted(hard_actions),
-                        "rule_version": profile.policy_version,
+                        "rule_version": (
+                            authority_lease.rule_version if authority_lease is not None else profile.policy_version
+                        ),
                     }
                 ],
             )
@@ -451,8 +472,7 @@ class StockRiskPolicyService:
         uses_score_overlay: bool,
     ) -> RiskAdjustmentResult:
         normalized_decisions = {
-            symbol: decision.model_dump(mode="json")
-            for symbol, decision in sorted(decisions.items())
+            symbol: decision.model_dump(mode="json") for symbol, decision in sorted(decisions.items())
         }
         policy_metadata = {
             "status": "COMPLETE",

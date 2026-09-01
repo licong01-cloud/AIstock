@@ -1,21 +1,27 @@
-"""Point-in-time Shenwan L2 providers for EfficientGATs.
+"""Point-in-time Shenwan L2 providers for EfficientGATs (frozen files only).
+
+Data-plane invariant: QE training, prediction, backtest and multi-alpha combine
+computations must read industry ids exclusively from frozen dataset files
+(``sector_data.h5`` or ``static_factors.parquet``) that ship an explicit
+``l2_code_id`` column with per-trading-day PIT alignment.  This module contains
+no database driver, no connection configuration and no credential environment
+variables; any missing file, missing field, unalignable symbol or insufficient
+coverage fails loud instead of falling back to a database or a current
+snapshot.
 
 The QE runner cannot pass callables through ``conf.yaml``.  It injects the
 provider from Python when EfficientGATs needs industry ids for either
 ``industry_bias`` adjacency or ``gats_industry_embedding=on``.  The provider
-queries authoritative ``market.sw_index_member`` PIT rows at runtime and clears
-all lookup caches when pickled so qlib ``params.pkl`` does not embed source
-membership data.
+clears its loaded frame when pickled so qlib ``params.pkl`` does not embed
+frozen source data; only the file path and thresholds persist.
 """
 
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -25,9 +31,17 @@ INDUSTRY_BIAS_MODE = "industry_bias"
 INDUSTRY_EMBEDDING_ON = "on"
 DEFAULT_MIN_COVERAGE = 0.90
 MIN_COVERAGE_ENV = "QE_GATS_INDUSTRY_MIN_COVERAGE"
-DEFAULT_SOURCE_NAME = "market.sw_index_member"
+SOURCE_ENV = "QE_GATS_INDUSTRY_SOURCE_PATH"
+RDAGENT_FACTOR_DATA_ENV = "RDAGENT_FACTOR_DATA_WSL"
+DEFAULT_SECTOR_SOURCE_NAME = "sector_data.h5"
+FALLBACK_SECTOR_SOURCE_NAME = "static_factors.parquet"
+L2_CODE_ID_COLUMN = "l2_code_id"
+UNKNOWN_L2_CODE_ID = -1
 
-ConnFactory = Callable[[], Iterator[Any]]
+_SOURCE_KEYS = ("data", "/data")
+_EXPLICIT_ID_COLUMNS = (L2_CODE_ID_COLUMN,)
+_SUPPORTED_SUFFIXES = {".h5", ".hdf", ".hdf5", ".parquet"}
+_MISSING_TOKENS = {"", "nan", "NaN", "None", "none", "<NA>"}
 
 
 class GatsIndustryProviderError(RuntimeError):
@@ -35,35 +49,34 @@ class GatsIndustryProviderError(RuntimeError):
 
 
 @dataclass
-class SwIndexMemberIndustryIdProvider:
-    """Return PIT Shenwan L2 codes aligned to a qlib segment MultiIndex.
+class SectorDataIndustryIdProvider:
+    """Return PIT Shenwan L2 ids aligned to a qlib segment MultiIndex.
 
-    The SQL mirrors Selection Center's authoritative provider: for each
-    ``(trade_date, ts_code)``, choose the latest membership row whose
-    ``in_date`` is not after the target date and whose ``out_date`` is either
-    null or not before the target date.  Only ``l2_code`` is returned to the
-    model; missing codes remain missing so the model can map them to the
-    explicit unknown class.
+    The only accepted industry identity is the explicit ``l2_code_id`` column
+    of a frozen ``sector_data.h5`` / ``static_factors.parquet`` file indexed by
+    ``(datetime, instrument)``.  Rows are aligned per trading day with a
+    backward as-of lookup inside the frozen file, so historical PIT membership
+    is preserved; a current snapshot is never substituted for PIT.  There is
+    intentionally no industry-feature-signature inference: when the explicit
+    column is absent the provider fails loud.
     """
 
+    source_path: str | os.PathLike[str]
     min_coverage: float = DEFAULT_MIN_COVERAGE
-    conn_factory: ConnFactory | None = field(default=None, repr=False, compare=False)
-    source_name: str = DEFAULT_SOURCE_NAME
-    _daily_cache: dict[tuple[date, tuple[str, ...]], dict[str, str | None]] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
+    hdf_key: str = "data"
+    source_name: str = DEFAULT_SECTOR_SOURCE_NAME
+    _frame: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    _id_column: str | None = field(default=None, init=False, repr=False)
     last_coverage: dict[str, Any] | None = field(default=None, init=False)
     coverage_history: list[dict[str, Any]] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
+        self.source_path = str(Path(self.source_path))
         self.min_coverage = _validate_min_coverage(self.min_coverage)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
-        state["_daily_cache"] = {}
-        state["conn_factory"] = None
+        state["_frame"] = None
         return state
 
     def __call__(self, *args: Any) -> pd.Series:
@@ -75,7 +88,7 @@ class SwIndexMemberIndustryIdProvider:
         elif len(args) == 1:
             (index,) = args
         else:
-            raise TypeError("SwIndexMemberIndustryIdProvider expects index or segment,index")
+            raise TypeError("SectorDataIndustryIdProvider expects index or segment,index")
         return self.get_industry_ids(index, segment_name=str(segment_name or "unknown"))
 
     def get_industry_ids(self, index: Any, *, segment_name: str = "unknown") -> pd.Series:
@@ -84,24 +97,13 @@ class SwIndexMemberIndustryIdProvider:
         if len(target_index) == 0:
             return pd.Series([], index=return_index, dtype="object")
 
-        target_frame = pd.DataFrame(
-            {
-                "_pos": np.arange(len(target_index), dtype=np.int64),
-                "trade_date": [pd.Timestamp(value).date() for value in target_index.get_level_values("datetime")],
-                "ts_code": list(target_index.get_level_values("instrument")),
-            }
-        )
-        values: list[str | None] = [None] * len(target_frame)
-        for trade_date, group in target_frame.groupby("trade_date", sort=False):
-            symbols = [str(symbol) for symbol in group["ts_code"].drop_duplicates().tolist()]
-            daily = self._lookup_l2_codes(trade_date, symbols)
-            for pos, symbol in zip(group["_pos"], group["ts_code"]):
-                values[int(pos)] = daily.get(str(symbol))
+        source = self._load_source()
+        matched = self._lookup_asof(source, target_index)
+        values = self._industry_values_from_rows(matched)
 
-        series = pd.Series(values, index=return_index, dtype="object")
-        missing = series.isna() | series.astype(str).isin(["", "nan", "NaN", "None", "none", "<NA>"])
+        missing = values.isna() | values.astype(str).isin(_MISSING_TOKENS)
         covered_rows = int((~missing).sum())
-        rows = int(len(series))
+        rows = int(len(target_index))
         coverage = covered_rows / rows if rows else 1.0
         payload = {
             "reason_code": "qe_gats_industry_coverage",
@@ -111,8 +113,8 @@ class SwIndexMemberIndustryIdProvider:
             "missing_rows": int(missing.sum()),
             "coverage": coverage,
             "threshold": self.min_coverage,
-            "source": self.source_name,
-            "id_source": "l2_code",
+            "source": self.source_path,
+            "id_source": self._id_column,
         }
         self.last_coverage = payload
         self.coverage_history.append(payload)
@@ -120,93 +122,89 @@ class SwIndexMemberIndustryIdProvider:
         if coverage < self.min_coverage:
             raise GatsIndustryProviderError(
                 "reason_code=qe_gats_industry_coverage_below_threshold: "
-                f"segment={segment_name} source={self.source_name} "
+                f"segment={segment_name} source={self.source_path} "
                 f"coverage={coverage:.6f} threshold={self.min_coverage:.6f} "
                 f"rows={rows} covered_rows={covered_rows} missing_rows={int(missing.sum())}"
             )
 
-        return series
+        return pd.Series(values.to_numpy(dtype=object), index=return_index, dtype="object")
 
-    def _lookup_l2_codes(self, trade_date: date, symbols: list[str]) -> dict[str, str | None]:
-        if not symbols:
-            return {}
-        key = (trade_date, tuple(sorted(symbols)))
-        cached = self._daily_cache.get(key)
-        if cached is not None:
-            return cached
+    def validate_source_available(self) -> None:
+        path = Path(self.source_path)
+        if not path.exists():
+            raise GatsIndustryProviderError(
+                "reason_code=qe_gats_industry_source_missing: "
+                f"source={path} source_name={self.source_name}"
+            )
+        if not path.is_file():
+            raise GatsIndustryProviderError(
+                "reason_code=qe_gats_industry_source_not_file: "
+                f"source={path} source_name={self.source_name}"
+            )
 
+    def _load_source(self) -> pd.DataFrame:
+        if self._frame is not None:
+            return self._frame
+
+        self.validate_source_available()
+        path = Path(self.source_path)
+        suffix = path.suffix.lower()
         try:
-            with self._connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        WITH ranked AS (
-                            SELECT
-                                ts_code, l2_code, in_date, out_date,
-                                ROW_NUMBER() OVER (
-                                    PARTITION BY ts_code
-                                    ORDER BY in_date DESC NULLS LAST,
-                                             out_date DESC NULLS LAST,
-                                             l3_code NULLS LAST
-                                ) AS rn
-                            FROM market.sw_index_member
-                            WHERE ts_code = ANY(%s)
-                              AND in_date <= %s
-                              AND (out_date IS NULL OR out_date >= %s)
-                        )
-                        SELECT ts_code, l2_code, in_date, out_date
-                        FROM ranked
-                        WHERE rn = 1
-                        ORDER BY ts_code
-                        """,
-                        (symbols, trade_date, trade_date),
-                    )
-                    rows = cur.fetchall()
+            if suffix in {".h5", ".hdf", ".hdf5"}:
+                frame = _read_hdf_first_key(path, self.hdf_key)
+            elif suffix == ".parquet":
+                frame = pd.read_parquet(path)
+            else:
+                raise GatsIndustryProviderError(
+                    "reason_code=qe_gats_industry_source_format_unsupported: "
+                    f"source={path} suffix={path.suffix} supported={sorted(_SUPPORTED_SUFFIXES)}"
+                )
         except GatsIndustryProviderError:
             raise
         except Exception as exc:
             raise GatsIndustryProviderError(
-                "reason_code=qe_gats_industry_lookup_failed: "
-                f"source={self.source_name} trade_date={trade_date.isoformat()} "
-                f"symbol_count={len(symbols)} error={type(exc).__name__}: {exc}"
+                "reason_code=qe_gats_industry_source_load_failed: "
+                f"source={path} error={type(exc).__name__}: {exc}"
             ) from exc
 
-        result = {symbol: None for symbol in symbols}
-        for row in rows:
-            symbol = _row_value(row, 0, "ts_code")
-            l2_code = _clean(_row_value(row, 1, "l2_code"))
-            if symbol is not None:
-                result[str(symbol)] = l2_code
-        self._daily_cache[key] = result
-        return result
+        frame = _normalise_source_frame(frame, source=str(path))
+        self._id_column = next((col for col in _EXPLICIT_ID_COLUMNS if col in frame.columns), None)
+        if self._id_column is None:
+            raise GatsIndustryProviderError(
+                "reason_code=qe_gats_industry_source_schema_invalid: "
+                f"source={path} missing explicit {L2_CODE_ID_COLUMN} column; "
+                "industry-feature-signature inference is forbidden"
+            )
 
-    @contextmanager
-    def _connect(self) -> Iterator[Any]:
-        factory = self.conn_factory
-        if factory is not None:
-            with factory() as conn:
-                yield conn
-            return
-        with _default_conn_factory() as conn:
-            yield conn
+        frame = frame[[self._id_column]].sort_index()
+        if frame.index.get_level_values("datetime").nunique() < 1:
+            raise GatsIndustryProviderError(
+                "reason_code=qe_gats_industry_source_empty: "
+                f"source={path} no trading dates available"
+            )
+        self._frame = frame
+        return frame
 
+    def _lookup_asof(self, source: pd.DataFrame, target_index: pd.MultiIndex) -> pd.DataFrame:
+        exact = source.reindex(target_index)
+        missing_mask = exact.isna().all(axis=1)
+        if not bool(missing_mask.any()):
+            return exact
 
-class SectorDataIndustryIdProvider(SwIndexMemberIndustryIdProvider):
-    """Backward-compatible name for the upgraded DB-backed provider.
+        missing_index = target_index[missing_mask.to_numpy()]
+        asof_rows = _asof_rows_by_instrument(source, missing_index)
+        if not asof_rows.empty:
+            # Object dtype on both sides keeps the assignment free of pandas
+            # incompatible-dtype downcasting warnings (int16 vs float64 NaN).
+            exact = exact.astype("object")
+            exact.loc[asof_rows.index, asof_rows.columns] = asof_rows.astype("object")
+        return exact
 
-    Older call sites passed a sector source path to this class.  The true L2
-    implementation intentionally ignores that file path and reads
-    ``market.sw_index_member`` instead; no SW2 signature fallback remains.
-    """
-
-    def __init__(self, source_path: str | os.PathLike[str] | None = None, **kwargs: Any) -> None:
-        self.legacy_source_path = str(source_path) if source_path is not None else None
-        super().__init__(**kwargs)
-
-    def __getstate__(self) -> dict[str, Any]:
-        state = super().__getstate__()
-        state["legacy_source_path"] = None
-        return state
+    def _industry_values_from_rows(self, rows: pd.DataFrame) -> pd.Series:
+        numeric = pd.to_numeric(rows[self._id_column], errors="coerce")
+        unknown = numeric.isna() | (numeric == UNKNOWN_L2_CODE_ID)
+        values = numeric.astype("Int64").astype("object")
+        return values.where(~unknown, np.nan)
 
 
 def inject_gats_industry_provider_if_needed(
@@ -214,10 +212,9 @@ def inject_gats_industry_provider_if_needed(
     *,
     cwd: str | os.PathLike[str] | None = None,
     print_fn=print,
-) -> SwIndexMemberIndustryIdProvider | None:
-    """Inject a PIT SW L2 provider into ``config.task.model.kwargs`` when needed."""
+) -> SectorDataIndustryIdProvider | None:
+    """Inject a frozen-file PIT L2 provider into ``config.task.model.kwargs``."""
 
-    del cwd
     model_kwargs = _model_kwargs_if_industry_requested(config)
     if model_kwargs is None:
         return None
@@ -231,11 +228,25 @@ def inject_gats_industry_provider_if_needed(
             f"type={type(existing).__name__} expected=callable_or_dict"
         )
 
-    provider = SwIndexMemberIndustryIdProvider(min_coverage=resolve_min_coverage(config))
+    source_path = resolve_sector_source_path(config, cwd=cwd)
+    if source_path is None:
+        candidates = ", ".join(str(path) for path in sector_source_candidates(config, cwd=cwd))
+        raise GatsIndustryProviderError(
+            "reason_code=qe_gats_industry_source_missing: "
+            f"source_names=[{DEFAULT_SECTOR_SOURCE_NAME}, {FALLBACK_SECTOR_SOURCE_NAME}] "
+            f"candidates=[{candidates}]"
+        )
+
+    provider = SectorDataIndustryIdProvider(
+        source_path=source_path,
+        min_coverage=resolve_min_coverage(config),
+        source_name=Path(source_path).name,
+    )
+    provider.validate_source_available()
     model_kwargs["gats_industry_id_provider"] = provider
     print_fn(
-        "[INFO] EfficientGATs industry: injected PIT SW L2 provider "
-        f"source={provider.source_name} min_coverage={provider.min_coverage:.4f}"
+        "[INFO] EfficientGATs industry: injected frozen-file PIT L2 provider "
+        f"source={provider.source_path} min_coverage={provider.min_coverage:.4f}"
     )
     return provider
 
@@ -291,9 +302,9 @@ def resolve_sector_source_path(
     *,
     cwd: str | os.PathLike[str] | None = None,
 ) -> Path | None:
-    """Deprecated compatibility shim: true L2 lookup no longer reads files."""
-
-    del config, cwd
+    for candidate in sector_source_candidates(config, cwd=cwd):
+        if candidate.exists() and candidate.is_file():
+            return candidate
     return None
 
 
@@ -302,10 +313,39 @@ def sector_source_candidates(
     *,
     cwd: str | os.PathLike[str] | None = None,
 ) -> list[Path]:
-    """Deprecated compatibility shim: true L2 lookup no longer reads files."""
+    base = Path(cwd or os.getcwd())
+    raw_candidates: list[str | os.PathLike[str]] = []
 
-    del config, cwd
-    return []
+    env_source = os.environ.get(SOURCE_ENV)
+    if env_source:
+        raw_candidates.append(env_source)
+
+    runtime = config.get("qe_runtime") if isinstance(config, dict) else None
+    if isinstance(runtime, dict):
+        for key in ("gats_industry_source_path", "sector_data_path"):
+            value = runtime.get(key)
+            if value:
+                raw_candidates.append(value)
+
+    for name in (DEFAULT_SECTOR_SOURCE_NAME, FALLBACK_SECTOR_SOURCE_NAME):
+        raw_candidates.append(base / name)
+
+    factor_dir = os.environ.get(RDAGENT_FACTOR_DATA_ENV)
+    if factor_dir:
+        for name in (DEFAULT_SECTOR_SOURCE_NAME, FALLBACK_SECTOR_SOURCE_NAME):
+            raw_candidates.append(Path(factor_dir) / name)
+
+    result: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = base / path
+        key = str(path)
+        if key not in seen:
+            result.append(path)
+            seen.add(key)
+    return result
 
 
 def _model_kwargs_if_industry_requested(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -346,6 +386,41 @@ def _coerce_return_index(index: Any) -> pd.MultiIndex:
     return pd.MultiIndex.from_tuples(list(index), names=["datetime", "instrument"])
 
 
+def _normalise_source_frame(frame: pd.DataFrame, *, source: str) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        raise GatsIndustryProviderError(
+            "reason_code=qe_gats_industry_source_empty: "
+            f"source={source}"
+        )
+
+    if isinstance(frame.index, pd.MultiIndex) and frame.index.nlevels >= 2:
+        source_index = pd.MultiIndex.from_arrays(
+            [
+                pd.to_datetime(frame.index.get_level_values(0)),
+                [_normalise_instrument_code(value) for value in frame.index.get_level_values(frame.index.nlevels - 1)],
+            ],
+            names=["datetime", "instrument"],
+        )
+        frame = frame.copy()
+        frame.index = source_index
+        return frame
+
+    columns = {str(col): col for col in frame.columns}
+    date_col = next((columns[key] for key in ("datetime", "trade_date", "date") if key in columns), None)
+    inst_col = next((columns[key] for key in ("instrument", "ts_code", "symbol") if key in columns), None)
+    if date_col is None or inst_col is None:
+        raise GatsIndustryProviderError(
+            "reason_code=qe_gats_industry_source_index_invalid: "
+            f"source={source} expected MultiIndex(datetime,instrument) or date/instrument columns"
+        )
+    frame = frame.copy()
+    frame.index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(frame[date_col]), [_normalise_instrument_code(value) for value in frame[inst_col]]],
+        names=["datetime", "instrument"],
+    )
+    return frame.drop(columns=[date_col, inst_col], errors="ignore")
+
+
 def _normalise_instrument_code(value: Any) -> str:
     text = str(value).strip()
     if not text:
@@ -358,17 +433,57 @@ def _normalise_instrument_code(value: Any) -> str:
     return upper
 
 
-def _row_value(row: Any, index: int, key: str) -> Any:
-    if isinstance(row, Mapping):
-        return row.get(key)
-    return row[index]
+def _read_hdf_first_key(path: Path, preferred_key: str) -> pd.DataFrame:
+    try:
+        return pd.read_hdf(path, key=preferred_key)
+    except (KeyError, ValueError):
+        with pd.HDFStore(path, mode="r") as store:
+            keys = store.keys()
+            for key in _SOURCE_KEYS:
+                if key in keys:
+                    return store[key]
+            if len(keys) == 1:
+                return store[keys[0]]
+            raise GatsIndustryProviderError(
+                "reason_code=qe_gats_industry_hdf_key_missing: "
+                f"source={path} preferred_key={preferred_key} keys={keys}"
+            )
 
 
-def _clean(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+def _asof_rows_by_instrument(source: pd.DataFrame, missing_index: pd.MultiIndex) -> pd.DataFrame:
+    if len(missing_index) == 0:
+        return pd.DataFrame(index=missing_index, columns=source.columns)
+
+    missing = pd.DataFrame(index=missing_index).reset_index()
+    missing["_target_order"] = np.arange(len(missing), dtype=np.int64)
+    source_reset = source.reset_index()
+
+    rows: list[pd.DataFrame] = []
+    for instrument, target_group in missing.groupby("instrument", sort=False):
+        source_group = source_reset[source_reset["instrument"] == instrument]
+        if source_group.empty:
+            continue
+        target_sorted = target_group.sort_values("datetime")
+        source_sorted = source_group.sort_values("datetime")
+        merged = pd.merge_asof(
+            target_sorted,
+            source_sorted,
+            on="datetime",
+            by="instrument",
+            direction="backward",
+            allow_exact_matches=True,
+        )
+        rows.append(merged)
+
+    if not rows:
+        return pd.DataFrame(index=missing_index, columns=source.columns)
+
+    out = pd.concat(rows, ignore_index=True).sort_values("_target_order")
+    out_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(out["datetime"]), out["instrument"].astype(str)],
+        names=["datetime", "instrument"],
+    )
+    return out.set_index(out_index)[list(source.columns)]
 
 
 def _flag_is_on(value: Any) -> bool:
@@ -391,66 +506,3 @@ def _validate_min_coverage(value: Any) -> float:
             f"value={coverage} expected_between_0_and_1"
         )
     return coverage
-
-
-def _db_cfg() -> dict[str, Any]:
-    return {
-        "host": _first_env("TDX_DB_HOST", "POSTGRES_HOST", "PG_HOST", default="127.0.0.1"),
-        "port": int(_first_env("TDX_DB_PORT", "POSTGRES_PORT", "PG_PORT", default="5432")),
-        "user": _first_env("TDX_DB_USER", "POSTGRES_USER", "PG_USER", default="postgres"),
-        "password": _require_env(
-            "TDX_DB_PASSWORD",
-            "POSTGRES_PASSWORD",
-            "PG_PASSWORD",
-        ),
-        "dbname": _first_env("TDX_DB_NAME", "POSTGRES_DB", "PG_DATABASE", default="aistock"),
-        "application_name": "AIstock-EfficientGATs-industry-provider",
-        "options": "-c client_encoding=utf8",
-    }
-
-
-def _first_env(*keys: str, default: str) -> str:
-    for key in keys:
-        value = os.environ.get(key)
-        if value not in (None, ""):
-            return str(value)
-    return default
-
-
-def _require_env(*keys: str) -> str:
-    for key in keys:
-        try:
-            value = os.environ[key]
-        except KeyError:
-            continue
-        if value != "":
-            return value
-    raise GatsIndustryProviderError(
-        "reason_code=qe_gats_industry_db_password_missing: "
-        "set one of TDX_DB_PASSWORD/POSTGRES_PASSWORD/PG_PASSWORD"
-    )
-
-
-@contextmanager
-def _default_conn_factory() -> Iterator[Any]:
-    try:
-        import psycopg2
-    except ModuleNotFoundError as exc:
-        raise GatsIndustryProviderError(
-            "reason_code=qe_gats_industry_db_driver_missing: "
-            "psycopg2 is required to query market.sw_index_member"
-        ) from exc
-
-    try:
-        conn = psycopg2.connect(**_db_cfg())
-    except GatsIndustryProviderError:
-        raise
-    except Exception as exc:
-        raise GatsIndustryProviderError(
-            "reason_code=qe_gats_industry_db_connect_failed: "
-            f"source={DEFAULT_SOURCE_NAME} error={type(exc).__name__}: {exc}"
-        ) from exc
-    try:
-        yield conn
-    finally:
-        conn.close()

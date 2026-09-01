@@ -322,6 +322,60 @@ def _create_running_day(
     return resolved, artifacts, created, range_run_id, day_run_id, catalog
 
 
+def test_postgres_operation_idempotency_is_scoped_by_operation_type(
+    tmp_path: Path,
+) -> None:
+    store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r-operation-scope")
+    repository = PostgresHistoricalRangeRepository(
+        conn_factory=_connection_factory,
+        artifact_store=store,
+    )
+    run_namespace = str(os.environ.get("AISTOCK_PHASE1R_TEST_RUN_ID") or "operation-type-scope").strip()
+    _, _, created, _, _, _ = _create_running_day(
+        repository=repository,
+        store=store,
+        client_key=f"pg-operation-type-scope-{run_namespace}",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    shared_operation_key = f"bridge-shared-type-scope-{run_namespace}"
+    batch_version = int(
+        _scalar(
+            "SELECT row_version FROM app.advisory_historical_range_batch WHERE batch_id = %s",
+            (created.batch_id,),
+        )
+    )
+    parent_request = HistoricalRangeOperationRequestV1(
+        operation_id=f"operation-bridge-parent-{created.batch_id}",
+        batch_id=created.batch_id,
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+        operation_idempotency_key=shared_operation_key,
+        request_payload_sha256=digest({"operation": "bridge-parent"}),
+        expected_row_version=batch_version,
+    )
+    child_request = HistoricalRangeOperationRequestV1(
+        operation_id=f"operation-bridge-child-{created.batch_id}",
+        batch_id=created.batch_id,
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        operation_idempotency_key=shared_operation_key,
+        request_payload_sha256=digest({"operation": "bridge-child"}),
+        expected_row_version=batch_version,
+    )
+
+    parent_row, parent_idempotent = repository.get_or_create_operation(parent_request)
+    child_row, child_idempotent = repository.get_or_create_operation(child_request)
+    retried_parent, exact_parent_retry = repository.get_or_create_operation(parent_request)
+    retried_child, exact_child_retry = repository.get_or_create_operation(child_request)
+
+    assert parent_idempotent is False
+    assert child_idempotent is False
+    assert exact_parent_retry is True
+    assert exact_child_retry is True
+    assert parent_row["operation_id"] == retried_parent["operation_id"]
+    assert child_row["operation_id"] == retried_child["operation_id"]
+    assert parent_row["operation_type"] == "BUILD_DATASET_BRIDGE"
+    assert child_row["operation_type"] == "BUILD_DATASET_BRIDGE_RUN"
+
+
 def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover(tmp_path: Path) -> None:
     store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r")
     repository = PostgresHistoricalRangeRepository(conn_factory=_connection_factory, artifact_store=store)
@@ -330,6 +384,7 @@ def test_postgres_contracts_close_success_aggregates_attempts_watch_and_takeover
 
     def client_key(value: str) -> str:
         return f"{value}-{run_namespace}" if run_namespace else value
+
     assert (
         _scalar(
             """

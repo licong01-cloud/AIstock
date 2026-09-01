@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle, OrderHandleStatus
+from backend.services.simulation_execution.broker import BrokerBackend, OrderHandle, OrderHandleStatus
 from backend.services.trading_core.errors import ArtifactGenerationFailedError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan
@@ -147,11 +147,7 @@ class TailHandlingPolicyService:
         status: OrderHandleStatus,
         broker: BrokerBackend,
     ) -> TailHandlingOrderResult:
-        order_quantity = next(
-            intent.order_quantity
-            for intent in plan.intents
-            if intent.intent_id == handle.intent_id
-        )
+        order_quantity = next(intent.order_quantity for intent in plan.intents if intent.intent_id == handle.intent_id)
         remaining = max(0, order_quantity - status.filled_quantity)
         if status.state == "filled":
             return TailHandlingOrderResult(
@@ -219,7 +215,9 @@ class TailHandlingPolicyService:
             plan_id=plan.plan_id,
             intent_count=len(order_results),
             filled_count=sum(1 for item in order_results if item.action == "NO_ACTION_FILLED"),
-            partial_cancelled_count=sum(1 for item in order_results if item.action == "CANCEL_REMAINING_AFTER_PARTIAL_FILL"),
+            partial_cancelled_count=sum(
+                1 for item in order_results if item.action == "CANCEL_REMAINING_AFTER_PARTIAL_FILL"
+            ),
             no_fill_cancelled_count=sum(1 for item in order_results if item.action == "CANCEL_UNFILLED"),
             rejected_count=sum(1 for item in order_results if item.action == "BROKER_REJECTED"),
             cancelled_count=sum(1 for item in order_results if item.action == "ALREADY_CANCELLED"),

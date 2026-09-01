@@ -15,7 +15,9 @@ from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+
+from backend.services.strategy_package.models import StrategyPackageCanonicalPitBindingV2
 
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 
@@ -278,7 +280,9 @@ class HistoricalRangeOperationType(str, Enum):
     RESUME = "RESUME"
     CANCEL = "CANCEL"
     REFRESH_OUTCOMES = "REFRESH_OUTCOMES"
+    REFRESH_OUTCOMES_RUN = "REFRESH_OUTCOMES_RUN"
     BUILD_DATASET_BRIDGE = "BUILD_DATASET_BRIDGE"
+    BUILD_DATASET_BRIDGE_RUN = "BUILD_DATASET_BRIDGE_RUN"
 
 
 class HistoricalRangeListAction(str, Enum):
@@ -534,6 +538,14 @@ class HistoricalRangeAdmittedPackageProjectionV1(_StrictContract):
     manifest_sha256: str = Field(min_length=64, max_length=64)
     alpha_mode: HistoricalRangeAlphaMode
     components: tuple[HistoricalRangeAdmittedComponentV1, ...] = Field(min_length=1)
+    canonical_pit_binding: StrategyPackageCanonicalPitBindingV2 | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_legacy_compatibly(self, serializer: Any) -> dict[str, Any]:
+        payload = serializer(self)
+        if self.canonical_pit_binding is None:
+            payload.pop("canonical_pit_binding", None)
+        return payload
 
     @field_validator("package_id", "package_version")
     @classmethod

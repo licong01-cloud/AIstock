@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 import psycopg2
 import psycopg2.extras
@@ -31,6 +31,8 @@ from backend.services.advisory_phase1.dataset_build import (
     FixtureDatasetBuildRequest,
     DatasetBuildRequest,
     RetrospectiveDatasetBuildRequest,
+    RetrospectiveSnapshotPolicySet,
+    SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
     RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION,
     REASON_ATTEMPT_FENCING_STALE,
     REASON_ATTEMPT_FILE_CONFLICT,
@@ -85,8 +87,17 @@ def _transactional_conn_factory() -> Iterator[Any]:
 class PostgresDatasetBuildRepository:
     """Short-transaction control plane; it never holds a DB transaction over IO."""
 
-    def __init__(self, conn_factory: Any | None = None) -> None:
+    def __init__(
+        self,
+        conn_factory: Any | None = None,
+        historical_range_policy_payload_loader: (
+            Callable[[Mapping[str, object]], Mapping[str, object]] | None
+        ) = None,
+    ) -> None:
         self._conn_factory = conn_factory or _transactional_conn_factory
+        self._historical_range_policy_payload_loader = (
+            historical_range_policy_payload_loader
+        )
 
     def create_or_get(
         self,
@@ -101,7 +112,11 @@ class PostgresDatasetBuildRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (key,))
-                self._require_capture_admission(cur, request)
+                self._require_capture_admission(
+                    cur,
+                    request,
+                    self._historical_range_policy_payload_loader,
+                )
                 self._require_base_snapshot_admission(cur, request)
                 cur.execute(
                     "SELECT * FROM app.advisory_dataset_build WHERE logical_build_key_sha256 = %s ORDER BY build_generation DESC FOR UPDATE",
@@ -1149,12 +1164,20 @@ class PostgresDatasetBuildRepository:
             raise DatasetBuildError(REASON_BUILD_TRANSITION_INVALID, "build row version/checkpoint/lifecycle is stale")
 
     @staticmethod
-    def _require_capture_admission(cur: Any, request: DatasetBuildRequest) -> None:
+    def _require_capture_admission(
+        cur: Any,
+        request: DatasetBuildRequest,
+        historical_range_policy_payload_loader: (
+            Callable[[Mapping[str, object]], Mapping[str, object]] | None
+        ) = None,
+    ) -> None:
         """Revalidate every frozen capture descriptor against authority rows."""
 
         if isinstance(request, RetrospectiveDatasetBuildRequest):
             PostgresDatasetBuildRepository._require_retrospective_capture_admission(
-                cur, request
+                cur,
+                request,
+                historical_range_policy_payload_loader,
             )
             return
 
@@ -1262,9 +1285,64 @@ class PostgresDatasetBuildRepository:
             raise DatasetBuildError(REASON_BUILD_REQUEST_CONFLICT, "capture label targets do not match frozen build request")
 
     @staticmethod
+    def _load_snapshot_policy_set(
+        request: RetrospectiveDatasetBuildRequest,
+        payload_loader: Callable[
+            [Mapping[str, object]], Mapping[str, object]
+        ] | None,
+    ) -> RetrospectiveSnapshotPolicySet | None:
+        ref = request.historical_range_policy_bundle_ref
+        if ref.get("payload_schema_version") != SNAPSHOT_POLICY_SET_SCHEMA_VERSION:
+            return None
+        if payload_loader is None:
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "composite snapshot policy admission requires exact artifact readback",
+            )
+        try:
+            policy_set = RetrospectiveSnapshotPolicySet.model_validate(
+                payload_loader(ref)
+            )
+        except Exception as exc:
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "composite snapshot policy artifact is invalid",
+            ) from exc
+        if (
+            canonical_json_sha256(policy_set.canonical_payload())
+            != request.label_policy_bundle_hash
+            or policy_set.aggregate_component_set_hash
+            != request.policy_component_set_hash
+            or policy_set.aggregate_component_hashes["BENCHMARK"]
+            != request.benchmark_policy_hash
+            or policy_set.aggregate_component_hashes["COST"]
+            != request.cost_policy_hash
+        ):
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "composite snapshot policy aggregate differs from build request",
+            )
+        return policy_set
+
+    @staticmethod
     def _require_retrospective_capture_admission(
-        cur: Any, request: RetrospectiveDatasetBuildRequest
+        cur: Any,
+        request: RetrospectiveDatasetBuildRequest,
+        historical_range_policy_payload_loader: (
+            Callable[[Mapping[str, object]], Mapping[str, object]] | None
+        ) = None,
     ) -> None:
+        policy_set = PostgresDatasetBuildRepository._load_snapshot_policy_set(
+            request,
+            historical_range_policy_payload_loader,
+        )
+        policy_members = (
+            {item.policy_bundle_hash: item for item in policy_set.members}
+            if policy_set is not None
+            else {}
+        )
+        observed_observation_policies: set[str] = set()
+        observed_label_policies: set[str] = set()
         expected_scopes = {
             (item.identity_id, item.identity_hash)
             for item in request.range_lineage_scopes
@@ -1371,18 +1449,36 @@ class PostgresDatasetBuildRepository:
                         REASON_BUILD_REQUEST_CONFLICT,
                         "retrospective observation capture lineage is incompatible",
                     )
-                if (
-                    canonicalize(
-                        dict(row["historical_range_policy_bundle_ref"] or {})
-                    )
-                    != canonicalize(request.historical_range_policy_bundle_ref)
-                    or str(row["historical_range_policy_bundle_hash"] or "")
-                    != request.label_policy_bundle_hash
-                ):
-                    raise DatasetBuildError(
-                        REASON_BUILD_REQUEST_CONFLICT,
-                        "retrospective observation capture policy identity is incompatible",
-                    )
+                row_policy_ref = canonicalize(
+                    dict(row["historical_range_policy_bundle_ref"] or {})
+                )
+                row_policy_hash = str(
+                    row["historical_range_policy_bundle_hash"] or ""
+                )
+                if policy_set is None:
+                    if (
+                        row_policy_ref
+                        != canonicalize(request.historical_range_policy_bundle_ref)
+                        or row_policy_hash != request.label_policy_bundle_hash
+                    ):
+                        raise DatasetBuildError(
+                            REASON_BUILD_REQUEST_CONFLICT,
+                            "retrospective observation capture policy identity is incompatible",
+                        )
+                else:
+                    policy_member = policy_members.get(row_policy_hash)
+                    if (
+                        policy_member is None
+                        or row_policy_ref
+                        != canonicalize(
+                            policy_member.policy_bundle_ref.model_dump(mode="json")
+                        )
+                    ):
+                        raise DatasetBuildError(
+                            REASON_BUILD_REQUEST_CONFLICT,
+                            "retrospective observation capture policy is outside the snapshot set",
+                        )
+                    observed_observation_policies.add(row_policy_hash)
             else:
                 planned_labels = payload.get("planned_labels")
                 selected_mappings = payload.get("selected_observation_mappings")
@@ -1417,21 +1513,53 @@ class PostgresDatasetBuildRepository:
                         str(payload.get("label_source_revision_set_hash")),
                     )
                 }
-                if (
-                    str(payload.get("label_policy_bundle_id"))
-                    != request.label_policy_bundle_id
-                    or str(payload.get("label_policy_bundle_hash"))
-                    != request.label_policy_bundle_hash
-                    or not _same_aware_timestamp(
-                        payload.get("label_as_of_ts"), request.label_as_of_ts
+                row_policy_ref = canonicalize(
+                    dict(row["historical_range_policy_bundle_ref"] or {})
+                )
+                row_policy_hash = str(
+                    row["historical_range_policy_bundle_hash"] or ""
+                )
+                policy_identity_invalid = not _same_aware_timestamp(
+                    payload.get("label_as_of_ts"), request.label_as_of_ts
+                )
+                if policy_set is None:
+                    policy_identity_invalid = policy_identity_invalid or (
+                        str(payload.get("label_policy_bundle_id"))
+                        != request.label_policy_bundle_id
+                        or str(payload.get("label_policy_bundle_hash"))
+                        != request.label_policy_bundle_hash
+                        or row_policy_ref
+                        != canonicalize(request.historical_range_policy_bundle_ref)
+                        or row_policy_hash != request.label_policy_bundle_hash
                     )
-                    or canonicalize(
-                        dict(row["historical_range_policy_bundle_ref"] or {})
+                else:
+                    policy_member = policy_members.get(row_policy_hash)
+                    policy_identity_invalid = policy_identity_invalid or (
+                        policy_member is None
+                        or str(payload.get("label_policy_bundle_id"))
+                        != (
+                            policy_member.policy_bundle_id
+                            if policy_member is not None
+                            else ""
+                        )
+                        or str(payload.get("label_policy_bundle_hash"))
+                        != row_policy_hash
+                        or str(payload.get("policy_component_set_hash"))
+                        != (
+                            policy_member.policy_component_set_hash
+                            if policy_member is not None
+                            else ""
+                        )
+                        or row_policy_ref
+                        != canonicalize(
+                            policy_member.policy_bundle_ref.model_dump(mode="json")
+                            if policy_member is not None
+                            else {}
+                        )
                     )
-                    != canonicalize(request.historical_range_policy_bundle_ref)
-                    or str(row["historical_range_policy_bundle_hash"] or "")
-                    != request.label_policy_bundle_hash
-                ):
+                    if not policy_identity_invalid:
+                        observed_label_policies.add(row_policy_hash)
+                if policy_identity_invalid:
                     raise DatasetBuildError(
                         REASON_BUILD_REQUEST_CONFLICT,
                         "retrospective label capture policy or as-of identity is incompatible",
@@ -1464,6 +1592,14 @@ class PostgresDatasetBuildRepository:
                     "retrospective capture source revision set does not match authority",
                 )
 
+        if policy_set is not None and (
+            observed_observation_policies != set(policy_members)
+            or observed_label_policies != set(policy_members)
+        ):
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "retrospective capture policies do not exactly cover the snapshot set",
+            )
         if observed_scopes != expected_scopes:
             raise DatasetBuildError(
                 REASON_BUILD_REQUEST_CONFLICT,

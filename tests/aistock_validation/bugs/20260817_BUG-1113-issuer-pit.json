@@ -1,0 +1,398 @@
+{
+  "actual": "公告分类直接继承 market.anns.ts_code 并传播到 event_signal，已出现其他公司退市公告绑定到 000001.SZ 等错误，导致 canonical v2 DEV dry-run 阻断。",
+  "allowed_write_scope": [
+    "backend/services/announcements/title_classifier.py",
+    "scripts/classify_announcement_titles_v0.py",
+    "backend/services/event_signal/announcement_adapter.py",
+    "backend/services/event_signal/st_announcement_adapter.py",
+    "scripts/sync_eastmoney_anns_metadata.py",
+    "scripts/sync_cninfo_anns_metadata.py",
+    "scripts/ingest_tushare_anns_init.py",
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/tests/event_signal/test_announcement_adapter.py",
+    "backend/tests/event_signal/test_st_announcement_adapter.py",
+    "backend/tests/announcements/test_title_classifier.py",
+    "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "backend/tests/test_canonical_equity_pit.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "backend/services/canonical_equity_pit.py",
+    "backend/services/event_signal/announcement_issuer_binding.py",
+    "backend/tests/event_signal/test_announcement_issuer_binding.py",
+    "tests/aistock_validation/bugs/20260817_BUG-1113-issuer-pit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1113",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-17T02:54:36.698170Z",
+  "description": "公告分类直接继承 market.anns.ts_code 并传播到 event_signal，已出现其他公司退市公告绑定到 000001.SZ 等错误，导致 canonical v2 DEV dry-run 阻断。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260817-9539f080c31c",
+      "timestamp": "2026-08-17T02:54:36.698155Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-08-17 production read-only audit: 62 PIT-order violations, 474 listed-security false delisting confirmations, terminal evidence 131/321"
+  ],
+  "expected": "公告只能绑定到由权威标识确定且与 issuer 一致的证券；歧义、跨证券和 PIT 时间倒序记录必须 fail closed；历史退市证券具备可追溯 terminal evidence，当前上市证券不得获得错误退市确认。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py"
+    ],
+    "changed_files": [
+      "backend/services/announcements/title_classifier.py",
+      "scripts/classify_announcement_titles_v0.py",
+      "backend/services/event_signal/announcement_adapter.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "scripts/sync_eastmoney_anns_metadata.py",
+      "scripts/sync_cninfo_anns_metadata.py",
+      "scripts/ingest_tushare_anns_init.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/event_signal/test_announcement_adapter.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "backend/tests/announcements/test_title_classifier.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/classify_announcement_titles_v0.py",
+        "backend/services/event_signal/announcement_adapter.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "scripts/sync_eastmoney_anns_metadata.py",
+        "scripts/sync_cninfo_anns_metadata.py",
+        "scripts/ingest_tushare_anns_init.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/test_canonical_equity_pit.py"
+      ],
+      "impacted_modules": [
+        "scripts",
+        "platform.api",
+        "platform.db",
+        "local_data",
+        "selection_center",
+        "qe.core",
+        "paper_v2",
+        "tests.backend",
+        "qlib_data"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/classify_announcement_titles_v0.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/services/event_signal/announcement_adapter.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/event_signal/st_announcement_adapter.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "scripts/sync_eastmoney_anns_metadata.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/sync_cninfo_anns_metadata.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ingest_tushare_anns_init.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/build_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/event_signal/test_announcement_adapter.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/event_signal/test_st_announcement_adapter.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/test_canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "medium",
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "scripts/classify_announcement_titles_v0.py",
+        "backend/services/event_signal/announcement_adapter.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "scripts/sync_eastmoney_anns_metadata.py",
+        "scripts/sync_cninfo_anns_metadata.py",
+        "scripts/ingest_tushare_anns_init.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/test_canonical_equity_pit.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/announcements/title_classifier.py",
+      "scripts/classify_announcement_titles_v0.py",
+      "backend/services/event_signal/announcement_adapter.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "scripts/sync_eastmoney_anns_metadata.py",
+      "scripts/sync_cninfo_anns_metadata.py",
+      "scripts/ingest_tushare_anns_init.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/event_signal/test_announcement_adapter.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "backend/tests/announcements/test_title_classifier.py",
+      "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py"
+    ]
+  },
+  "first_seen_at": "2026-08-17T02:54:36.698170Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3546,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3546",
+  "last_seen_at": "2026-08-17T02:54:36.698170Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "bug1113_fresh_process_v2 contract=issuer_bound_stock_delisting_v2 exact=emitted stale_v1=removed source_sha256=af959b11f86764a7f2324c6ef8946145796591c3e37ce012e704683e27a60c9e"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "公告 issuer 与证券跨绑定污染退市 PIT 证据",
+  "trigger_condition": {
+    "fingerprint": "9539f080c31cd55b494dab69",
+    "source_event_id": "FE-20260817-9539f080c31c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "platform_api",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "platform_api",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

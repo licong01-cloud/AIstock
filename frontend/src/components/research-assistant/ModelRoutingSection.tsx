@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import JsonPanel from "@/components/paper-v2/JsonPanel";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import JsonPanel from "@/components/trading-console/JsonPanel";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState } from "@/components/research-assistant/AssistantShared";
 import { researchAssistantApi, type AssistantModelProfile, type AssistantRoutingPolicy } from "@/lib/research-assistant/api";
 

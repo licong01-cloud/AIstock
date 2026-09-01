@@ -13,8 +13,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
+    MinuteDataSource,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.validators import StrategyPackageValidator
@@ -24,6 +26,7 @@ from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
 )
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import (
@@ -101,9 +104,7 @@ class PaperTradingV2Runner:
             algo_code=manifest.minute_execution_policy.algo_code,
             algo_config=manifest.minute_execution_policy.algo_config,
             market_context=market_context,
-            allow_partial_fill=bool(
-                manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)
-            ),
+            allow_partial_fill=bool(manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)),
         )
 
         ledger = InMemoryLedger(
@@ -150,13 +151,18 @@ class PaperTradingV2Runner:
             portfolio_id=portfolio_id,
             order_intent=order_intent,
         )
+        require_execution_algo_active(
+            manifest.minute_execution_policy.algo_code,
+            operation="paper_v2_single_order_market_data_load",
+            semantic_path="manifest.minute_execution_policy.algo_code",
+            context={"package_id": manifest.package_id, "portfolio_id": portfolio_id},
+        )
         required_bars = min_bars or self._required_minute_bars_for_manifest(manifest)
         market_input = self.market_data_provider.load_symbol_input(
             symbol=order_intent.symbol,
             trade_date=order_intent.target_trade_date,
             source=data_source,
             min_bars=required_bars,
-            require_day_features=str(manifest.minute_execution_policy.algo_code).strip().upper() in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
         )
         if not market_input.minute_bars:
             raise DataUnavailableError(
@@ -246,9 +252,7 @@ class PaperTradingV2Runner:
                 algo_code=manifest.minute_execution_policy.algo_code,
                 algo_config=manifest.minute_execution_policy.algo_config,
                 market_context=market_context_by_symbol[intent.symbol],
-                allow_partial_fill=bool(
-                    manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)
-                ),
+                allow_partial_fill=bool(manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)),
             )
             for fill in order_fills:
                 ledger.apply_fill(fill)

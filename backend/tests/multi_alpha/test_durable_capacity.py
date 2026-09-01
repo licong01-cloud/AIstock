@@ -14,6 +14,9 @@ import pytest
 from psycopg2.extensions import parse_dsn
 from psycopg2.extras import RealDictCursor
 
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEExecutionSourceClaimFactory,
+)
 from backend.services.quantevolver.qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     QEExecutionReservationError,
@@ -130,6 +133,39 @@ def _reservation_row(spec: QEExecutionReservationSpec, **overrides: Any) -> dict
     return row
 
 
+def test_evolution_loop_source_claim_casts_jsonb_before_capacity_marker_match() -> None:
+    cursor = ScriptedCursor(
+        [
+            Step(
+                contains="agent_analysis::text LIKE",
+                one={
+                    "loop_id": "qe_task_1_Loop1",
+                    "task_id": "qe_task_1",
+                    "status": "running",
+                    "node_id": "wsl2-5080",
+                },
+            )
+        ]
+    )
+    claim_source, _record_waiting = QEExecutionSourceClaimFactory.evolution_loop(
+        loop_id="qe_task_1_Loop1",
+        node_id="wsl2-5080",
+    )
+
+    claimed = claim_source(cursor)
+
+    assert claimed == {
+        "loop_id": "qe_task_1_Loop1",
+        "task_id": "qe_task_1",
+        "status": "running",
+        "node_id": "wsl2-5080",
+    }
+    sql, params = cursor.executions[0]
+    assert "agent_analysis::text LIKE" in sql
+    assert "WHEN agent_analysis LIKE" not in sql
+    assert params == ("wsl2-5080", "qe_task_1_Loop1")
+
+
 def test_reservation_identity_is_stable_and_contract_is_explicit() -> None:
     first = make_qe_execution_reservation_id("multi_alpha_durable_attempt", "attempt_1")
     second = make_qe_execution_reservation_id("multi_alpha_durable_attempt", "attempt_1")
@@ -147,6 +183,133 @@ def test_reservation_identity_is_stable_and_contract_is_explicit() -> None:
             submission_intent_hash=_intent("attempt_1"),
         )
     assert invalid_source.value.reason_code == "qe_execution_reservation_source_kind_invalid"
+
+
+def test_conditional_source_claim_loses_stale_row_version_without_update() -> None:
+    spec = _spec("attempt-stale-claim")
+    current = _reservation_row(spec, status="running", row_version=9)
+    provider = ScriptedProvider(
+        [
+            Step(
+                contains="WHERE source_kind = %s AND source_execution_id = %s",
+                one=current,
+            )
+        ]
+    )
+    repository = QEExecutionReservationRepository(connection_provider=provider)
+
+    claimed = repository.claim_reservation_for_source(
+        source_kind=spec.source_kind,
+        source_execution_id=spec.source_execution_id,
+        owner_id="reconciler",
+        lease_seconds=60,
+        expected_row_version=10,
+    )
+
+    assert claimed is None
+    assert len(provider.cursor.executions) == 1
+    assert provider.cursor.executions[0][0].startswith("SELECT ")
+    assert provider.commits == 1
+    assert not provider.cursor.steps
+
+
+def test_capacity_observation_on_full_node_is_select_only() -> None:
+    spec = _spec("attempt-capacity-observe")
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT node_id FROM infra.compute_nodes", one={"node_id": spec.node_id}),
+            Step(
+                contains="WHERE source_kind = %s AND source_execution_id = %s",
+                one=None,
+            ),
+            Step(contains="SELECT COUNT(*) AS active_count", one={"active_count": 1}),
+        ]
+    )
+    repository = QEExecutionReservationRepository(connection_provider=provider)
+
+    observed = repository.observe_execution_capacity(spec, node_capacity=1)
+
+    assert observed.available is False
+    assert observed.duplicate_replay is False
+    assert observed.active_count == observed.node_capacity == 1
+    assert len(provider.cursor.executions) == 3
+    assert all(sql.startswith("SELECT ") for sql, _params in provider.cursor.executions)
+    assert all("FOR UPDATE" not in sql for sql, _params in provider.cursor.executions)
+    assert provider.commits == 1
+    assert not provider.cursor.steps
+
+
+def test_capacity_observation_preserves_existing_source_duplicate_replay() -> None:
+    spec = _spec("attempt-capacity-duplicate")
+    existing = _reservation_row(spec, status="running")
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT node_id FROM infra.compute_nodes", one={"node_id": spec.node_id}),
+            Step(
+                contains="WHERE source_kind = %s AND source_execution_id = %s",
+                one=existing,
+            ),
+            Step(contains="SELECT COUNT(*) AS active_count", one={"active_count": 1}),
+        ]
+    )
+    repository = QEExecutionReservationRepository(connection_provider=provider)
+
+    observed = repository.observe_execution_capacity(spec, node_capacity=1)
+
+    assert observed.available is True
+    assert observed.duplicate_replay is True
+    assert observed.reservation == existing
+
+
+def test_unchanged_capacity_wait_receipts_100x_execute_zero_updates() -> None:
+    class ExistingWaitCursor:
+        def __init__(self) -> None:
+            self.executions: list[str] = []
+            self.current: Any = None
+
+        def execute(self, sql: str, _params: Any = None) -> None:
+            normalized = " ".join(sql.split())
+            self.executions.append(normalized)
+            assert normalized.startswith("SELECT ")
+            if "COUNT(*) AS exact_count" in normalized:
+                self.current = {"exact_count": 2}
+            else:
+                self.current = {"status": "pending", "phase": "waiting_capacity"}
+
+        def fetchone(self) -> Any:
+            return self.current
+
+    recorders = [
+        QEExecutionSourceClaimFactory.evolution_loop(
+            loop_id="task-1_Loop1",
+            node_id="node-1",
+        )[1],
+        QEExecutionSourceClaimFactory.experiment(
+            experiment_id="exp-1",
+            node_id="node-1",
+            qe_task_id="task-1",
+            qe_loop_id="Loop1",
+        )[1],
+        QEExecutionSourceClaimFactory.multi_alpha_node(
+            experiment_id="exp-1",
+            node_id="node-1",
+            qe_loop_id="Loop1",
+            group_names=("g1", "g2"),
+        )[1],
+        QEExecutionSourceClaimFactory.pred_backtest_run(
+            run_id="run-1",
+            backtest_name="bt-1",
+            node_id="node-1",
+        )[1],
+    ]
+    cursor = ExistingWaitCursor()
+
+    for _ in range(100):
+        for recorder in recorders:
+            assert recorder(cursor, 2, 2) is not None
+
+    assert len(cursor.executions) == 400
+    assert all(statement.startswith("SELECT ") for statement in cursor.executions)
 
 
 def test_capacity_full_records_waiting_without_claim_or_reservation() -> None:

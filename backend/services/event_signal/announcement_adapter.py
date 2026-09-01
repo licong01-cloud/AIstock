@@ -25,6 +25,11 @@ from backend.services.announcements.title_classifier import (
     RULE_VERSION as ANNOUNCEMENT_RULE_VERSION,
     rule_config_hash as announcement_rule_config_hash,
 )
+from backend.services.event_signal.announcement_issuer_binding import (
+    ISSUER_BINDING_LATERAL_SQL,
+    ISSUER_BINDING_PROJECTION_SQL,
+    attach_announcement_issuer_bindings,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -291,6 +296,7 @@ def fetch_classification_batch(
             c.classification_detail,
             c.time_mode,
             a.title,
+            {ISSUER_BINDING_PROJECTION_SQL}
             s.signal_id AS ann_signal_id,
             s.signal_status AS ann_signal_status,
             s.reason AS ann_signal_reason,
@@ -302,6 +308,7 @@ def fetch_classification_batch(
             ON s.ann_id = c.ann_id
            AND s.rule_version = c.rule_version
            AND s.time_mode = c.time_mode
+          {ISSUER_BINDING_LATERAL_SQL}
          WHERE c.rule_version = %s
            AND c.time_mode = %s
            AND c.classification_id > %s
@@ -343,7 +350,7 @@ def build_fact_tuple(
         row["ts_code"],
         "announcement",
         row["event_type"],
-        "ACTIVE",
+        row.get("issuer_fact_status") or "ACTIVE",
         SOURCE_TYPE,
         str(row["ann_id"]),
         f"announcement:{row['ann_id']}",
@@ -495,29 +502,51 @@ def upsert_signals(
         values.append(build_signal_tuple(row, event_id=event_id, run_id=run_id, rule_version=rule_version))
 
     with conn.cursor() as cur:
+        suppression_evidence = _json_dumps(
+            {
+                "signal_suppression": {
+                    "schema_version": "event_signal_non_actionable_suppression_v1",
+                    "reason_code": "source_classification_no_longer_actionable",
+                    "adapter": ENGINE_NAME,
+                }
+            }
+        )
         if processed_source_pks:
             if values:
                 cur.execute(
                     """
-                    DELETE FROM market.event_signal
+                    UPDATE market.event_signal
+                       SET signal_status = 'SUPPRESSED',
+                           evidence = COALESCE(evidence, '{}'::jsonb) || %s::jsonb,
+                           updated_at = NOW()
                      WHERE source_type = %s
                        AND rule_version = %s
                        AND time_mode = %s
                        AND source_pk = ANY(%s)
                        AND NOT (signal_key = ANY(%s))
                     """,
-                    (SOURCE_TYPE, rule_version, time_mode, processed_source_pks, [value[0] for value in values]),
+                    (
+                        suppression_evidence,
+                        SOURCE_TYPE,
+                        rule_version,
+                        time_mode,
+                        processed_source_pks,
+                        [value[0] for value in values],
+                    ),
                 )
             else:
                 cur.execute(
                     """
-                    DELETE FROM market.event_signal
+                    UPDATE market.event_signal
+                       SET signal_status = 'SUPPRESSED',
+                           evidence = COALESCE(evidence, '{}'::jsonb) || %s::jsonb,
+                           updated_at = NOW()
                      WHERE source_type = %s
                        AND rule_version = %s
                        AND time_mode = %s
                        AND source_pk = ANY(%s)
                     """,
-                    (SOURCE_TYPE, rule_version, time_mode, processed_source_pks),
+                    (suppression_evidence, SOURCE_TYPE, rule_version, time_mode, processed_source_pks),
                 )
 
         if not values:
@@ -597,6 +626,7 @@ def sync_announcement_event_signals(
     processed_rows = 0
     fact_rows = 0
     signal_rows = 0
+    issuer_binding_counts: dict[str, int] = {}
     last_classification_id = 0
 
     with get_conn() as conn:
@@ -632,6 +662,16 @@ def sync_announcement_event_signals(
                     break
 
                 last_classification_id = int(rows[-1]["classification_id"])
+                # The generic adapter has no independent terminal-event
+                # cross-check.  Confirmed delistings therefore remain
+                # suppressed here and may become actionable only through the
+                # ST-first adapter, which supplies stock_st_events evidence.
+                rows, batch_binding_counts = attach_announcement_issuer_bindings(
+                    rows,
+                    require_terminal_cross_check=True,
+                )
+                for status, count in batch_binding_counts.items():
+                    issuer_binding_counts[status] = issuer_binding_counts.get(status, 0) + count
                 event_ids = upsert_facts(conn, rows, run_id=run_id, rule_version=rule_version)
                 batch_signal_rows = upsert_signals(
                     conn,
@@ -658,6 +698,7 @@ def sync_announcement_event_signals(
                     "last_classification_id": last_classification_id,
                     "missing_only": missing_only,
                     "limit": limit,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
                 },
             )
             status = "SUCCESS"
@@ -670,7 +711,11 @@ def sync_announcement_event_signals(
                 fact_rows=fact_rows,
                 signal_rows=signal_rows,
                 error_message=str(exc)[:4000],
-                metrics={"source_type": SOURCE_TYPE, "last_classification_id": last_classification_id},
+                metrics={
+                    "source_type": SOURCE_TYPE,
+                    "last_classification_id": last_classification_id,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
+                },
             )
             raise
 
@@ -709,7 +754,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    load_dotenv(ROOT / ".env", override=True)
+    # Respect an explicit DEV/production target selected by the caller.
+    load_dotenv(ROOT / ".env", override=False)
     load_dotenv(override=False)
     summary = sync_announcement_event_signals(
         source_rule_version=args.source_rule_version,

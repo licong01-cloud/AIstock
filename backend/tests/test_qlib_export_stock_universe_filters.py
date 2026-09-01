@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from backend.qlib_exporter import authoritative_bin_exporter as authoritative
+from backend.qlib_exporter import router as qlib_router
+from scripts import qlib_authoritative_bin_export as authoritative_cli
 from backend.qlib_exporter.db_reader import DBReader
 
 
@@ -158,3 +161,191 @@ def test_rewrite_stock_all_txt_applies_ipo_filter_without_deleting_bins(
         "000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n"
     )
     assert (instruments / "all_ipo_filter_summary.json").exists()
+
+
+def test_rewrite_minute_all_txt_uses_physical_feature_bounds_instead_of_stale_metadata(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instruments = tmp_path / "instruments"
+    calendars = tmp_path / "calendars"
+    features = tmp_path / "features" / "000001.sz"
+    instruments.mkdir(parents=True)
+    calendars.mkdir(parents=True)
+    features.mkdir(parents=True)
+    (instruments / "all.txt").write_text(
+        "000001.SZ\t2026-01-05 09:31:00\t2026-04-28 15:00:00\n",
+        encoding="utf-8",
+    )
+    (calendars / "1min.txt").write_text(
+        "\n".join(
+            [
+                "2026-01-05 09:31:00",
+                "2026-04-28 15:00:00",
+                "2026-06-30 09:31:00",
+                "2026-06-30 15:00:00",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    np.asarray([0, 10, 11, 12, 13], dtype="<f4").tofile(features / "close.1min.bin")
+
+    monkeypatch.setattr(
+        authoritative,
+        "_load_pit_spans_for_all_txt",
+        lambda **_kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "eligible_start": [date(2026, 1, 5)],
+                "eligible_end": [date(2026, 6, 30)],
+                "entry_reason": ["eligible"],
+                "exit_reason": ["generation_end"],
+            }
+        ),
+    )
+
+    summary = authoritative.rewrite_stock_all_txt_from_pit_spans(
+        bin_dir=tmp_path,
+        start=date(2026, 1, 5),
+        end=date(2026, 6, 30),
+        feature_frequency="1min",
+        allowed_bin_root=tmp_path.parent,
+    )
+
+    assert (instruments / "all.txt").read_text(encoding="utf-8") == (
+        "000001.SZ\t2026-01-05 09:31:00\t2026-06-30 15:00:00\n"
+    )
+    assert summary["range_authority"] == "physical_qlib_feature_bounds_v1"
+    assert summary["physical_range_summary"] == {
+        "range_authority": "physical_qlib_feature_bounds_v1",
+        "frequency": "1min",
+        "field": "close",
+        "calendar_rows": 4,
+        "feature_files": 1,
+        "feature_instruments": 1,
+        "feature_start_min": "2026-01-05",
+        "feature_end_max": "2026-06-30",
+    }
+
+
+def test_physical_feature_range_rejects_bounds_past_calendar(tmp_path) -> None:
+    instruments = tmp_path / "instruments"
+    calendars = tmp_path / "calendars"
+    features = tmp_path / "features" / "000001.sz"
+    instruments.mkdir(parents=True)
+    calendars.mkdir(parents=True)
+    features.mkdir(parents=True)
+    (instruments / "all.txt").write_text(
+        "000001.SZ\t2026-01-05 09:31:00\t2026-01-05 15:00:00\n",
+        encoding="utf-8",
+    )
+    (calendars / "1min.txt").write_text(
+        "2026-01-05 09:31:00\n2026-01-05 15:00:00\n",
+        encoding="utf-8",
+    )
+    np.asarray([1, 10, 11, 12], dtype="<f4").tofile(features / "close.1min.bin")
+
+    with pytest.raises(RuntimeError, match="feature bounds exceed calendar"):
+        authoritative.rewrite_stock_all_txt_from_pit_spans(
+            bin_dir=tmp_path,
+            start=date(2026, 1, 5),
+            end=date(2026, 1, 5),
+            feature_frequency="1min",
+            allowed_bin_root=tmp_path.parent,
+        )
+
+
+def test_physical_feature_range_rejects_uncontrolled_frequency(tmp_path) -> None:
+    instruments = tmp_path / "instruments"
+    instruments.mkdir(parents=True)
+    (instruments / "all.txt").write_text(
+        "000001.SZ\t2026-01-05 09:31:00\t2026-01-05 15:00:00\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported physical feature frequency"):
+        authoritative.rewrite_stock_all_txt_from_pit_spans(
+            bin_dir=tmp_path,
+            start=date(2026, 1, 5),
+            end=date(2026, 1, 5),
+            feature_frequency="../day",
+            allowed_bin_root=tmp_path.parent,
+        )
+
+
+def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _FakePitService:
+        def ensure_st_pit_universe(self, **_kwargs):
+            return {"status": "ready"}
+
+    monkeypatch.setattr(authoritative_cli, "StockUniversePitService", _FakePitService)
+    monkeypatch.setattr(authoritative_cli, "run_wsl_dump", lambda **_kwargs: {"ok": True, "returncode": 0})
+    monkeypatch.setattr(
+        authoritative_cli,
+        "rewrite_stock_all_txt_from_pit_spans",
+        lambda **kwargs: calls.append(kwargs) or {"mode": "pit_universe_spans"},
+    )
+    monkeypatch.setattr(authoritative_cli, "write_bin_meta", lambda **_kwargs: None)
+
+    exit_code = authoritative_cli.main(
+        [
+            "--dataset",
+            "stock_minute",
+            "--stage",
+            "dump",
+            "--snapshot-id",
+            "minute-candidate",
+            "--start",
+            "2026-01-05",
+            "--end",
+            "2026-06-30",
+            "--stock-universe-mode",
+            "pit_spans",
+            "--csv-root",
+            str(tmp_path / "csv"),
+            "--bin-root",
+            str(tmp_path / "bin"),
+            "--reports-dir",
+            str(tmp_path / "reports"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["feature_frequency"] == "1min"
+    assert calls[0]["allowed_bin_root"] == tmp_path / "bin"
+
+
+def test_backend_minute_finalize_passes_physical_range_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _DumpResult:
+        ok = True
+        stdout = "dumped"
+
+    monkeypatch.setattr(
+        qlib_router,
+        "rewrite_stock_all_txt_from_pit_spans",
+        lambda **kwargs: calls.append(kwargs) or {"mode": "pit_universe_spans"},
+    )
+
+    ok, _stdout, error, summary = qlib_router._finalize_stock_dump_result(
+        _DumpResult(),
+        tmp_path / "candidate",
+        stock_universe_mode="pit_spans",
+        universe_key=authoritative.DEFAULT_PIT_UNIVERSE_KEY,
+        start=date(2026, 1, 5),
+        end=date(2026, 6, 30),
+        feature_frequency="1min",
+        allowed_bin_root=tmp_path,
+    )
+
+    assert ok is True
+    assert error is None
+    assert summary == {"mode": "pit_universe_spans"}
+    assert calls[0]["feature_frequency"] == "1min"
+    assert calls[0]["allowed_bin_root"] == tmp_path

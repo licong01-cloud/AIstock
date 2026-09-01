@@ -33,6 +33,7 @@ from backend.services.advisory_historical_range.source_roles import (
     DECISION_MARK_SOURCE_ROLES_V1,
     select_day_source_roles,
 )
+from backend.services.strategy_package.advisory_input_projection import SELECTION_PIT_UNIVERSE_KEY
 
 
 DECISION_MARK_PROVIDER_CONTRACT_VERSION = "advisory_historical_range_decision_mark_provider_v1"
@@ -57,7 +58,7 @@ _STATE_SQL = """
     ), pit AS (
         SELECT ts_code
         FROM market.stock_universe_pit_spans
-        WHERE universe_key = 'shsz_st_pit_active_v1'
+        WHERE universe_key = %s
           AND eligible_start <= %s
           AND eligible_end >= %s
     )
@@ -90,6 +91,7 @@ class HistoricalRangeDecisionMarkReader(Protocol):
         self,
         *,
         decision_trade_date: date,
+        universe_key: str,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], datetime]: ...
 
 
@@ -105,7 +107,11 @@ class PostgresHistoricalRangeDecisionMarkReader:
         self,
         *,
         decision_trade_date: date,
+        universe_key: str,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], datetime]:
+        normalized_universe_key = str(universe_key or "").strip()
+        if not normalized_universe_key:
+            raise ValueError("universe_key is required for historical decision marks")
         with self._conn_factory() as conn:
             conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -119,7 +125,13 @@ class PostgresHistoricalRangeDecisionMarkReader:
                 }
                 cur.execute(
                     _STATE_SQL,
-                    (decision_trade_date, decision_trade_date, decision_trade_date, decision_trade_date),
+                    (
+                        decision_trade_date,
+                        normalized_universe_key,
+                        decision_trade_date,
+                        decision_trade_date,
+                        decision_trade_date,
+                    ),
                 )
                 states = {
                     str(row["ts_code"]).upper(): dict(row)
@@ -210,7 +222,12 @@ class HistoricalRangeDecisionMarkProvider:
         if initial_refs != expected_refs:
             raise ValueError("pre-read decision-mark source refs differ from the sealed role selection")
 
-        market_rows, state_rows, observed_at = self._reader.read(decision_trade_date=decision_trade_date)
+        binding = program.admitted_package_projection.canonical_pit_binding
+        universe_key = binding.frozen_universe_key if binding is not None else SELECTION_PIT_UNIVERSE_KEY
+        market_rows, state_rows, observed_at = self._reader.read(
+            decision_trade_date=decision_trade_date,
+            universe_key=universe_key,
+        )
         subjects = tuple(sorted({str(item).upper() for item in included_symbols} | {str(item).upper() for item in previous_marks_by_symbol}))
         marks = tuple(
             self._build_mark(

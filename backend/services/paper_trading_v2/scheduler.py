@@ -25,6 +25,8 @@ logger = logging.getLogger("aistock.paper_trading_v2.scheduler")
 SESSION_TICK_TIMEOUT_ERROR_CODE = "PAPER_V2_SESSION_TICK_TIMEOUT"
 SESSION_TICK_TIMEOUT_EVENT = "SESSION_TICK_TIMEOUT_FAILED"
 SESSION_TICK_TIMEOUT_POLICY = "mark_session_failed_release_scheduler_guard"
+LEGACY_SESSION_SCHEDULER_RETIRED_REASON_CODE = "PAPER_V2_LEGACY_SESSION_SCHEDULER_RETIRED"
+LEGACY_SESSION_SCHEDULER_REPLACEMENT = "/api/v1/simulation-runtime"
 
 
 class PaperTradingV2SessionScheduler:
@@ -79,6 +81,10 @@ class PaperTradingV2SessionScheduler:
     def status(self) -> dict[str, Any]:
         thread = self._thread
         return {
+            "retired": True,
+            "execution_enabled": False,
+            "reason_code": LEGACY_SESSION_SCHEDULER_RETIRED_REASON_CODE,
+            "replacement": LEGACY_SESSION_SCHEDULER_REPLACEMENT,
             "running": bool(thread and thread.is_alive() and not self._stop_event.is_set()),
             "thread_alive": bool(thread and thread.is_alive()),
             "interval_seconds": self._interval_seconds,
@@ -92,9 +98,14 @@ class PaperTradingV2SessionScheduler:
 
     def bootstrap_status(self) -> dict[str, Any]:
         env_scheduler = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
-        scheduler_autostart = env_scheduler in {"1", "true", "yes", "on"}
+        scheduler_requested = env_scheduler in {"1", "true", "yes", "on"}
         return {
-            "scheduler_autostart_env": bool(scheduler_autostart),
+            "retired": True,
+            "reason_code": LEGACY_SESSION_SCHEDULER_RETIRED_REASON_CODE,
+            "replacement": LEGACY_SESSION_SCHEDULER_REPLACEMENT,
+            "scheduler_autostart_env": False,
+            "scheduler_env_requested": bool(scheduler_requested),
+            "scheduler_env_ignored": True,
             "scheduler_env_raw": env_scheduler or None,
             "scheduler": self.status(),
             "auto_run": self.auto_run_coordinator.status(),
@@ -105,7 +116,9 @@ class PaperTradingV2SessionScheduler:
                 "status_api_exposes_slots": True,
                 "unified_path_active": True,
             },
-            "production_note": "backend process restart only auto-runs when ENABLE_PAPER_TRADING_V2_SCHEDULER is true-like",
+            "production_note": (
+                "legacy Paper v2 session scheduling is retired; use the unified simulation-runtime scheduler"
+            ),
         }
 
     def run_once(self, *, limit: int = 50, as_of_time: datetime | None = None) -> dict[str, Any]:

@@ -1890,6 +1890,123 @@ class AdvisoryProgramService:
     def _program_metrics(self, program: AdvisoryProgram) -> dict[str, Any]:
         return compute_program_metrics(program, self._episodes_for_metrics(program))
 
+    def prepare_forward_selection(
+        self,
+        program_id: str,
+        *,
+        decision_as_of_trade_date: date,
+        target_trade_date: date,
+        data_source: str = "DB_HISTORICAL",
+    ) -> tuple[AdvisoryProgram, AdvisoryStrategyBindingVersion, SelectionRun, dict[str, Any]]:
+        program = self.repository.get_program(program_id)
+        binding = self._ensure_active_binding(program)
+        bound_program = _program_with_binding(program, binding)
+        self._require_native_package_config(
+            package_mode=bound_program.package_mode,
+            package_ids=bound_program.package_ids,
+            operation="prepare_forward_selection",
+        )
+        config = self._with_advisory_date_context(
+            binding.runtime_config_json,
+            target_trade_date=target_trade_date,
+            selection_as_of_trade_date=decision_as_of_trade_date,
+        )
+        run = self._selection_run_for_review(
+            program=bound_program,
+            trade_date=target_trade_date,
+            selection_run_id=None,
+            data_source=data_source,
+            runtime_config=config,
+        )
+        return bound_program, binding, run, config
+
+    def evaluate_forward_settlement(
+        self,
+        *,
+        program: AdvisoryProgram,
+        target_trade_date: date,
+        candidates: list[AdvisoryCandidate],
+        market_by_symbol: Mapping[str, AdvisoryMarketMark],
+        active_episodes: list[AdvisoryEpisode],
+    ) -> AdvisoryReviewResult:
+        return self._evaluate_review(
+            program=program,
+            trade_date=target_trade_date,
+            candidates=candidates,
+            market_by_symbol=market_by_symbol,
+            active_episodes=active_episodes,
+            preview=False,
+            episode_identity_allocator=lambda candidate: _forward_episode_id(
+                program_id=program.program_id,
+                target_trade_date=target_trade_date,
+                symbol=candidate.symbol,
+            ),
+        )
+
+    def active_episode_objects(self, program_id: str) -> list[AdvisoryEpisode]:
+        return self.repository.active_episodes(program_id)
+
+    def load_forward_market_marks(
+        self,
+        *,
+        symbols: list[str],
+        target_trade_date: date,
+    ) -> dict[str, AdvisoryMarketMark]:
+        refresh_audit = getattr(self.selection_service, "refresh_audit", None)
+        require_success = getattr(refresh_audit, "require_success", None)
+        if not callable(require_success):
+            raise DataUnavailableError(
+                "target-open settlement requires the local suspend_d refresh audit",
+                context={"trade_date": target_trade_date.isoformat()},
+            )
+        require_success(dataset="suspend_d", trade_date=target_trade_date)
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if conn_factory is None:
+            raise DataUnavailableError(
+                "target-open settlement requires the Advisory PostgreSQL repository",
+                context={"trade_date": target_trade_date.isoformat()},
+            )
+        normalized = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+        if not normalized:
+            return {}
+        with conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        TRIM(k.ts_code) AS symbol,
+                        k.open_li,
+                        k.close_li,
+                        EXISTS (
+                            SELECT 1
+                            FROM market.suspend_d sd
+                            WHERE sd.trade_date = k.trade_date
+                              AND TRIM(sd.ts_code) = TRIM(k.ts_code)
+                              AND COALESCE(TRIM(sd.suspend_type), 'S') = 'S'
+                        ) AS suspended
+                    FROM market.kline_daily_raw k
+                    WHERE k.trade_date = %s
+                      AND TRIM(k.ts_code) = ANY(%s)
+                    """,
+                    (target_trade_date, normalized),
+                )
+                rows = cur.fetchall()
+        marks: dict[str, AdvisoryMarketMark] = {}
+        for row in rows:
+            symbol = str(row["symbol"]).strip().upper()
+            close_price = _li_price(row.get("close_li"))
+            marks[symbol] = AdvisoryMarketMark(
+                symbol=symbol,
+                trade_date=target_trade_date,
+                mark_price=close_price,
+                signal_close=close_price,
+                next_open_executable=_li_price(row.get("open_li")),
+                next_close=close_price,
+                suspended=bool(row.get("suspended")),
+                price_quality_status="SUSPENDED" if row.get("suspended") else "OK",
+            )
+        return marks
+
     def _episodes_for_metrics(self, program: AdvisoryProgram) -> list[AdvisoryEpisode]:
         episodes = self.repository.all_latest_episodes(program.program_id)
         return self._with_latest_open_episode_metric_marks(program, episodes)
@@ -2658,6 +2775,7 @@ class AdvisoryProgramService:
         market_by_symbol: Mapping[str, AdvisoryMarketMark],
         active_episodes: list[AdvisoryEpisode],
         preview: bool,
+        episode_identity_allocator: Callable[[AdvisoryTransitionCandidateV1], str] | None = None,
     ) -> AdvisoryReviewResult:
         """Project current Advisory inputs through the shared lifecycle engine.
 
@@ -2749,7 +2867,7 @@ class AdvisoryProgramService:
                 observed_max_selection_rank=max((item.rank for item in candidates), default=0),
                 active_rank_by_symbol={item.symbol: evidence_by_symbol[item.symbol].rank for item in active_episodes},
             ),
-            episode_identity_allocator=lambda _candidate: f"advep_{uuid4().hex}",
+            episode_identity_allocator=episode_identity_allocator or (lambda _candidate: f"advep_{uuid4().hex}"),
             effective_entry_date=lambda candidate: self._effective_trade_date(
                 trade_date,
                 program.entry_price_basis,
@@ -3678,6 +3796,11 @@ def _li_price(value: Any) -> float | None:
     if parsed is None or parsed <= 0:
         return None
     return parsed / MARKET_PRICE_UNIT_DIVISOR
+
+
+def _forward_episode_id(*, program_id: str, target_trade_date: date, symbol: str) -> str:
+    payload = "\x1f".join((program_id, target_trade_date.isoformat(), symbol.strip().upper()))
+    return f"advep_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]}"
 
 
 def _episode_exited(

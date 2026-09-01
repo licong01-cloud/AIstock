@@ -99,7 +99,7 @@ def test_running_multi_alpha_resumes_pending_node_before_status_poll(
         return {"status": "running"}
 
     monkeypatch.setattr(quantevolver, "_run_multi_alpha_experiment", resume_multi)
-    monkeypatch.setattr(quantevolver, "get_experiment_run_status", status)
+    monkeypatch.setattr(quantevolver, "reconcile_experiment_run_status", status)
 
     stats = asyncio.run(scanner.scan_once())
 
@@ -107,3 +107,59 @@ def test_running_multi_alpha_resumes_pending_node_before_status_poll(
     assert stats["capacity_resubmitted"] == 1
     assert stats["still_running"] == 1
     assert stats["errors"] == 0
+
+
+@pytest.mark.parametrize("alpha_mode", ["single", "multi"])
+def test_run_status_get_is_persisted_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    alpha_mode: str,
+) -> None:
+    statements: list[str] = []
+
+    class Cursor:
+        description = [
+            ("status",),
+            ("qe_task_id",),
+            ("qe_loop_id",),
+            ("result_metrics",),
+            ("alpha_mode",),
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql: str, _params=None) -> None:
+            statements.append(" ".join(sql.split()))
+
+        def fetchone(self):
+            return ("running", "task-1", "Loop1", {}, alpha_mode)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr(quantevolver, "get_conn", lambda: Connection())
+    monkeypatch.setattr(
+        quantevolver,
+        "_load_multi_alpha_status_payload",
+        lambda *_args: {
+            "stage": "running",
+            "artifact_status": "pending",
+        },
+    )
+
+    result = asyncio.run(quantevolver.get_experiment_run_status("exp-1"))
+
+    assert result["status"] == "running"
+    assert result["status_source"] == "persisted"
+    assert len(statements) == 1
+    assert statements[0].startswith("SELECT ")

@@ -75,7 +75,11 @@ def _label(_run_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _request(tmp_path: Path):
+def _request(
+    tmp_path: Path,
+    *,
+    remote_artifact_store_root: str = "/remote/artifacts",
+):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     conf = {
@@ -83,8 +87,19 @@ def _request(tmp_path: Path):
             "strategy": {
                 "class": "ScoreWeightedTopkStrategyV2",
                 "kwargs": {"topk": 20, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
             }
-        }
+        },
     }
     (runtime / "conf.yaml").write_text(
         yaml.safe_dump(conf, sort_keys=False),
@@ -108,7 +123,7 @@ def _request(tmp_path: Path):
                 "node_id": "wsl2-5080",
                 "node_parallelism": {"wsl2-5080": 2},
                 "runtime_template_dir": str(runtime),
-                "remote_artifact_store_root": "/remote/artifacts",
+                "remote_artifact_store_root": remote_artifact_store_root,
             },
             "baseline_leg_id": "leg_a",
             "topk": 1,
@@ -181,8 +196,9 @@ class _Repository:
 
 
 class _ArtifactClient:
-    def __init__(self) -> None:
+    def __init__(self, *, artifact_store_root: str = "/remote/artifacts") -> None:
         self.paths: list[Path] = []
+        self.artifact_store_root = artifact_store_root
 
     def ensure_artifact(self, path: Path, *, node_id: str) -> dict[str, Any]:
         self.paths.append(path)
@@ -197,7 +213,7 @@ class _ArtifactClient:
             "status": {
                 "exists": True,
                 "size": path.stat().st_size,
-                "artifact_store_root": "/remote/artifacts",
+                "artifact_store_root": self.artifact_store_root,
             },
         }
 
@@ -250,8 +266,30 @@ class _WorkspaceClient:
                 "max_drawdown": -0.1,
                 "sharpe": 2.0,
                 "calmar": 5.0,
+                "n_trading_days": 2,
             },
             "summary": {"Rank IC": 0.08},
+            "return_curves": {"dates": ["2026-01-03", "2026-01-04"]},
+        }
+
+
+class _MismatchedWindowWorkspaceClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        return None
+
+    async def get_workspace_file(self, _task_id: str, _loop_id: str, _path: str) -> dict[str, Any]:
+        return {
+            "absolute_returns": {
+                "cagr": 0.5,
+                "max_drawdown": -0.1,
+                "sharpe": 2.0,
+                "calmar": 5.0,
+            },
+            "summary": {"Rank IC": 0.08},
+            "return_curves": {"dates": ["2026-01-04"]},
         }
 
 
@@ -305,12 +343,19 @@ class _SubmissionCoordinator:
         )
 
 
-def _adapter(tmp_path: Path):
-    request = _request(tmp_path)
+def _adapter(
+    tmp_path: Path,
+    *,
+    artifact_store_root: str = "/remote/artifacts",
+):
+    request = _request(
+        tmp_path,
+        remote_artifact_store_root=artifact_store_root,
+    )
     repository = _Repository(request)
     predictions = {"a1": _prediction(0.0), "b1": _prediction(0.5)}
     used_nodes: list[str] = []
-    artifact_client = _ArtifactClient()
+    artifact_client = _ArtifactClient(artifact_store_root=artifact_store_root)
     coordinator = _SubmissionCoordinator()
     adapter = QEWorkspacePredBacktestAdapter(
         repository=repository,  # type: ignore[arg-type]
@@ -476,6 +521,21 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert set(materialized.weights) == {"leg_a", "leg_b"}
     assert published.prediction_path.exists()
     assert (published.workspace / "conf.yaml").exists()
+    effective_conf = yaml.safe_load((published.workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert effective_conf["port_analysis_config"]["backtest"]["start_time"] == "2026-01-02"
+    assert effective_conf["port_analysis_config"]["backtest"]["end_time"] == "2026-01-04"
+    assert effective_conf["task"]["dataset"]["kwargs"]["segments"]["test"] == [
+        "2026-01-02",
+        "2026-01-04",
+    ]
+    materialization = json.loads((published.workspace / "materialization.json").read_text(encoding="utf-8"))
+    assert materialization["prediction_window"] == {
+        "requested_start": "2026-01-02",
+        "requested_end": "2026-01-04",
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
     assert published.artifact_manifest["schema_version"] == "multi_alpha_child_artifact_manifest_v1"
     assert published.artifact_manifest["l2_artifact"]["path"] == "combined_factors_df.parquet"
     assert replay.artifact_manifest == published.artifact_manifest
@@ -800,7 +860,12 @@ def test_published_manifest_rejects_path_escape_before_reading_external_file(
     assert caught.value.reason_code == "multi_alpha_artifact_manifest_invalid"
 
 
-def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp_path: Path) -> None:
+def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
     adapter, repository, coordinator, artifact_client, used_nodes = _adapter(tmp_path)
     materialized = adapter.materialize_child_input(
         run_id=RUN_ID,
@@ -939,6 +1004,59 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
     assert collected.result_manifest["remote_runtime_artifact_bindings"] == bindings
 
 
+def test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    artifact_store_root = "/mnt/f/Dev/RD-Agent-state/artifact_cas"
+    adapter, repository, coordinator, artifact_client, _used_nodes = _adapter(
+        tmp_path,
+        artifact_store_root=artifact_store_root,
+    )
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    nested_runtime = published.workspace / "aistock_models" / "__init__.py"
+    nested_runtime.parent.mkdir()
+    nested_runtime.write_bytes(b"r" * 578)
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="wsl2-5080",
+    )
+    token = OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=1)
+
+    outcome = asyncio.run(
+        adapter.submit(
+            artifacts=published,
+            intent=intent,
+            attempt_token=token,
+        )
+    )
+
+    expected_sha = _sha256(nested_runtime)
+    expected_remote_path = f"{artifact_store_root}/{expected_sha}"
+    payload = coordinator.calls[0]["payload"]
+    binding = next(
+        item
+        for item in payload.config["runtime_artifact_bindings"]
+        if item["name"] == "aistock_models/__init__.py"
+    )
+    assert outcome.state == "submitted"
+    assert artifact_client.paths[-1] == nested_runtime
+    assert binding["remote_path"] == expected_remote_path
+    assert expected_remote_path in payload.wsl_command
+    assert payload.wsl_command.index("set +u") < payload.wsl_command.index("conda activate")
+    assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("set -u")
+    assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("python -c")
+
+
 def test_submission_intent_is_deterministic_and_attempt_scoped(tmp_path: Path) -> None:
     adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
     first = adapter.prepare_submission_intent(
@@ -1005,6 +1123,18 @@ def test_collect_result_persists_hash_linked_manifest_idempotently(tmp_path: Pat
     assert first.result_manifest == second.result_manifest
     assert first.result_manifest["completed_after_deadline"] is True
     assert first.result_manifest["execution_deadline"] == deadline_evidence
+    assert first.result_manifest["prediction_window"] == {
+        "requested_start": "2026-01-02",
+        "requested_end": "2026-01-04",
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
+    assert first.result_manifest["result_window"] == {
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
     assert first.result_manifest_path.exists()
     assert json.loads(first.result_manifest_path.read_text(encoding="utf-8")) == first.result_manifest
 
@@ -1033,6 +1163,33 @@ def test_collect_result_distinguishes_not_visible_from_invalid_content(tmp_path:
     with pytest.raises(DurableExecutionAdapterError) as invalid:
         asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
     assert invalid.value.reason_code == "multi_alpha_child_result_invalid"
+
+
+def test_collect_result_rejects_success_payload_outside_materialized_prediction_window(tmp_path: Path) -> None:
+    adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="wsl2-5080",
+    )
+    adapter._workspace_client_factory = lambda _node_id: _MismatchedWindowWorkspaceClient()
+
+    with pytest.raises(DurableExecutionAdapterError) as mismatch:
+        asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
+
+    assert mismatch.value.reason_code == "multi_alpha_result_window_mismatch"
+    assert mismatch.value.context["mismatches"] == {
+        "effective_start": {"expected": "2026-01-03", "observed": "2026-01-04"},
+        "trading_date_count": {"expected": 2, "observed": 1},
+    }
+    assert not (published.workspace / "qlib_results_enhanced.json").exists()
 
 
 def test_inspect_remote_returns_receipt_and_status_without_fallback(tmp_path: Path) -> None:

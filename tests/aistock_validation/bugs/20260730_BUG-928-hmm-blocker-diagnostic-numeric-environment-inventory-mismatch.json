@@ -1,0 +1,216 @@
+{
+  "actual": "The first child completed 174 fits, then the parent failed with blocker diagnostic child numeric environment identity is invalid because the loaded-library inventory expanded after HMM execution.",
+  "allowed_write_scope": [
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "tests/aistock_validation/bugs/20260730_BUG-928-hmm-blocker-diagnostic-numeric-environment-inventory-mismatch.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-928",
+  "closed_at": "2026-07-30T15:39:18.912720Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-30T06:53:33.184950Z",
+  "description": "The first child completed 174 fits, then the parent failed with blocker diagnostic child numeric environment identity is invalid because the loaded-library inventory expanded after HMM execution.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260730-17b03e57f8bd",
+      "timestamp": "2026-07-30T06:53:33.184942Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_artifacts\\hmm_risk\\b3_blocker_diag01_20260730_3a1c8d33\\blocker_diagnostic.json#canonical_sha256=cab37043d67b0ec0d75b72be9ba324a29a02b6d314f24a57c614147b4acd3920"
+  ],
+  "expected": "Validate stable Python/package/executable/thread environment identity and require every reported child thread pool to be single-thread; retain exact full-payload equality between the two fresh-process children.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ]
+  },
+  "first_seen_at": "2026-07-30T06:53:33.184950Z",
+  "fix_branch": null,
+  "fix_commit": "efe38e9f9fe34718db6db4140bbc19c77b5716bc",
+  "fixed_at": "2026-07-30T15:39:18.912733Z",
+  "github_issue_number": 2944,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2944",
+  "last_seen_at": "2026-07-30T06:53:33.184950Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2948",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "conda run -n AIstock python scripts/hmm_risk/prepare_state_model_set.py --request <frozen-request> --b3-formal-report <formal-report> --b3-blocker-diagnostic-output <new-output>",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM blocker diagnostic numeric environment inventory mismatch",
+  "trigger_condition": {
+    "fingerprint": "17b03e57f8bd7f85a0746c7c",
+    "source_event_id": "FE-20260730-17b03e57f8bd"
+  },
+  "validation_evidence": [
+    "PR #2948 CI -> 16 passed, 0 failed",
+    "python -m pytest backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider -> 38 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

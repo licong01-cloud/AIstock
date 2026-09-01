@@ -19,12 +19,35 @@ from backend.services.advisory_historical_range.models import (
     normalize_hmm_binding_metadata,
 )
 from backend.services.strategy_package.advisory_input_projection import (
+    CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH,
     HISTORICAL_RANGE_QUERY_CONTRACT_HASH,
+    SELECTION_PIT_UNIVERSE_KEY,
 )
 from backend.services.strategy_package.selection_computation import parse_selection_runtime_profile_for_computation
 
 
 _QUERY_VERSION = "v1"
+
+
+def _program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
+    binding = program.admitted_package_projection.canonical_pit_binding
+    if binding is None:
+        return SELECTION_PIT_UNIVERSE_KEY
+    return binding.frozen_universe_key
+
+
+def _query_contract_hash(frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...]) -> str:
+    canonical_flags = {
+        program.admitted_package_projection.canonical_pit_binding is not None
+        for program in frozen_programs
+    }
+    if len(canonical_flags) != 1:
+        raise ValueError("historical range batch cannot mix legacy reproduction and canonical v2 packages")
+    return (
+        CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH
+        if True in canonical_flags
+        else HISTORICAL_RANGE_QUERY_CONTRACT_HASH
+    )
 
 
 class HistoricalRangeSourceRequirementPlanner:
@@ -87,21 +110,6 @@ class HistoricalRangeSourceRequirementPlanner:
                 for window in component.day_windows
                 if window.decision_trade_date == trade_date
             )
-            universe_id = self._add(
-                requirements,
-                source_role="pit_universe",
-                dataset_id="market.stock_universe_pit",
-                query_template_id="historical_pit_universe_existing_readonly",
-                parameters={
-                    "trade_date": date_text,
-                    "universe_key": "shsz_st_pit_active_v1",
-                    "ensure": False,
-                },
-                partition_ref=f"shsz_st_pit_active_v1:{date_text}",
-                required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
-                missing_reason_code="ADVISORY_HR_PIT_UNIVERSE_UNAVAILABLE",
-                decision_trade_date=trade_date,
-            )
             calendar_id = self._add(
                 requirements,
                 source_role="trading_calendar",
@@ -136,22 +144,46 @@ class HistoricalRangeSourceRequirementPlanner:
                 decision_trade_date=trade_date,
                 dependencies=(calendar_id,),
             )
-            self._add(
-                requirements,
-                source_role="decision_mark_market_state",
-                dataset_id="market.decision_mark_market_state",
-                query_template_id="historical_decision_mark_market_state",
-                parameters={
-                    "trade_date": date_text,
-                    "state_fields": ("suspend", "listing", "delist", "st", "pit_universe"),
-                },
-                partition_ref=f"decision-mark-market-state:{date_text}",
-                required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
-                missing_reason_code="ADVISORY_HR_DECISION_MARK_STATE_UNAVAILABLE",
-                decision_trade_date=trade_date,
-                dependencies=(calendar_id,),
-            )
             for program in frozen_programs:
+                pit_universe_key = _program_pit_universe_key(program)
+                universe_id = self._add(
+                    requirements,
+                    source_role="pit_universe",
+                    dataset_id="market.stock_universe_pit",
+                    query_template_id="historical_pit_universe_existing_readonly",
+                    parameters={
+                        "trade_date": date_text,
+                        "universe_key": pit_universe_key,
+                        "ensure": False,
+                    },
+                    partition_ref=f"{pit_universe_key}:{date_text}",
+                    required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
+                    missing_reason_code="ADVISORY_HR_PIT_UNIVERSE_UNAVAILABLE",
+                    decision_trade_date=trade_date,
+                )
+                self._add(
+                    requirements,
+                    source_role="decision_mark_market_state",
+                    dataset_id="market.decision_mark_market_state",
+                    query_template_id="historical_decision_mark_market_state",
+                    parameters={
+                        "trade_date": date_text,
+                        "universe_key": pit_universe_key,
+                        "state_fields": ("suspend", "listing", "delist", "st", "pit_universe"),
+                    },
+                    partition_ref=(
+                        f"decision-mark-market-state:{pit_universe_key}:{date_text}"
+                    ),
+                    required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
+                    missing_reason_code="ADVISORY_HR_DECISION_MARK_STATE_UNAVAILABLE",
+                    package_id=(
+                        program.package_id
+                        if program.admitted_package_projection.canonical_pit_binding is not None
+                        else None
+                    ),
+                    decision_trade_date=trade_date,
+                    dependencies=(calendar_id, universe_id),
+                )
                 runtime_profile = parse_selection_runtime_profile_for_computation(program.runtime_config)
                 provider_dependencies = (universe_id, calendar_id, package_requirement_ids[program.package_id])
                 if runtime_profile.risk_policy.enabled and "st_pit" in runtime_profile.risk_policy.providers:
@@ -249,7 +281,7 @@ class HistoricalRangeSourceRequirementPlanner:
                     common = {
                         "start_date": start_date.isoformat(),
                         "trade_date": date_text,
-                        "universe_key": "shsz_st_pit_active_v1",
+                        "universe_key": pit_universe_key,
                         "factor_order_hash": canonical_json_sha256(list(component.factor_order)),
                         "lookback_contract_hash": component.lookback_contract_hash,
                         "required_window": component.required_window,
@@ -296,12 +328,11 @@ class HistoricalRangeSourceRequirementPlanner:
             request=request,
             date_plan=date_plan,
             frozen_programs=frozen_programs,
-            query_contract_hash=HISTORICAL_RANGE_QUERY_CONTRACT_HASH,
+            query_contract_hash=_query_contract_hash(frozen_programs),
             calendar_identity_hash=calendar_identity_hash,
             code_release_hash=code_release_hash,
             requirements=tuple(requirements.values()),
         )
-
     @staticmethod
     def _add(
         requirements: dict[str, HistoricalRangeSourceRequirementV1],

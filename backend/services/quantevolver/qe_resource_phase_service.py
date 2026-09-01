@@ -356,6 +356,15 @@ class QEResourcePhaseService:
                     ),
                 )
             conn.commit()
+        from .qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.RESOURCE_SESSION,
+            key=session_id,
+        )
         return ResourceSessionSecret(
             session_id=session_id,
             source_run_key=source_run_key,
@@ -375,7 +384,8 @@ class QEResourcePhaseService:
                     """,
                     (session_id,),
                 )
-                if cur.rowcount != 1:
+                changed = cur.rowcount == 1
+                if not changed:
                     cur.execute(
                         "SELECT status FROM qe_archive.run_resource_session WHERE session_id = %s",
                         (session_id,),
@@ -384,6 +394,16 @@ class QEResourcePhaseService:
                     if not row or row[0] not in {"running", "completed", "failed", "cancelled"}:
                         raise QEResourcePhaseError(PHASE_INVALID_REASON, f"session {session_id} is not reserved")
             conn.commit()
+        if changed:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=session_id,
+            )
 
     def mark_session_terminal(self, session_id: str, *, status: str, reason_code: str | None = None) -> None:
         normalized = "cancelled" if status in {"cancelled", "canceled"} else status
@@ -409,10 +429,38 @@ class QEResourcePhaseService:
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
                     WHERE session_id = %s
+                      AND (
+                          status NOT IN ('completed', 'failed', 'cancelled')
+                          OR current_phase NOT IN ('completed', 'failed', 'cancelled')
+                          OR completed_at IS NULL
+                      )
                     """,
                     (normalized, normalized, reason_code, session_id),
                 )
+                changed = cur.rowcount == 1
+                if not changed:
+                    cur.execute(
+                        "SELECT status FROM qe_archive.run_resource_session WHERE session_id = %s",
+                        (session_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row or row[0] not in TERMINAL_PHASES:
+                        raise QEResourcePhaseError(
+                            PHASE_INVALID_REASON,
+                            f"session {session_id} could not be marked terminal",
+                        )
             conn.commit()
+        if changed:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=session_id,
+                force=True,
+            )
 
     def has_unreleased_gpu_session(
         self,

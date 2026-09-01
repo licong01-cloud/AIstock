@@ -6,27 +6,25 @@ import type { ReactNode } from "react";
 import "./paper-v2.css";
 
 const TABS = [
-  { href: "/paper-v2", label: "总览", exact: true },
+  { href: "/simulation/localsim", label: "LocalSIM", exact: false },
   { href: "/paper-v2/packages", label: "策略包", exact: false },
   { href: "/paper-v2/selection", label: "选股中心", exact: false },
   { href: "/paper-v2/advisory", label: "荐股中心", exact: false },
-  { href: "/paper-v2/running", label: "运行监控", exact: false },
-  { href: "/paper-v2/simulation-runtime", label: "统一运行态", exact: false },
-  { href: "/paper-v2/portfolios", label: "模拟盘实例", exact: false },
   { href: "/paper-v2/miniqmt-sim", label: "MiniQMT", exact: false },
   { href: "/paper-v2/model-hmm", label: "模型与 HMM", exact: false },
 ];
 
 export default function PaperV2Layout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const advisoryRoute = pathname === "/paper-v2/advisory" || pathname?.startsWith("/paper-v2/advisory/");
   return (
-    <div className="pv2-shell">
+    <div className={`pv2-shell ${advisoryRoute ? "pv2-shell-advisory" : ""}`}>
       <header className="pv2-hero">
         <div className="pv2-hero-top">
           <div>
             <div className="pv2-kicker">StrategyPackage 权威入口</div>
-            <h1>模拟盘 v2</h1>
-            <p>基于策略包的分钟级模拟盘控制台，覆盖就绪检查、订单、成交、账本、历史回放、MiniQMT 权威撮合和模型维护。</p>
+            <h1>策略包与交易应用</h1>
+            <p>策略包、选股、荐股、MiniQMT 与模型维护入口；LocalSIM 已迁移到独立的统一运行时产品。</p>
           </div>
           <div className="pv2-chip-row">
             <span className="pv2-chip">禁止静默兜底</span>

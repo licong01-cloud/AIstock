@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 
 import pytest
 
 from backend.services.paper_trading_v2.live_session import PaperTradingLiveMinuteExecutor
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
+from backend.services.simulation_data.contracts import MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.models import (
     OrderExecutionState,
     PaperDayRunResult,
@@ -21,15 +22,32 @@ from backend.services.paper_trading_v2.models import (
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
+from backend.services.selection_center.canonical_pit_runtime import (
+    CanonicalPitGenerationDriftError,
+    migrate_runtime_config_to_canonical_pointer,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import BrokerConnectivityError, DataUnavailableError, InvalidStateTransitionError
-from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, OrderStatus, PositionLot, RunStatus
+from backend.services.trading_core.errors import (
+    BrokerConnectivityError,
+    DataUnavailableError,
+    InvalidStateTransitionError,
+)
+from backend.services.trading_core.models import (
+    AccountSnapshot,
+    MinuteBar,
+    OrderIntent,
+    OrderSide,
+    OrderStatus,
+    PositionLot,
+    RunStatus,
+)
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.paper_trading_v2.test_day_runner import ActiveCanonicalPitResolver, DriftingCanonicalPitResolver
 
 
 class FakeCalendar:
@@ -115,7 +133,6 @@ class FakeLiveMarket:
         source,
         until_time,
         require_suspend_status=False,
-        require_day_features=False,
     ):
         observed = [bar for bar in self.bars if bar.symbol == symbol and bar.bar_time <= until_time]
         return MinuteExecutionMarketInput(
@@ -161,7 +178,6 @@ class FakeTdxFetchFailureMarket:
         source,
         until_time,
         require_suspend_status=False,
-        require_day_features=False,
     ):
         self._raise(symbol, trade_date)
 
@@ -178,7 +194,9 @@ class ExplodingLiveMarket:
 
 
 class FakeTradabilityFilter:
-    def filter_candidates(self, *, candidates, trade_date, top_k, package_id, manifest_sha256, enabled=True, industry_blacklist=None):
+    def filter_candidates(
+        self, *, candidates, trade_date, top_k, package_id, manifest_sha256, enabled=True, industry_blacklist=None
+    ):
         return candidates[:top_k], []
 
 
@@ -218,7 +236,9 @@ class FakeNoCandidateRuntime:
 
 
 class FakeTargetEngine:
-    def build_targets(self, *, snapshot, total_equity, top_k, manifest=None, current_positions=None, current_prices=None):
+    def build_targets(
+        self, *, snapshot, total_equity, top_k, manifest=None, current_positions=None, current_prices=None
+    ):
         from backend.services.selection_center.models import TargetPosition
 
         candidate = snapshot.candidates[0]
@@ -244,10 +264,14 @@ class FakeRiskPolicyService:
     def evaluate(self, *, symbols, trade_date, profile, current_positions):
         return {}
 
-    def apply_to_candidates(self, *, candidates, decisions, trade_date, top_k, package_id, manifest_sha256, allow_empty=False):
+    def apply_to_candidates(
+        self, *, candidates, decisions, trade_date, top_k, package_id, manifest_sha256, allow_empty=False
+    ):
         return candidates, []
 
-    def forced_exit_targets(self, *, decisions, current_positions, trade_date, package_id, manifest_sha256, existing_target_symbols):
+    def forced_exit_targets(
+        self, *, decisions, current_positions, trade_date, package_id, manifest_sha256, existing_target_symbols
+    ):
         return []
 
 
@@ -419,14 +443,18 @@ def make_portfolio_repo(
         start_date=date(2024, 1, 2),
         data_source=data_source,
         broker_backend=broker_backend,
-        execution_policy={"validated_execution_policy_id": StrategyPackageService(repository=package_repo).create_execution_policy(
-            package_id=manifest.package_id,
-            policy_name="live_session_test_policy",
-            policy_json=policy_json,
-            source_backtest_id="bt_live_session_test",
-            source_backtest_status="BACKTEST_VALIDATED",
-            paper_enabled=True,
-        ).policy_id},
+        execution_policy={
+            "validated_execution_policy_id": StrategyPackageService(repository=package_repo)
+            .create_execution_policy(
+                package_id=manifest.package_id,
+                policy_name="live_session_test_policy",
+                policy_json=policy_json,
+                source_backtest_id="bt_live_session_test",
+                source_backtest_status="BACKTEST_VALIDATED",
+                paper_enabled=True,
+            )
+            .policy_id
+        },
     )
     return paper_repo, portfolio.portfolio_id
 
@@ -447,6 +475,79 @@ def make_bars() -> list[MinuteBar]:
         )
         for i in range(2)
     ]
+
+
+def test_live_tick_stops_before_fill_persistence_when_canonical_pit_generation_drifts() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    admission_resolver = ActiveCanonicalPitResolver(generation=1)
+    pointer_config = migrate_runtime_config_to_canonical_pointer(
+        {
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        }
+    )
+    session = PaperTradingSessionService(
+        repository=paper_repo,
+        pit_authority_resolver=admission_resolver,
+    ).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config=pointer_config,
+    )
+    run_config = deepcopy(session.runtime_config)
+    run_config["validated_execution_policy"] = {
+        "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 2, "allow_partial_fill": True}},
+    }
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config=run_config,
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 2),
+        )
+    )
+    paper_repo.save_order(run.run_id, order)
+    initial_state = paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            status=order.status.value,
+        )
+    )
+    resolver = DriftingCanonicalPitResolver(drift_on_call=3)
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(make_bars()),
+        pit_authority_resolver=resolver,
+    )
+
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        live_executor.tick(session, as_of_time=datetime(2024, 1, 2, 9, 31))
+
+    assert paper_repo.list_fills_for_run(run.run_id) == []
+    assert paper_repo.cash_entries.get(run.run_id, []) == []
+    persisted_state = paper_repo.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)[0]
+    assert persisted_state == initial_state
 
 
 def test_live_session_tick_processes_new_minute_bar_once() -> None:
@@ -600,16 +701,20 @@ def test_live_day_with_terminal_orders_and_zero_fills_succeeds_as_no_trade() -> 
             },
         )
     )
-    order = OMS().create_order(
-        OrderIntent(
-            package_id="pkg_test",
-            portfolio_id=portfolio_id,
-            symbol="000001.SZ",
-            side=OrderSide.BUY,
-            quantity=100,
-            target_trade_date=run.trade_date,
+    order = (
+        OMS()
+        .create_order(
+            OrderIntent(
+                package_id="pkg_test",
+                portfolio_id=portfolio_id,
+                symbol="000001.SZ",
+                side=OrderSide.BUY,
+                quantity=100,
+                target_trade_date=run.trade_date,
+            )
         )
-    ).model_copy(update={"status": OrderStatus.CANCELLED})
+        .model_copy(update={"status": OrderStatus.CANCELLED})
+    )
     paper_repo.save_order(run.run_id, order)
     paper_repo.save_order_execution_state(
         OrderExecutionState(
@@ -893,7 +998,9 @@ def test_minqmt_live_session_throttles_repeated_platform_data_live_inference_ret
     assert event_types.count("MINIQMT_LIVE_WAITING_PLATFORM_DATA") == 1
     assert event_types.count("MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED") == 1
     wait_event = next(event for event in events if event["event_type"] == "MINIQMT_LIVE_WAITING_PLATFORM_DATA")
-    throttle_event = next(event for event in events if event["event_type"] == "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED")
+    throttle_event = next(
+        event for event in events if event["event_type"] == "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED"
+    )
     assert wait_event["context"]["platform_data_retry"]["sql_storm_guard"] is True
     assert throttle_event["context"]["platform_data_retry"]["retry_allowed"] is False
 
@@ -1109,7 +1216,11 @@ def test_minqmt_live_session_resets_stale_empty_running_run_before_cutoff() -> N
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY
     event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
     assert "MINIQMT_LIVE_STALE_EMPTY_RUN_RESET" in event_types
-    reset_event = next(event for event in paper_repo.list_session_events(session.session_id) if event["event_type"] == "MINIQMT_LIVE_STALE_EMPTY_RUN_RESET")
+    reset_event = next(
+        event
+        for event in paper_repo.list_session_events(session.session_id)
+        if event["event_type"] == "MINIQMT_LIVE_STALE_EMPTY_RUN_RESET"
+    )
     assert reset_event["context"]["run_id"] == stale_run.run_id
     assert reset_event["context"]["reset_counts"]["run"] == 1
 
@@ -1421,10 +1532,7 @@ def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar(
             status=order.status.value,
         )
     )
-    bars = [
-        bar.model_copy(update={"bar_time": datetime(2024, 1, 4, 9, 31)})
-        for bar in make_bars()[:1]
-    ]
+    bars = [bar.model_copy(update={"bar_time": datetime(2024, 1, 4, 9, 31)}) for bar in make_bars()[:1]]
     replay = FakeReplayService()
     live_executor = PaperTradingLiveMinuteExecutor(
         repository=paper_repo,
@@ -1450,6 +1558,7 @@ def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar(
     assert live_days[-1].last_processed_bar_time == datetime(2024, 1, 4, 9, 31)
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
     assert len(fills) == 1
+
 
 def test_live_prepare_seeds_order_cursor_after_existing_completed_bars() -> None:
     paper_repo, portfolio_id = make_portfolio_repo()
@@ -1542,7 +1651,9 @@ def test_live_tick_never_backfills_prepared_order_with_existing_bars() -> None:
     assert len(fills) == 1
     assert fills[0]["trade_time"] == "2024-01-02T09:40:00"
     state = paper_repo.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)[0]
-    assert datetime.fromisoformat(fills[0]["trade_time"]) > datetime.fromisoformat(state.algo_state["strict_live_start_bar_time"])
+    assert datetime.fromisoformat(fills[0]["trade_time"]) > datetime.fromisoformat(
+        state.algo_state["strict_live_start_bar_time"]
+    )
     assert all(datetime.fromisoformat(fill["trade_time"]).minute >= 40 for fill in fills)
 
 
@@ -1568,16 +1679,20 @@ def test_live_mark_to_market_continues_after_orders_filled() -> None:
             },
         )
     )
-    order = OMS().create_order(
-        OrderIntent(
-            package_id="pkg_test",
-            portfolio_id=portfolio_id,
-            symbol="000001.SZ",
-            side=OrderSide.BUY,
-            quantity=600,
-            target_trade_date=date(2024, 1, 2),
+    order = (
+        OMS()
+        .create_order(
+            OrderIntent(
+                package_id="pkg_test",
+                portfolio_id=portfolio_id,
+                symbol="000001.SZ",
+                side=OrderSide.BUY,
+                quantity=600,
+                target_trade_date=date(2024, 1, 2),
+            )
         )
-    ).model_copy(update={"status": "FILLED", "filled_quantity": 600, "avg_fill_price": 10.1})
+        .model_copy(update={"status": "FILLED", "filled_quantity": 600, "avg_fill_price": 10.1})
+    )
     paper_repo.save_order(run.run_id, order)
     paper_repo.save_order_execution_state(
         OrderExecutionState(
@@ -1835,7 +1950,10 @@ def test_live_tdx_fetch_failure_after_close_marks_run_failed_before_raise() -> N
     failed_session = paper_repo.get_session(session.session_id)
     assert failed_session.status == PaperSessionStatus.FAILED
     assert failed_session.last_error["context"]["reason_code"] == "PAPER_V2_LIVE_TDX_FETCH_FAILED_AFTER_CLOSE"
-    assert paper_repo.list_run_events(portfolio_id, run_id=run.run_id)[-1]["event_type"] == "LIVE_DATA_FETCH_TERMINAL_AFTER_CLOSE"
+    assert (
+        paper_repo.list_run_events(portfolio_id, run_id=run.run_id)[-1]["event_type"]
+        == "LIVE_DATA_FETCH_TERMINAL_AFTER_CLOSE"
+    )
 
 
 def test_live_finalize_does_not_mark_succeeded_with_open_order() -> None:
@@ -1860,16 +1978,20 @@ def test_live_finalize_does_not_mark_succeeded_with_open_order() -> None:
             },
         )
     )
-    order = OMS().create_order(
-        OrderIntent(
-            package_id="pkg_test",
-            portfolio_id=portfolio_id,
-            symbol="000001.SZ",
-            side=OrderSide.BUY,
-            quantity=600,
-            target_trade_date=date(2024, 1, 2),
+    order = (
+        OMS()
+        .create_order(
+            OrderIntent(
+                package_id="pkg_test",
+                portfolio_id=portfolio_id,
+                symbol="000001.SZ",
+                side=OrderSide.BUY,
+                quantity=600,
+                target_trade_date=date(2024, 1, 2),
+            )
         )
-    ).model_copy(update={"status": OrderStatus.PARTIALLY_FILLED, "filled_quantity": 300, "avg_fill_price": 10.1})
+        .model_copy(update={"status": OrderStatus.PARTIALLY_FILLED, "filled_quantity": 300, "avg_fill_price": 10.1})
+    )
     paper_repo.save_order(run.run_id, order)
     paper_repo.save_order_execution_state(
         OrderExecutionState(

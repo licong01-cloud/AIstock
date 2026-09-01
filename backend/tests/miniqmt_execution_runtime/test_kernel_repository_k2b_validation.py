@@ -178,6 +178,8 @@ def test_k2b_public_entry_guards_fail_before_database_access() -> None:
             creation_authority=_request(),
             bundle_builder=None,
         )
+    assert not hasattr(repository, "initialize_algo_atomic_v2")
+    assert callable(repository.initialize_product_algo_atomic_v3)
     with pytest.raises(TypeError, match="delivery_id"):
         repository.apply_claimed_delivery_atomic(
             delivery_id="",
@@ -197,6 +199,17 @@ def test_k2b_public_entry_guards_fail_before_database_access() -> None:
             expected_lease_epoch=1,
             expected_lease_fence_token="fence",
             bundle_builder=None,
+        )
+    with pytest.raises(TypeError, match="facade_read_request"):
+        repository.apply_claimed_delivery_atomic(
+            delivery_id="delivery_k2b",
+            expected_delivery_row_version=1,
+            expected_algo_row_version=1,
+            expected_lease_owner="worker",
+            expected_lease_epoch=1,
+            expected_lease_fence_token="fence",
+            bundle_builder=lambda *_args: None,
+            facade_read_request=object(),
         )
 
 

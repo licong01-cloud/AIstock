@@ -209,6 +209,26 @@ def _apply_statement_timeout(conn: psycopg2.extensions.connection) -> Optional[i
         return None
 
 
+def _reset_checkout_session(conn: psycopg2.extensions.connection) -> None:
+    """Restore transaction characteristics that pooled borrowers may mutate."""
+
+    try:
+        conn.set_session(
+            isolation_level="READ COMMITTED",
+            readonly=False,
+            deferrable=False,
+        )
+    except Exception as exc:
+        _emit_conn_audit_metric(
+            "session_reset_failed",
+            error=f"{type(exc).__name__}: {exc}",
+            reason_code="AISTOCK_DB_SESSION_RESET_FAILED",
+        )
+        raise RuntimeError(
+            "DB pooled session reset failed; reason_code=AISTOCK_DB_SESSION_RESET_FAILED"
+        ) from exc
+
+
 def init_db_pool(minconn: int = 1, maxconn: int = 10) -> None:
     """Initialize global psycopg2 connection pool for this backend process.
 
@@ -262,24 +282,27 @@ def close_db_pool() -> None:
 
 
 def _prepare_connection(conn: psycopg2.extensions.connection, *, autocommit: bool) -> Optional[int]:
-    """Apply session options outside the caller transaction, then enter the requested mode."""
+    """Sanitize a borrowed session outside a transaction, then enter caller mode."""
 
-    original_autocommit = bool(conn.autocommit)
-    original_status = conn.get_transaction_status()
-    if original_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
-        try:
-            conn.rollback()
-        except Exception:
-            conn.autocommit = original_autocommit
-            raise
-    conn.autocommit = True
     try:
+        original_status = conn.get_transaction_status()
+        if original_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            conn.rollback()
+        conn.autocommit = True
+        _reset_checkout_session(conn)
         statement_timeout_ms = _apply_statement_timeout(conn)
+        conn.autocommit = autocommit
+        return statement_timeout_ms
     except Exception:
-        conn.autocommit = original_autocommit
+        try:
+            conn.close()
+        except Exception as close_exc:
+            logger.warning(
+                "Unsafe DB connection close failed; reason_code=AISTOCK_DB_UNSAFE_CONN_CLOSE_FAILED error=%s",
+                f"{type(close_exc).__name__}: {close_exc}",
+                exc_info=True,
+            )
         raise
-    conn.autocommit = autocommit
-    return statement_timeout_ms
 
 
 def _configure_checkout_connection(
@@ -288,11 +311,8 @@ def _configure_checkout_connection(
     autocommit: bool,
     manage_transaction: bool,
 ) -> Optional[int]:
-    """Keep legacy default checkout behavior; enable transaction prep only on explicit opt-in."""
+    """Sanitize every checkout, including the legacy autocommit default."""
 
-    if autocommit and not manage_transaction:
-        conn.autocommit = True
-        return _apply_statement_timeout(conn)
     return _prepare_connection(conn, autocommit=autocommit)
 
 

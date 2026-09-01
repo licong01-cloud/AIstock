@@ -1,0 +1,2537 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import date, timedelta
+import json
+import struct
+
+import numpy as np
+import pytest
+
+from backend.services.hmm_risk import b3_d1_inactive_dimension as subject
+from backend.services.hmm_risk import b3_training as training_subject
+from backend.services.hmm_risk.b3_training import B3CoreFitEvidence, B3TrainOnlySeries
+from backend.services.hmm_risk.state_model_set import (
+    ALL_CORE_FEATURES,
+    canonical_json_bytes,
+    canonical_sha256,
+    sha256_bytes,
+)
+
+
+def _source_identities(label: str) -> list[dict[str, object]]:
+    return [
+        {
+            "seed": seed,
+            "diagnostic_entry_sha256": canonical_sha256({"label": label, "seed": seed, "kind": "diagnostic"}),
+            "source_entry_receipt_sha256": canonical_sha256({"label": label, "seed": seed, "kind": "source"}),
+        }
+        for seed in range(42, 50)
+    ]
+
+
+def _install_authority(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    treatment = _source_identities("treatment")
+    control = _source_identities("control")
+    monkeypatch.setattr(subject, "TREATMENT_PROFILE_RECEIPT_SHA256", "1" * 64)
+    monkeypatch.setattr(subject, "CONTROL_PROFILE_RECEIPT_SHA256", "2" * 64)
+    monkeypatch.setattr(subject, "TREATMENT_SOURCE_SET_SHA256", canonical_sha256(treatment))
+    monkeypatch.setattr(subject, "CONTROL_SOURCE_SET_SHA256", canonical_sha256(control))
+    monkeypatch.setattr(
+        subject,
+        "TREATMENT_TRAIN_INPUT_MANIFEST_SHA256",
+        canonical_sha256(_series(subject.TREATMENT_SECTOR).train_input_manifest),
+    )
+    monkeypatch.setattr(
+        subject,
+        "CONTROL_TRAIN_INPUT_MANIFEST_SHA256",
+        canonical_sha256(_series(subject.CONTROL_SECTOR, inactive_value=7.0).train_input_manifest),
+    )
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(_preprocess()))
+    monkeypatch.setattr(subject, "FEATURE_DEFINITION_SHA256", "4" * 64)
+    return treatment, control
+
+
+def _series(
+    sector_code: str,
+    *,
+    inactive_value: float = 0.0,
+    mapping_manifest_hash: str | None = None,
+) -> B3TrainOnlySeries:
+    rows = 120
+    observations = np.arange(rows * len(ALL_CORE_FEATURES), dtype=np.float64).reshape(rows, len(ALL_CORE_FEATURES))
+    observations = observations / 1000.0
+    observations[:, subject.INACTIVE_FEATURE_INDEX] = inactive_value
+    dates = tuple(date(2023, 1, 1) + timedelta(days=index) for index in range(rows))
+    date_values = [value.isoformat() for value in dates]
+    manifest = {
+        "schema_version": "hmm_risk_d4_train_frozen_input_manifest_v1",
+        "direct_sector_level": "L2",
+        "sector_code": sector_code,
+        "train_dates": date_values,
+        "train_dates_sha256": canonical_sha256(date_values),
+        "train_observation_sha256": canonical_sha256(observations.tolist()),
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": mapping_manifest_hash or subject.C010_A5_MAPPING_SHA256,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "6" * 64,
+        "feature_domain_policy_sha256": "d" * 64,
+    }
+    return B3TrainOnlySeries(
+        sector_code=sector_code,
+        sector_name=sector_code,
+        train_observations=observations,
+        train_dates=dates,
+        pit_l2_constituents=(sector_code,),
+        pit_constituent_manifest_hash="e" * 64,
+        observation_manifest_hash="f" * 64,
+        train_input_manifest=manifest,
+    )
+
+
+def _preprocess() -> dict[str, object]:
+    return {"family": "identity", "winsor_low": None, "winsor_high": None, "center": None, "scale": None}
+
+
+def _lineage_migration_receipt(
+    *,
+    producer_commit: str = "1" * 40,
+    current: bool = False,
+) -> dict[str, object]:
+    pairs = {
+        label: {
+            "approved_receipt_sha256": canonical_sha256({"label": label, "side": "approved"}),
+            "current_receipt_sha256": canonical_sha256({"label": label, "side": "current"}),
+            "approved_semantic_payload_sha256": canonical_sha256({"label": label, "semantic": True}),
+            "current_semantic_payload_sha256": canonical_sha256({"label": label, "semantic": True}),
+        }
+        for label in ("eligibility", "expected_opportunity", "provider_absence_partition")
+    }
+    body = {
+        "schema_version": subject.C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
+        "producer_commit": producer_commit,
+        "source_a5_report_sha256": (
+            subject.C010_A5_CURRENT_REPORT_SHA256 if current else subject.C010_A5_REPORT_SHA256
+        ),
+        "source_a5_partition_sha256": (
+            subject.C010_A5_CURRENT_PARTITION_SHA256 if current else subject.C010_A5_PARTITION_SHA256
+        ),
+        "status": "accepted",
+        "excluded_non_business_fields": list(subject.C010_A5_LINEAGE_EXCLUDED_FIELDS),
+        "receipt_pairs": pairs,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def test_refit03_frozen_input_bundle_roundtrips_exact_float64_and_is_append_only(monkeypatch, tmp_path) -> None:
+    producer_commit = "1" * 40
+    preprocess = _preprocess()
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(preprocess))
+    treatment = _series(
+        subject.TREATMENT_SECTOR,
+        mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+    )
+    harness = _series(
+        subject.CONTROL_SECTOR,
+        inactive_value=7.0,
+        mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+    )
+    bundle = subject.build_refit03_frozen_input_bundle(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="a" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    path = tmp_path / "refit03.frozen-input.json"
+
+    identity = subject.write_refit03_frozen_input_bundle(path, bundle)
+    readback = subject.validate_refit03_frozen_input_bundle(json.loads(path.read_text(encoding="utf-8")))
+
+    assert identity == bundle["bundle_sha256"]
+    assert path.read_bytes() == canonical_json_bytes(bundle) + b"\n"
+    assert np.array_equal(
+        readback["parsed_roles"][subject.REFIT02_TREATMENT_ROLE].train_observations,
+        treatment.train_observations,
+    )
+    assert np.array_equal(
+        readback["parsed_roles"][subject.REFIT02_HARNESS_ROLE].train_observations,
+        harness.train_observations,
+    )
+    assert subject.write_refit03_frozen_input_bundle(path, bundle) == identity
+
+    alternate = subject.build_refit03_frozen_input_bundle(
+        treatment_item=treatment,
+        harness_item=_series(
+            subject.CONTROL_SECTOR,
+            inactive_value=8.0,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="c" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="collision"):
+        subject.write_refit03_frozen_input_bundle(path, alternate)
+
+
+def test_refit03_frozen_input_bundle_rejects_rehashed_observation_tampering(monkeypatch) -> None:
+    producer_commit = "1" * 40
+    preprocess = _preprocess()
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(preprocess))
+    bundle = subject.build_refit03_frozen_input_bundle(
+        treatment_item=_series(
+            subject.TREATMENT_SECTOR,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        harness_item=_series(
+            subject.CONTROL_SECTOR,
+            inactive_value=7.0,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="a" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    tampered = deepcopy(bundle)
+    role = tampered["roles"][subject.REFIT02_TREATMENT_ROLE]
+    role["train_observations"]["base64"] = "AAAA"
+    body = {key: value for key, value in tampered.items() if key != "bundle_sha256"}
+    tampered["bundle_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="observation identity is invalid"):
+        subject.validate_refit03_frozen_input_bundle(tampered)
+
+
+def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[str, object]]:
+    treatment = _series(subject.TREATMENT_SECTOR)
+    control = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    return {
+        role: subject.build_input_migration_receipt(
+            item,
+            historical_train_input_manifest=item.train_input_manifest,
+            role=role,
+            current_policy_sha256=str(item.train_input_manifest["feature_domain_policy_sha256"]),
+            producer_commit=producer_commit,
+            historical_observation_manifest_hash=(
+                item.observation_manifest_hash if role == subject.CONTROL_ROLE else None
+            ),
+            historical_pit_constituent_manifest_hash=(
+                item.pit_constituent_manifest_hash if role == subject.CONTROL_ROLE else None
+            ),
+            c010_a5_lineage_migration_receipt=_lineage_migration_receipt(producer_commit=producer_commit),
+        )
+        for role, item in (
+            (subject.TREATMENT_ROLE, treatment),
+            (subject.CONTROL_ROLE, control),
+        )
+    }
+
+
+def _projection_kwargs(role: str) -> dict[str, str]:
+    treatment = role == subject.TREATMENT_ROLE
+    return {
+        "profile_receipt_sha256": "1" * 64 if treatment else "2" * 64,
+        "source_set_sha256": subject.TREATMENT_SOURCE_SET_SHA256 if treatment else subject.CONTROL_SOURCE_SET_SHA256,
+        "preprocess_identity_sha256": subject.PREPROCESS_IDENTITY_SHA256,
+        "feature_definition_sha256": "4" * 64,
+    }
+
+
+def _core(
+    feature_count: int,
+    *,
+    covars: np.ndarray | None = None,
+    train_occupancy_valid: bool = True,
+) -> B3CoreFitEvidence:
+    covars = (
+        np.full((3, feature_count), 0.5, dtype=np.float64) if covars is None else np.asarray(covars, dtype=np.float64)
+    )
+    reference = np.ones(feature_count, dtype=np.float64)
+    masses = np.full(3, 40.0, dtype=np.float64)
+    second_moment = np.full((3, feature_count), 0.4875, dtype=np.float64)
+    expected = (reference[None, :] + masses[:, None] * second_moment) / (1.0 + masses[:, None])
+    lower = reference[None, :] / (1.0 + masses[:, None])
+    upper = 121.0 * reference[None, :] / (1.0 + masses[:, None])
+    residual = (covars - expected) / np.maximum(np.abs(expected), np.finfo(np.float64).tiny)
+    covariance_source = {
+        "raw_covars": covars.tolist(),
+        "sector_local_reference_variance_R_sj": reference.tolist(),
+        "state_posterior_mass": masses.tolist(),
+        "posterior_second_moment_about_fitted_mean": second_moment.tolist(),
+        "train_rows": 120,
+        "nu": 1.0,
+        "postfit_projection_performed": False,
+    }
+    covariance_acceptance = training_subject.evaluate_covariance_acceptance(covariance_source)
+    model_entry_valid = covariance_acceptance.get("covariance_valid") is True and train_occupancy_valid
+    status = {"status": "accepted" if model_entry_valid else "failed"}
+    initialization = _current_initialization_evidence(feature_count)
+    monitor = {"history": [-2.0, -1.0], "status": "accepted"}
+    likelihood = {
+        "monitor_status": "accepted",
+        "convergence_valid": True,
+        "likelihood_status": "accepted",
+        "likelihood_valid": True,
+    }
+    raw_capture = training_subject.capture_raw_diag_covariance_evidence(
+        covars,
+        expected_shape=(3, feature_count),
+    )
+    covariance_stage = {
+        **covariance_source,
+        "posterior_weighted_variance_about_weighted_mean": np.full((3, feature_count), 0.5).tolist(),
+        "mstep_expected_covariance": expected.tolist(),
+        "dynamic_lower_reference": lower.tolist(),
+        "dynamic_upper_reference": upper.tolist(),
+        "mstep_relative_residual": residual.tolist(),
+        "acceptance": covariance_acceptance,
+    }
+    stage_evidence = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=[
+            "initialization",
+            "fit",
+            "raw_covariance_capture",
+            "monitor",
+            "likelihood",
+            "covariance",
+            "train_posterior",
+        ],
+        initialization=initialization,
+        monitor_evidence=monitor,
+        likelihood=likelihood,
+        raw_covariance_evidence=raw_capture,
+        covariance_evidence=covariance_stage,
+    )
+    return B3CoreFitEvidence(
+        initialization=initialization,
+        monitor_evidence=monitor,
+        likelihood=likelihood,
+        covariance=covariance_acceptance,
+        train_occupancy={
+            "train_occupancy_status": "accepted" if train_occupancy_valid else "failed",
+            "train_occupancy_valid": train_occupancy_valid,
+        },
+        startprob=np.array([0.2, 0.3, 0.5]),
+        transmat=np.array([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+        means=np.ones((3, feature_count)),
+        covars=covars,
+        terminal_likelihood=-1.0,
+        model_entry_status=status["status"],
+        model_entry_valid=model_entry_valid,
+        training_stage_evidence=stage_evidence,
+    )
+
+
+def _current_initialization_evidence(feature_count: int = 20) -> dict[str, object]:
+    return {
+        "schema_version": "hmm_risk_b3_manual_initialization_v1",
+        "contract_version": training_subject.D3_CONTRACT_VERSION,
+        "diagnostic_source_contract": "hmm_risk_c008_b3_diag04_manual_initialization_v1",
+        "formal_initialization_contract_applied": True,
+        "sector_local_reference_variance_R_sj": [1.0] * feature_count,
+        "nu": 1.0,
+    }
+
+
+def test_treatment_projects_full20_after_preprocess_and_never_fabricates_inactive_parameters(monkeypatch):
+    _install_authority(monkeypatch)
+    item = _series(subject.TREATMENT_SECTOR)
+
+    projected, receipt = subject.build_projection(
+        item,
+        preprocess=_preprocess(),
+        role=subject.TREATMENT_ROLE,
+        **_projection_kwargs(subject.TREATMENT_ROLE),
+    )
+
+    assert projected.shape == (120, 19)
+    assert receipt["full_feature_count"] == 20
+    assert receipt["likelihood_feature_count"] == 19
+    assert receipt["active_feature_indices"] == list(range(19))
+    assert receipt["inactive_feature_indices"] == [19]
+    assert receipt["active_feature_mask"] == [True] * 19 + [False]
+    assert receipt["dynamic_activation"] is False
+    assert receipt["exact_zero_evidence"]["raw_unique_bit_pattern_count"] == 1
+
+
+def test_a5_input_migration_preserves_sector_core_and_normalizes_control_lineage(monkeypatch):
+    _install_authority(monkeypatch)
+    base = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    historical_manifest = {
+        **dict(base.train_input_manifest),
+        "l2_stock_fact_manifest_hash": "6" * 64,
+        "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+    }
+    current_manifest = {
+        **historical_manifest,
+        "dataset_manifest_hash": "7" * 64,
+        "mapping_manifest_hash": "8" * 64,
+        "calendar_manifest_hash": "9" * 64,
+        "l2_stock_fact_manifest_hash": "a" * 64,
+        "feature_domain_policy_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(subject, "CONTROL_TRAIN_INPUT_MANIFEST_SHA256", canonical_sha256(historical_manifest))
+    monkeypatch.setattr(subject, "C010_A5_MAPPING_SHA256", current_manifest["mapping_manifest_hash"])
+    current = B3TrainOnlySeries(
+        sector_code=base.sector_code,
+        sector_name=base.sector_name,
+        train_observations=base.train_observations,
+        train_dates=base.train_dates,
+        pit_l2_constituents=(subject.CONTROL_SECTOR,),
+        pit_constituent_manifest_hash="c" * 64,
+        observation_manifest_hash=base.observation_manifest_hash,
+        train_input_manifest=current_manifest,
+    )
+    migration = subject.build_input_migration_receipt(
+        current,
+        historical_train_input_manifest=historical_manifest,
+        role=subject.CONTROL_ROLE,
+        current_policy_sha256=current_manifest["feature_domain_policy_sha256"],
+        producer_commit="1" * 40,
+        historical_observation_manifest_hash=base.observation_manifest_hash,
+        historical_pit_constituent_manifest_hash="d" * 64,
+        c010_a5_lineage_migration_receipt=_lineage_migration_receipt(),
+    )
+
+    projected, projection = subject.build_projection(
+        current,
+        preprocess=_preprocess(),
+        role=subject.CONTROL_ROLE,
+        input_migration_receipt=migration,
+        **_projection_kwargs(subject.CONTROL_ROLE),
+    )
+
+    assert projected.shape == (120, 20)
+    assert projection["historical_train_input_manifest_sha256"] == canonical_sha256(historical_manifest)
+    assert projection["train_input_manifest_sha256"] == canonical_sha256(current_manifest)
+    assert projection["input_migration_receipt_sha256"] == migration["receipt_sha256"]
+
+    core = _core(20)
+    current_hashes = subject._legacy_compatible_hashes(
+        current,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment={"environment": "fixed"},
+        core=core,
+        input_migration_receipt=migration,
+    )
+    historical = B3TrainOnlySeries(
+        sector_code=base.sector_code,
+        sector_name=base.sector_name,
+        train_observations=base.train_observations,
+        train_dates=base.train_dates,
+        pit_l2_constituents=(subject.CONTROL_SECTOR,),
+        pit_constituent_manifest_hash="d" * 64,
+        observation_manifest_hash=base.observation_manifest_hash,
+        train_input_manifest=historical_manifest,
+    )
+    historical_hashes = subject._legacy_compatible_hashes(
+        historical,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment={"environment": "fixed"},
+        core=core,
+    )
+    assert current_hashes == historical_hashes
+
+    drifted = B3TrainOnlySeries(
+        **{
+            **current.__dict__,
+            "train_input_manifest": {**current_manifest, "train_observation_sha256": "e" * 64},
+        }
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="train core changed"):
+        subject.build_input_migration_receipt(
+            drifted,
+            historical_train_input_manifest=historical_manifest,
+            role=subject.CONTROL_ROLE,
+            current_policy_sha256=current_manifest["feature_domain_policy_sha256"],
+            producer_commit="1" * 40,
+            historical_observation_manifest_hash=base.observation_manifest_hash,
+            historical_pit_constituent_manifest_hash="d" * 64,
+            c010_a5_lineage_migration_receipt=_lineage_migration_receipt(),
+        )
+
+
+def test_treatment_accepts_nonzero_constant_created_by_approved_full20_preprocess(monkeypatch):
+    _install_authority(monkeypatch)
+    preprocess = {
+        "family": "winsor_zscore_1_99_train_global_v1",
+        "winsor_low": [-100.0] * 19 + [-1.0],
+        "winsor_high": [100.0] * 19 + [-0.1],
+        "center": [0.0] * 19 + [-0.2],
+        "scale": [1.0] * 19 + [0.1],
+    }
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(preprocess))
+
+    projected, receipt = subject.build_projection(
+        _series(subject.TREATMENT_SECTOR),
+        preprocess=preprocess,
+        role=subject.TREATMENT_ROLE,
+        profile_receipt_sha256="1" * 64,
+        source_set_sha256=subject.TREATMENT_SOURCE_SET_SHA256,
+        preprocess_identity_sha256=subject.PREPROCESS_IDENTITY_SHA256,
+        feature_definition_sha256="4" * 64,
+    )
+
+    evidence = receipt["exact_zero_evidence"]
+    assert projected.shape[1] == 19
+    assert evidence["raw_all_exact_zero"] is True
+    assert evidence["preprocessed_variance_ddof0"] == 0.0
+    assert evidence["preprocessed_vector_identity"] != evidence["raw_vector_identity"]
+
+
+@pytest.mark.parametrize("inactive_value", [1.0, 1e-14, float("inf")])
+def test_treatment_rejects_nonzero_nearzero_and_nonfinite_inactive_values(monkeypatch, inactive_value):
+    _install_authority(monkeypatch)
+    item = _series(
+        subject.TREATMENT_SECTOR,
+        inactive_value=inactive_value if np.isfinite(inactive_value) else 0.0,
+    )
+    if not np.isfinite(inactive_value):
+        item.train_observations[:, subject.INACTIVE_FEATURE_INDEX] = inactive_value
+
+    with pytest.raises(subject.D1InactiveDimensionError):
+        subject.build_projection(
+            item,
+            preprocess=_preprocess(),
+            role=subject.TREATMENT_ROLE,
+            **_projection_kwargs(subject.TREATMENT_ROLE),
+        )
+
+
+def test_treatment_rejects_mixed_positive_and_negative_zero_bit_patterns(monkeypatch):
+    _install_authority(monkeypatch)
+    item = _series(subject.TREATMENT_SECTOR)
+    item.train_observations[0, subject.INACTIVE_FEATURE_INDEX] = -0.0
+    item.train_input_manifest["train_observation_sha256"] = canonical_sha256(item.train_observations.tolist())
+    monkeypatch.setattr(
+        subject,
+        "TREATMENT_TRAIN_INPUT_MANIFEST_SHA256",
+        canonical_sha256(item.train_input_manifest),
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="exact zero"):
+        subject.build_projection(
+            item,
+            preprocess=_preprocess(),
+            role=subject.TREATMENT_ROLE,
+            **_projection_kwargs(subject.TREATMENT_ROLE),
+        )
+
+
+def test_projection_rejects_train_input_manifest_drift_before_fit(monkeypatch):
+    _install_authority(monkeypatch)
+    item = _series(subject.TREATMENT_SECTOR)
+    item.train_input_manifest["dataset_manifest_hash"] = "9" * 64
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="train input manifest"):
+        subject.build_projection(
+            item,
+            preprocess=_preprocess(),
+            role=subject.TREATMENT_ROLE,
+            **_projection_kwargs(subject.TREATMENT_ROLE),
+        )
+
+
+def test_identity20_control_uses_same_projection_path_without_dropping_a_dimension(monkeypatch):
+    _install_authority(monkeypatch)
+    item = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+
+    projected, receipt = subject.build_projection(
+        item,
+        preprocess=_preprocess(),
+        role=subject.CONTROL_ROLE,
+        **_projection_kwargs(subject.CONTROL_ROLE),
+    )
+
+    np.testing.assert_array_equal(projected, item.train_observations)
+    assert receipt["likelihood_feature_count"] == 20
+    assert receipt["active_feature_indices"] == list(range(20))
+    assert receipt["inactive_feature_indices"] == []
+    assert receipt["exact_zero_evidence"] is None
+
+
+def test_projection_rejects_preprocess_payload_drift_even_when_caller_claims_approved_hash(monkeypatch):
+    _install_authority(monkeypatch)
+    drifted = {**_preprocess(), "family": "drifted"}
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="preprocess payload"):
+        subject.build_projection(
+            _series(subject.TREATMENT_SECTOR),
+            preprocess=drifted,
+            role=subject.TREATMENT_ROLE,
+            **_projection_kwargs(subject.TREATMENT_ROLE),
+        )
+
+
+def test_treatment_attempt_passes_only_19_dimensions_to_shared_hmm_core(monkeypatch):
+    treatment, _ = _install_authority(monkeypatch)
+    captured: list[tuple[int, int]] = []
+
+    def fake_fit(item, *, train, seed):
+        captured.append(train.shape)
+        return _core(train.shape[1])
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fake_fit)
+    attempt = subject.fit_controlled_attempt(
+        _series(subject.TREATMENT_SECTOR),
+        preprocess=_preprocess(),
+        role=subject.TREATMENT_ROLE,
+        seed=42,
+        process_identity="process-a",
+        numeric_environment={"environment": "fixed"},
+        source_identity=treatment[0],
+        **_projection_kwargs(subject.TREATMENT_ROLE),
+    )
+
+    assert captured == [(120, 19)]
+    assert attempt["status"] == "fit_completed"
+    assert attempt["parameter_payload"]["means"]["shape"] == [3, 19]
+    assert attempt["selection_performed"] is False
+    assert attempt["model_write_performed"] is False
+    assert attempt["ready_artifact_write_performed"] is False
+
+
+def test_treatment_attempt_rejects_parameters_that_reintroduce_the_inactive_dimension(monkeypatch):
+    treatment, _ = _install_authority(monkeypatch)
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", lambda *args, **kwargs: _core(20))
+
+    attempt = subject.fit_controlled_attempt(
+        _series(subject.TREATMENT_SECTOR),
+        preprocess=_preprocess(),
+        role=subject.TREATMENT_ROLE,
+        seed=42,
+        process_identity="process-a",
+        numeric_environment={"environment": "fixed"},
+        source_identity=treatment[0],
+        **_projection_kwargs(subject.TREATMENT_ROLE),
+    )
+
+    assert attempt["status"] == "fit_failed"
+    assert attempt["failure_stage"] == "parameter_shape"
+    assert attempt["failure_reason_codes"] == ["hmm_risk_model_inactive_dimension_parameter_shape_invalid"]
+
+
+def test_identity20_control_compares_frozen_entry_and_model_hashes_without_refit(monkeypatch):
+    _, control = _install_authority(monkeypatch)
+    item = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    evidence = _core(20)
+    environment = {"environment": "fixed"}
+    expected = subject._legacy_compatible_hashes(
+        item,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment=environment,
+        core=evidence,
+    )
+    captured: list[tuple[int, int]] = []
+
+    def fake_fit(item, *, train, seed):
+        captured.append(train.shape)
+        return evidence
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fake_fit)
+    attempt = subject.fit_controlled_attempt(
+        item,
+        preprocess=_preprocess(),
+        role=subject.CONTROL_ROLE,
+        seed=42,
+        process_identity="process-a",
+        numeric_environment=environment,
+        source_identity=control[0],
+        expected_control_entry_receipt_sha256=expected["entry_receipt_sha256"],
+        expected_control_model_payload_sha256=expected["model_payload_sha256"],
+        **_projection_kwargs(subject.CONTROL_ROLE),
+    )
+
+    assert captured == [(120, 20)]
+    assert attempt["status"] == "fit_completed"
+    assert attempt["control_payload_bitwise_equal"] is True
+
+    drifted = subject.fit_controlled_attempt(
+        item,
+        preprocess=_preprocess(),
+        role=subject.CONTROL_ROLE,
+        seed=42,
+        process_identity="process-a",
+        numeric_environment=environment,
+        source_identity=control[0],
+        expected_control_entry_receipt_sha256="0" * 64,
+        expected_control_model_payload_sha256=expected["model_payload_sha256"],
+        **_projection_kwargs(subject.CONTROL_ROLE),
+    )
+    assert drifted["status"] == "fit_failed"
+    assert drifted["failure_reason_codes"] == ["hmm_risk_model_inactive_dimension_control_drift"]
+
+
+def test_control_compatibility_builder_matches_formal_training_payload_hashes(monkeypatch):
+    _install_authority(monkeypatch)
+    item = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    evidence = _core(20)
+    environment = {"environment": "fixed"}
+    monkeypatch.setattr(training_subject, "fit_b3_preprocessed_train_only", lambda *args, **kwargs: evidence)
+
+    entry, fitted = training_subject._fit_b3_train_only(
+        item,
+        family="autocycle_all_core",
+        level="L2",
+        feature_names=ALL_CORE_FEATURES,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment=environment,
+    )
+    compatibility = subject._legacy_compatible_hashes(
+        item,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment=environment,
+        core=evidence,
+    )
+
+    assert compatibility["entry_receipt_sha256"] == entry["entry_receipt_sha256"]
+    assert compatibility["model_payload_sha256"] == fitted.model_payload_sha256
+
+
+def _attempt(
+    role: str,
+    seed: int,
+    process_identity: str,
+    *,
+    status: str = "fit_completed",
+    failure_reason: str | None = None,
+    input_migration_receipt_sha256: str | None = None,
+) -> dict:
+    failure_reasons = []
+    if status != "fit_completed":
+        failure_reasons = [failure_reason or "hmm_risk_model_inactive_dimension_projection_invalid"]
+    body = {
+        "schema_version": subject.ATTEMPT_SCHEMA_VERSION,
+        "algorithm_version": subject.ALGORITHM_VERSION,
+        "process_identity": process_identity,
+        "role": role,
+        "family": "autocycle_all_core",
+        "level": "L2",
+        "sector_code": subject.TREATMENT_SECTOR if role == subject.TREATMENT_ROLE else subject.CONTROL_SECTOR,
+        "seed": seed,
+        "diagnostic_entry_sha256": canonical_sha256({"label": role, "seed": seed, "kind": "diagnostic"}),
+        "source_entry_receipt_sha256": canonical_sha256({"label": role, "seed": seed, "kind": "source"}),
+        "input_migration_receipt_sha256": input_migration_receipt_sha256,
+        "status": "fit_completed" if status == "fit_completed" else "fit_failed",
+        "fit_status": "accepted" if status == "fit_completed" else "failed",
+        "failure_stage": None
+        if status == "fit_completed"
+        else ("projection" if failure_reason is None else "covariance"),
+        "failure_reason_codes": failure_reasons,
+        "failure_message": None if status == "fit_completed" else "projection failed",
+        "projection_receipt": {"projection_status": "accepted"},
+        "projection_sha256": "a" * 64,
+        "likelihood_feature_count": 19 if role == subject.TREATMENT_ROLE else 20,
+        "parameter_payload": {"sha256": "b" * 64},
+        "numeric_environment": {"environment": "fixed"},
+        "numeric_environment_sha256": canonical_sha256({"environment": "fixed"}),
+        "initialization_evidence": {"status": "accepted"},
+        "monitor_evidence": {"status": "accepted"},
+        "likelihood": {"status": "accepted"},
+        "covariance": {"status": "accepted"},
+        "train_occupancy": {"status": "accepted"},
+        "final_train_log_likelihood": -1.0,
+        "control_compatible_payload_hashes": {"entry": "c" * 64} if role == subject.CONTROL_ROLE else None,
+        "expected_control_entry_receipt_sha256": "d" * 64 if role == subject.CONTROL_ROLE else None,
+        "expected_control_model_payload_sha256": "e" * 64 if role == subject.CONTROL_ROLE else None,
+        "control_payload_bitwise_equal": True if role == subject.CONTROL_ROLE else None,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "semantic_labelability_accessed": False,
+        "d6_status_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "attempt_receipt_sha256": canonical_sha256(body)}
+
+
+def _process(monkeypatch, process_identity: str, *, failed_treatment_seed: int | None = None):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    attempts = [
+        _attempt(
+            subject.TREATMENT_ROLE,
+            seed,
+            process_identity,
+            status="projection_failed" if seed == failed_treatment_seed else "fit_completed",
+            input_migration_receipt_sha256=migrations[subject.TREATMENT_ROLE]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+    ] + [
+        _attempt(
+            subject.CONTROL_ROLE,
+            seed,
+            process_identity,
+            input_migration_receipt_sha256=migrations[subject.CONTROL_ROLE]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+    ]
+    return subject.build_process_receipt(
+        process_identity=process_identity,
+        producer_commit="1" * 40,
+        attempts=attempts,
+        treatment_source_identities=treatment,
+        control_source_identities=control,
+        input_migration_receipts=migrations,
+    )
+
+
+def test_process_runner_never_early_stops_after_a_failed_attempt(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    calls: list[tuple[str, int]] = []
+
+    def fake_attempt(item, *, role, seed, process_identity, **kwargs):
+        calls.append((role, seed))
+        status = "projection_failed" if role == subject.TREATMENT_ROLE and seed == 42 else "fit_completed"
+        return _attempt(
+            role,
+            seed,
+            process_identity,
+            status=status,
+            input_migration_receipt_sha256=kwargs["input_migration_receipt"]["receipt_sha256"],
+        )
+
+    monkeypatch.setattr(subject, "fit_controlled_attempt", fake_attempt)
+    receipt = subject.run_controlled_process(
+        treatment_item=_series(subject.TREATMENT_SECTOR),
+        control_item=_series(subject.CONTROL_SECTOR, inactive_value=7.0),
+        preprocess=_preprocess(),
+        process_identity="process-a",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed"},
+        treatment_source_identities=treatment,
+        control_source_identities=control,
+        frozen_control_hashes={
+            seed: {"entry_receipt_sha256": "a" * 64, "model_payload_sha256": "b" * 64} for seed in range(42, 50)
+        },
+        treatment_input_migration_receipt=migrations[subject.TREATMENT_ROLE],
+        control_input_migration_receipt=migrations[subject.CONTROL_ROLE],
+    )
+
+    assert calls == [(role, seed) for seed in range(42, 50) for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)]
+    assert receipt["attempt_count"] == 16
+    assert receipt["terminal_attempt_count"] == 16
+
+
+def test_process_runner_validates_all_frozen_control_authority_before_first_fit(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    calls: list[tuple[str, int]] = []
+
+    def fake_attempt(item, *, role, seed, process_identity, **kwargs):
+        calls.append((role, seed))
+        return _attempt(
+            role,
+            seed,
+            process_identity,
+            input_migration_receipt_sha256=kwargs["input_migration_receipt"]["receipt_sha256"],
+        )
+
+    monkeypatch.setattr(subject, "fit_controlled_attempt", fake_attempt)
+    invalid_hashes = {
+        seed: {"entry_receipt_sha256": "a" * 64, "model_payload_sha256": "b" * 64} for seed in range(42, 50)
+    }
+    invalid_hashes[49]["entry_receipt_sha256"] = "invalid"
+
+    with pytest.raises(subject.D1InactiveDimensionError):
+        subject.run_controlled_process(
+            treatment_item=_series(subject.TREATMENT_SECTOR),
+            control_item=_series(subject.CONTROL_SECTOR, inactive_value=7.0),
+            preprocess=_preprocess(),
+            process_identity="process-a",
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed"},
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+            frozen_control_hashes=invalid_hashes,
+            treatment_input_migration_receipt=migrations[subject.TREATMENT_ROLE],
+            control_input_migration_receipt=migrations[subject.CONTROL_ROLE],
+        )
+    assert calls == []
+
+
+def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_effect(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    attempts = [
+        _attempt(
+            role,
+            seed,
+            "process-a",
+            input_migration_receipt_sha256=migrations[role]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+        for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)
+    ]
+    attempts[0]["selection_performed"] = True
+    body = {key: value for key, value in attempts[0].items() if key != "attempt_receipt_sha256"}
+    attempts[0]["attempt_receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="attempt receipt identity"):
+        subject.build_process_receipt(
+            process_identity="process-a",
+            producer_commit="1" * 40,
+            attempts=attempts,
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+            input_migration_receipts=migrations,
+        )
+
+
+def test_process_receipt_rejects_self_consistent_input_migration_envelope_drift(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    drifted = deepcopy(migrations[subject.TREATMENT_ROLE])
+    drifted["migrated_identity_fields"]["dataset_manifest_hash"]["current"] = "9" * 64
+    body = {key: value for key, value in drifted.items() if key != "receipt_sha256"}
+    drifted["receipt_sha256"] = canonical_sha256(body)
+    migrations[subject.TREATMENT_ROLE] = drifted
+    attempts = [
+        _attempt(
+            role,
+            seed,
+            "process-a",
+            input_migration_receipt_sha256=migrations[role]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+        for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)
+    ]
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="migration receipt envelope"):
+        subject.build_process_receipt(
+            process_identity="process-a",
+            producer_commit="1" * 40,
+            attempts=attempts,
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+            input_migration_receipts=migrations,
+        )
+
+    lineage = _lineage_migration_receipt()
+    lineage["receipt_pairs"]["eligibility"]["current_semantic_payload_sha256"] = "9" * 64
+    lineage_body = {key: value for key, value in lineage.items() if key != "receipt_sha256"}
+    lineage["receipt_sha256"] = canonical_sha256(lineage_body)
+    with pytest.raises(subject.D1InactiveDimensionError, match="execution-lineage migration receipt"):
+        subject._validate_c010_a5_lineage_migration_envelope(
+            lineage,
+            expected_producer_commit="1" * 40,
+        )
+
+
+def test_controlled_report_separates_diagnostic_completion_mechanism_and_d5_readiness(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "constant_dimension_effect_supported"
+    assert report["d5_compatibility_evidence_ready"] is True
+    assert report["canonical_payload_bitwise_equal"] is True
+    assert report["attempt_count"] == 32
+    assert report["selection_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
+
+
+def test_v3_writer_binds_c010_a5_mapping_and_v1_v2_durable_readback_remains_supported(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    current = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert current["schema_version"] == subject.REPORT_SCHEMA_VERSION
+    assert current["source_authority"]["c010_a5_report_sha256"] == subject.C010_A5_REPORT_SHA256
+    assert current["source_authority"]["c010_a5_partition_sha256"] == subject.C010_A5_PARTITION_SHA256
+    assert current["source_authority"]["c010_a5_mapping_sha256"] == subject.C010_A5_MAPPING_SHA256
+
+    for process_schema, report_schema, source_authority in (
+        (subject.PROCESS_SCHEMA_VERSION_V1, subject.REPORT_SCHEMA_VERSION_V1, subject.SOURCE_AUTHORITY_V1),
+        (subject.PROCESS_SCHEMA_VERSION_V2, subject.REPORT_SCHEMA_VERSION_V2, subject.SOURCE_AUTHORITY_V2),
+    ):
+        legacy_processes = []
+        for process in (first, second):
+            legacy = deepcopy(process)
+            legacy["schema_version"] = process_schema
+            legacy["source_authority"] = dict(source_authority)
+            legacy.pop("input_migration_receipts", None)
+            for attempt in legacy["attempts"]:
+                attempt["schema_version"] = subject.ATTEMPT_SCHEMA_VERSION_V1
+                attempt.pop("input_migration_receipt_sha256", None)
+                attempt_body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+                attempt["attempt_receipt_sha256"] = canonical_sha256(attempt_body)
+            legacy_comparable = [
+                {
+                    key: value
+                    for key, value in attempt.items()
+                    if key not in {"process_identity", "attempt_receipt_sha256"}
+                }
+                for attempt in legacy["attempts"]
+            ]
+            legacy["comparable_payload_sha256"] = canonical_sha256(legacy_comparable)
+            legacy_body = {key: value for key, value in legacy.items() if key != "process_receipt_sha256"}
+            legacy["process_receipt_sha256"] = canonical_sha256(legacy_body)
+            legacy_processes.append(legacy)
+        legacy_report = subject.build_controlled_refit_report(
+            legacy_processes[0],
+            legacy_processes[1],
+            producer_commit="1" * 40,
+            _schema_version=report_schema,
+            _source_authority=source_authority,
+        )
+
+        assert subject.validate_controlled_refit_report(legacy_report) == legacy_report
+
+
+def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the_d1_mechanism(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+
+    def process(process_identity: str) -> dict:
+        attempts = [
+            _attempt(
+                subject.TREATMENT_ROLE,
+                seed,
+                process_identity,
+                status="fit_failed" if seed == 42 else "fit_completed",
+                failure_reason=("hmm_risk_model_covariance_acceptance_failed" if seed == 42 else None),
+                input_migration_receipt_sha256=migrations[subject.TREATMENT_ROLE]["receipt_sha256"],
+            )
+            for seed in range(42, 50)
+        ] + [
+            _attempt(
+                subject.CONTROL_ROLE,
+                seed,
+                process_identity,
+                input_migration_receipt_sha256=migrations[subject.CONTROL_ROLE]["receipt_sha256"],
+            )
+            for seed in range(42, 50)
+        ]
+        return subject.build_process_receipt(
+            process_identity=process_identity,
+            producer_commit="1" * 40,
+            attempts=attempts,
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+            input_migration_receipts=migrations,
+        )
+
+    report = subject.build_controlled_refit_report(
+        process("fresh_process_1"),
+        process("fresh_process_2"),
+        producer_commit="1" * 40,
+    )
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "constant_dimension_effect_supported"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert report["mechanism_assessment_reason_codes"] == ["hmm_risk_model_covariance_acceptance_failed"]
+
+
+def test_controlled_report_rejects_projection_mechanism_without_hiding_other_attempts(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1", failed_treatment_seed=45)
+    second = _process(monkeypatch, "fresh_process_2", failed_treatment_seed=45)
+
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "constant_dimension_mechanism_rejected"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert report["attempt_count"] == 32
+    assert report["mechanism_assessment_reason_codes"] == ["hmm_risk_model_inactive_dimension_projection_invalid"]
+
+
+def test_repeat_mismatch_is_inconclusive_not_fake_success(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    second["comparable_payload_sha256"] = "0" * 64
+    body = {key: value for key, value in second.items() if key != "process_receipt_sha256"}
+    second["process_receipt_sha256"] = canonical_sha256(body)
+
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_incomplete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert "hmm_risk_model_inactive_dimension_repeat_mismatch" in report["mechanism_assessment_reason_codes"]
+
+
+def test_self_consistent_process_schema_drift_is_inconclusive_not_mechanism_success(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    first["schema_version"] = "tampered_process_schema_v999"
+    body = {key: value for key, value in first.items() if key != "process_receipt_sha256"}
+    first["process_receipt_sha256"] = canonical_sha256(body)
+
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_incomplete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert "hmm_risk_model_inactive_dimension_contract_invalid" in report["mechanism_assessment_reason_codes"]
+
+
+def test_controlled_report_rejects_self_consistent_process_with_forbidden_side_effect(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    first["model_write_performed"] = True
+    body = {key: value for key, value in first.items() if key != "process_receipt_sha256"}
+    first["process_receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="forbidden side-effect"):
+        subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+
+def test_writer_is_immutable_and_canonical_readback_is_verified(tmp_path, monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+    target = tmp_path / "d1.json"
+
+    identity = subject.write_controlled_refit_report(target, report)
+
+    assert identity == canonical_sha256(report)
+    assert subject.write_controlled_refit_report(target, report) == identity
+    target.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(subject.D1InactiveDimensionError, match="collision"):
+        subject.write_controlled_refit_report(target, report)
+
+    invalid = {**report, "receipt_sha256": "0" * 64}
+    with pytest.raises(subject.D1InactiveDimensionError, match="report readback differs"):
+        subject.write_controlled_refit_report(tmp_path / "invalid.json", invalid)
+
+
+def test_report_writer_rejects_self_consistent_fake_success(monkeypatch, tmp_path):
+    report = subject.build_controlled_refit_report(
+        _process(monkeypatch, "fresh_process_1"),
+        _process(monkeypatch, "fresh_process_2"),
+        producer_commit="1" * 40,
+    )
+    report["d5_compatibility_evidence_ready"] = False
+    body = {key: value for key, value in report.items() if key != "receipt_sha256"}
+    report["receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="report readback differs"):
+        subject.write_controlled_refit_report(tmp_path / "fake-success.json", report)
+
+
+def test_controlled_report_requires_approved_fresh_process_identities(monkeypatch):
+    report = subject.build_controlled_refit_report(
+        _process(monkeypatch, "process-a"),
+        _process(monkeypatch, "process-b"),
+        producer_commit="1" * 40,
+    )
+
+    assert report["status"] == "diagnostic_incomplete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert "hmm_risk_model_inactive_dimension_contract_invalid" in report["mechanism_assessment_reason_codes"]
+
+
+def _refit02_authorities(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    treatment_inactive_value: float = 0.0,
+    current_revision: bool = False,
+) -> tuple[B3TrainOnlySeries, B3TrainOnlySeries, dict, dict]:
+    mapping_identity = subject.C010_A5_CURRENT_MAPPING_SHA256 if current_revision else subject.C010_A5_MAPPING_SHA256
+    treatment = _series(
+        subject.TREATMENT_SECTOR,
+        inactive_value=treatment_inactive_value,
+        mapping_manifest_hash=mapping_identity,
+    )
+    harness = _series(
+        subject.CONTROL_SECTOR,
+        inactive_value=7.0,
+        mapping_manifest_hash=mapping_identity,
+    )
+    historical_treatment = {**dict(treatment.train_input_manifest), "dataset_manifest_hash": "8" * 64}
+    historical_harness = {**dict(harness.train_input_manifest), "dataset_manifest_hash": "8" * 64}
+    monkeypatch.setattr(
+        subject,
+        "TREATMENT_TRAIN_INPUT_MANIFEST_SHA256",
+        canonical_sha256(historical_treatment),
+    )
+    monkeypatch.setattr(
+        subject,
+        "CONTROL_TRAIN_INPUT_MANIFEST_SHA256",
+        canonical_sha256(historical_harness),
+    )
+    authority = subject.build_refit02_current_a5_authority(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        current_policy_sha256="d" * 64,
+        producer_commit="1" * 40,
+    )
+    historical = subject.build_refit02_historical_reference_receipt(
+        treatment_item=treatment,
+        harness_item=harness,
+        historical_treatment_manifest=historical_treatment,
+        historical_harness_manifest=historical_harness,
+    )
+    return treatment, harness, authority, historical
+
+
+def _refit02_fit(item, *, train, seed):
+    del seed
+    return _core(int(train.shape[1]))
+
+
+def _initialization_stage_error(message: str) -> training_subject.B3TrainingStageError:
+    stage = training_subject._training_stage_evidence(
+        fit_invoked=False,
+        fit_returned=False,
+        completed_stages=[],
+        initialization={},
+        stage_specific_cause_evidence={"error_type": "ValueError", "error": message},
+    )
+    return training_subject.B3TrainingStageError(
+        "initialization",
+        "hmm_risk_model_initialization_failed",
+        ValueError(message),
+        stage_evidence=stage,
+    )
+
+
+def _covariance_stage_error(
+    feature_count: int,
+    message: str,
+    *,
+    raw_covars: np.ndarray | None = None,
+    derived_status: str = "not_computable_posterior_audit_invalid",
+    covariance_status: str = "failed",
+) -> training_subject.B3TrainingStageError:
+    initialization = _current_initialization_evidence(feature_count)
+    monitor = {"history": [-2.0, -1.0], "status": "accepted"}
+    likelihood = {"status": "accepted"}
+    raw_values = np.full((3, feature_count), 0.5) if raw_covars is None else raw_covars
+    raw_capture = training_subject.capture_raw_diag_covariance_evidence(
+        raw_values,
+        expected_shape=(3, feature_count),
+    )
+    cause = {
+        "d4_derived_evidence_status": derived_status,
+        "covariance_status": covariance_status,
+        "covariance_valid": False,
+        "state_posterior_mass": None,
+        "posterior_weighted_variance_about_weighted_mean": None,
+        "posterior_second_moment_about_fitted_mean": None,
+        "mstep_expected_covariance": None,
+        "dynamic_lower_reference": None,
+        "dynamic_upper_reference": None,
+        "mstep_relative_residual": None,
+    }
+    stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=["initialization", "fit", "raw_covariance_capture", "monitor", "likelihood"],
+        initialization=initialization,
+        monitor_evidence=monitor,
+        likelihood=likelihood,
+        raw_covariance_evidence=raw_capture,
+        stage_specific_cause_evidence=cause,
+    )
+    error = ValueError(message)
+    error.evidence = cause
+    return training_subject.B3TrainingStageError(
+        "covariance",
+        "hmm_risk_model_covariance_bounds_failed",
+        error,
+        stage_evidence=stage,
+    )
+
+
+def _refit02_negative_initialization_blocker(item, *, train, seed):
+    del item, train, seed
+    raise _initialization_stage_error("matched identity20 initialization blocker")
+
+
+def _refit02_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> dict:
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", _refit02_fit)
+    return subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity=process_identity,
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+
+def _refit03_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> dict:
+    treatment, harness, authority, historical = _refit02_authorities(
+        monkeypatch,
+        current_revision=True,
+    )
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", _refit02_fit)
+    return subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity=process_identity,
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+
+def _remove_refit03_attempt_fields(attempt: dict) -> None:
+    for field in (
+        "training_stage_evidence",
+        "diagnostic_evidence_complete",
+        "raw_covariance_evidence",
+        "formal_model_set_acceptance_performed",
+        "hard_semantic_authority_changed",
+    ):
+        attempt.pop(field, None)
+
+
+def _as_matched_fit_refit02_process(process: dict) -> dict:
+    attempts = deepcopy(process["attempts"])
+    for attempt in attempts:
+        _remove_refit03_attempt_fields(attempt)
+        attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT
+        body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+        attempt["attempt_receipt_sha256"] = canonical_sha256(body)
+    return subject.build_refit02_process_receipt(
+        process_identity=process["process_identity"],
+        producer_commit=process["producer_commit"],
+        attempts=attempts,
+        current_authority=process["current_authority"],
+        historical_reference=process["historical_reference"],
+    )
+
+
+def _as_legacy_refit02_process(process: dict) -> dict:
+    attempts = deepcopy(process["attempts"])
+    for attempt in attempts:
+        _remove_refit03_attempt_fields(attempt)
+        attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY
+        attempt["fit_budget_contract_version"] = subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
+        if attempt["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE:
+            attempt.update(
+                {
+                    "status": "fit_failed",
+                    "fit_status": "failed",
+                    "fit_performed": False,
+                    "role_outcome": "negative_control_blocker_reproduced",
+                    "negative_control_blocker_reproduced": True,
+                    "failure_stage": "initialization",
+                    "failure_reason_codes": ["hmm_risk_model_initialization_failed"],
+                    "failure_message": "legacy matched identity20 initialization blocker",
+                    "parameter_payload": None,
+                    "initialization_evidence": None,
+                    "monitor_evidence": None,
+                    "likelihood": None,
+                    "covariance": None,
+                    "train_occupancy": None,
+                    "final_train_log_likelihood": None,
+                }
+            )
+        body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+        attempt["attempt_receipt_sha256"] = canonical_sha256(body)
+    return subject.build_refit02_process_receipt(
+        process_identity=process["process_identity"],
+        producer_commit=process["producer_commit"],
+        attempts=attempts,
+        current_authority=process["current_authority"],
+        historical_reference=process["historical_reference"],
+    )
+
+
+def _as_original_refit02_process(process: dict) -> dict:
+    attempts = deepcopy(process["attempts"])
+    for attempt in attempts:
+        attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_ORIGINAL
+        attempt.pop("fit_budget_contract_version", None)
+        body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+        attempt["attempt_receipt_sha256"] = canonical_sha256(body)
+    return subject.build_refit02_process_receipt(
+        process_identity=process["process_identity"],
+        producer_commit=process["producer_commit"],
+        attempts=attempts,
+        current_authority=process["current_authority"],
+        historical_reference=process["historical_reference"],
+    )
+
+
+def test_refit02_current_authority_binds_matched_input_and_historical_drift(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    assert authority["current_profile_eligible"] is True
+    role_inputs = authority["experiment_authority"]["role_inputs"]
+    assert role_inputs[subject.REFIT02_TREATMENT_ROLE] == role_inputs[subject.REFIT02_MATCHED_NEGATIVE_ROLE]
+    assert role_inputs[subject.REFIT02_HARNESS_ROLE]["sector_code"] == subject.CONTROL_SECTOR
+    assert all(pair["historical_reference_status"] == "drift_observed" for pair in historical["pairs"].values())
+    assert (
+        subject.validate_refit02_current_a5_authority(
+            authority,
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+        )
+        == authority
+    )
+
+
+def test_refit03_current_authority_process_and_report_are_versioned_without_rewriting_v7(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(
+        monkeypatch,
+        current_revision=True,
+    )
+
+    assert authority["schema_version"] == subject.REFIT03_AUTHORITY_SCHEMA_VERSION
+    assert authority["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert authority["experiment_authority"]["mapping_manifest_sha256"] == subject.C010_A5_CURRENT_MAPPING_SHA256
+    assert (
+        subject.validate_refit02_current_a5_authority(
+            authority,
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+        )
+        == authority
+    )
+    assert (
+        subject.validate_refit02_historical_reference_receipt(
+            historical,
+            current_authority=authority,
+        )
+        == historical
+    )
+
+    first = _refit03_process(monkeypatch, "fresh_process_1")
+    second = _refit03_process(monkeypatch, "fresh_process_2")
+    report = subject.build_refit02_report(first, second, producer_commit="1" * 40)
+
+    assert first["schema_version"] == subject.REFIT03_PROCESS_SCHEMA_VERSION
+    assert second["schema_version"] == subject.REFIT03_PROCESS_SCHEMA_VERSION
+    assert report["schema_version"] == subject.REFIT03_REPORT_SCHEMA_VERSION
+    assert report["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert subject.validate_refit02_report(report) == report
+
+    failed = subject.build_refit02_preflight_failure_report(
+        producer_commit="1" * 40,
+        reason_code="hmm_risk_model_inactive_dimension_authority_mismatch",
+        error_type="D1InactiveDimensionError",
+        error="current authority rejected before fit",
+        schema_version=subject.REFIT03_REPORT_SCHEMA_VERSION,
+    )
+    assert failed["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert failed["actual_hmm_fit_invocation_count"] == 0
+    assert subject.validate_refit02_report(failed) == failed
+    assert (
+        subject.validate_refit02_historical_reference_receipt(
+            historical,
+            current_authority=authority,
+        )
+        == historical
+    )
+
+
+def test_refit02_historical_reference_rejects_self_consistent_changed_path_tamper(monkeypatch):
+    _, _, authority, historical = _refit02_authorities(monkeypatch)
+    tampered = deepcopy(historical)
+    tampered["pairs"][subject.TREATMENT_SECTOR]["changed_paths"] = []
+    body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    tampered["receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="historical reference pair"):
+        subject.validate_refit02_historical_reference_receipt(
+            tampered,
+            current_authority=authority,
+        )
+
+
+def test_refit02_current_authority_rejects_self_consistent_eligibility_tamper(monkeypatch):
+    _, _, authority, _ = _refit02_authorities(monkeypatch)
+    tampered = deepcopy(authority)
+    tampered["current_profile_eligible"] = False
+    body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    tampered["receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="authority envelope"):
+        subject._validate_refit02_current_authority_envelope(tampered)
+
+
+def test_refit02_current_profile_change_returns_not_applicable_without_attempts(monkeypatch):
+    _, _, authority, historical = _refit02_authorities(monkeypatch, treatment_inactive_value=0.25)
+
+    report = subject.build_refit02_not_applicable_report(
+        authority,
+        historical,
+        producer_commit="1" * 40,
+    )
+
+    assert authority["current_profile_eligible"] is False
+    assert report["status"] == "not_applicable"
+    assert report["attempt_count"] == 0
+    assert report["planned_hmm_fit_count"] == 0
+    assert report["selection_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
+    assert subject.validate_refit02_report(report) == report
+
+
+def test_refit02_process_runs_24_terminal_attempts_with_24_planned_true_fits(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+
+    assert process["attempt_count"] == 24
+    assert process["terminal_attempt_count"] == 24
+    assert process["planned_hmm_fit_count"] == 24
+    assert process["actual_hmm_fit_invocation_count"] == 24
+    assert len(process["attempts"]) == 24
+    negative = [value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE]
+    assert len(negative) == 8
+    assert all(value["status"] == "fit_completed" for value in negative)
+    assert all(value["fit_performed"] is True for value in negative)
+    assert all(value["role_outcome"] == "matched_control_fit_completed" for value in negative)
+    assert all(value["negative_control_blocker_reproduced"] is None for value in negative)
+    assert process["selection_performed"] is False
+    assert process["ready_artifact_write_performed"] is False
+
+
+def test_refit02_under_budget_initialization_failure_preserves_terminal_evidence(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_one_initialization_failure(item, *, train, seed):
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 19 and seed == 42:
+            raise _initialization_stage_error("treatment initialization failed before HMM fit")
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_one_initialization_failure)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+
+    assert all(process["attempt_count"] == 24 for process in processes)
+    assert all(process["terminal_attempt_count"] == 24 for process in processes)
+    assert all(process["actual_hmm_fit_invocation_count"] == 23 for process in processes)
+    failed = [
+        attempt
+        for attempt in processes[0]["attempts"]
+        if attempt["role"] == subject.REFIT02_TREATMENT_ROLE and attempt["seed"] == 42
+    ]
+    assert len(failed) == 1
+    assert failed[0]["fit_performed"] is False
+    assert failed[0]["failure_stage"] == "initialization"
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["actual_hmm_fit_invocation_count"] == 46
+    assert "hmm_risk_model_initialization_failed" in report["mechanism_assessment_reason_codes"]
+
+
+def test_refit02_two_process_report_separates_completion_mechanism_and_d5_readiness(monkeypatch):
+    first = _refit02_process(monkeypatch, "fresh_process_1")
+    second = _refit02_process(monkeypatch, "fresh_process_2")
+
+    report = subject.build_refit02_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["covariance_pattern_assessment"] is None
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert report["canonical_payload_bitwise_equal"] is True
+    assert report["attempt_count"] == 48
+    assert report["planned_hmm_fit_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 48
+    assert report["mechanism_assessment_reason_codes"] == []
+    assert report["formal_model_set_acceptance_performed"] is False
+    assert report["hard_semantic_authority_changed"] is False
+    assert report["selection_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
+    assert subject.validate_refit02_report(report) == report
+
+
+def test_refit02_matched_control_blocker_with_19d_fit_supports_dimension_effect(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_matched_control_blocker(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raise _initialization_stage_error("matched identity20 initialization blocker")
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_matched_control_blocker)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert all(process["planned_hmm_fit_count"] == 24 for process in processes)
+    assert all(process["actual_hmm_fit_invocation_count"] == 16 for process in processes)
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert report["planned_hmm_fit_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 32
+    assert "hmm_risk_model_initialization_failed" in report["mechanism_assessment_reason_codes"]
+    assert subject.validate_refit02_report(report) == report
+
+
+def test_refit02_v6_writer_is_immutable_and_rejects_self_consistent_fake_readiness(monkeypatch, tmp_path):
+    report = subject.build_refit02_report(
+        _refit02_process(monkeypatch, "fresh_process_1"),
+        _refit02_process(monkeypatch, "fresh_process_2"),
+        producer_commit="1" * 40,
+    )
+    target = tmp_path / "refit02.json"
+
+    identity = subject.write_controlled_refit_report(target, report)
+
+    assert identity == canonical_sha256(report)
+    assert subject.write_controlled_refit_report(target, report) == identity
+    tampered = deepcopy(report)
+    tampered["d5_compatibility_evidence_ready"] = True
+    body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    tampered["receipt_sha256"] = canonical_sha256(body)
+    with pytest.raises(subject.D1InactiveDimensionError, match="differs from its writer authority"):
+        subject.write_controlled_refit_report(tmp_path / "fake-readiness.json", tampered)
+
+
+def test_refit02_v6_writer_persists_complete_matched_control_rejection_report(monkeypatch, tmp_path):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        lambda item, train, seed: _core(int(train.shape[1])),
+    )
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["attempt_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 48
+    assert "failed_process_receipt" not in report
+    assert subject.validate_refit02_report(report) == report
+    assert subject.write_controlled_refit_report(tmp_path / "diagnostic-failed.json", report) == canonical_sha256(
+        report
+    )
+
+
+def test_refit02_matched_control_fit_rejects_dimension_mechanism_even_when_treatment_d4_fails(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_downstream_failure(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 19:
+            raise _covariance_stage_error(int(train.shape[1]), "post-fit covariance rejected")
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_downstream_failure)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert report["covariance_pattern_assessment"] == "cross_role_failure_present"
+    assert "hmm_risk_model_covariance_bounds_failed" in report["mechanism_assessment_reason_codes"]
+
+
+def test_refit02_matched_control_runs_real_hmm_fit_and_rejects_dimension_mechanism(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+    fit_calls = []
+
+    def fit_all_roles(item, *, train, seed):
+        fit_calls.append((item.sector_code, int(train.shape[1]), seed))
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        fit_all_roles,
+    )
+    process = subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity="fresh_process_1",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+    negative = [value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE]
+    assert process["planned_hmm_fit_count"] == 24
+    assert process["actual_hmm_fit_invocation_count"] == 24
+    assert len(fit_calls) == 24
+    assert all(value["negative_control_blocker_reproduced"] is None for value in negative)
+    assert all(value["fit_performed"] is True for value in negative)
+    assert all(value["status"] == "fit_completed" for value in negative)
+    assert all(value["role_outcome"] == "matched_control_fit_completed" for value in negative)
+    assert all(value["initialization_evidence"]["formal_initialization_contract_applied"] is True for value in negative)
+
+
+def test_refit03_raw_covariance_capture_preserves_ieee754_classes_layout_and_byteorder():
+    payload_bits = np.array(
+        [
+            0x0000000000000000,
+            0x8000000000000000,
+            0x7FF8000000000001,
+            0x7FF0000000000000,
+            0xFFF0000000000000,
+            0x3FF0000000000000,
+        ],
+        dtype=np.uint64,
+    )
+    values = payload_bits.view(np.float64).reshape(3, 2)
+
+    captured = training_subject.capture_raw_diag_covariance_evidence(values, expected_shape=(3, 2))
+
+    assert [cell["semantic_bit_pattern_hex"] for cell in captured["cells"]] == [
+        f"{value:016x}" for value in payload_bits
+    ]
+    assert [cell["classification"] for cell in captured["cells"]] == [
+        "positive_zero",
+        "negative_zero",
+        "nan",
+        "positive_infinity",
+        "negative_infinity",
+        "finite_positive",
+    ]
+    assert captured["reason_codes"] == [
+        "hmm_risk_model_covariance_raw_non_finite",
+        "hmm_risk_model_covariance_raw_non_positive",
+    ]
+    assert (
+        canonical_sha256({key: value for key, value in captured.items() if key != "capture_receipt_sha256"})
+        == captured["capture_receipt_sha256"]
+    )
+    big_endian = values.astype(">f8")
+    captured_big = training_subject.capture_raw_diag_covariance_evidence(big_endian, expected_shape=(3, 2))
+    assert [cell["semantic_bit_pattern_hex"] for cell in captured_big["cells"]] == [
+        cell["semantic_bit_pattern_hex"] for cell in captured["cells"]
+    ]
+    non_contiguous = np.ones((3, 4), dtype=np.float64)[:, ::2]
+    non_contiguous_capture = training_subject.capture_raw_diag_covariance_evidence(
+        non_contiguous,
+        expected_shape=(3, 2),
+    )
+    assert "hmm_risk_model_covariance_raw_layout_invalid" in non_contiguous_capture["reason_codes"]
+    assert (
+        training_subject.capture_raw_diag_covariance_evidence([1.0], expected_shape=(3, 2))[
+            "evidence_unavailable_reason"
+        ]
+        == "raw_authority_is_not_numpy_ndarray"
+    )
+    assert (
+        "hmm_risk_model_covariance_raw_dtype_invalid"
+        in training_subject.capture_raw_diag_covariance_evidence(
+            np.ones((3, 2), dtype=np.float32),
+            expected_shape=(3, 2),
+        )["reason_codes"]
+    )
+
+    negative = training_subject.capture_raw_diag_covariance_evidence(
+        np.array([[-1.5, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float64),
+        expected_shape=(3, 2),
+    )
+    assert negative["cells"][0]["classification"] == "finite_negative"
+    assert float.fromhex(negative["cells"][0]["float_hex"]) == -1.5
+    assert b"NaN" not in canonical_json_bytes(captured)
+
+
+def test_refit03_ndarray_subclass_is_readable_but_not_raw_authority():
+    class _ArraySubclass(np.ndarray):
+        pass
+
+    values = np.ones((3, 2), dtype=np.float64).view(_ArraySubclass)
+    captured = training_subject.capture_raw_diag_covariance_evidence(values, expected_shape=(3, 2))
+
+    assert captured["actual_python_type"].endswith("._ArraySubclass")
+    assert captured["reason_codes"] == ["hmm_risk_model_covariance_raw_type_invalid"]
+    assert len(captured["cells"]) == 6
+    assert captured["raw_validity"] is False
+
+    stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=["initialization", "fit", "raw_covariance_capture", "monitor", "likelihood"],
+        initialization=_current_initialization_evidence(2),
+        monitor_evidence={"history": [-2.0, -1.0]},
+        likelihood={"status": "accepted"},
+        raw_covariance_evidence=captured,
+        stage_specific_cause_evidence={
+            "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+            "covariance_status": "failed",
+            "covariance_valid": False,
+        },
+    )
+    bound = subject._bind_refit03_stage_evidence(stage, role=subject.REFIT02_MATCHED_NEGATIVE_ROLE)[
+        "raw_covariance_evidence"
+    ]
+    assert bound["raw_covariance_payload_sha256"] is None
+    assert bound["diagnostic_evidence_complete"] is False
+
+
+def test_refit03_raw_capture_rejects_bitpattern_conflict_and_preserves_wrong_shape_frame():
+    captured = training_subject.capture_raw_diag_covariance_evidence(
+        np.ones((3, 2), dtype=np.float64),
+        expected_shape=(3, 3),
+    )
+    stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=["initialization", "fit", "raw_covariance_capture"],
+        initialization=_current_initialization_evidence(3),
+        raw_covariance_evidence=captured,
+        stage_specific_cause_evidence={
+            "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+            "covariance_status": "failed",
+            "covariance_valid": False,
+        },
+    )
+    bound = subject._bind_refit03_stage_evidence(stage, role=subject.REFIT02_TREATMENT_ROLE)["raw_covariance_evidence"]
+    assert bound["actual_shape"] == [3, 2]
+    assert bound["raw_covariance_payload_sha256"] is not None
+    assert bound["diagnostic_evidence_complete"] is False
+
+    tampered = deepcopy(captured)
+    tampered["cells"][0]["semantic_bit_pattern_hex"] = "8000000000000000"
+    tampered["capture_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "capture_receipt_sha256"}
+    )
+    tampered_stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=["initialization", "fit", "raw_covariance_capture"],
+        initialization=_current_initialization_evidence(3),
+        raw_covariance_evidence=tampered,
+        stage_specific_cause_evidence={
+            "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+            "covariance_status": "failed",
+            "covariance_valid": False,
+        },
+    )
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._bind_refit03_stage_evidence(tampered_stage, role=subject.REFIT02_TREATMENT_ROLE)
+    assert exc_info.value.reason_code == "hmm_risk_model_covariance_bitpattern_conflict"
+
+
+def test_refit03_bound_covariance_frame_hash_uses_exact_header_and_cell_bits():
+    stage = _core(19).training_stage_evidence
+    assert isinstance(stage, dict)
+
+    bound_stage = subject._bind_refit03_stage_evidence(stage, role=subject.REFIT02_TREATMENT_ROLE)
+    evidence = bound_stage["raw_covariance_evidence"]
+    header = evidence["raw_frame_header"]
+    header_bytes = canonical_json_bytes(header)
+    cell_bits = b"".join(struct.pack(">Q", int(cell["semantic_bit_pattern_hex"], 16)) for cell in evidence["cells"])
+
+    assert evidence["raw_covariance_payload_sha256"] == sha256_bytes(
+        struct.pack(">Q", len(header_bytes)) + header_bytes + cell_bits
+    )
+    assert evidence["diagnostic_evidence_complete"] is True
+    assert evidence["cross_role_state_alignment_performed"] is False
+    assert evidence["semantic_label_accessed"] is False
+    assert evidence["posterior_weighted_variance_about_weighted_mean"] == np.full((3, 19), 0.5).tolist()
+    assert evidence["posterior_second_moment_about_fitted_mean"] == np.full((3, 19), 0.4875).tolist()
+
+
+@pytest.mark.parametrize(
+    ("raw_covars", "derived_status", "covariance_status"),
+    [
+        (
+            np.zeros((3, 20), dtype=np.float64),
+            "not_computable_raw_covariance_invalid",
+            "failed",
+        ),
+        (
+            np.full((3, 20), 0.5, dtype=np.float64),
+            "not_computable_posterior_audit_unavailable",
+            "insufficient_evidence",
+        ),
+        (
+            np.full((3, 20), 0.5, dtype=np.float64),
+            "not_computable_posterior_audit_invalid",
+            "failed",
+        ),
+    ],
+)
+def test_refit03_derived_evidence_status_never_fabricates_bounds(raw_covars, derived_status, covariance_status):
+    error = _covariance_stage_error(
+        20,
+        "covariance audit stopped",
+        raw_covars=raw_covars,
+        derived_status=derived_status,
+        covariance_status=covariance_status,
+    )
+
+    stage = subject._bind_refit03_stage_evidence(error.stage_evidence, role=subject.REFIT02_MATCHED_NEGATIVE_ROLE)
+    evidence = stage["raw_covariance_evidence"]
+
+    assert evidence["d4_derived_evidence_status"] == derived_status
+    assert evidence["covariance_status"] == covariance_status
+    assert evidence["covariance_valid"] is False
+    assert evidence["state_posterior_mass"] is None
+    assert evidence["posterior_weighted_variance_about_weighted_mean"] is None
+    assert evidence["posterior_second_moment_about_fitted_mean"] is None
+    assert evidence["dynamic_lower_reference"] is None
+    assert evidence["dynamic_upper_reference"] is None
+    assert evidence["mstep_expected_covariance"] is None
+
+
+@pytest.mark.parametrize(
+    "raw_covars",
+    [
+        np.ones((3, 20), dtype=np.float32),
+        np.ones((3, 40), dtype=np.float64)[:, ::2],
+        np.ones((3, 20), dtype=np.float64).view(type("RawCovarianceSubclass", (np.ndarray,), {})),
+    ],
+)
+def test_refit03_raw_authority_failure_remains_valid_fail_closed_readback(raw_covars):
+    error = _covariance_stage_error(
+        20,
+        "raw covariance authority is invalid",
+        raw_covars=raw_covars,
+        derived_status="not_computable_raw_covariance_invalid",
+        covariance_status="failed",
+    )
+    bound_stage = subject._bind_refit03_stage_evidence(
+        error.stage_evidence,
+        role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+    )
+
+    assert (
+        subject._validate_refit03_bound_stage_evidence(
+            bound_stage,
+            role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+        )
+        == bound_stage
+    )
+
+
+def test_refit03_computed_d4_cannot_claim_valid_raw_authority_after_rehash():
+    stage = deepcopy(_core(20).training_stage_evidence)
+    raw_capture = stage["raw_covariance_evidence"]
+    raw_capture["actual_python_type"] = "forged.RawCovarianceSubclass"
+    raw_capture["reason_codes"] = ["hmm_risk_model_covariance_raw_type_invalid"]
+    raw_capture["raw_validity"] = False
+    raw_capture["capture_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in raw_capture.items() if key != "capture_receipt_sha256"}
+    )
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    bound_stage = subject._bind_refit03_stage_evidence(
+        stage,
+        role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit03_bound_stage_evidence(
+            bound_stage,
+            role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+        )
+    assert exc_info.value.reason_code == "hmm_risk_model_covariance_bitpattern_conflict"
+
+
+def test_refit03_covariance_failure_preserves_stage_evidence_and_feature_level_pair(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_inactive_covariance_failure(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            raw_covars[:, subject.INACTIVE_FEATURE_INDEX] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "inactive covariance is zero",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_inactive_covariance_failure)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+    matched = [
+        attempt for attempt in processes[0]["attempts"] if attempt["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE
+    ]
+
+    assert all(attempt["diagnostic_evidence_complete"] is True for attempt in matched)
+    assert all(isinstance(attempt["initialization_evidence"], dict) for attempt in matched)
+    assert all(isinstance(attempt["monitor_evidence"], dict) for attempt in matched)
+    assert all(isinstance(attempt["likelihood"], dict) for attempt in matched)
+    assert all(attempt["raw_covariance_evidence"]["invalid_feature_indices"] == [19] for attempt in matched)
+    assert all(
+        "hmm_risk_model_covariance_raw_non_positive" in attempt["failure_reason_codes"]
+        and "hmm_risk_model_covariance_derived_evidence_not_computable" in attempt["failure_reason_codes"]
+        for attempt in matched
+    )
+    assert all(
+        pair["diagnostic_labels"] == ["inactive_coordinate_pattern_consistent"]
+        for pair in processes[0]["pair_receipts"]
+    )
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["covariance_pattern_assessment"] == "inactive_coordinate_pattern_consistent"
+    assert report["d5_compatibility_evidence_ready"] is False
+    for receipt in (processes[0], processes[1], report):
+        assert receipt["validation_accessed"] is False
+        assert receipt["future_utility_accessed"] is False
+        assert receipt["semantic_labelability_accessed"] is False
+        assert receipt["d6_status_accessed"] is False
+
+
+def test_refit03_mixed_seed_pattern_is_complete_but_never_d5_ready(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_mixed_matched_failures(item, *, train, seed):
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            feature_index = subject.INACTIVE_FEATURE_INDEX if seed % 2 == 0 else 0
+            raw_covars[:, feature_index] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "matched covariance is invalid",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_mixed_matched_failures)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["diagnostic_evidence_complete"] is True
+    assert report["covariance_pattern_assessment"] == "mixed_seed_pattern"
+    assert "hmm_risk_model_inactive_dimension_covariance_pattern_mixed" in report["mechanism_assessment_reason_codes"]
+    assert report["d5_compatibility_evidence_ready"] is False
+
+
+def test_refit03_likelihood_failure_keeps_raw_diagnostic_complete_without_fake_bounds(monkeypatch):
+    treatment, _, authority, _ = _refit02_authorities(monkeypatch)
+    raw_capture = training_subject.capture_raw_diag_covariance_evidence(
+        np.full((3, 19), 0.5, dtype=np.float64),
+        expected_shape=(3, 19),
+    )
+    stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=["initialization", "fit", "raw_covariance_capture", "monitor"],
+        initialization=_current_initialization_evidence(19),
+        monitor_evidence={"history": [-2.0, -1.0]},
+        raw_covariance_evidence=raw_capture,
+        stage_specific_cause_evidence={
+            "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
+            "covariance_status": "insufficient_evidence",
+            "covariance_valid": False,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            training_subject.B3TrainingStageError(
+                "likelihood",
+                "hmm_risk_model_likelihood_evidence_invalid",
+                ValueError("likelihood receipt unavailable"),
+                stage_evidence=stage,
+            )
+        ),
+    )
+
+    attempt = subject.fit_refit02_attempt(
+        treatment,
+        preprocess=_preprocess(),
+        role=subject.REFIT02_TREATMENT_ROLE,
+        seed=42,
+        process_identity="fresh_process_1",
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+    )
+
+    assert attempt["status"] == "fit_failed"
+    assert attempt["diagnostic_evidence_complete"] is True
+    assert attempt["raw_covariance_evidence"]["covariance_status"] == "insufficient_evidence"
+    assert attempt["raw_covariance_evidence"]["dynamic_lower_reference"] is None
+    assert "hmm_risk_model_covariance_derived_evidence_not_computable" in attempt["failure_reason_codes"]
+
+
+def test_refit03_computed_d4_failure_is_terminal_model_failure_with_complete_raw_evidence(monkeypatch):
+    treatment, _, authority, _ = _refit02_authorities(monkeypatch)
+    covars = np.full((3, 20), 0.5, dtype=np.float64)
+    covars[0, subject.INACTIVE_FEATURE_INDEX] = 10.0
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        lambda *args, **kwargs: _core(20, covars=covars),
+    )
+
+    attempt = subject.fit_refit02_attempt(
+        treatment,
+        preprocess=_preprocess(),
+        role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+        seed=42,
+        process_identity="fresh_process_1",
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+    )
+
+    assert attempt["status"] == "fit_failed"
+    assert attempt["failure_stage"] == "covariance"
+    assert attempt["diagnostic_evidence_complete"] is True
+    assert "hmm_risk_model_covariance_bounds_failed" in attempt["failure_reason_codes"]
+    assert "hmm_risk_model_covariance_raw_bounds_failed" in attempt["failure_reason_codes"]
+    assert attempt["raw_covariance_evidence"]["invalid_feature_indices"] == [19]
+    subject._validate_refit02_attempt_receipt(
+        attempt,
+        process_identity="fresh_process_1",
+        current_authority=authority,
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "classification_count",
+        "invalid_feature_indices",
+        "raw_payload_hash",
+        "d4_formula_identity",
+        "cell_order",
+        "actual_nbytes",
+        "actual_strides",
+        "raw_capture_receipt",
+    ],
+)
+def test_refit03_rehashed_bound_covariance_internal_tamper_fails_readback(monkeypatch, tamper):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    raw = attempt["raw_covariance_evidence"]
+    if tamper == "classification_count":
+        raw["classification_count_by_feature"] = {"forged": {"finite_positive": 999}}
+    elif tamper == "invalid_feature_indices":
+        raw["invalid_feature_indices"] = [0]
+    elif tamper == "raw_payload_hash":
+        raw["raw_covariance_payload_sha256"] = "0" * 64
+    elif tamper == "d4_formula_identity":
+        raw["d4_formula_identity"]["bound_tolerance"] = 0.5
+        raw["d4_formula_identity_sha256"] = canonical_sha256(raw["d4_formula_identity"])
+    elif tamper == "cell_order":
+        raw["cells"] = list(reversed(raw["cells"]))
+    elif tamper == "actual_nbytes":
+        raw["actual_nbytes"] += 8
+    elif tamper == "actual_strides":
+        raw["actual_strides"] = [8, 8]
+    elif tamper == "raw_capture_receipt":
+        raw["raw_capture_receipt_sha256"] = "0" * 64
+    raw["covariance_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in raw.items() if key != "covariance_evidence_sha256"}
+    )
+    stage = attempt["training_stage_evidence"]
+    stage["raw_covariance_evidence"] = raw
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["raw_covariance_evidence"] = raw
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code in {
+        "hmm_risk_model_covariance_bitpattern_conflict",
+        "hmm_risk_model_covariance_evidence_incomplete",
+    }
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["stage_order", "stage_monitor", "attempt_monitor", "attempt_covariance"],
+)
+def test_refit03_rehashed_stage_or_attempt_lineage_tamper_fails_readback(monkeypatch, tamper):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    stage = attempt["training_stage_evidence"]
+    if tamper == "stage_order":
+        stage["completed_stages"].remove("monitor")
+    elif tamper == "stage_monitor":
+        stage["monitor_evidence"] = {"history": [-999.0], "status": "accepted"}
+    elif tamper == "attempt_monitor":
+        attempt["monitor_evidence"] = {"history": [-999.0], "status": "accepted"}
+    elif tamper == "attempt_covariance":
+        attempt["covariance"] = {"covariance_status": "accepted", "covariance_valid": False}
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code in {
+        "hmm_risk_model_training_stage_evidence_incomplete",
+        "hmm_risk_model_covariance_bitpattern_conflict",
+    }
+
+
+def test_refit03_rehashed_derived_covariance_formula_tamper_fails_readback(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    stage = attempt["training_stage_evidence"]
+    stage["covariance_evidence"]["state_posterior_mass"] = [999.0, 999.0, 999.0]
+    raw = attempt["raw_covariance_evidence"]
+    raw["state_posterior_mass"] = [999.0, 999.0, 999.0]
+    raw["covariance_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in raw.items() if key != "covariance_evidence_sha256"}
+    )
+    stage["raw_covariance_evidence"] = raw
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["raw_covariance_evidence"] = raw
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code == "hmm_risk_model_covariance_bitpattern_conflict"
+
+
+def test_refit03_positive_harness_pre_covariance_failure_cannot_claim_inactive_pattern(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_failed_harness(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.CONTROL_SECTOR:
+            raise _initialization_stage_error("positive harness failed before covariance")
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            raw_covars[:, subject.INACTIVE_FEATURE_INDEX] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "inactive covariance is zero",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_failed_harness)
+    process = subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity="fresh_process_1",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+    assert process["diagnostic_evidence_complete"] is True
+    assert all(pair["diagnostic_labels"] == ["cross_role_failure_present"] for pair in process["pair_receipts"])
+
+
+def test_refit03_positive_harness_d4_failure_cannot_claim_inactive_pattern(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_failed_harness_d4(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.CONTROL_SECTOR:
+            return _core(int(train.shape[1]), train_occupancy_valid=False)
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            raw_covars[:, subject.INACTIVE_FEATURE_INDEX] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "inactive covariance is zero",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_failed_harness_d4)
+    process = subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity="fresh_process_1",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+    assert process["diagnostic_evidence_complete"] is True
+    assert all(pair["diagnostic_labels"] == ["cross_role_failure_present"] for pair in process["pair_receipts"])
+
+
+def test_refit03_invalid_stage_envelope_is_persisted_as_incomplete_not_raised(monkeypatch):
+    treatment, _, authority, _ = _refit02_authorities(monkeypatch)
+    invalid_stage = training_subject._training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=False,
+        completed_stages=["initialization"],
+        initialization=_current_initialization_evidence(19),
+    )
+    invalid_stage["stage_evidence_sha256"] = "0" * 64
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            training_subject.B3TrainingStageError(
+                "fit",
+                "hmm_risk_model_fit_failed",
+                ValueError("fit failed"),
+                stage_evidence=invalid_stage,
+            )
+        ),
+    )
+
+    attempt = subject.fit_refit02_attempt(
+        treatment,
+        preprocess=_preprocess(),
+        role=subject.REFIT02_TREATMENT_ROLE,
+        seed=42,
+        process_identity="fresh_process_1",
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+    )
+
+    assert attempt["status"] == "fit_failed"
+    assert attempt["diagnostic_evidence_complete"] is False
+    assert "hmm_risk_model_training_stage_evidence_incomplete" in attempt["failure_reason_codes"]
+
+
+def test_refit03_pair_receipt_rejects_cross_role_state_alignment(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    tampered = deepcopy(process["pair_receipts"][0])
+    tampered["cross_role_state_alignment_performed"] = True
+    tampered["pair_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "pair_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="pair receipt is invalid"):
+        subject._validate_refit03_pair_receipt(tampered)
+
+
+def test_refit02_current_matched_fit_and_initialization_tamper_fail_closed(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    negative = next(value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE)
+
+    fit_tampered = deepcopy(negative)
+    fit_tampered["fit_performed"] = False
+    fit_tampered["status"] = "fit_failed"
+    fit_tampered["fit_status"] = "failed"
+    fit_tampered["role_outcome"] = "negative_control_not_reproduced"
+    fit_tampered["negative_control_blocker_reproduced"] = False
+    fit_tampered["failure_stage"] = "initialization"
+    fit_tampered["failure_reason_codes"] = ["hmm_risk_model_inactive_dimension_negative_control_not_reproduced"]
+    fit_tampered["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in fit_tampered.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError) as fit_error:
+        subject._validate_refit02_attempt_receipt(
+            fit_tampered,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert fit_error.value.reason_code == "hmm_risk_model_inactive_dimension_contract_invalid"
+
+    initialization_tampered = deepcopy(negative)
+    initialization_tampered["initialization_evidence"] = {
+        **_current_initialization_evidence(),
+        "formal_initialization_contract_applied": False,
+    }
+    initialization_tampered["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in initialization_tampered.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="initialization evidence is not authoritative"):
+        subject._validate_refit02_attempt_receipt(
+            initialization_tampered,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+
+
+def test_refit02_current_and_legacy_schemas_are_explicit_and_cannot_mix(monkeypatch):
+    current_first = _refit02_process(monkeypatch, "fresh_process_1")
+    current_second = _refit02_process(monkeypatch, "fresh_process_2")
+    matched_fit_first = _as_matched_fit_refit02_process(current_first)
+    matched_fit_second = _as_matched_fit_refit02_process(current_second)
+    legacy_first = _as_legacy_refit02_process(current_first)
+    legacy_second = _as_legacy_refit02_process(current_second)
+    original_first = _as_original_refit02_process(legacy_first)
+    original_second = _as_original_refit02_process(legacy_second)
+
+    assert current_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION
+    current_report = subject.build_refit02_report(current_first, current_second, producer_commit="1" * 40)
+    assert current_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION
+    assert current_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT
+    assert subject.validate_refit02_report(current_report) == current_report
+
+    assert matched_fit_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT
+    matched_fit_report = subject.build_refit02_report(
+        matched_fit_first,
+        matched_fit_second,
+        producer_commit="1" * 40,
+    )
+    assert matched_fit_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT
+    assert matched_fit_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT_MATCHED_FIT
+    assert subject.validate_refit02_report(matched_fit_report) == matched_fit_report
+
+    assert legacy_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
+    assert legacy_first["fit_budget_contract_version"] == subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
+    legacy_report = subject.build_refit02_report(legacy_first, legacy_second, producer_commit="1" * 40)
+    assert legacy_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_LEGACY
+    assert legacy_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
+    assert legacy_report["fit_budget_contract_version"] == subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
+    assert subject.validate_refit02_report(legacy_report) == legacy_report
+
+    assert original_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL
+    assert "fit_budget_contract_version" not in original_first
+    original_report = subject.build_refit02_report(original_first, original_second, producer_commit="1" * 40)
+    assert original_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL
+    assert original_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
+    assert "fit_budget_contract_version" not in original_report
+    assert subject.validate_refit02_report(original_report) == original_report
+
+    mixed_attempts = deepcopy(current_first["attempts"])
+    mixed_attempts[0] = deepcopy(matched_fit_first["attempts"][0])
+    with pytest.raises(subject.D1InactiveDimensionError, match="cannot mix current and legacy"):
+        subject.build_refit02_process_receipt(
+            process_identity="fresh_process_1",
+            producer_commit="1" * 40,
+            attempts=mixed_attempts,
+            current_authority=current_first["current_authority"],
+            historical_reference=current_first["historical_reference"],
+        )
+
+    downgraded_current = deepcopy(current_first["attempts"][0])
+    downgraded_current.pop("fit_budget_contract_version")
+    downgraded_current["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in downgraded_current.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="attempt receipt is invalid"):
+        subject._validate_refit02_attempt_receipt(
+            downgraded_current,
+            process_identity="fresh_process_1",
+            current_authority=current_first["current_authority"],
+        )
