@@ -262,6 +262,8 @@ Body：
 }
 ```
 
+`review_policy` 允许为空或只覆盖部分字段，但服务端必须在冻结 Program 前调用当前荐股与历史荐股共用的 `normalize_advisory_review_policy`。归一化结果必须完整包含 `rank_enter_threshold/rank_exit_threshold/rank_exit_confirm_days/daily_replacement_budget/stop_loss_bps/take_profit_bps/trailing_stop_bps/time_stop_days/take_profit_mode`；其中两个 rank 阈值默认分别绑定 `target_count` 与 `target_count * 2`，其余默认值沿用当前荐股权威合同。`program_config/review_policy/review_policy_hash` 必须同时记录归一化后的同一语义，不得冻结空对象后在逐日执行阶段补默认值或静默 fallback。该处理是请求合同归一化，不是 StrategyPackage 二次验证、业务门禁或审批。
+
 服务端补充 `request_id/requested_at/requested_by/data_source/origin/research_scope/evidence_level/execution_prohibited`，并把 Header 映射为 domain `client_idempotency_key`。客户端不得提交：
 
 - `research_program_id`、`alpha_mode`、package version、manifest、component、weight；
