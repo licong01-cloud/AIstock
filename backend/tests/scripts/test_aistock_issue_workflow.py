@@ -2998,6 +2998,12 @@ _BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
 _BUSINESS_SMOKE_SCOPED_SCHEDULER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
 )
+_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL = (
+    "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum"
+    "?source=manual&expected_is_available=false"
+    "&expected_disable_reason_code=PIT_CAUSALITY_VIOLATION"
+    "&expected_disable_batch_id=BUG-1302_pit_causality_quarantine_20260901"
+)
 _BUG992_RECORD_REF = (
     "tests/aistock_validation/bugs/"
     "20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
@@ -3048,6 +3054,136 @@ def _semantic_runtime_issue(root: Path, *, smoke_url: str) -> Path:
 
 def _smoke_probe(payload: dict[str, Any]) -> dict[str, Any]:
     return next(probe for probe in payload["probes"] if probe["name"] == "business_smoke_ref")
+
+
+def _factor_quarantine_payload(**overrides: Any) -> dict[str, Any]:
+    factor: dict[str, Any] = {
+        "id": 1235,
+        "factor_name": "neg_vol_adjusted_momentum",
+        "source": "manual",
+        "is_available": False,
+        "disable_reason": (
+            "PIT_CAUSALITY_VIOLATION: future-append replay changed historical factor values"
+        ),
+        "disable_batch_id": "BUG-1302_pit_causality_quarantine_20260901",
+        "disable_at": "2026-09-01T11:11:12.285620+08:00",
+        "rehab_candidate": False,
+    }
+    factor.update(overrides)
+    return {"ok": True, "domain": "factor_library", "factor": factor}
+
+
+def test_post_restart_verify_accepts_bound_factor_quarantine_detail(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"] == {
+        "factor_id": 1235,
+        "factor_name": "neg_vol_adjusted_momentum",
+        "source": "manual",
+        "is_available": False,
+        "disable_reason_code": "PIT_CAUSALITY_VIOLATION",
+        "disable_batch_id": "BUG-1302_pit_causality_quarantine_20260901",
+        "disable_at": "2026-09-01T11:11:12.285620+08:00",
+        "rehab_candidate": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_fragment"),
+    [
+        ({"factor_name": "other_factor"}, "factor_name does not match"),
+        ({"source": "qe"}, "source does not match"),
+        ({"is_available": True}, "availability mismatch"),
+        ({"disable_reason": ""}, "missing disable_reason"),
+        ({"disable_reason": "OTHER_REASON: disabled"}, "reason code does not match"),
+        ({"disable_batch_id": "other_batch"}, "disable_batch_id does not match"),
+        ({"disable_at": "2026-09-01T11:11:12"}, "timezone-aware timestamp"),
+        ({"disable_at": "not-a-timestamp"}, "timezone-aware timestamp"),
+        ({"rehab_candidate": True}, "rehab_candidate=false"),
+    ],
+)
+def test_post_restart_verify_rejects_unbound_or_incomplete_factor_quarantine_detail(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    reason_fragment: str,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload(**overrides)).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert reason_fragment in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_rejects_factor_detail_without_explicit_lifecycle_expectation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=(
+            "http://127.0.0.1:8001/api/v1/factor-library/factors/"
+            "neg_vol_adjusted_momentum?source=manual"
+        ),
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert "expected_is_available" in smoke["semantic"]["reason"]
 
 
 def test_post_restart_verify_blocks_failed_retryable_run_payload_on_http_200(
