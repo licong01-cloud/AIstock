@@ -1,6 +1,8 @@
 {
   "actual": "The merged C-012-RL1 immutable input-bundle reader hard-codes float32 for every fixed H5 component. All real approved index_context index_daily.h5 assets have the exact nine-column schema but float64 payloads, so formal source preflight fails at zero fits. Fix must preserve index float64 authority, keep daily_basic/moneyflow float32, fail closed on component dtype drift, and add real-contract targeted tests without changing RW1 model, seed, fold, threshold, DB, runtime, or source values.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "tests/aistock_validation/bugs/20260901_BUG-1300-formal-hmm-input-bundle-rejects-authoritative-float64-index-context.json"
   ],
   "assigned_agent": null,
@@ -35,9 +37,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1300-formal-hmm-input-bundle-rejects-authoritative-float64-index-context.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1300-formal-hmm-input-bundle-rejects-authoritative-float64-index-context.json"
+    ]
   },
   "first_seen_at": "2026-09-01T02:52:29.647962Z",
   "fix_branch": null,
