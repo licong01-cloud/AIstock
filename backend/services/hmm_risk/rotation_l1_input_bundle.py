@@ -874,6 +874,7 @@ def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence
         "identity",
         "research_basis",
         "l1_projection",
+        "l2_projection",
     }:
         raise _fail(REASON_MANIFEST_INVALID, "C-013 industry authority schema differs")
     root = Path(str(authority.get("artifact_root") or ""))
@@ -887,6 +888,7 @@ def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence
         )
         adapter.bind_research_basis_contract(authority["research_basis"])
         adapter.bind_l1_code_projection(authority["l1_projection"])
+        adapter.bind_l2_code_projection(authority["l2_projection"])
     except Exception as exc:
         raise _fail(REASON_AUTHORITY_AMBIGUOUS, "C-013 authority cannot be bound") from exc
     return adapter
@@ -2316,6 +2318,7 @@ def _validated_mapping_manifest(value: Any, *, source: Mapping[str, Any]) -> dic
         "active_classification_basis",
         "non_as_known_taxonomy",
         "l1_code_projection_sha256",
+        "l2_code_projection_sha256",
         "constituent_manifest_hash",
     }
     if not isinstance(value, Mapping) or set(value) != expected:

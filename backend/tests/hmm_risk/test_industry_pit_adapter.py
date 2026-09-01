@@ -22,6 +22,7 @@ from backend.services.industry_pit.contracts import (
 from backend.services.hmm_risk.industry_pit_adapter import (
     HMMIndustryPitAdapter,
     build_l1_code_projection_authority,
+    build_l2_code_projection_authority,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError
 from backend.services.hmm_risk.stock_fact_repository import PostgresStockFactReader
@@ -182,8 +183,8 @@ def _bundle(tmp_path: Path, *, target_unavailable: bool = False, drop_last_l1: b
     )
 
 
-def _bind(adapter: HMMIndustryPitAdapter) -> None:
-    adapter.bind_l1_code_projection(
+def _l1_projection() -> dict[str, object]:
+    return dict(
         build_l1_code_projection_authority(
             taxonomy_contract_id="sw2021_classification_catalog_v1",
             taxonomy_version="SW2021",
@@ -203,6 +204,82 @@ def _bind(adapter: HMMIndustryPitAdapter) -> None:
             source_hashes=(HASH, "b" * 64),
         )
     )
+
+
+def _l2_projection_inputs() -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    taxonomy_rows: list[dict[str, str]] = []
+    published_rows: list[dict[str, str]] = []
+    member_rows: list[dict[str, str]] = []
+    ordinal = 0
+    for l1_number in range(1, 32):
+        l2_count = 5 if l1_number <= 7 else 4
+        for l2_number in range(1, l2_count + 1):
+            ordinal += 1
+            taxonomy_l2_code = f"{l1_number:02d}{l2_number:02d}00"
+            canonical_l2_code = f"801{200 + ordinal:03d}.SI"
+            taxonomy_rows.append(
+                {
+                    "taxonomy_l1_code": f"{l1_number:02d}0000",
+                    "taxonomy_l1_name": f"L1-{l1_number:02d}",
+                    "taxonomy_l2_code": taxonomy_l2_code,
+                    "taxonomy_l2_name": f"L2-{l1_number:02d}-{l2_number:02d}",
+                }
+            )
+            published_rows.append(
+                {
+                    "level": "L2",
+                    "industry_code": taxonomy_l2_code,
+                    "industry_name": f"L2-{l1_number:02d}-{l2_number:02d}",
+                    "index_code": canonical_l2_code,
+                    "parent_code": f"801{l1_number:03d}.SI",
+                }
+            )
+            member_rows.append({"l1_code": f"801{l1_number:03d}.SI", "l2_code": canonical_l2_code})
+    for extra in range(1, 4):
+        taxonomy_l2_code = f"{extra:02d}9900"
+        canonical_l2_code = f"801{900 + extra:03d}.SI"
+        taxonomy_rows.append(
+            {
+                "taxonomy_l1_code": f"{extra:02d}0000",
+                "taxonomy_l1_name": f"L1-{extra:02d}",
+                "taxonomy_l2_code": taxonomy_l2_code,
+                "taxonomy_l2_name": f"L2-{extra:02d}-unpublished",
+            }
+        )
+        published_rows.append(
+            {
+                "level": "L2",
+                "industry_code": taxonomy_l2_code,
+                "industry_name": f"L2-{extra:02d}-unpublished",
+                "index_code": canonical_l2_code,
+                "parent_code": f"801{extra:03d}.SI",
+            }
+        )
+    assert ordinal == 131
+    return taxonomy_rows, published_rows, member_rows
+
+
+def _l2_projection(l1_projection: dict[str, object]) -> dict[str, object]:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    return dict(
+        build_l2_code_projection_authority(
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+            taxonomy_rows=taxonomy_rows,
+            published_index_rows=published_rows,
+            member_index_rows=member_rows,
+            l1_projection_authority=l1_projection,
+            source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+            source_hashes=(HASH, "b" * 64, "c" * 64),
+        )
+    )
+
+
+def _bind(adapter: HMMIndustryPitAdapter) -> None:
+    l1_projection = _l1_projection()
+    adapter.bind_l1_code_projection(l1_projection)
+    adapter.bind_l2_code_projection(_l2_projection(l1_projection))
 
 
 def _research_basis(*, active_mode: str = "historical_replay") -> dict[str, object]:
@@ -284,9 +361,9 @@ def test_adapter_uses_classification_assignment_and_aligned_index_code_projectio
     assert projection.status == "resolved"
     assert projection.l1_code == "801001.SI"
     assert projection.l1_name == "L1-01"
-    assert projection.l2_code == "010100"
+    assert projection.l2_code == "801201.SI"
     assert projection.alignment_state == "aligned"
-    assert len(adapter.classification_lookup) == 62
+    assert len(adapter.classification_lookup) == 324
     assert len(adapter.constituents) == 31
     assert sum(len(value["l2_codes"]) for value in adapter.constituents.values()) == 131
     assert projection.as_dict()["classification_research_basis"] == "as_published_pit"
@@ -322,6 +399,8 @@ def test_historical_backcast_resolves_unique_frozen_candidate_and_marks_non_as_k
     assert manifest["active_classification_basis"] == "stable_taxonomy_backcast"
     assert manifest["non_as_known_taxonomy"] is True
     assert manifest["stable_backcast_candidate_sha256"] is not None
+    assert manifest["canonical_l2_count"] == 131
+    assert manifest["l2_code_projection_sha256"] is not None
     assert manifest["source_classification_authority_receipt_hash"] != manifest["classification_authority_receipt_hash"]
     assert projection.as_dict()["classification_research_basis"] == "stable_taxonomy_backcast"
     assert projection.as_dict()["non_as_known_taxonomy"] is True
@@ -420,6 +499,8 @@ def test_601d_preflight_closes_full_denominator_and_performs_no_model_work(tmp_p
     assert report["model_or_ready_written"] is False
     assert report["l1_code_projection_status"] == "bound"
     assert report["l1_code_projection_sha256"] is not None
+    assert report["l2_code_projection_status"] == "bound"
+    assert report["l2_code_projection_sha256"] is not None
 
 
 def test_preflight_rejects_unbound_l1_projection(tmp_path: Path) -> None:
@@ -434,6 +515,155 @@ def test_preflight_rejects_unbound_l1_projection(tmp_path: Path) -> None:
 
     with pytest.raises(StateModelSetError, match="L1 code projection has not been bound"):
         adapter.preflight(denominator, expected_trading_days=2)
+
+
+def test_preflight_rejects_unbound_l2_projection(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
+    adapter.bind_l1_code_projection(_l1_projection())
+    denominator = FrozenDenominator.build(
+        window_start=date(2022, 1, 3),
+        window_end=date(2022, 1, 4),
+        trading_dates=(date(2022, 1, 3), date(2022, 1, 4)),
+        universe_spans=(UniverseSpan("000001.SZ", date(2022, 1, 1), date(2022, 1, 5)),),
+    )
+
+    with pytest.raises(StateModelSetError, match="L2 code projection has not been bound"):
+        adapter.preflight(denominator, expected_trading_days=2)
+
+
+@pytest.mark.parametrize("member_count", [130, 132])
+def test_l2_projection_builder_rejects_noncanonical_member_backed_denominator(member_count: int) -> None:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    if member_count == 130:
+        member_rows = member_rows[:-1]
+    else:
+        member_rows = [
+            *member_rows,
+            {"l1_code": published_rows[-1]["parent_code"], "l2_code": published_rows[-1]["index_code"]},
+        ]
+
+    with pytest.raises(StateModelSetError, match="exactly 131 published codes"):
+        build_l2_code_projection_authority(
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+            taxonomy_rows=taxonomy_rows,
+            published_index_rows=published_rows,
+            member_index_rows=member_rows,
+            l1_projection_authority=_l1_projection(),
+            source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+            source_hashes=(HASH, "b" * 64, "c" * 64),
+        )
+
+
+def test_l2_projection_builder_rejects_parent_owner_drift() -> None:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    published_rows[0] = {**published_rows[0], "parent_code": "801002.SI"}
+
+    with pytest.raises(StateModelSetError, match="member-backed L2 parent ownership differs"):
+        build_l2_code_projection_authority(
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+            taxonomy_rows=taxonomy_rows,
+            published_index_rows=published_rows,
+            member_index_rows=member_rows,
+            l1_projection_authority=_l1_projection(),
+            source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+            source_hashes=(HASH, "b" * 64, "c" * 64),
+        )
+
+
+def test_l2_projection_builder_rejects_published_name_drift() -> None:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    published_rows[0] = {**published_rows[0], "industry_name": "different-name"}
+
+    with pytest.raises(StateModelSetError, match="parent or name authority differs"):
+        build_l2_code_projection_authority(
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+            taxonomy_rows=taxonomy_rows,
+            published_index_rows=published_rows,
+            member_index_rows=member_rows,
+            l1_projection_authority=_l1_projection(),
+            source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+            source_hashes=(HASH, "b" * 64, "c" * 64),
+        )
+
+
+def test_l2_projection_builder_accepts_member_taxonomy_l1_alias_when_it_closes_same_parent() -> None:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    member_rows.append({"l1_code": "010000", "l2_code": member_rows[0]["l2_code"]})
+
+    authority = build_l2_code_projection_authority(
+        taxonomy_contract_id="sw2021_classification_catalog_v1",
+        taxonomy_version="SW2021",
+        projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+        taxonomy_rows=taxonomy_rows,
+        published_index_rows=published_rows,
+        member_index_rows=member_rows,
+        l1_projection_authority=_l1_projection(),
+        source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+        source_hashes=(HASH, "b" * 64, "c" * 64),
+    )
+
+    assert len(authority["rows"]) == 131
+
+
+def test_l2_projection_builder_rejects_duplicate_published_code() -> None:
+    taxonomy_rows, published_rows, member_rows = _l2_projection_inputs()
+    published_rows[1] = {**published_rows[1], "index_code": published_rows[0]["index_code"]}
+
+    with pytest.raises(StateModelSetError, match="duplicate index codes"):
+        build_l2_code_projection_authority(
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            projection_version="sw2021_taxonomy_to_published_member_backed_l2_v1",
+            taxonomy_rows=taxonomy_rows,
+            published_index_rows=published_rows,
+            member_index_rows=member_rows,
+            l1_projection_authority=_l1_projection(),
+            source_ids=("test:taxonomy", "test:index", "test:member-catalog"),
+            source_hashes=(HASH, "b" * 64, "c" * 64),
+        )
+
+
+def test_adapter_rejects_l2_projection_hash_drift(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    l1_projection = _l1_projection()
+    l2_projection = _l2_projection(l1_projection)
+    l2_projection["canonical_hash"] = "f" * 64
+    adapter.bind_l1_code_projection(l1_projection)
+
+    with pytest.raises(StateModelSetError, match="L2 code projection hash is invalid"):
+        adapter.bind_l2_code_projection(l2_projection)
+
+
+def test_adapter_rejects_self_hashed_l2_projection_that_omits_an_observed_taxonomy_code(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    l1_projection = _l1_projection()
+    l2_projection = _l2_projection(l1_projection)
+    rows = list(l2_projection["rows"])
+    replacement = dict(rows[0])
+    replacement.update(
+        {
+            "taxonomy_l2_code": "019900",
+            "taxonomy_l2_name": "L2-01-unpublished",
+            "canonical_l2_code": "801901.SI",
+            "canonical_l2_name": "L2-01-unpublished",
+        }
+    )
+    replacement_body = {key: value for key, value in replacement.items() if key != "row_hash"}
+    replacement["row_hash"] = digest_named_fields("hmm_risk_industry_l2_code_projection_row_v1", replacement_body)
+    l2_projection["rows"] = [replacement, *rows[1:]]
+    authority_body = {key: value for key, value in l2_projection.items() if key != "canonical_hash"}
+    l2_projection["canonical_hash"] = digest_named_fields("hmm_risk_industry_l2_code_projection_v1", authority_body)
+    adapter.bind_l1_code_projection(l1_projection)
+
+    with pytest.raises(StateModelSetError, match="observed taxonomy L2 escapes"):
+        adapter.bind_l2_code_projection(l2_projection)
 
 
 @pytest.mark.parametrize("method_name", ["iter_stock_fact_rows", "iter_missing_price_rows"])
