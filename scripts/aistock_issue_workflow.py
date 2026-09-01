@@ -3331,6 +3331,121 @@ def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", f"correlation status payload reports unknown status: {normalized}", {}
 
 
+_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
+    "paper_v2.simulation_account_v1",
+    "paper_v2.legacy_localsim_account_lineage_v1",
+    "paper_v2.localsim_replay_job_v1",
+    "paper_v2.localsim_runtime_profile_v1",
+    "paper_v2.localsim_runtime_profile_version_v1",
+    "paper_v2.simulation_ledger_scope_v1",
+    "strategy_pkg.strategy_runtime_release",
+    "paper_v2.simulation_release_binding",
+    "paper_v2.simulation_daily_run",
+    "paper_v2.run",
+    "paper_v2.intraday_snapshots",
+})
+
+
+def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the complete LocalSIM cutover authority to report a safe boundary."""
+    if not isinstance(payload, dict):
+        return "failed", "LocalSIM cutover-readiness payload must be a JSON object", {}
+    if payload.get("ok") is not True:
+        return "failed", "LocalSIM cutover-readiness payload must report ok=true", {}
+    readiness = payload.get("readiness")
+    if not isinstance(readiness, dict):
+        return "failed", "LocalSIM cutover-readiness payload is missing readiness", {}
+    if readiness.get("schema_version") != "localsim_cutover_readiness_v1":
+        return "failed", "LocalSIM cutover-readiness schema_version is invalid", {}
+    checked_at = readiness.get("checked_at")
+    if not isinstance(checked_at, str) or not checked_at.strip():
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+    try:
+        parsed_checked_at = datetime.fromisoformat(checked_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+    if parsed_checked_at.tzinfo is None:
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+
+    ready = readiness.get("ready")
+    blockers = readiness.get("blockers")
+    if type(ready) is not bool:
+        return "failed", "LocalSIM cutover-readiness ready must be boolean", {}
+    if not isinstance(blockers, list) or any(not isinstance(item, str) or not item.strip() for item in blockers):
+        return "failed", "LocalSIM cutover-readiness blockers must be a list of non-empty strings", {}
+    if ready != (not blockers):
+        return "failed", "LocalSIM cutover-readiness ready and blockers are inconsistent", {}
+
+    relation_presence = readiness.get("relation_presence")
+    if (
+        not isinstance(relation_presence, dict)
+        or not relation_presence
+        or any(not isinstance(name, str) or type(present) is not bool for name, present in relation_presence.items())
+    ):
+        return "failed", "LocalSIM cutover-readiness relation_presence is invalid", {}
+    relation_names = set(relation_presence)
+    if relation_names != _LOCALSIM_CUTOVER_REQUIRED_RELATIONS:
+        missing = sorted(_LOCALSIM_CUTOVER_REQUIRED_RELATIONS - relation_names)
+        unexpected = sorted(relation_names - _LOCALSIM_CUTOVER_REQUIRED_RELATIONS)
+        return (
+            "failed",
+            f"LocalSIM cutover-readiness relation_presence keys are invalid: missing={missing}, unexpected={unexpected}",
+            {},
+        )
+    missing_relations = sorted(name for name, present in relation_presence.items() if not present)
+
+    count_fields = (
+        "runtime_fk_count",
+        "orphan_ledger_scope_count",
+        "invalid_ledger_scope_count",
+        "legacy_active_session_count",
+        "legacy_auto_run_count",
+        "legacy_sentinel_count",
+        "in_flight_economic_run_count",
+    )
+    counts: dict[str, int] = {}
+    for field in count_fields:
+        value = readiness.get(field)
+        if type(value) is not int or value < 0:
+            return "failed", f"LocalSIM cutover-readiness {field} must be a non-negative integer", {}
+        counts[field] = value
+
+    retained_accounts = readiness.get("retained_legacy_account_ids")
+    missing_lineages = readiness.get("missing_lineage_account_ids")
+    for field, value in (
+        ("retained_legacy_account_ids", retained_accounts),
+        ("missing_lineage_account_ids", missing_lineages),
+    ):
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+            return "failed", f"LocalSIM cutover-readiness {field} must be a list of non-empty strings", {}
+
+    facts = {
+        "ready": ready,
+        "checked_at": parsed_checked_at.isoformat(),
+        "blockers": list(blockers),
+        "relation_count": len(relation_presence),
+        "missing_relations": missing_relations,
+        **counts,
+        "retained_legacy_account_count": len(retained_accounts),
+        "missing_lineage_account_count": len(missing_lineages),
+    }
+    invariant_failures: list[str] = []
+    if missing_relations:
+        invariant_failures.append(f"missing_relations={missing_relations}")
+    if counts["runtime_fk_count"] != 2:
+        invariant_failures.append(f"runtime_fk_count={counts['runtime_fk_count']}")
+    for field in count_fields[1:]:
+        if counts[field]:
+            invariant_failures.append(f"{field}={counts[field]}")
+    if missing_lineages:
+        invariant_failures.append(f"missing_lineage_account_count={len(missing_lineages)}")
+    if blockers:
+        invariant_failures.append(f"blockers={blockers}")
+    if invariant_failures:
+        return "failed", "LocalSIM cutover is not ready: " + "; ".join(invariant_failures), facts
+    return "passed", None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
@@ -3341,6 +3456,11 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_scheduler_verification_status,
     ),
     (re.compile(r"^/api/v1/simulation-runtime/platform-diagnostics$"), "scheduler_status", _validate_scheduler_status),
+    (
+        re.compile(r"^/api/v1/simulation-runtime/localsim/cutover-readiness$"),
+        "localsim_cutover_readiness",
+        _validate_localsim_cutover_readiness,
+    ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
