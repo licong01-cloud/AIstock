@@ -3788,7 +3788,7 @@ RW1通过D1～D5后才允许写compact candidate，并继续G2-A的真实单日p
 
 ##### A. C-012-RL1-IB-D1：identity、范围与时间边界（USER_APPROVED_EXACT_CONTRACT）
 
-1. input contract固定为`C-012-RL1-IB-D1-D6`，builder algorithm固定为`hmm_risk_rotation_l1_input_bundle_v1`，manifest schema固定为`hmm_risk_rotation_l1_input_bundle_manifest_v1`，build receipt schema固定为`hmm_risk_rotation_l1_input_bundle_build_receipt_v1`。父蓝图authority固定为merge commit `30a42e8fda2eda702ef6b88907a12a0bbac03326`及UTF-8文件字节SHA-256 `2131bd618ba1ca34f41c3a9c674d0f0ccbdba7b204371800b875b22d12800179`；物理路径、mtime、run id、timestamp、elapsed和RSS只作运行信息，不进入bundle canonical identity；elapsed/RSS仅进入build receipt。
+1. input contract固定为`C-012-RL1-IB-D1-D6`，builder algorithm固定为`hmm_risk_rotation_l1_input_bundle_v1`，manifest schema按BUG-1316固定为`hmm_risk_rotation_l1_input_bundle_manifest_v2`，build receipt schema固定为`hmm_risk_rotation_l1_input_bundle_build_receipt_v1`。父蓝图authority固定为merge commit `30a42e8fda2eda702ef6b88907a12a0bbac03326`及UTF-8文件字节SHA-256 `2131bd618ba1ca34f41c3a9c674d0f0ccbdba7b204371800b875b22d12800179`；物理路径、mtime、run id、timestamp、elapsed和RSS只作运行信息，不进入bundle canonical identity；elapsed/RSS仅进入build receipt。
 2. model contract继续为`C-012-RL1-RW1-D1-D6`，algorithm继续为`hmm_risk_rotation_l1_market_conditioned_rolling_ridge_v1`。input contract与model contract独立入manifest；前者变化不允许原地改写后者，后者的feature、target、252日window、120日warmup、alpha、seed、fold和经济/coverage阈值全部不变。
 3. bundle payload只允许覆盖`2020-07-30..2026-03-31`：`2020-07-30`是现有causal `circ_mv`/rolling feature最早历史边界，正式development仍为`2022-01-04..2026-03-31`。任何`trade_date>=2026-04-01`的数据行、calendar行、benchmark行、target或sidecar projection均以`hmm_risk_rotation_l1_input_bundle_holdout_contamination`拒绝；底层dataset即使已发布到`2026-06-30`也必须在bundle build前裁剪，不能把未来行写入后再依赖runner忽略。
 4. canonical sector scope固定为31个L1和131个L2。L1用于rotation，L2只作为market-conditioning carrier；不得因G2-A只交付L1而删除L2 market carrier，也不得把L2 rotation/risk冒充已验收能力。
@@ -3831,7 +3831,7 @@ RW1通过D1～D5后才允许写compact candidate，并继续G2-A的真实单日p
    - `/l1_panel`、`/l2_panel`：按`trade_date,sector_code`升序唯一，固定ASCII sector code，九个RW1实际消费feature：`daily_return,volatility_Nd,net_mf_ratio,sf_breadth_5d,sf_dispersion_5d_neg,excess_return_Nd,elg_net_mf_ratio,sf_excess_breadth_5d,sf_turnover_pctile_120d_neg`；
    - `/validity`：每row/feature的boolean有效位；无效数值payload必须规范化为`+0.0`，reader按mask恢复NA，禁止用NaN payload参与canonical hash；
    - `/unavailable_reason`：`trade_date,level,sector_code,field,reason_code,source_observation_date`，reason必须来自批准枚举；
-   - `/security_identity_intervals`：按`canonical_security_id,valid_from,valid_to,source_code`排序的代码身份有效区间；
+   - `/security_identity_intervals`：按`canonical_security_id,source_dataset,valid_from,valid_to,source_code`排序的代码身份有效区间；`source_dataset`固定为`market.daily_basic`或`market.moneyflow_ts`，两个dataset分别保存并验收，不得要求其`source_code`相同，也不得把一个dataset的alias复制到另一个dataset；
    - `/industry_projection_intervals`：按`canonical_security_id,effective_from,effective_to,l1_code,l2_code`排序的C-013投影有效区间；
    - `/source_status_intervals`：按`canonical_security_id,valid_from,valid_to,status,reason_code,provider`排序的停牌/provider-absence/上市前/退市后互斥区间。三个区间表只保存边界变化，不物化`date×stock`历史副本；reader按calendar展开并逐日验证唯一命中，0或多于1个命中均失败。
 2. bundle不保存fold preprocess、Ridge coefficient、market state、hard state、future target或metric。`build_target_rows`继续在每个fresh process中从bundle的`daily_return`与benchmark计算既有10D future excess/横截面centered target，并严格限制future horizon落在该fold train/validation segment内。
@@ -6401,3 +6401,25 @@ D4/D5/D6、hard semantic authority、24-fit预算或产品验收。C-013继续�
 
 当前状态：`BUG-1309 = SOURCE_REVIEWED_MERGE_READY_PENDING_PR_CI`。该状态不表示immutable bundle已构建、RW1 24-fit已执行、模型已通过或
 板块轮动产品可用；源码合入后的backend restart/post-restart readback仍由用户控制。
+
+### 23.44 BUG-1316：immutable bundle dataset-specific security interval evidence
+
+正式full-universe bundle build证明旧`/security_identity_intervals`把`market.daily_basic`与`market.moneyflow_ts`压缩为一个
+`source_code`：对`302132.SZ`，冻结C-009 authority正确要求daily-basic继续使用`302132.SZ`，moneyflow在历史区间使用
+`300114.SZ`，旧构建器因二者不同而以`hmm_risk_rotation_l1_input_bundle_authority_ambiguous`失败。不能选择任一alias冒充两个dataset，
+也不能删除该行、复制raw fact或用canonical code覆盖source evidence。
+
+1. manifest schema从`hmm_risk_rotation_l1_input_bundle_manifest_v1`升级为
+   `hmm_risk_rotation_l1_input_bundle_manifest_v2`；旧v1 bundle必须显式拒绝，不做兼容补字段或静默升级。canonical serialization算法
+   仍为v1，但logical dataset schema/hash因新增字段自然变化。
+2. 每个canonical security、每个source dataset分别生成区间；合法dataset集合必须严格等于
+   `{market.daily_basic,market.moneyflow_ts}`。每个`(canonical_security_id,source_dataset)`内部区间必须有序、唯一、不重叠，两个dataset
+   对同一上市区间必须逐日同时覆盖；允许且必须保留不同`source_code`。
+3. feature构建继续按`security.resolve(canonical,day,dataset)`独立读取daily-basic与moneyflow；本修复只修正已经存在的紧凑authority evidence，
+   不改变price、moneyflow、circ-mv、industry、provider-absence、停牌、模型feature、target、seed、D4/D5/D6、hard semantic authority或READY合同。
+4. 定向验收必须覆盖dataset-specific alias正例、旧datasetless row拒绝、未知dataset拒绝、单dataset缺口拒绝、同dataset重叠拒绝、H5
+   round-trip/hash/readback，以及现有bundle全部正反例。失败保持typed/fail-closed；不得以忽略evidence或降级为warning恢复构建。
+5. 本BUG不执行HMM fit、selection、D6、model/READY、DDL/DML、依赖安装或进程控制。它通过后必须回到BUG-1306，在最终合入代码上重新执行
+   同一冻结输入、1200秒/4GiB的immutable bundle build，不复用本次失败根冒充成功。
+
+当前状态：`BUG-1316 = SOURCE_IMPLEMENTATION_IN_REVIEW`；该状态不表示BUG-1306已修复、bundle已构建或RW1实验已开始。
