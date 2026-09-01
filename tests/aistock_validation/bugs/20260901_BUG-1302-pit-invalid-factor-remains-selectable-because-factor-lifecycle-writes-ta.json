@@ -184,7 +184,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum?source=manual",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum?source=manual&expected_is_available=false&expected_disable_reason_code=PIT_CAUSALITY_VIOLATION&expected_disable_batch_id=BUG-1302_pit_causality_quarantine_20260901",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum_pit_v2?source=manual",
     "fresh_process_evidence": [
       "Fresh Python process imported branch router/service code and exercised existing DEV schema: quarantine availability and register returned 409; missing disable paths executed current SQL and returned 404/failed with zero writes; quarantine rollback reported rehab_count=0 and blocked_quarantine_count=1; DB readback retained catalog id 1235 disabled and pkg_b668f8a633c44b72a5d557a2cb8970e3 RETIRED.",
