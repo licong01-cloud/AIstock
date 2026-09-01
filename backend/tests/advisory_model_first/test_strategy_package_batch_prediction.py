@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -33,7 +34,9 @@ from backend.services.advisory_model_first.strategy_package_batch_prediction imp
     FACTOR_RESULT_PROJECTION_MODE_FILE,
     StrategyPackageBatchPredictionRunner,
     _assert_file_backed_feature_parity,
+    _prepare_static_panel,
     _publish_prediction_store,
+    _slice_panel,
     _virtualized_factor_io,
     run_factor_group_batch,
 )
@@ -231,6 +234,64 @@ def _fake_factor_runner(
     )
 
 
+def test_instrument_slice_is_independent_without_a_second_deep_copy() -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.date_range("2026-01-02", periods=3), ["000001.SZ", "000002.SZ", "000003.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    source = pd.DataFrame({"close": np.arange(len(index), dtype="float64")}, index=index)
+
+    sliced = _slice_panel(
+        source,
+        start=date(2026, 1, 2),
+        cutoff=date(2026, 1, 4),
+        instruments={"000001.SZ", "000003.SZ"},
+    )
+
+    assert set(sliced.index.get_level_values("instrument")) == {"000001.SZ", "000003.SZ"}
+    assert not np.shares_memory(
+        source["close"].to_numpy(copy=False),
+        sliced["close"].to_numpy(copy=False),
+    )
+    sliced.iloc[0, 0] = -1.0
+    assert source.iloc[0, 0] == 0.0
+
+
+def test_static_precompute_uses_its_single_owned_copy(monkeypatch) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.date_range("2026-01-02", periods=2), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    static_raw = pd.DataFrame({"pb": np.arange(1, len(index) + 1, dtype="float64")}, index=index)
+    daily = pd.DataFrame({"close": np.arange(10, 10 + len(index), dtype="float64")}, index=index)
+    observed: dict[str, bool] = {}
+
+    def compute_once(static: pd.DataFrame, observed_daily: pd.DataFrame) -> pd.DataFrame:
+        observed["shares_input"] = np.shares_memory(
+            static["db_pb"].to_numpy(copy=False),
+            static_raw["pb"].to_numpy(copy=False),
+        )
+        assert observed_daily is daily
+        result = static.copy()
+        result["derived"] = 1.0
+        return result
+
+    monkeypatch.setattr(
+        "backend.services.advisory_model_first.strategy_package_batch_prediction.compute_precomputed_factors",
+        compute_once,
+    )
+    monkeypatch.setattr(
+        "backend.services.advisory_model_first.strategy_package_batch_prediction.validate_precomputed_factors",
+        lambda _frame: (True, []),
+    )
+
+    prepared = _prepare_static_panel(static_raw, daily, canonicalized=True)
+
+    assert observed == {"shares_input": True}
+    prepared.iloc[0, 0] = -1.0
+    assert static_raw.iloc[0, 0] == 1.0
+
+
 def test_batch_runner_reads_once_groups_once_and_loads_each_model_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -243,6 +304,7 @@ def test_batch_runner_reads_once_groups_once_and_loads_each_model_once(
     request = _request(tmp_path, snapshot)
     counts = {"source": 0, "factor": 0, "model": 0}
     exact_window_day_counts: list[int] = []
+    original_dont_write_bytecode = sys.dont_write_bytecode
 
     def source_loader(_universe, _start, _end):  # noqa: ANN001, ANN202
         counts["source"] += 1
@@ -271,6 +333,7 @@ def test_batch_runner_reads_once_groups_once_and_loads_each_model_once(
         return frame
 
     def model_loader(path: Path):  # noqa: ANN202
+        assert sys.dont_write_bytecode is True
         counts["model"] += 1
         order = json.loads((path.parents[1] / "factor_order.json").read_text(encoding="utf-8"))["factor_order"]
         return object(), "fake", None, len(order)
@@ -290,6 +353,7 @@ def test_batch_runner_reads_once_groups_once_and_loads_each_model_once(
     )
 
     assert counts == {"source": 1, "factor": 390, "model": 2}
+    assert sys.dont_write_bytecode is original_dont_write_bytecode
     assert result.batch_receipt["primary_factor_group_run_count"] == 386
     assert result.batch_receipt["primary_decision_batch_count"] == 386
     assert result.batch_receipt["primary_factor_group_run_count_per_decision"] == 1
@@ -351,6 +415,37 @@ def test_batch_runner_rejects_workspace_file_roster_drift(tmp_path: Path) -> Non
         )
 
     assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_ASSET_INVALID"
+
+
+def test_batch_runner_rejects_model_loader_workspace_mutation(tmp_path: Path) -> None:
+    decisions = _decisions()
+    snapshot = _pit_snapshot()
+    request = _request(tmp_path, snapshot)
+    original_dont_write_bytecode = sys.dont_write_bytecode
+
+    def mutating_model_loader(path: Path):  # noqa: ANN202
+        assert sys.dont_write_bytecode is True
+        cache = path.parent / "__pycache__" / "model.cpython-310.pyc"
+        cache.parent.mkdir()
+        cache.write_bytes(b"unexpected bytecode")
+        return object(), "fake", None, 57
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        StrategyPackageBatchPredictionRunner(
+            source_loader=lambda _universe, _start, _end: _source(decisions),
+            factor_runner=_fake_factor_runner,
+            model_loader=mutating_model_loader,
+            model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
+            history_start_resolver=lambda _start, _window: _history_start(decisions),
+        ).run(
+            request=request,
+            pit_snapshot=snapshot,
+            decision_dates=decisions,
+            temp_root=tmp_path / "temp",
+        )
+
+    assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_ASSET_INVALID"
+    assert sys.dont_write_bytecode is original_dont_write_bytecode
 
 
 def test_batch_runner_rejects_future_sensitive_factor_output(tmp_path: Path) -> None:
