@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from enum import Enum
+import math
 from typing import Any, Callable, Iterable, Iterator
 
 import psycopg2.extras
@@ -20,7 +24,6 @@ from backend.services.trading_core.tca_sidecar import (
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
-    DailySelectionEvidence,
     ExecutionPlan,
     ExecutionPlanIntent,
     LocalSimEconomicReceiptV1,
@@ -38,6 +41,7 @@ from .models import (
     TradingRuleDecision,
     canonical_json_sha256,
 )
+from backend.services.simulation_signal.contracts import DailySelectionEvidence
 
 ConnFactory = Callable[[], Iterator[Any]]
 LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY = "local_sim_execution_states_v1"
@@ -46,20 +50,773 @@ LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY = "local_sim_projection_outbox_v1"
 LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY = "local_sim_projection_receipts_v1"
 LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY = "local_sim_economic_generation"
 LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_terminal_failure"
+LOCAL_SIM_PROJECTION_GENERATION_PAYLOAD_KEY = "local_sim_projection_generation"
+LOCAL_SIM_PROJECTION_READBACK_FAILURE_PAYLOAD_KEY = "local_sim_projection_readback_failure"
+LOCAL_SIM_PROJECTION_READBACK_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_readback_terminal_failure"
+LOCAL_SIM_VALUATION_PENDING_PAYLOAD_KEY = "local_sim_valuation_pending_v1"
+LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY = "local_sim_valuation_completion_v1"
+LOCAL_SIM_AUTHORITY_DIAGNOSTIC_LIMIT = 64
+SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY = "simulation_scheduler_retry_control_v1"
+SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA = "simulation_scheduler_retry_control_v1"
+SIMULATION_SCHEDULER_RETRY_ENTRY_SCHEMA = "simulation_scheduler_retry_entry_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY = "simulation_scheduler_retry_claims_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA = "simulation_scheduler_retry_claims_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA = "simulation_scheduler_retry_claim_v1"
+_SIMULATION_SCHEDULER_RETRY_MAX_ENTRIES = 16
+_SIMULATION_SCHEDULER_RETRY_ENTRY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "retry_key",
+        "source_fingerprint",
+        "failure_fingerprint",
+        "failure_stage",
+        "consecutive_failure_count",
+        "attempt_count",
+        "first_failed_at",
+        "last_failed_at",
+        "next_retry_at",
+        "last_attempt_at",
+        "attempt_lease_until",
+        "last_error",
+        "entry_sha256",
+    }
+)
+_SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS = frozenset(
+    {
+        "schema_version",
+        "retry_key",
+        "source_fingerprint",
+        "claimed_at",
+        "lease_until",
+        "claim_token",
+    }
+)
+
+
+@dataclass(frozen=True)
+class SimulationRetryAttemptDecision:
+    run: SimulationDailyRun
+    should_execute: bool
+    reason: str
+    retry_entry: dict[str, Any] | None
+    claim_token: str | None
+
+
+def _retry_required_text(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control text field is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual_type": type(value).__name__,
+            },
+        )
+    return value.strip()
+
+
+def _retry_string(value: Any, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control string field is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual_type": type(value).__name__,
+            },
+        )
+    return value
+
+
+def _retry_as_of_time(value: datetime) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry as-of time must be timezone-aware",
+            context={"reason_code": "SIMULATION_SCHEDULER_RETRY_AS_OF_TIME_INVALID"},
+        )
+    return value.astimezone(UTC)
+
+
+def _retry_sha256(value: Any, *, field: str) -> str:
+    normalized = _retry_required_text(value, field=field).lower()
+    if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control hash is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual": normalized,
+            },
+        )
+    return normalized
+
+
+def _retry_time(value: Any, *, field: str, optional: bool = False) -> datetime | None:
+    if value is None and optional:
+        return None
+    text = _retry_required_text(value, field=field)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control timestamp is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual": text,
+            },
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control timestamp must be timezone-aware",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual": text,
+            },
+        )
+    return parsed.astimezone(UTC)
+
+
+def _retry_positive_int(value: Any, *, field: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control counter is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "field": field,
+                "actual": value,
+            },
+        )
+    return value
+
+
+def _retry_json_safe(value: Any) -> Any:
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            normalized_key = str(key)
+            if normalized_key in normalized:
+                raise InvalidStateTransitionError(
+                    "simulation scheduler retry error context has duplicate normalized keys",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_RETRY_ERROR_CONTEXT_KEY_CONFLICT",
+                        "key": normalized_key,
+                    },
+                )
+            normalized[normalized_key] = _retry_json_safe(item)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_retry_json_safe(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        normalized = [_retry_json_safe(item) for item in value]
+        return sorted(normalized, key=lambda item: repr(item))
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Enum):
+        return _retry_json_safe(value.value)
+    if isinstance(value, bytes):
+        return {
+            "schema_version": "simulation_scheduler_retry_binary_evidence_v1",
+            "hex": value.hex(),
+        }
+    return {
+        "schema_version": "simulation_scheduler_retry_unsupported_evidence_v1",
+        "type": f"{type(value).__module__}.{type(value).__qualname__}",
+    }
+
+
+def simulation_retry_json_safe_evidence(value: Any) -> Any:
+    """Normalize retry diagnostics before both identity hashing and persistence."""
+
+    return _retry_json_safe(value)
+
+
+def _retry_entry_hash_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    return {key: entry[key] for key in sorted(_SIMULATION_SCHEDULER_RETRY_ENTRY_FIELDS - {"entry_sha256"})}
+
+
+def _retry_entry_with_hash(entry: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(entry)
+    normalized["entry_sha256"] = canonical_json_sha256(_retry_entry_hash_payload(normalized))
+    return normalized
+
+
+def _retry_control_with_hash(entries: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "schema_version": SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA,
+        "entries": {key: entries[key] for key in sorted(entries)},
+    }
+    return {**payload, "control_sha256": canonical_json_sha256(payload)}
+
+
+def _simulation_retry_control(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = payload.get(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"schema_version", "entries", "control_sha256"}:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control envelope is invalid",
+            context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"},
+        )
+    if raw.get("schema_version") != SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control schema version is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "actual_schema_version": raw.get("schema_version"),
+            },
+        )
+    entries = raw.get("entries")
+    if not isinstance(entries, dict) or len(entries) > _SIMULATION_SCHEDULER_RETRY_MAX_ENTRIES:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control entries are invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                "entry_count": len(entries) if isinstance(entries, dict) else None,
+            },
+        )
+    normalized_entries: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_entry in entries.items():
+        retry_key = _retry_required_text(raw_key, field="retry_key")
+        if not isinstance(raw_entry, dict) or set(raw_entry) != _SIMULATION_SCHEDULER_RETRY_ENTRY_FIELDS:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry entry is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        entry = dict(raw_entry)
+        if entry.get("schema_version") != SIMULATION_SCHEDULER_RETRY_ENTRY_SCHEMA:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry entry schema version is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        if _retry_required_text(entry.get("retry_key"), field="retry_key") != retry_key:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry entry map identity conflicts with its payload",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_IDENTITY_CONFLICT",
+                    "map_retry_key": retry_key,
+                    "payload_retry_key": entry.get("retry_key"),
+                },
+            )
+        _retry_sha256(entry.get("source_fingerprint"), field="source_fingerprint")
+        _retry_sha256(entry.get("failure_fingerprint"), field="failure_fingerprint")
+        _retry_required_text(entry.get("failure_stage"), field="failure_stage")
+        failure_count = _retry_positive_int(entry.get("consecutive_failure_count"), field="consecutive_failure_count")
+        attempt_count = _retry_positive_int(entry.get("attempt_count"), field="attempt_count")
+        first_failed_at = _retry_time(entry.get("first_failed_at"), field="first_failed_at")
+        last_failed_at = _retry_time(entry.get("last_failed_at"), field="last_failed_at")
+        next_retry_at = _retry_time(entry.get("next_retry_at"), field="next_retry_at")
+        last_attempt_at = _retry_time(entry.get("last_attempt_at"), field="last_attempt_at", optional=True)
+        lease_until = _retry_time(entry.get("attempt_lease_until"), field="attempt_lease_until", optional=True)
+        if first_failed_at is None or last_failed_at is None or next_retry_at is None:
+            raise AssertionError("required retry timestamps were not parsed")
+        if last_failed_at < first_failed_at or next_retry_at < last_failed_at or attempt_count < failure_count:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry entry timeline is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_TIMELINE_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        if (last_attempt_at is None) != (lease_until is None) or (
+            last_attempt_at is not None and lease_until is not None and lease_until < last_attempt_at
+        ):
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry attempt lease is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_TIMELINE_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        last_error = entry.get("last_error")
+        if not isinstance(last_error, dict) or set(last_error) != {"type", "message", "reason_code", "context"}:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry error evidence is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        _retry_required_text(last_error.get("type"), field="last_error.type")
+        _retry_string(last_error.get("message"), field="last_error.message")
+        expected_entry_hash = canonical_json_sha256(_retry_entry_hash_payload(entry))
+        if _retry_sha256(entry.get("entry_sha256"), field="entry_sha256") != expected_entry_hash:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry entry hash drifted",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_HASH_DRIFT",
+                    "retry_key": retry_key,
+                    "expected": expected_entry_hash,
+                    "actual": entry.get("entry_sha256"),
+                },
+            )
+        normalized_entries[retry_key] = entry
+    expected_control = _retry_control_with_hash(normalized_entries)
+    if _retry_sha256(raw.get("control_sha256"), field="control_sha256") != expected_control["control_sha256"]:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry control hash drifted",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_HASH_DRIFT",
+                "expected": expected_control["control_sha256"],
+                "actual": raw.get("control_sha256"),
+            },
+        )
+    return expected_control
+
+
+def _retry_control_payload_with_entries(payload: dict[str, Any], entries: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(payload)
+    if entries:
+        merged[SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY] = _retry_control_with_hash(entries)
+    else:
+        merged.pop(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY, None)
+    return merged
+
+
+def _retry_claim_hash_payload(claim: dict[str, Any]) -> dict[str, Any]:
+    return {key: claim[key] for key in sorted(_SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS - {"claim_token"})}
+
+
+def _retry_claim_with_token(claim: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(claim)
+    normalized["claim_token"] = canonical_json_sha256(_retry_claim_hash_payload(normalized))
+    return normalized
+
+
+def _retry_claims_with_hash(claims: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "schema_version": SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA,
+        "claims": {key: claims[key] for key in sorted(claims)},
+    }
+    return {**payload, "claims_sha256": canonical_json_sha256(payload)}
+
+
+def _simulation_retry_claims(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = payload.get(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"schema_version", "claims", "claims_sha256"}:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims envelope is invalid",
+            context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID"},
+        )
+    if raw.get("schema_version") != SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims schema version is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                "actual_schema_version": raw.get("schema_version"),
+            },
+        )
+    claims = raw.get("claims")
+    if not isinstance(claims, dict) or len(claims) > _SIMULATION_SCHEDULER_RETRY_MAX_ENTRIES:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims are invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                "claim_count": len(claims) if isinstance(claims, dict) else None,
+            },
+        )
+    normalized_claims: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_claim in claims.items():
+        retry_key = _retry_required_text(raw_key, field="retry_key")
+        if not isinstance(raw_claim, dict) or set(raw_claim) != _SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        claim = dict(raw_claim)
+        if claim.get("schema_version") != SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim schema version is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        if _retry_required_text(claim.get("retry_key"), field="retry_key") != retry_key:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim map identity conflicts with its payload",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_IDENTITY_CONFLICT",
+                    "map_retry_key": retry_key,
+                    "payload_retry_key": claim.get("retry_key"),
+                },
+            )
+        _retry_sha256(claim.get("source_fingerprint"), field="source_fingerprint")
+        claimed_at = _retry_time(claim.get("claimed_at"), field="claimed_at")
+        lease_until = _retry_time(claim.get("lease_until"), field="lease_until")
+        if claimed_at is None or lease_until is None:
+            raise AssertionError("required retry claim timestamps were not parsed")
+        if lease_until < claimed_at:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim timeline is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TIMELINE_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        expected_token = canonical_json_sha256(_retry_claim_hash_payload(claim))
+        if _retry_sha256(claim.get("claim_token"), field="claim_token") != expected_token:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim token drifted",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT",
+                    "retry_key": retry_key,
+                    "expected": expected_token,
+                    "actual": claim.get("claim_token"),
+                },
+            )
+        normalized_claims[retry_key] = claim
+    expected_claims = _retry_claims_with_hash(normalized_claims)
+    if _retry_sha256(raw.get("claims_sha256"), field="claims_sha256") != expected_claims["claims_sha256"]:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims hash drifted",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT",
+                "expected": expected_claims["claims_sha256"],
+                "actual": raw.get("claims_sha256"),
+            },
+        )
+    return expected_claims
+
+
+def _retry_claims_payload_with_claims(payload: dict[str, Any], claims: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(payload)
+    if claims:
+        merged[SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY] = _retry_claims_with_hash(claims)
+    else:
+        merged.pop(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY, None)
+    return merged
+
+
+def _simulation_retry_state(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    control = _simulation_retry_control(payload)
+    claims = _simulation_retry_claims(payload)
+    entry_keys = set(control["entries"]) if control is not None else set()
+    claim_keys = set(claims["claims"]) if claims is not None else set()
+    overlap = sorted(entry_keys & claim_keys)
+    if overlap:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry failure entries and initial claims overlap",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_IDENTITY_CONFLICT",
+                "retry_keys": overlap,
+            },
+        )
+    return control, claims
+
+
+def _new_retry_initial_claim(
+    *, retry_key: str, source_fingerprint: str, as_of_time: datetime, lease_seconds: int
+) -> dict[str, Any]:
+    return _retry_claim_with_token(
+        {
+            "schema_version": SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA,
+            "retry_key": retry_key,
+            "source_fingerprint": source_fingerprint,
+            "claimed_at": as_of_time.isoformat(),
+            "lease_until": (as_of_time + timedelta(seconds=lease_seconds)).isoformat(),
+        }
+    )
+
+
+def _claim_retry_attempt_payload(
+    *,
+    payload: dict[str, Any],
+    retry_key: str,
+    source_fingerprint: str,
+    as_of_time: datetime,
+    lease_seconds: int,
+) -> tuple[dict[str, Any], bool, str, dict[str, Any] | None, str | None]:
+    retry_key = _retry_required_text(retry_key, field="retry_key")
+    source_fingerprint = _retry_sha256(source_fingerprint, field="source_fingerprint")
+    now = _retry_as_of_time(as_of_time)
+    control, claims_control = _simulation_retry_state(payload)
+    entries = dict(control["entries"]) if control is not None else {}
+    claims = dict(claims_control["claims"]) if claims_control is not None else {}
+    existing_claim = claims.get(retry_key)
+    recovered_initial_claim = False
+    initial_claim_source_changed = False
+    if existing_claim is not None:
+        claim_lease_until = _retry_time(existing_claim.get("lease_until"), field="lease_until")
+        if claim_lease_until is None:
+            raise AssertionError("retry claim lease timestamp was not parsed")
+        if existing_claim["source_fingerprint"] == source_fingerprint and claim_lease_until > now:
+            return dict(payload), False, "attempt_in_progress", existing_claim, existing_claim["claim_token"]
+        recovered_initial_claim = existing_claim["source_fingerprint"] == source_fingerprint
+        initial_claim_source_changed = not recovered_initial_claim
+        claims.pop(retry_key)
+    if retry_key not in entries:
+        claim = _new_retry_initial_claim(
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            as_of_time=now,
+            lease_seconds=lease_seconds,
+        )
+        claims[retry_key] = claim
+        next_payload = _retry_claims_payload_with_claims(payload, claims)
+        reason = (
+            "source_changed"
+            if initial_claim_source_changed
+            else "initial_claim_recovered"
+            if recovered_initial_claim
+            else "no_previous_failure"
+        )
+        return next_payload, True, reason, None, claim["claim_token"]
+    entry = dict(entries[retry_key])
+    if entry["source_fingerprint"] != source_fingerprint:
+        entries.pop(retry_key)
+        claim = _new_retry_initial_claim(
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            as_of_time=now,
+            lease_seconds=lease_seconds,
+        )
+        claims[retry_key] = claim
+        next_payload = _retry_control_payload_with_entries(payload, entries)
+        next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+        return next_payload, True, "source_changed", None, claim["claim_token"]
+    lease_until = _retry_time(entry.get("attempt_lease_until"), field="attempt_lease_until", optional=True)
+    if lease_until is not None and lease_until > now:
+        return dict(payload), False, "attempt_in_progress", entry, entry["entry_sha256"]
+    next_retry_at = _retry_time(entry.get("next_retry_at"), field="next_retry_at")
+    if next_retry_at is None:
+        raise AssertionError("next retry timestamp was not parsed")
+    if next_retry_at > now:
+        return dict(payload), False, "backoff_not_due", entry, None
+    entry.update(
+        {
+            "attempt_count": int(entry["attempt_count"]) + 1,
+            "last_attempt_at": now.isoformat(),
+            "attempt_lease_until": (now + timedelta(seconds=lease_seconds)).isoformat(),
+        }
+    )
+    entry = _retry_entry_with_hash(entry)
+    entries[retry_key] = entry
+    next_payload = _retry_control_payload_with_entries(payload, entries)
+    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+    return next_payload, True, "retry_claimed", entry, entry["entry_sha256"]
+
+
+def inspect_simulation_retry_backoff(
+    *,
+    run: SimulationDailyRun,
+    retry_key: str,
+    source_fingerprint: str,
+    as_of_time: datetime,
+    lease_seconds: int,
+) -> SimulationRetryAttemptDecision | None:
+    """Return a strict non-due decision without opening another DB transaction.
+
+    The run is already loaded by the scheduler's bounded candidate query.  A
+    due/source-changed/first attempt still returns ``None`` so the repository
+    row-lock claim remains the only writer authority.
+    """
+
+    if type(lease_seconds) is not int or lease_seconds <= 0:
+        raise ValueError("lease_seconds must be a positive integer")
+    _, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
+        payload=run.run_payload_json,
+        retry_key=retry_key,
+        source_fingerprint=source_fingerprint,
+        as_of_time=as_of_time,
+        lease_seconds=lease_seconds,
+    )
+    if should_execute:
+        return None
+    return SimulationRetryAttemptDecision(
+        run=run,
+        should_execute=False,
+        reason=reason,
+        retry_entry=deepcopy(retry_entry),
+        claim_token=claim_token,
+    )
+
+
+def simulation_retry_claim_token(payload: dict[str, Any], *, retry_key: str) -> str | None:
+    retry_key = _retry_required_text(retry_key, field="retry_key")
+    control, claims_control = _simulation_retry_state(payload)
+    claims = claims_control["claims"] if claims_control is not None else {}
+    claim = claims.get(retry_key)
+    if claim is not None:
+        return str(claim["claim_token"])
+    entries = control["entries"] if control is not None else {}
+    entry = entries.get(retry_key)
+    if entry is None:
+        return None
+    if entry.get("last_attempt_at") is not None and entry.get("attempt_lease_until") is not None:
+        return str(entry["entry_sha256"])
+    return None
+
+
+def _record_retry_failure_payload(
+    *,
+    payload: dict[str, Any],
+    retry_key: str,
+    source_fingerprint: str,
+    failure_fingerprint: str,
+    failure_stage: str,
+    error: dict[str, Any],
+    as_of_time: datetime,
+    base_delay_seconds: int,
+    max_delay_seconds: int,
+    expected_claim_token: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    retry_key = _retry_required_text(retry_key, field="retry_key")
+    source_fingerprint = _retry_sha256(source_fingerprint, field="source_fingerprint")
+    failure_fingerprint = _retry_sha256(failure_fingerprint, field="failure_fingerprint")
+    failure_stage = _retry_required_text(failure_stage, field="failure_stage")
+    control, claims_control = _simulation_retry_state(payload)
+    entries = dict(control["entries"]) if control is not None else {}
+    claims = dict(claims_control["claims"]) if claims_control is not None else {}
+    previous = entries.get(retry_key)
+    active_token = simulation_retry_claim_token(payload, retry_key=retry_key)
+    if expected_claim_token is not None:
+        expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+        if active_token != expected_claim_token:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry failure writer no longer owns the attempt claim",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                    "retry_key": retry_key,
+                    "expected_claim_token": expected_claim_token,
+                    "actual_claim_token": active_token,
+                },
+            )
+        claim = claims.get(retry_key)
+        active_source = claim.get("source_fingerprint") if claim is not None else previous.get("source_fingerprint")
+        if active_source != source_fingerprint:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry failure source no longer matches the attempt claim",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_SOURCE_CONFLICT",
+                    "retry_key": retry_key,
+                    "expected_source_fingerprint": active_source,
+                    "actual_source_fingerprint": source_fingerprint,
+                },
+            )
+    elif active_token is not None:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry failure writer omitted the active attempt claim token",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                "retry_key": retry_key,
+                "active_claim_token": active_token,
+            },
+        )
+    same_failure = bool(
+        previous
+        and previous["source_fingerprint"] == source_fingerprint
+        and previous["failure_fingerprint"] == failure_fingerprint
+    )
+    count = int(previous["consecutive_failure_count"]) + 1 if same_failure else 1
+    attempt_count = max(int(previous["attempt_count"]) if same_failure else 0, count)
+    now = _retry_as_of_time(as_of_time)
+    delay_seconds = min(base_delay_seconds * (2 ** min(count - 1, 20)), max_delay_seconds)
+    normalized_error = _retry_json_safe(error)
+    if not isinstance(normalized_error, dict):
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry error evidence must be an object",
+            context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"},
+        )
+    last_error = {
+        "type": _retry_required_text(normalized_error.get("type"), field="last_error.type"),
+        "message": _retry_string(normalized_error.get("message"), field="last_error.message"),
+        "reason_code": normalized_error.get("reason_code"),
+        "context": normalized_error.get("context"),
+    }
+    entry = _retry_entry_with_hash(
+        {
+            "schema_version": SIMULATION_SCHEDULER_RETRY_ENTRY_SCHEMA,
+            "retry_key": retry_key,
+            "source_fingerprint": source_fingerprint,
+            "failure_fingerprint": failure_fingerprint,
+            "failure_stage": failure_stage,
+            "consecutive_failure_count": count,
+            "attempt_count": attempt_count,
+            "first_failed_at": previous["first_failed_at"] if same_failure else now.isoformat(),
+            "last_failed_at": now.isoformat(),
+            "next_retry_at": (now + timedelta(seconds=delay_seconds)).isoformat(),
+            "last_attempt_at": None,
+            "attempt_lease_until": None,
+            "last_error": last_error,
+        }
+    )
+    entries[retry_key] = entry
+    claims.pop(retry_key, None)
+    next_payload = _retry_control_payload_with_entries(payload, entries)
+    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+    return next_payload, entry
+
+
+_LOCAL_SIM_EMPTY_AUTHORITY_DIRECT_CARRIERS = (
+    LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_GENERATION_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_READBACK_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_READBACK_TERMINAL_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_VALUATION_PENDING_PAYLOAD_KEY,
+    LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY,
+    "local_sim_persistence",
+    "local_sim_durable_minute_loop",
+)
+_LOCAL_SIM_EMPTY_AUTHORITY_PROJECTION_SUMMARIES = (
+    "strategy_performance",
+    "performance_projection",
+)
 
 
 def _local_sim_economic_receipt_map(payload: dict[str, Any]) -> dict[str, LocalSimEconomicReceiptV1]:
-    raw = payload.get(LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY) or {}
+    raw = payload.get(LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY)
+    if raw is None:
+        return {}
     if not isinstance(raw, dict):
-        raise InvalidStateTransitionError("LocalSIM economic receipt payload must be an object", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_PAYLOAD_INVALID"})
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt payload must be an object",
+            context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_PAYLOAD_INVALID"},
+        )
     receipts: dict[str, LocalSimEconomicReceiptV1] = {}
     for receipt_id, receipt_payload in raw.items():
+        raw_generation = receipt_payload.get("generation") if isinstance(receipt_payload, dict) else None
+        if type(raw_generation) is not int or raw_generation <= 0:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic receipt generation must be a positive integer",
+                context={
+                    "reason_code": "LOCALSIM_ECONOMIC_RECEIPT_GENERATION_INVALID",
+                    "receipt_id": str(receipt_id),
+                    "actual_generation": raw_generation,
+                },
+            )
         try:
             receipt = LocalSimEconomicReceiptV1.model_validate(receipt_payload)
         except Exception as exc:
-            raise InvalidStateTransitionError("LocalSIM economic receipt failed schema or hash validation", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)}) from exc
+            raise InvalidStateTransitionError(
+                "LocalSIM economic receipt failed schema or hash validation",
+                context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)},
+            ) from exc
         if receipt.receipt_id != receipt_id:
-            raise InvalidStateTransitionError("LocalSIM economic receipt map key does not match identity", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)})
+            raise InvalidStateTransitionError(
+                "LocalSIM economic receipt map key does not match identity",
+                context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)},
+            )
         receipts[receipt_id] = receipt
     return receipts
 
@@ -71,21 +828,33 @@ def _local_sim_projection_outbox(payload: dict[str, Any]) -> LocalSimProjectionO
     try:
         return LocalSimProjectionOutboxV1.model_validate(raw)
     except Exception as exc:
-        raise InvalidStateTransitionError("LocalSIM projection outbox failed schema or hash validation", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"}) from exc
+        raise InvalidStateTransitionError(
+            "LocalSIM projection outbox failed schema or hash validation",
+            context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID"},
+        ) from exc
 
 
 def _local_sim_projection_receipt_map(payload: dict[str, Any]) -> dict[str, LocalSimProjectionReceiptV1]:
     raw = payload.get(LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY) or {}
     if not isinstance(raw, dict):
-        raise InvalidStateTransitionError("LocalSIM projection receipt payload must be an object", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_PAYLOAD_INVALID"})
+        raise InvalidStateTransitionError(
+            "LocalSIM projection receipt payload must be an object",
+            context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_PAYLOAD_INVALID"},
+        )
     receipts: dict[str, LocalSimProjectionReceiptV1] = {}
     for receipt_id, receipt_payload in raw.items():
         try:
             receipt = LocalSimProjectionReceiptV1.model_validate(receipt_payload)
         except Exception as exc:
-            raise InvalidStateTransitionError("LocalSIM projection receipt failed schema or hash validation", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)}) from exc
+            raise InvalidStateTransitionError(
+                "LocalSIM projection receipt failed schema or hash validation",
+                context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_SCHEMA_INVALID", "receipt_id": str(receipt_id)},
+            ) from exc
         if receipt.projection_receipt_id != receipt_id:
-            raise InvalidStateTransitionError("LocalSIM projection receipt map key does not match identity", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)})
+            raise InvalidStateTransitionError(
+                "LocalSIM projection receipt map key does not match identity",
+                context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_IDENTITY_CONFLICT", "receipt_id": str(receipt_id)},
+            )
         receipts[receipt_id] = receipt
     return receipts
 
@@ -119,6 +888,855 @@ def _local_sim_state_map(payload: dict[str, Any]) -> dict[str, LocalSimExecution
             )
         states[state.state_id] = state
     return states
+
+
+def _local_sim_json_safe_context_value(value: Any) -> Any:
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    return str(value)
+
+
+def _local_sim_bounded_authority_evidence(values: Iterable[Any]) -> dict[str, Any]:
+    normalized = sorted(
+        (_retry_json_safe(value) for value in values),
+        key=canonical_json_sha256,
+    )
+    retained = normalized[:LOCAL_SIM_AUTHORITY_DIAGNOSTIC_LIMIT]
+    return {
+        "retained": retained,
+        "total_count": len(normalized),
+        "retained_count": len(retained),
+        "omitted_count": max(0, len(normalized) - len(retained)),
+        "full_set_sha256": canonical_json_sha256(normalized),
+    }
+
+
+def _local_sim_empty_authority_carrier_context(
+    payload: dict[str, Any],
+    *,
+    raw_generation: Any,
+) -> dict[str, Any] | None:
+    carrier_type: str | None = None
+    carrier: Any = None
+    for candidate in _LOCAL_SIM_EMPTY_AUTHORITY_DIRECT_CARRIERS:
+        if candidate in payload:
+            carrier_type = candidate
+            carrier = payload.get(candidate)
+            break
+    if carrier_type is None:
+        for candidate in _LOCAL_SIM_EMPTY_AUTHORITY_PROJECTION_SUMMARIES:
+            raw = payload.get(candidate)
+            if isinstance(raw, dict) and any(
+                key in raw
+                for key in (
+                    "local_sim_generation",
+                    "local_sim_outbox_id",
+                    "local_sim_economic_hash",
+                    "tca_generation",
+                )
+            ):
+                carrier_type = candidate
+                carrier = raw
+                break
+    if carrier_type is None and payload.get("broker_order_handles"):
+        carrier_type = "broker_order_handles"
+        carrier = payload.get("broker_order_handles")
+    broker_called = payload.get("broker_called")
+    if carrier_type is None and broker_called is not None and (type(broker_called) is not bool or broker_called):
+        carrier_type = "broker_called"
+        carrier = broker_called
+    submitted_intents = payload.get("submitted_intents")
+    if (
+        carrier_type is None
+        and submitted_intents is not None
+        and (type(submitted_intents) is not int or submitted_intents != 0)
+    ):
+        carrier_type = "submitted_intents"
+        carrier = submitted_intents
+    if carrier_type is None:
+        return None
+
+    carrier_payload = carrier if isinstance(carrier, dict) else {}
+    receipt_payload: dict[str, Any] = {}
+    receipt_map_id: Any = None
+    if carrier_type == LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY and isinstance(carrier, dict) and carrier:
+        receipt_map_id, raw_receipt = sorted(carrier.items(), key=lambda item: str(item[0]))[0]
+        if isinstance(raw_receipt, dict):
+            receipt_payload = raw_receipt
+
+    generation = carrier_payload.get("generation")
+    if generation is None:
+        generation = carrier_payload.get("local_sim_generation")
+    if generation is None and isinstance(carrier_payload.get("tca_generation"), dict):
+        generation = carrier_payload["tca_generation"].get("generation")
+    if generation is None:
+        generation = receipt_payload.get("generation")
+    if generation is None:
+        generation = raw_generation
+
+    outbox_id = (
+        carrier_payload.get("outbox_id")
+        or carrier_payload.get("local_sim_outbox_id")
+        or receipt_payload.get("outbox_id")
+    )
+    projection_receipt_id = (
+        carrier_payload.get("projection_receipt_id") or receipt_payload.get("projection_receipt_id") or receipt_map_id
+    )
+    receipt_id = carrier_payload.get("receipt_id") or receipt_payload.get("receipt_id")
+    if receipt_id is None and carrier_type == LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY:
+        receipt_id = projection_receipt_id
+    carrier_identity = outbox_id or receipt_id or projection_receipt_id
+    return {
+        "carrier_type": carrier_type,
+        "carrier_identity": _local_sim_json_safe_context_value(carrier_identity),
+        "outbox_id": _local_sim_json_safe_context_value(outbox_id),
+        "receipt_id": _local_sim_json_safe_context_value(receipt_id),
+        "projection_receipt_id": _local_sim_json_safe_context_value(projection_receipt_id),
+        "expected_generation": 0,
+        "actual_generation": _local_sim_json_safe_context_value(generation),
+    }
+
+
+@dataclass(frozen=True)
+class _LocalSimStateAuthority:
+    generation: int
+    receipt: LocalSimEconomicReceiptV1 | None
+    states: dict[str, LocalSimExecutionStateV1]
+
+
+def _local_sim_state_authority_closure(
+    *,
+    run_id: str,
+    binding_id: str,
+    trade_date: date,
+    plan_id: str | None,
+    payload: dict[str, Any],
+    states: dict[str, LocalSimExecutionStateV1] | None = None,
+    plan_reader: Callable[[str], ExecutionPlan] | None = None,
+) -> _LocalSimStateAuthority:
+    """Close current run identity, receipt history and durable state authority."""
+    state_map = states if states is not None else _local_sim_state_map(payload)
+    current_identity = {
+        "run_id": run_id,
+        "binding_id": binding_id,
+        "trade_date": trade_date.isoformat(),
+        "plan_id": plan_id,
+    }
+    raw_generation = payload.get(LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY)
+    try:
+        receipts = _local_sim_economic_receipt_map(payload)
+    except InvalidStateTransitionError as exc:
+        raise InvalidStateTransitionError(
+            exc.message,
+            context={"run_id": run_id, **exc.context},
+        ) from exc
+
+    if not state_map and not receipts:
+        if raw_generation is not None and not (type(raw_generation) is int and raw_generation == 0):
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation is invalid for an empty durable authority",
+                context={
+                    "reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID",
+                    "run_id": run_id,
+                    "carrier_type": LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY,
+                    "carrier_identity": None,
+                    "outbox_id": None,
+                    "receipt_id": None,
+                    "projection_receipt_id": None,
+                    "expected_generation": 0,
+                    "actual_generation": _local_sim_json_safe_context_value(raw_generation),
+                },
+            )
+        orphan_carrier = _local_sim_empty_authority_carrier_context(
+            payload,
+            raw_generation=raw_generation,
+        )
+        if orphan_carrier is not None:
+            raise InvalidStateTransitionError(
+                "LocalSIM empty durable authority contains an orphan economic or projection carrier",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER",
+                    "run_id": run_id,
+                    **orphan_carrier,
+                },
+            )
+        return _LocalSimStateAuthority(generation=0, receipt=None, states={})
+    if not receipts:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state authority is missing its committed economic receipt",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_MISSING",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": None,
+                "receipt_id": None,
+            },
+        )
+    if type(raw_generation) is not int or raw_generation <= 0:
+        raise InvalidStateTransitionError(
+            "LocalSIM economic generation must be a positive integer",
+            context={
+                "reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID",
+                "run_id": run_id,
+                "expected_generation": "positive_integer",
+                "actual_generation": raw_generation,
+            },
+        )
+
+    by_generation: dict[int, list[LocalSimEconomicReceiptV1]] = {}
+    for receipt in receipts.values():
+        by_generation.setdefault(receipt.generation, []).append(receipt)
+    duplicate_generation = next(
+        (generation for generation, items in sorted(by_generation.items()) if len(items) != 1),
+        None,
+    )
+    if duplicate_generation is not None:
+        conflicts = by_generation[duplicate_generation]
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt history has duplicate generation authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": duplicate_generation,
+                "receipt_id": None,
+                "receipt_ids": sorted(item.receipt_id for item in conflicts),
+            },
+        )
+    receipt_generations = sorted(by_generation)
+    receipt_max_generation = receipt_generations[-1]
+    if raw_generation != receipt_max_generation:
+        raise InvalidStateTransitionError(
+            "LocalSIM economic generation high-watermark conflicts with receipt history",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_MISMATCH",
+                "run_id": run_id,
+                "expected_generation": receipt_max_generation,
+                "actual_generation": raw_generation,
+                "receipt_id": by_generation[receipt_max_generation][0].receipt_id,
+            },
+        )
+    expected_generations = list(range(1, raw_generation + 1))
+    if receipt_generations != expected_generations:
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt generation history is not contiguous",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_GAP",
+                "run_id": run_id,
+                "expected_generation": expected_generations,
+                "actual_generation": receipt_generations,
+                "receipt_id": by_generation[receipt_max_generation][0].receipt_id,
+            },
+        )
+
+    predecessor_plan_id: str | None = None
+    rebuilt_plan_id: str | None = None
+    if payload.get("rebuilt_after_side_effect_free_failure") is True:
+        raw_predecessor = payload.get("rebuilt_from_execution_plan_id")
+        raw_rebuilt = payload.get("rebuilt_execution_plan_id")
+        raw_backend = payload.get("rebuilt_failure_backend")
+        if (
+            isinstance(raw_predecessor, str)
+            and raw_predecessor.strip()
+            and isinstance(raw_rebuilt, str)
+            and raw_rebuilt.strip()
+            and raw_backend == SimulationBrokerBackend.LOCAL_SIM.value
+        ):
+            normalized_predecessor = raw_predecessor.strip()
+            normalized_rebuilt = raw_rebuilt.strip()
+            cash_fit = payload.get("local_sim_cash_fit")
+            prepared_successor_is_proven = normalized_rebuilt == plan_id
+            if normalized_rebuilt != plan_id and isinstance(cash_fit, dict):
+                prepared_successor_is_proven = (
+                    cash_fit.get("schema_version") == "localsim_capital_dependency_v1"
+                    and cash_fit.get("status") == "SELL_FIRST_DEPENDENCY_ORDERED"
+                    and cash_fit.get("capital_waiting_owner") == "LocalSimExecutionStateV1"
+                )
+            if prepared_successor_is_proven:
+                predecessor_plan_id = normalized_predecessor
+                rebuilt_plan_id = normalized_rebuilt
+
+    allowed_receipt_plan_ids = {plan_id}
+    if predecessor_plan_id is not None:
+        allowed_receipt_plan_ids.add(predecessor_plan_id)
+    receipt_plan_ids = {receipt.plan_id for receipt in receipts.values()}
+    latest = by_generation[raw_generation][0]
+    ordered_receipt_plan_ids = [by_generation[generation][0].plan_id for generation in receipt_generations]
+    predecessor_has_economic_history = predecessor_plan_id is not None and predecessor_plan_id in receipt_plan_ids
+    if predecessor_has_economic_history:
+        if plan_reader is None or rebuilt_plan_id is None or plan_id is None:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded plan authority cannot read back its durable plan lineage",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_PLAN_AUTHORITY_MISSING",
+                    "run_id": run_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "rebuilt_plan_id": rebuilt_plan_id,
+                    "current_plan_id": plan_id,
+                },
+            )
+        lineage_ids = (predecessor_plan_id, rebuilt_plan_id, plan_id)
+        try:
+            predecessor_plan, rebuilt_plan, current_plan = tuple(plan_reader(item) for item in lineage_ids)
+        except Exception as exc:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded plan authority cannot read back its durable plan lineage",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_PLAN_AUTHORITY_MISSING",
+                    "run_id": run_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "rebuilt_plan_id": rebuilt_plan_id,
+                    "current_plan_id": plan_id,
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+        common_plan_fields = (
+            "strategy_id",
+            "portfolio_id",
+            "package_id",
+            "release_id",
+            "release_hash",
+            "binding_id",
+            "binding_hash",
+            "account_group_id",
+            "strategy_slot_id",
+            "selection_evidence_id",
+            "selection_evidence_hash",
+            "target_trade_date",
+            "execution_policy_version_id",
+            "execution_policy_sha256",
+            "tail_policy_version_id",
+            "tail_policy_sha256",
+        )
+        plan_identity_drift = {
+            field: {
+                "predecessor": _local_sim_json_safe_context_value(getattr(predecessor_plan, field)),
+                "rebuilt": _local_sim_json_safe_context_value(getattr(rebuilt_plan, field)),
+                "current": _local_sim_json_safe_context_value(getattr(current_plan, field)),
+            }
+            for field in common_plan_fields
+            if len(
+                {
+                    _local_sim_json_safe_context_value(getattr(predecessor_plan, field)),
+                    _local_sim_json_safe_context_value(getattr(rebuilt_plan, field)),
+                    _local_sim_json_safe_context_value(getattr(current_plan, field)),
+                }
+            )
+            != 1
+        }
+        predecessor_intent_ids = {intent.intent_id for intent in predecessor_plan.intents}
+        rebuilt_intent_ids = {intent.intent_id for intent in rebuilt_plan.intents}
+        current_intent_ids = {intent.intent_id for intent in current_plan.intents}
+
+        def intent_payload(intent: ExecutionPlanIntent) -> dict[str, Any]:
+            payload = intent.model_dump(mode="json", exclude={"plan_id"})
+            metadata = deepcopy(payload.get("metadata") or {})
+            causality = metadata.get("local_sim_execution_causality")
+            if isinstance(causality, dict):
+                normalized_causality = dict(causality)
+                normalized_causality.pop("captured_as_of_time", None)
+                metadata["local_sim_execution_causality"] = normalized_causality
+            payload["metadata"] = metadata
+            return payload
+
+        predecessor_intents_by_id = {intent.intent_id: intent_payload(intent) for intent in predecessor_plan.intents}
+        rebuilt_intents_by_id = {intent.intent_id: intent_payload(intent) for intent in rebuilt_plan.intents}
+        predecessor_decisions = {
+            decision.decision_id: decision.model_dump(mode="json", exclude={"created_at"})
+            for decision in predecessor_plan.trading_rule_decisions
+        }
+        rebuilt_decisions = {
+            decision.decision_id: decision.model_dump(mode="json", exclude={"created_at"})
+            for decision in rebuilt_plan.trading_rule_decisions
+        }
+        current_decisions = {
+            decision.decision_id: decision.model_dump(mode="json", exclude={"created_at"})
+            for decision in current_plan.trading_rule_decisions
+        }
+        if (
+            plan_identity_drift
+            or predecessor_intent_ids != rebuilt_intent_ids
+            or rebuilt_intent_ids != current_intent_ids
+            or predecessor_intents_by_id != rebuilt_intents_by_id
+            or predecessor_decisions != rebuilt_decisions
+            or rebuilt_decisions != current_decisions
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded plan lineage drifts from the durable execution authority",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_PLAN_IDENTITY_CONFLICT",
+                    "run_id": run_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "rebuilt_plan_id": rebuilt_plan_id,
+                    "current_plan_id": plan_id,
+                    "identity_drift": plan_identity_drift,
+                    "predecessor_intents": _local_sim_bounded_authority_evidence(predecessor_intent_ids),
+                    "rebuilt_intents": _local_sim_bounded_authority_evidence(rebuilt_intent_ids),
+                    "current_intents": _local_sim_bounded_authority_evidence(current_intent_ids),
+                },
+            )
+        if rebuilt_plan_id != plan_id:
+            expected_current_intents = [
+                *[intent for intent in rebuilt_plan.intents if intent.side.value == "SELL"],
+                *[intent for intent in rebuilt_plan.intents if intent.side.value == "BUY"],
+            ]
+            cash_fit_drift = payload.get("local_sim_cash_fit") != current_plan.plan_payload_json.get(
+                "local_sim_cash_fit"
+            ) or [intent_payload(intent) for intent in current_plan.intents] != [
+                intent_payload(intent) for intent in expected_current_intents
+            ]
+            if cash_fit_drift:
+                raise InvalidStateTransitionError(
+                    "LocalSIM current plan does not close over the durable cash-fit successor",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_CASH_FIT_CONFLICT",
+                        "run_id": run_id,
+                        "predecessor_plan_id": predecessor_plan_id,
+                        "rebuilt_plan_id": rebuilt_plan_id,
+                        "current_plan_id": plan_id,
+                    },
+                )
+    expected_plan_sequence = (
+        [predecessor_plan_id] * ordered_receipt_plan_ids.count(predecessor_plan_id)
+        + [plan_id] * ordered_receipt_plan_ids.count(plan_id)
+        if predecessor_has_economic_history
+        else [plan_id] * len(ordered_receipt_plan_ids)
+    )
+    if (
+        latest.plan_id != plan_id
+        or receipt_plan_ids - allowed_receipt_plan_ids
+        or ordered_receipt_plan_ids != expected_plan_sequence
+        or (predecessor_has_economic_history and receipt_plan_ids != {predecessor_plan_id, plan_id})
+    ):
+        conflicting_receipt = next(
+            (
+                receipt
+                for receipt in sorted(receipts.values(), key=lambda item: item.generation)
+                if receipt.plan_id not in allowed_receipt_plan_ids or receipt.generation == raw_generation
+            ),
+            latest,
+        )
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt identity conflicts with the durable run",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": conflicting_receipt.generation,
+                "receipt_id": conflicting_receipt.receipt_id,
+                "current_run_identity": current_identity,
+                "receipt_identity": {
+                    "run_id": conflicting_receipt.run_id,
+                    "binding_id": conflicting_receipt.binding_id,
+                    "trade_date": conflicting_receipt.trade_date.isoformat(),
+                    "plan_id": conflicting_receipt.plan_id,
+                },
+                "allowed_receipt_plan_ids": sorted(item for item in allowed_receipt_plan_ids if item is not None),
+                "ordered_receipt_plan_ids": ordered_receipt_plan_ids,
+            },
+        )
+
+    for receipt in receipts.values():
+        receipt_identity = {
+            "run_id": receipt.run_id,
+            "binding_id": receipt.binding_id,
+            "trade_date": receipt.trade_date.isoformat(),
+            "plan_id": receipt.plan_id,
+        }
+        expected_receipt_identity = {
+            **current_identity,
+            "plan_id": receipt.plan_id,
+        }
+        if receipt_identity != expected_receipt_identity:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic receipt identity conflicts with the durable run",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT",
+                    "run_id": run_id,
+                    "expected_generation": raw_generation,
+                    "actual_generation": receipt.generation,
+                    "receipt_id": receipt.receipt_id,
+                    "current_run_identity": expected_receipt_identity,
+                    "receipt_identity": receipt_identity,
+                },
+            )
+        expected_fact_identity = expected_receipt_identity
+        actual_fact_identity = {
+            field: receipt.economic_facts.get(field)
+            for field in ("run_id", "binding_id", "trade_date", "plan_id")
+            if field in receipt.economic_facts
+        }
+        fact_drift = {
+            field: {"expected": expected_fact_identity[field], "actual": actual}
+            for field, actual in actual_fact_identity.items()
+            if actual != expected_fact_identity[field]
+        }
+        if fact_drift:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic fact identity conflicts with the durable run",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_FACT_IDENTITY_CONFLICT",
+                    "run_id": run_id,
+                    "expected_generation": raw_generation,
+                    "actual_generation": receipt.generation,
+                    "receipt_id": receipt.receipt_id,
+                    "current_run_identity": current_identity,
+                    "economic_fact_identity": actual_fact_identity,
+                    "identity_drift": fact_drift,
+                },
+            )
+
+    raw_hashes = latest.economic_facts.get("state_hashes")
+    if raw_hashes == {} and not state_map:
+        return _LocalSimStateAuthority(generation=raw_generation, receipt=latest, states={})
+    if not isinstance(raw_hashes, dict) or not raw_hashes:
+        raise InvalidStateTransitionError(
+            "LocalSIM latest economic generation has no exact state authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_MISSING",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+            },
+        )
+    authoritative: dict[str, LocalSimExecutionStateV1] = {}
+    for state_id, expected_hash in raw_hashes.items():
+        if not isinstance(state_id, str) or not state_id or not isinstance(expected_hash, str) or not expected_hash:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation state authority is malformed",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_SCHEMA_INVALID",
+                    "run_id": run_id,
+                    "expected_generation": raw_generation,
+                    "actual_generation": latest.generation,
+                    "receipt_id": latest.receipt_id,
+                    "state_id": state_id if isinstance(state_id, str) else None,
+                },
+            )
+        state = state_map.get(state_id)
+        if state is None:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation references a missing durable state",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_MISSING",
+                    "run_id": run_id,
+                    "expected_generation": raw_generation,
+                    "actual_generation": latest.generation,
+                    "receipt_id": latest.receipt_id,
+                    "state_id": state_id,
+                    "expected_state_hash": expected_hash,
+                    "actual_state_hash": None,
+                },
+            )
+        if state.state_hash != expected_hash:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation state authority hash conflicts with durable state",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT",
+                    "run_id": run_id,
+                    "expected_generation": raw_generation,
+                    "actual_generation": latest.generation,
+                    "receipt_id": latest.receipt_id,
+                    "state_id": state_id,
+                    "expected_state_hash": expected_hash,
+                    "actual_state_hash": state.state_hash,
+                },
+            )
+        authoritative[state_id] = state
+
+    invalid_authority = tuple(
+        state
+        for state in authoritative.values()
+        if {
+            "run_id": state.run_id,
+            "binding_id": state.binding_id,
+            "trade_date": state.trade_date.isoformat(),
+            "plan_id": state.plan_id,
+        }
+        != current_identity
+    )
+    if invalid_authority:
+        raise InvalidStateTransitionError(
+            "LocalSIM authoritative state identity conflicts with the durable run",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_IDENTITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+                "state_ids": sorted(state.state_id for state in invalid_authority),
+                "current_run_identity": current_identity,
+            },
+        )
+    authority_intents = {state.intent_id for state in authoritative.values()}
+    superseded_authoritative: dict[str, LocalSimExecutionStateV1] = {}
+    if predecessor_has_economic_history:
+        assert predecessor_plan_id is not None
+        predecessor_receipt = max(
+            (receipt for receipt in receipts.values() if receipt.plan_id == predecessor_plan_id),
+            key=lambda item: item.generation,
+        )
+        predecessor_hashes = predecessor_receipt.economic_facts.get("state_hashes")
+        if not isinstance(predecessor_hashes, dict) or not predecessor_hashes:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded plan has no exact terminal generation state authority",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_AUTHORITY_MISSING",
+                    "run_id": run_id,
+                    "expected_generation": predecessor_receipt.generation,
+                    "actual_generation": predecessor_receipt.generation,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "plan_id": predecessor_plan_id,
+                },
+            )
+        for state_id, expected_hash in predecessor_hashes.items():
+            state = state_map.get(state_id) if isinstance(state_id, str) else None
+            if (
+                state is None
+                or not isinstance(expected_hash, str)
+                or not expected_hash
+                or state.state_hash != expected_hash
+                or state.run_id != run_id
+                or state.binding_id != binding_id
+                or state.trade_date != trade_date
+                or state.plan_id != predecessor_plan_id
+            ):
+                raise InvalidStateTransitionError(
+                    "LocalSIM superseded plan state authority does not close over its final committed generation",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_AUTHORITY_CONFLICT",
+                        "run_id": run_id,
+                        "expected_generation": predecessor_receipt.generation,
+                        "actual_generation": predecessor_receipt.generation,
+                        "receipt_id": predecessor_receipt.receipt_id,
+                        "plan_id": predecessor_plan_id,
+                        "state_id": state_id if isinstance(state_id, str) else None,
+                        "expected_state_hash": expected_hash,
+                        "actual_state_hash": state.state_hash if state is not None else None,
+                    },
+                )
+            superseded_authoritative[state_id] = state
+        if {state.intent_id for state in superseded_authoritative.values()} != authority_intents:
+            predecessor_intents = sorted(state.intent_id for state in superseded_authoritative.values())
+            current_intents = sorted(authority_intents)
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded and current plan authorities do not close over the same intent set",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_INTENT_CONFLICT",
+                    "run_id": run_id,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "current_plan_id": plan_id,
+                    "predecessor_intents": _local_sim_bounded_authority_evidence(predecessor_intents),
+                    "current_intents": _local_sim_bounded_authority_evidence(current_intents),
+                },
+            )
+        predecessor_by_intent = {state.intent_id: state for state in superseded_authoritative.values()}
+        current_by_intent = {state.intent_id: state for state in authoritative.values()}
+        immutable_semantic_fields = (
+            "portfolio_id",
+            "symbol",
+            "side",
+            "total_quantity",
+            "algo_code",
+            "schedule_version",
+            "causality_cursor",
+        )
+        semantic_drift = {
+            intent_id: {
+                field: {
+                    "predecessor": _local_sim_json_safe_context_value(getattr(predecessor_by_intent[intent_id], field)),
+                    "current": _local_sim_json_safe_context_value(getattr(current_by_intent[intent_id], field)),
+                }
+                for field in immutable_semantic_fields
+                if getattr(predecessor_by_intent[intent_id], field) != getattr(current_by_intent[intent_id], field)
+            }
+            for intent_id in sorted(authority_intents)
+        }
+        semantic_drift = {intent_id: fields for intent_id, fields in semantic_drift.items() if fields}
+        if semantic_drift:
+            bounded_semantic_drift = _local_sim_bounded_authority_evidence(
+                {"intent_id": intent_id, "fields": fields} for intent_id, fields in semantic_drift.items()
+            )
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded and current plan authorities drift in execution semantics",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_SEMANTIC_CONFLICT",
+                    "run_id": run_id,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "current_plan_id": plan_id,
+                    "semantic_drift": bounded_semantic_drift,
+                },
+            )
+    active_history = tuple(
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative
+        and state_id not in superseded_authoritative
+        and not state.is_terminal
+        and state.intent_id in authority_intents
+        and state.plan_id == plan_id
+    )
+    if active_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history contains a second active authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+                "active_state_ids": sorted(state.state_id for state in active_history),
+            },
+        )
+    invalid_history = tuple(
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative
+        and state_id not in superseded_authoritative
+        and not (
+            state.intent_id in authority_intents
+            and {
+                "run_id": state.run_id,
+                "binding_id": state.binding_id,
+                "trade_date": state.trade_date.isoformat(),
+                "plan_id": state.plan_id,
+            }
+            == current_identity
+        )
+    )
+    if invalid_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history does not belong to the committed plan authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_HISTORY_IDENTITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+                "state_ids": sorted(state.state_id for state in invalid_history),
+            },
+        )
+    active_history = tuple(
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative and state_id not in superseded_authoritative and not state.is_terminal
+    )
+    if active_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history contains a second active authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+                "active_state_ids": sorted(state.state_id for state in active_history),
+            },
+        )
+    return _LocalSimStateAuthority(generation=raw_generation, receipt=latest, states=authoritative)
+
+
+def _validate_local_sim_economic_readback(
+    *,
+    run: SimulationDailyRun,
+    receipt: LocalSimEconomicReceiptV1,
+    outbox: LocalSimProjectionOutboxV1,
+    plan_reader: Callable[[str], ExecutionPlan],
+) -> None:
+    state_map = _local_sim_state_map(run.run_payload_json)
+    authority = _local_sim_state_authority_closure(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=run.execution_plan_id,
+        payload=run.run_payload_json,
+        states=state_map,
+        plan_reader=plan_reader,
+    )
+    persisted_receipt = authority.receipt
+    if (
+        persisted_receipt is None
+        or persisted_receipt.receipt_id != receipt.receipt_id
+        or persisted_receipt.receipt_hash != receipt.receipt_hash
+    ):
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt independent readback failed",
+            context={
+                "reason_code": "LOCALSIM_ECONOMIC_RECEIPT_READBACK_FAILED",
+                "run_id": run.run_id,
+                "expected_generation": receipt.generation,
+                "actual_generation": authority.generation,
+                "receipt_id": receipt.receipt_id,
+                "actual_receipt_id": persisted_receipt.receipt_id if persisted_receipt else None,
+                "expected_receipt_hash": receipt.receipt_hash,
+                "actual_receipt_hash": persisted_receipt.receipt_hash if persisted_receipt else None,
+            },
+        )
+    persisted_outbox = _local_sim_projection_outbox(run.run_payload_json)
+    if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
+        raise InvalidStateTransitionError(
+            "LocalSIM projection outbox independent readback failed",
+            context={
+                "reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED",
+                "run_id": run.run_id,
+                "expected_generation": outbox.generation,
+                "actual_generation": persisted_outbox.generation if persisted_outbox else None,
+                "receipt_id": receipt.receipt_id,
+                "outbox_id": outbox.outbox_id,
+                "actual_outbox_id": persisted_outbox.outbox_id if persisted_outbox else None,
+                "expected_outbox_hash": outbox.outbox_hash,
+                "actual_outbox_hash": persisted_outbox.outbox_hash if persisted_outbox else None,
+            },
+        )
+    expected_outbox_identity = {
+        "receipt_id": persisted_receipt.receipt_id,
+        "run_id": run.run_id,
+        "plan_id": run.execution_plan_id,
+        "generation": authority.generation,
+        "economic_hash": persisted_receipt.economic_hash,
+    }
+    actual_outbox_identity = {
+        "receipt_id": persisted_outbox.receipt_id,
+        "run_id": persisted_outbox.run_id,
+        "plan_id": persisted_outbox.plan_id,
+        "generation": persisted_outbox.generation,
+        "economic_hash": persisted_outbox.economic_hash,
+    }
+    if actual_outbox_identity != expected_outbox_identity:
+        raise InvalidStateTransitionError(
+            "LocalSIM projection outbox identity conflicts with the authoritative economic generation",
+            context={
+                "reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_IDENTITY_CONFLICT",
+                "run_id": run.run_id,
+                "expected_generation": authority.generation,
+                "actual_generation": persisted_outbox.generation,
+                "receipt_id": persisted_receipt.receipt_id,
+                "outbox_id": persisted_outbox.outbox_id,
+                "expected_outbox_identity": expected_outbox_identity,
+                "actual_outbox_identity": actual_outbox_identity,
+            },
+        )
+    expected_states = persisted_receipt.economic_facts.get("state_hashes")
+    actual_states = {state_id: state.state_hash for state_id, state in authority.states.items()}
+    if expected_states != actual_states:
+        expected_state_ids = sorted(expected_states) if isinstance(expected_states, dict) else []
+        raise InvalidStateTransitionError(
+            "LocalSIM economic state independent readback failed",
+            context={
+                "reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED",
+                "run_id": run.run_id,
+                "expected_generation": receipt.generation,
+                "actual_generation": authority.generation,
+                "receipt_id": persisted_receipt.receipt_id,
+                "expected_state_ids": expected_state_ids,
+                "actual_state_ids": sorted(actual_states),
+            },
+        )
 
 
 def _merge_local_sim_state_batch(
@@ -191,9 +1809,21 @@ def _merge_local_sim_state_batch(
                     },
                 )
             immutable_fields = (
-                "run_id", "binding_id", "trade_date", "plan_id", "intent_id", "algo_instance_id",
-                "portfolio_id", "order_id", "symbol", "side", "total_quantity", "algo_code",
-                "schedule_version", "causality_cursor", "created_at",
+                "run_id",
+                "binding_id",
+                "trade_date",
+                "plan_id",
+                "intent_id",
+                "algo_instance_id",
+                "portfolio_id",
+                "order_id",
+                "symbol",
+                "side",
+                "total_quantity",
+                "algo_code",
+                "schedule_version",
+                "causality_cursor",
+                "created_at",
             )
             drift = [field for field in immutable_fields if getattr(existing, field) != getattr(state, field)]
             if drift:
@@ -214,10 +1844,16 @@ def _merge_local_sim_state_batch(
 
 
 def _merge_local_sim_economic_event(
-    *, run_id: str, binding_id: str, trade_date: date, plan_id: str,
-    payload: dict[str, Any], states: Iterable[LocalSimExecutionStateV1],
+    *,
+    run_id: str,
+    binding_id: str,
+    trade_date: date,
+    plan_id: str,
+    payload: dict[str, Any],
+    states: Iterable[LocalSimExecutionStateV1],
     expected_versions: dict[str, tuple[int, str] | None],
-    economic_facts: dict[str, Any], projection_payload: dict[str, Any],
+    economic_facts: dict[str, Any],
+    projection_payload: dict[str, Any],
 ) -> tuple[dict[str, Any], LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
     incoming = list(states)
     economic_hash = canonical_json_sha256(economic_facts)
@@ -225,6 +1861,7 @@ def _merge_local_sim_economic_event(
     receipts = _local_sim_economic_receipt_map(payload)
     existing_receipt = next((item for item in receipts.values() if item.idempotency_key == idempotency_key), None)
     existing_outbox = _local_sim_projection_outbox(payload)
+
     def merge_states() -> dict[str, Any]:
         if not incoming:
             return dict(payload)
@@ -234,63 +1871,122 @@ def _merge_local_sim_economic_event(
             states=incoming,
             expected_versions=expected_versions,
         )
+
     if existing_receipt is not None:
         if existing_outbox is None or existing_outbox.receipt_id != existing_receipt.receipt_id:
-            raise InvalidStateTransitionError("LocalSIM economic receipt is missing its projection outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_MISSING", "run_id": run_id})
+            raise InvalidStateTransitionError(
+                "LocalSIM economic receipt is missing its projection outbox",
+                context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_MISSING", "run_id": run_id},
+            )
         return merge_states(), existing_receipt, existing_outbox, False
     if existing_outbox is not None and existing_outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-        raise InvalidStateTransitionError("LocalSIM cannot commit a new economic event while projection outbox is pending", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_PENDING", "run_id": run_id, "outbox_id": existing_outbox.outbox_id})
+        raise InvalidStateTransitionError(
+            "LocalSIM cannot commit a new economic event while projection outbox is pending",
+            context={
+                "reason_code": "LOCALSIM_PROJECTION_OUTBOX_PENDING",
+                "run_id": run_id,
+                "outbox_id": existing_outbox.outbox_id,
+            },
+        )
     raw_generation = payload.get(LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY, 0)
     if isinstance(raw_generation, bool) or not isinstance(raw_generation, int) or raw_generation < 0:
-        raise InvalidStateTransitionError("LocalSIM economic generation is invalid", context={"reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID", "run_id": run_id})
+        raise InvalidStateTransitionError(
+            "LocalSIM economic generation is invalid",
+            context={"reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID", "run_id": run_id},
+        )
     receipt = LocalSimEconomicReceiptV1(
-        run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
-        generation=raw_generation + 1, economic_facts=economic_facts,
+        run_id=run_id,
+        binding_id=binding_id,
+        trade_date=trade_date,
+        plan_id=plan_id,
+        generation=raw_generation + 1,
+        economic_facts=economic_facts,
     )
     outbox = LocalSimProjectionOutboxV1(
-        receipt_id=receipt.receipt_id, run_id=run_id, plan_id=plan_id,
-        generation=receipt.generation, economic_hash=receipt.economic_hash,
+        receipt_id=receipt.receipt_id,
+        run_id=run_id,
+        plan_id=plan_id,
+        generation=receipt.generation,
+        economic_hash=receipt.economic_hash,
         projection_payload=projection_payload,
     )
     merged = merge_states()
     receipts[receipt.receipt_id] = receipt
-    merged[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)}
+    merged[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {
+        key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)
+    }
     merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = outbox.model_dump(mode="json")
     merged[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = receipt.generation
     return merged, receipt, outbox, True
 
 
 def _merge_local_sim_projection_success(
-    *, run_id: str, payload: dict[str, Any], outbox_id: str,
-    generation: int, projection_result: dict[str, Any],
+    *,
+    run_id: str,
+    payload: dict[str, Any],
+    outbox_id: str,
+    generation: int,
+    projection_result: dict[str, Any],
 ) -> tuple[dict[str, Any], LocalSimProjectionReceiptV1]:
     outbox = _local_sim_projection_outbox(payload)
     if outbox is None or outbox.outbox_id != outbox_id or outbox.generation != generation:
-        raise InvalidStateTransitionError("LocalSIM projection outbox identity changed before projection commit", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+        raise InvalidStateTransitionError(
+            "LocalSIM projection outbox identity changed before projection commit",
+            context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id},
+        )
     if outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
-        existing = next((item for item in _local_sim_projection_receipt_map(payload).values() if item.outbox_id == outbox_id), None)
+        existing = next(
+            (item for item in _local_sim_projection_receipt_map(payload).values() if item.outbox_id == outbox_id), None
+        )
         if existing is None:
-            raise InvalidStateTransitionError("LocalSIM projected outbox is missing its projection receipt", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_MISSING", "run_id": run_id})
+            raise InvalidStateTransitionError(
+                "LocalSIM projected outbox is missing its projection receipt",
+                context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_MISSING", "run_id": run_id},
+            )
         return dict(payload), existing
     receipt = LocalSimProjectionReceiptV1(
-        outbox_id=outbox.outbox_id, run_id=run_id, generation=outbox.generation,
-        economic_hash=outbox.economic_hash, projection_payload_hash=outbox.projection_payload_hash,
+        outbox_id=outbox.outbox_id,
+        run_id=run_id,
+        generation=outbox.generation,
+        economic_hash=outbox.economic_hash,
+        projection_payload_hash=outbox.projection_payload_hash,
         projection_hash=canonical_json_sha256(projection_result),
     )
-    updated = outbox.model_copy(update={"status": LocalSimProjectionOutboxStatus.PROJECTED, "attempt_count": outbox.attempt_count + 1, "last_error": None, "updated_at": datetime.now(UTC)})
+    updated = outbox.model_copy(
+        update={
+            "status": LocalSimProjectionOutboxStatus.PROJECTED,
+            "attempt_count": outbox.attempt_count + 1,
+            "last_error": None,
+            "updated_at": datetime.now(UTC),
+        }
+    )
     receipts = _local_sim_projection_receipt_map(payload)
     receipts[receipt.projection_receipt_id] = receipt
     merged = dict(payload)
     merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = updated.model_dump(mode="json")
-    merged[LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY] = {key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)}
+    merged[LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY] = {
+        key: value.model_dump(mode="json") for key, value in sorted(receipts.items(), key=lambda row: row[1].generation)
+    }
     return merged, receipt
 
 
-def _merge_local_sim_projection_retryable(*, run_id: str, payload: dict[str, Any], outbox_id: str, error: dict[str, Any]) -> dict[str, Any]:
+def _merge_local_sim_projection_retryable(
+    *, run_id: str, payload: dict[str, Any], outbox_id: str, error: dict[str, Any]
+) -> dict[str, Any]:
     outbox = _local_sim_projection_outbox(payload)
     if outbox is None or outbox.outbox_id != outbox_id or outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
-        raise InvalidStateTransitionError("LocalSIM projection retry state CAS failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
-    updated = outbox.model_copy(update={"status": LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE, "attempt_count": outbox.attempt_count + 1, "last_error": error, "updated_at": datetime.now(UTC)})
+        raise InvalidStateTransitionError(
+            "LocalSIM projection retry state CAS failed",
+            context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id},
+        )
+    updated = outbox.model_copy(
+        update={
+            "status": LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE,
+            "attempt_count": outbox.attempt_count + 1,
+            "last_error": error,
+            "updated_at": datetime.now(UTC),
+        }
+    )
     merged = dict(payload)
     merged[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = updated.model_dump(mode="json")
     return merged
@@ -300,11 +1996,7 @@ def _merge_local_sim_projection_terminal(
     *, run_id: str, payload: dict[str, Any], outbox_id: str, error: dict[str, Any]
 ) -> dict[str, Any]:
     outbox = _local_sim_projection_outbox(payload)
-    if (
-        outbox is None
-        or outbox.outbox_id != outbox_id
-        or outbox.status == LocalSimProjectionOutboxStatus.PROJECTED
-    ):
+    if outbox is None or outbox.outbox_id != outbox_id or outbox.status == LocalSimProjectionOutboxStatus.PROJECTED:
         raise InvalidStateTransitionError(
             "LocalSIM projection terminal state CAS failed",
             context={
@@ -731,9 +2423,7 @@ class SimulationRuntimeRepository:
             params.append(release_id)
         if broker_backend is not None:
             backend = (
-                broker_backend.value
-                if isinstance(broker_backend, SimulationBrokerBackend)
-                else str(broker_backend)
+                broker_backend.value if isinstance(broker_backend, SimulationBrokerBackend) else str(broker_backend)
             )
             clauses.append("broker_backend = %s")
             params.append(backend)
@@ -780,9 +2470,7 @@ class SimulationRuntimeRepository:
             params.append(strategy_id)
         if broker_backend is not None:
             backend = (
-                broker_backend.value
-                if isinstance(broker_backend, SimulationBrokerBackend)
-                else str(broker_backend)
+                broker_backend.value if isinstance(broker_backend, SimulationBrokerBackend) else str(broker_backend)
             )
             clauses.append("broker_backend = %s")
             params.append(backend)
@@ -860,7 +2548,7 @@ class SimulationRuntimeRepository:
                     raise InvalidStateTransitionError(
                         "daily selection evidence conflicts with an existing immutable evidence row",
                         context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
-                ) from exc
+                    ) from exc
         return evidence
 
     def _save_daily_selection_evidence_v2(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
@@ -1123,6 +2811,7 @@ class SimulationRuntimeRepository:
         self,
         *,
         trade_date: Any | None = None,
+        trade_date_before: Any | None = None,
         broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         status: SimulationDailyRunStatus | str | None = None,
@@ -1133,11 +2822,12 @@ class SimulationRuntimeRepository:
         if trade_date is not None:
             clauses.append("trade_date = %s")
             params.append(trade_date)
+        if trade_date_before is not None:
+            clauses.append("trade_date < %s")
+            params.append(trade_date_before)
         if broker_backend is not None:
             backend = (
-                broker_backend.value
-                if isinstance(broker_backend, SimulationBrokerBackend)
-                else str(broker_backend)
+                broker_backend.value if isinstance(broker_backend, SimulationBrokerBackend) else str(broker_backend)
             )
             clauses.append("broker_backend = %s")
             params.append(backend)
@@ -1180,8 +2870,12 @@ class SimulationRuntimeRepository:
         updated = current.model_copy(
             update={
                 "status": status or current.status,
-                "selection_evidence_id": selection_evidence.evidence_id if selection_evidence else current.selection_evidence_id,
-                "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
+                "selection_evidence_id": selection_evidence.evidence_id
+                if selection_evidence
+                else current.selection_evidence_id,
+                "selection_artifact_hash": selection_evidence.artifact_hash
+                if selection_evidence
+                else current.selection_artifact_hash,
                 "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
                 "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
                 "run_payload_json": merged_payload,
@@ -1213,9 +2907,183 @@ class SimulationRuntimeRepository:
                 )
         return self.get_simulation_daily_run(run_id)
 
-    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+    def claim_simulation_retry_attempt(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        source_fingerprint: str,
+        as_of_time: datetime,
+        lease_seconds: int,
+    ) -> SimulationRetryAttemptDecision:
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("lease_seconds must be a positive integer")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                current_payload = dict(row.get("run_payload_json") or {})
+                next_payload, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
+                    payload=current_payload,
+                    retry_key=retry_key,
+                    source_fingerprint=source_fingerprint,
+                    as_of_time=as_of_time,
+                    lease_seconds=lease_seconds,
+                )
+                if next_payload != current_payload:
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_daily_run
+                        SET run_payload_json = %s, updated_at = now()
+                        WHERE run_id = %s
+                        """,
+                        (psycopg2.extras.Json(next_payload), run_id),
+                    )
+        readback = self.get_simulation_daily_run(run_id)
+        _simulation_retry_state(readback.run_payload_json)
+        return SimulationRetryAttemptDecision(
+            run=readback,
+            should_execute=should_execute,
+            reason=reason,
+            retry_entry=deepcopy(retry_entry),
+            claim_token=claim_token,
+        )
+
+    def record_simulation_retry_failure(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        source_fingerprint: str,
+        failure_fingerprint: str,
+        failure_stage: str,
+        error: dict[str, Any],
+        as_of_time: datetime,
+        base_delay_seconds: int,
+        max_delay_seconds: int,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
+        if (
+            type(base_delay_seconds) is not int
+            or type(max_delay_seconds) is not int
+            or base_delay_seconds <= 0
+            or max_delay_seconds < base_delay_seconds
+        ):
+            raise ValueError("retry delay bounds are invalid")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                next_payload, _ = _record_retry_failure_payload(
+                    payload=dict(row.get("run_payload_json") or {}),
+                    retry_key=retry_key,
+                    source_fingerprint=source_fingerprint,
+                    failure_fingerprint=failure_fingerprint,
+                    failure_stage=failure_stage,
+                    error=error,
+                    as_of_time=as_of_time,
+                    base_delay_seconds=base_delay_seconds,
+                    max_delay_seconds=max_delay_seconds,
+                    expected_claim_token=expected_claim_token,
+                )
+                cur.execute(
+                    """
+                    UPDATE paper_v2.simulation_daily_run
+                    SET run_payload_json = %s, updated_at = now()
+                    WHERE run_id = %s
+                    """,
+                    (psycopg2.extras.Json(next_payload), run_id),
+                )
+        readback = self.get_simulation_daily_run(run_id)
+        _simulation_retry_state(readback.run_payload_json)
+        return readback
+
+    def clear_simulation_retry_control(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
+        retry_key = _retry_required_text(retry_key, field="retry_key")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                current_payload = dict(row.get("run_payload_json") or {})
+                control, claims_control = _simulation_retry_state(current_payload)
+                entries = dict(control["entries"]) if control is not None else {}
+                claims = dict(claims_control["claims"]) if claims_control is not None else {}
+                active_token = simulation_retry_claim_token(current_payload, retry_key=retry_key)
+                if expected_claim_token is not None:
+                    expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+                    if active_token != expected_claim_token:
+                        raise InvalidStateTransitionError(
+                            "simulation scheduler retry success writer no longer owns the attempt claim",
+                            context={
+                                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                                "retry_key": retry_key,
+                                "expected_claim_token": expected_claim_token,
+                                "actual_claim_token": active_token,
+                            },
+                        )
+                elif active_token is not None:
+                    raise InvalidStateTransitionError(
+                        "simulation scheduler retry success writer omitted the active attempt claim token",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                            "retry_key": retry_key,
+                            "active_claim_token": active_token,
+                        },
+                    )
+                if retry_key in entries or retry_key in claims:
+                    entries.pop(retry_key, None)
+                    claims.pop(retry_key, None)
+                    next_payload = _retry_control_payload_with_entries(current_payload, entries)
+                    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_daily_run
+                        SET run_payload_json = %s, updated_at = now()
+                        WHERE run_id = %s
+                        """,
+                        (psycopg2.extras.Json(next_payload), run_id),
+                    )
+        readback = self.get_simulation_daily_run(run_id)
+        _simulation_retry_state(readback.run_payload_json)
+        return readback
+
+    def list_local_sim_execution_states(
+        self, run_id: str, *, authoritative: bool = False
+    ) -> list[LocalSimExecutionStateV1]:
         run = self.get_simulation_daily_run(run_id)
-        states = list(_local_sim_state_map(run.run_payload_json).values())
+        state_map = _local_sim_state_map(run.run_payload_json)
+        if authoritative:
+            state_map = _local_sim_state_authority_closure(
+                run_id=run.run_id,
+                binding_id=run.binding_id,
+                trade_date=run.trade_date,
+                plan_id=run.execution_plan_id,
+                payload=run.run_payload_json,
+                states=state_map,
+                plan_reader=self.get_execution_plan,
+            ).states
+        states = list(state_map.values())
         states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
         return states
 
@@ -1276,83 +3144,131 @@ class SimulationRuntimeRepository:
         return [readback[state.state_id] for state in incoming]
 
     def stage_local_sim_economic_commit(
-        self, *, connection: Any, run_id: str, binding_id: str, trade_date: date,
-        plan_id: str, states: Iterable[LocalSimExecutionStateV1],
+        self,
+        *,
+        connection: Any,
+        run_id: str,
+        binding_id: str,
+        trade_date: date,
+        plan_id: str,
+        states: Iterable[LocalSimExecutionStateV1],
         expected_versions: dict[str, tuple[int, str] | None],
-        economic_facts: dict[str, Any], projection_payload: dict[str, Any],
-        status: SimulationDailyRunStatus, payload_patch: dict[str, Any],
+        economic_facts: dict[str, Any],
+        projection_payload: dict[str, Any],
+        status: SimulationDailyRunStatus,
+        payload_patch: dict[str, Any],
         payload_unset: Iterable[str] = (),
     ) -> tuple[LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
         if connection is None:
             raise RuntimeError("PostgreSQL LocalSIM economic commit requires the owning transaction connection")
         with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+            cur.execute(
+                "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,)
+            )
             row = cur.fetchone()
             if row is None:
                 raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
             current_payload = dict(row.get("run_payload_json") or {})
             merged, receipt, outbox, created = _merge_local_sim_economic_event(
-                run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
-                payload=current_payload, states=states, expected_versions=expected_versions,
-                economic_facts=economic_facts, projection_payload=projection_payload,
+                run_id=run_id,
+                binding_id=binding_id,
+                trade_date=trade_date,
+                plan_id=plan_id,
+                payload=current_payload,
+                states=states,
+                expected_versions=expected_versions,
+                economic_facts=economic_facts,
+                projection_payload=projection_payload,
             )
             if created:
                 merged.update(payload_patch)
                 for key in payload_unset:
                     merged.pop(str(key), None)
                 merged = preserve_tca_sidecar(current_payload, merged)
-                cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (status.value, psycopg2.extras.Json(merged), run_id))
+                cur.execute(
+                    "UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s",
+                    (status.value, psycopg2.extras.Json(merged), run_id),
+                )
         return receipt, outbox, created
 
-    def readback_local_sim_economic_commit(self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1) -> SimulationDailyRun:
+    def readback_local_sim_economic_commit(
+        self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1
+    ) -> SimulationDailyRun:
         run = self.get_simulation_daily_run(run_id)
-        persisted_receipt = _local_sim_economic_receipt_map(run.run_payload_json).get(receipt.receipt_id)
-        persisted_outbox = _local_sim_projection_outbox(run.run_payload_json)
-        if persisted_receipt is None or persisted_receipt.receipt_hash != receipt.receipt_hash:
-            raise InvalidStateTransitionError("LocalSIM economic receipt independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_READBACK_FAILED", "run_id": run_id})
-        if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
-            raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
-        persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
-        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
-            raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
+        _validate_local_sim_economic_readback(
+            run=run,
+            receipt=receipt,
+            outbox=outbox,
+            plan_reader=self.get_execution_plan,
+        )
         return run
 
     def stage_local_sim_projection_commit(
-        self, *, connection: Any, run_id: str, outbox_id: str, generation: int,
-        final_status: SimulationDailyRunStatus, projection_result: dict[str, Any],
-        payload_patch: dict[str, Any], payload_unset: Iterable[str] = (),
+        self,
+        *,
+        connection: Any,
+        run_id: str,
+        outbox_id: str,
+        generation: int,
+        final_status: SimulationDailyRunStatus,
+        projection_result: dict[str, Any],
+        payload_patch: dict[str, Any],
+        payload_unset: Iterable[str] = (),
     ) -> LocalSimProjectionReceiptV1:
         if connection is None:
             raise RuntimeError("PostgreSQL LocalSIM projection commit requires the owning transaction connection")
         with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+            cur.execute(
+                "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,)
+            )
             row = cur.fetchone()
             if row is None:
                 raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
             current_payload = dict(row.get("run_payload_json") or {})
-            merged, receipt = _merge_local_sim_projection_success(run_id=run_id, payload=current_payload, outbox_id=outbox_id, generation=generation, projection_result=projection_result)
+            merged, receipt = _merge_local_sim_projection_success(
+                run_id=run_id,
+                payload=current_payload,
+                outbox_id=outbox_id,
+                generation=generation,
+                projection_result=projection_result,
+            )
             merged.update(payload_patch)
-            merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = receipt.projection_receipt_id
+            merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = (
+                receipt.projection_receipt_id
+            )
             for key in payload_unset:
                 merged.pop(str(key), None)
             merged = preserve_tca_sidecar(current_payload, merged)
-            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (final_status.value, psycopg2.extras.Json(merged), run_id))
+            cur.execute(
+                "UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s",
+                (final_status.value, psycopg2.extras.Json(merged), run_id),
+            )
         return receipt
 
-    def mark_local_sim_projection_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+    def mark_local_sim_projection_retryable(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
         with self._conn_factory() as conn:
             original_autocommit = bool(getattr(conn, "autocommit", False))
             try:
                 if original_autocommit:
                     conn.autocommit = False
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+                    cur.execute(
+                        "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
+                        (run_id,),
+                    )
                     row = cur.fetchone()
                     if row is None:
                         raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
-                    merged = _merge_local_sim_projection_retryable(run_id=run_id, payload=dict(row.get("run_payload_json") or {}), outbox_id=outbox_id, error=error)
+                    merged = _merge_local_sim_projection_retryable(
+                        run_id=run_id, payload=dict(row.get("run_payload_json") or {}), outbox_id=outbox_id, error=error
+                    )
                     merged["last_stage"] = SimulationDailyRunStatus.FAILED_RETRYABLE.value
-                    cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (SimulationDailyRunStatus.FAILED_RETRYABLE.value, psycopg2.extras.Json(merged), run_id))
+                    cur.execute(
+                        "UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s",
+                        (SimulationDailyRunStatus.FAILED_RETRYABLE.value, psycopg2.extras.Json(merged), run_id),
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -1372,8 +3288,7 @@ class SimulationRuntimeRepository:
                     conn.autocommit = False
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT run_payload_json FROM paper_v2.simulation_daily_run "
-                        "WHERE run_id = %s FOR UPDATE",
+                        "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
                         (run_id,),
                     )
                     row = cur.fetchone()
@@ -1407,35 +3322,68 @@ class SimulationRuntimeRepository:
                     conn.autocommit = True
         return self.get_simulation_daily_run(run_id)
 
-    def readback_local_sim_projection_commit(self, *, run_id: str, receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+    def readback_local_sim_projection_commit(
+        self, *, run_id: str, receipt: LocalSimProjectionReceiptV1
+    ) -> SimulationDailyRun:
         run = self.get_simulation_daily_run(run_id)
         outbox = _local_sim_projection_outbox(run.run_payload_json)
         persisted = _local_sim_projection_receipt_map(run.run_payload_json).get(receipt.projection_receipt_id)
-        if outbox is None or outbox.outbox_id != receipt.outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-            raise InvalidStateTransitionError("LocalSIM projection outbox status independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id})
+        if (
+            outbox is None
+            or outbox.outbox_id != receipt.outbox_id
+            or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM projection outbox status independent readback failed",
+                context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id},
+            )
         if persisted is None or persisted.receipt_hash != receipt.receipt_hash:
-            raise InvalidStateTransitionError("LocalSIM projection receipt independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id})
+            raise InvalidStateTransitionError(
+                "LocalSIM projection receipt independent readback failed",
+                context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id},
+            )
         return run
 
-    def _update_local_sim_projection_readback_state(self, *, run_id: str, outbox_id: str, status: SimulationDailyRunStatus, patch: dict[str, Any], unset: Iterable[str] = ()) -> SimulationDailyRun:
+    def _update_local_sim_projection_readback_state(
+        self,
+        *,
+        run_id: str,
+        outbox_id: str,
+        status: SimulationDailyRunStatus,
+        patch: dict[str, Any],
+        unset: Iterable[str] = (),
+    ) -> SimulationDailyRun:
         with self._conn_factory() as conn:
             original_autocommit = bool(getattr(conn, "autocommit", False))
             try:
                 if original_autocommit:
                     conn.autocommit = False
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run_id,))
+                    cur.execute(
+                        "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE",
+                        (run_id,),
+                    )
                     row = cur.fetchone()
                     if row is None:
                         raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
                     payload = dict(row.get("run_payload_json") or {})
                     outbox = _local_sim_projection_outbox(payload)
-                    if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-                        raise InvalidStateTransitionError("LocalSIM projection readback state CAS failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
+                    if (
+                        outbox is None
+                        or outbox.outbox_id != outbox_id
+                        or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED
+                    ):
+                        raise InvalidStateTransitionError(
+                            "LocalSIM projection readback state CAS failed",
+                            context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id},
+                        )
                     payload.update(patch)
                     for key in unset:
                         payload.pop(str(key), None)
-                    cur.execute("UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s", (status.value, psycopg2.extras.Json(payload), run_id))
+                    cur.execute(
+                        "UPDATE paper_v2.simulation_daily_run SET status = %s, run_payload_json = %s, updated_at = now() WHERE run_id = %s",
+                        (status.value, psycopg2.extras.Json(payload), run_id),
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -1445,11 +3393,29 @@ class SimulationRuntimeRepository:
                     conn.autocommit = True
         return self.get_simulation_daily_run(run_id)
 
-    def mark_local_sim_projection_readback_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
-        return self._update_local_sim_projection_readback_state(run_id=run_id, outbox_id=outbox_id, status=SimulationDailyRunStatus.FAILED_RETRYABLE, patch={"local_sim_projection_readback_failure": error, "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value})
+    def mark_local_sim_projection_readback_retryable(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
+        return self._update_local_sim_projection_readback_state(
+            run_id=run_id,
+            outbox_id=outbox_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            patch={
+                "local_sim_projection_readback_failure": error,
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            },
+        )
 
-    def clear_local_sim_projection_readback_failure(self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus) -> SimulationDailyRun:
-        return self._update_local_sim_projection_readback_state(run_id=run_id, outbox_id=outbox_id, status=final_status, patch={"last_stage": final_status.value}, unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"))
+    def clear_local_sim_projection_readback_failure(
+        self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus
+    ) -> SimulationDailyRun:
+        return self._update_local_sim_projection_readback_state(
+            run_id=run_id,
+            outbox_id=outbox_id,
+            status=final_status,
+            patch={"last_stage": final_status.value},
+            unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"),
+        )
 
     def merge_run_tca_capture_sidecar(
         self,
@@ -1490,7 +3456,10 @@ class SimulationRuntimeRepository:
                     if row is None:
                         conn.rollback()
                         return CaptureMergeOutcome.NOT_FOUND
-                    if row.get("execution_plan_id") != expected_plan_id or row.get("execution_plan_hash") != expected_plan_hash:
+                    if (
+                        row.get("execution_plan_id") != expected_plan_id
+                        or row.get("execution_plan_hash") != expected_plan_hash
+                    ):
                         conn.rollback()
                         return CaptureMergeOutcome.IDENTITY_DRIFT
                     payload = dict(row.get("run_payload_json") or {})
@@ -1658,7 +3627,9 @@ class SimulationRuntimeRepository:
     def _execution_plan_from_row(row: dict[str, Any]) -> ExecutionPlan:
         payload = row.get("plan_payload_json") or {}
         intent_payloads = payload.get("intents") if isinstance(payload.get("intents"), list) else []
-        decisions_payloads = payload.get("trading_rule_decisions") if isinstance(payload.get("trading_rule_decisions"), list) else []
+        decisions_payloads = (
+            payload.get("trading_rule_decisions") if isinstance(payload.get("trading_rule_decisions"), list) else []
+        )
         intents = [
             ExecutionPlanIntent(
                 intent_id=item["intent_id"],
@@ -1795,7 +3766,9 @@ class InMemorySimulationRuntimeRepository:
         try:
             return self.releases[release_id]
         except KeyError as exc:
-            raise DataUnavailableError("strategy runtime release does not exist", context={"release_id": release_id}) from exc
+            raise DataUnavailableError(
+                "strategy runtime release does not exist", context={"release_id": release_id}
+            ) from exc
 
     def get_strategy_runtime_release_by_hash(self, release_hash: str) -> StrategyRuntimeRelease | None:
         release_id = self.release_hash_index.get(release_hash)
@@ -1901,7 +3874,9 @@ class InMemorySimulationRuntimeRepository:
         try:
             return self.bindings[binding_id]
         except KeyError as exc:
-            raise DataUnavailableError("simulation release binding does not exist", context={"binding_id": binding_id}) from exc
+            raise DataUnavailableError(
+                "simulation release binding does not exist", context={"binding_id": binding_id}
+            ) from exc
 
     def get_simulation_release_binding_by_hash(self, binding_hash: str) -> SimulationReleaseBinding | None:
         binding_id = self.binding_hash_index.get(binding_hash)
@@ -1952,7 +3927,11 @@ class InMemorySimulationRuntimeRepository:
         if release_id is not None:
             rows = [row for row in rows if row.release_id == release_id]
         if broker_backend is not None:
-            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            backend = (
+                broker_backend
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else SimulationBrokerBackend(str(broker_backend))
+            )
             rows = [row for row in rows if row.broker_backend == backend]
         states = {
             state if isinstance(state, SimulationBindingApprovalState) else SimulationBindingApprovalState(str(state))
@@ -1983,7 +3962,11 @@ class InMemorySimulationRuntimeRepository:
         if strategy_id is not None:
             rows = [row for row in rows if row.strategy_id == strategy_id]
         if broker_backend is not None:
-            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            backend = (
+                broker_backend
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else SimulationBrokerBackend(str(broker_backend))
+            )
             rows = [row for row in rows if row.broker_backend == backend]
         states = {
             state if isinstance(state, SimulationBindingApprovalState) else SimulationBindingApprovalState(str(state))
@@ -1993,9 +3976,7 @@ class InMemorySimulationRuntimeRepository:
             rows = [row for row in rows if row.approval_state in states]
         if effective_from_on_or_before is not None:
             rows = [
-                row
-                for row in rows
-                if row.effective_from is None or row.effective_from <= effective_from_on_or_before
+                row for row in rows if row.effective_from is None or row.effective_from <= effective_from_on_or_before
             ]
         latest: dict[tuple[str, SimulationBrokerBackend], SimulationReleaseBinding] = {}
         for row in rows:
@@ -2043,7 +4024,9 @@ class InMemorySimulationRuntimeRepository:
         try:
             return self.daily_selection_evidences[evidence_id]
         except KeyError as exc:
-            raise DataUnavailableError("daily selection evidence does not exist", context={"evidence_id": evidence_id}) from exc
+            raise DataUnavailableError(
+                "daily selection evidence does not exist", context={"evidence_id": evidence_id}
+            ) from exc
 
     def get_daily_selection_evidence_by_hash(self, artifact_hash: str) -> DailySelectionEvidence | None:
         evidence_id = self.daily_selection_hash_index.get(artifact_hash)
@@ -2124,6 +4107,7 @@ class InMemorySimulationRuntimeRepository:
         self,
         *,
         trade_date: Any | None = None,
+        trade_date_before: Any | None = None,
         broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         status: SimulationDailyRunStatus | str | None = None,
@@ -2132,8 +4116,14 @@ class InMemorySimulationRuntimeRepository:
         rows = list(self.daily_runs.values())
         if trade_date is not None:
             rows = [row for row in rows if row.trade_date == trade_date]
+        if trade_date_before is not None:
+            rows = [row for row in rows if row.trade_date < trade_date_before]
         if broker_backend is not None:
-            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            backend = (
+                broker_backend
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else SimulationBrokerBackend(str(broker_backend))
+            )
             rows = [row for row in rows if row.broker_backend == backend]
         if strategy_id is not None:
             rows = [row for row in rows if row.strategy_id == strategy_id]
@@ -2161,8 +4151,12 @@ class InMemorySimulationRuntimeRepository:
         updated = current.model_copy(
             update={
                 "status": status or current.status,
-                "selection_evidence_id": selection_evidence.evidence_id if selection_evidence else current.selection_evidence_id,
-                "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
+                "selection_evidence_id": selection_evidence.evidence_id
+                if selection_evidence
+                else current.selection_evidence_id,
+                "selection_artifact_hash": selection_evidence.artifact_hash
+                if selection_evidence
+                else current.selection_artifact_hash,
                 "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
                 "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
                 "run_payload_json": merged_payload,
@@ -2171,9 +4165,136 @@ class InMemorySimulationRuntimeRepository:
         self.daily_runs[run_id] = updated
         return updated
 
-    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+    def claim_simulation_retry_attempt(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        source_fingerprint: str,
+        as_of_time: datetime,
+        lease_seconds: int,
+    ) -> SimulationRetryAttemptDecision:
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("lease_seconds must be a positive integer")
+        current = self.get_simulation_daily_run(run_id)
+        next_payload, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
+            payload=current.run_payload_json,
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            as_of_time=as_of_time,
+            lease_seconds=lease_seconds,
+        )
+        if next_payload != current.run_payload_json:
+            current = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
+            self.daily_runs[run_id] = current
+        _simulation_retry_state(current.run_payload_json)
+        return SimulationRetryAttemptDecision(
+            run=current,
+            should_execute=should_execute,
+            reason=reason,
+            retry_entry=deepcopy(retry_entry),
+            claim_token=claim_token,
+        )
+
+    def record_simulation_retry_failure(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        source_fingerprint: str,
+        failure_fingerprint: str,
+        failure_stage: str,
+        error: dict[str, Any],
+        as_of_time: datetime,
+        base_delay_seconds: int,
+        max_delay_seconds: int,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
+        if (
+            type(base_delay_seconds) is not int
+            or type(max_delay_seconds) is not int
+            or base_delay_seconds <= 0
+            or max_delay_seconds < base_delay_seconds
+        ):
+            raise ValueError("retry delay bounds are invalid")
+        current = self.get_simulation_daily_run(run_id)
+        next_payload, _ = _record_retry_failure_payload(
+            payload=current.run_payload_json,
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            failure_fingerprint=failure_fingerprint,
+            failure_stage=failure_stage,
+            error=error,
+            as_of_time=as_of_time,
+            base_delay_seconds=base_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+            expected_claim_token=expected_claim_token,
+        )
+        updated = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
+        self.daily_runs[run_id] = updated
+        _simulation_retry_state(updated.run_payload_json)
+        return updated
+
+    def clear_simulation_retry_control(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
+        retry_key = _retry_required_text(retry_key, field="retry_key")
+        current = self.get_simulation_daily_run(run_id)
+        control, claims_control = _simulation_retry_state(current.run_payload_json)
+        entries = dict(control["entries"]) if control is not None else {}
+        claims = dict(claims_control["claims"]) if claims_control is not None else {}
+        active_token = simulation_retry_claim_token(current.run_payload_json, retry_key=retry_key)
+        if expected_claim_token is not None:
+            expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+            if active_token != expected_claim_token:
+                raise InvalidStateTransitionError(
+                    "simulation scheduler retry success writer no longer owns the attempt claim",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                        "retry_key": retry_key,
+                        "expected_claim_token": expected_claim_token,
+                        "actual_claim_token": active_token,
+                    },
+                )
+        elif active_token is not None:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry success writer omitted the active attempt claim token",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                    "retry_key": retry_key,
+                    "active_claim_token": active_token,
+                },
+            )
+        if retry_key not in entries and retry_key not in claims:
+            return current
+        entries.pop(retry_key, None)
+        claims.pop(retry_key, None)
+        next_payload = _retry_control_payload_with_entries(current.run_payload_json, entries)
+        next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+        updated = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
+        self.daily_runs[run_id] = updated
+        return updated
+
+    def list_local_sim_execution_states(
+        self, run_id: str, *, authoritative: bool = False
+    ) -> list[LocalSimExecutionStateV1]:
         run = self.get_simulation_daily_run(run_id)
-        states = list(_local_sim_state_map(run.run_payload_json).values())
+        state_map = _local_sim_state_map(run.run_payload_json)
+        if authoritative:
+            state_map = _local_sim_state_authority_closure(
+                run_id=run.run_id,
+                binding_id=run.binding_id,
+                trade_date=run.trade_date,
+                plan_id=run.execution_plan_id,
+                payload=run.run_payload_json,
+                states=state_map,
+                plan_reader=self.get_execution_plan,
+            ).states
+        states = list(state_map.values())
         states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
         return states
 
@@ -2210,56 +4331,106 @@ class InMemorySimulationRuntimeRepository:
         return [readback[state.state_id] for state in incoming]
 
     def stage_local_sim_economic_commit(
-        self, *, connection: Any, run_id: str, binding_id: str, trade_date: date,
-        plan_id: str, states: Iterable[LocalSimExecutionStateV1],
+        self,
+        *,
+        connection: Any,
+        run_id: str,
+        binding_id: str,
+        trade_date: date,
+        plan_id: str,
+        states: Iterable[LocalSimExecutionStateV1],
         expected_versions: dict[str, tuple[int, str] | None],
-        economic_facts: dict[str, Any], projection_payload: dict[str, Any],
-        status: SimulationDailyRunStatus, payload_patch: dict[str, Any],
+        economic_facts: dict[str, Any],
+        projection_payload: dict[str, Any],
+        status: SimulationDailyRunStatus,
+        payload_patch: dict[str, Any],
         payload_unset: Iterable[str] = (),
     ) -> tuple[LocalSimEconomicReceiptV1, LocalSimProjectionOutboxV1, bool]:
         current = self.get_simulation_daily_run(run_id)
         merged, receipt, outbox, created = _merge_local_sim_economic_event(
-            run_id=run_id, binding_id=binding_id, trade_date=trade_date, plan_id=plan_id,
-            payload=current.run_payload_json, states=states, expected_versions=expected_versions,
-            economic_facts=economic_facts, projection_payload=projection_payload,
+            run_id=run_id,
+            binding_id=binding_id,
+            trade_date=trade_date,
+            plan_id=plan_id,
+            payload=current.run_payload_json,
+            states=states,
+            expected_versions=expected_versions,
+            economic_facts=economic_facts,
+            projection_payload=projection_payload,
         )
         if created:
             merged.update(payload_patch)
             for key in payload_unset:
                 merged.pop(str(key), None)
             merged = preserve_tca_sidecar(current.run_payload_json, merged)
-        self.daily_runs[run_id] = current.model_copy(update={"status": status if created else current.status, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        self.daily_runs[run_id] = current.model_copy(
+            update={
+                "status": status if created else current.status,
+                "run_payload_json": merged,
+                "updated_at": datetime.now(UTC),
+            }
+        )
         return receipt, outbox, created
 
-    def readback_local_sim_economic_commit(self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1) -> SimulationDailyRun:
+    def readback_local_sim_economic_commit(
+        self, *, run_id: str, receipt: LocalSimEconomicReceiptV1, outbox: LocalSimProjectionOutboxV1
+    ) -> SimulationDailyRun:
         run = self.get_simulation_daily_run(run_id)
-        persisted_receipt = _local_sim_economic_receipt_map(run.run_payload_json).get(receipt.receipt_id)
-        persisted_outbox = _local_sim_projection_outbox(run.run_payload_json)
-        if persisted_receipt is None or persisted_receipt.receipt_hash != receipt.receipt_hash:
-            raise InvalidStateTransitionError("LocalSIM economic receipt independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_RECEIPT_READBACK_FAILED", "run_id": run_id})
-        if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
-            raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
-        persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
-        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
-            raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
+        _validate_local_sim_economic_readback(
+            run=run,
+            receipt=receipt,
+            outbox=outbox,
+            plan_reader=self.get_execution_plan,
+        )
         return run
 
-    def stage_local_sim_projection_commit(self, *, connection: Any, run_id: str, outbox_id: str, generation: int, final_status: SimulationDailyRunStatus, projection_result: dict[str, Any], payload_patch: dict[str, Any], payload_unset: Iterable[str] = ()) -> LocalSimProjectionReceiptV1:
+    def stage_local_sim_projection_commit(
+        self,
+        *,
+        connection: Any,
+        run_id: str,
+        outbox_id: str,
+        generation: int,
+        final_status: SimulationDailyRunStatus,
+        projection_result: dict[str, Any],
+        payload_patch: dict[str, Any],
+        payload_unset: Iterable[str] = (),
+    ) -> LocalSimProjectionReceiptV1:
         current = self.get_simulation_daily_run(run_id)
-        merged, receipt = _merge_local_sim_projection_success(run_id=run_id, payload=current.run_payload_json, outbox_id=outbox_id, generation=generation, projection_result=projection_result)
+        merged, receipt = _merge_local_sim_projection_success(
+            run_id=run_id,
+            payload=current.run_payload_json,
+            outbox_id=outbox_id,
+            generation=generation,
+            projection_result=projection_result,
+        )
         merged.update(payload_patch)
-        merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = receipt.projection_receipt_id
+        merged.setdefault("local_sim_projection_generation", {})["projection_receipt_id"] = (
+            receipt.projection_receipt_id
+        )
         for key in payload_unset:
             merged.pop(str(key), None)
         merged = preserve_tca_sidecar(current.run_payload_json, merged)
-        self.daily_runs[run_id] = current.model_copy(update={"status": final_status, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        self.daily_runs[run_id] = current.model_copy(
+            update={"status": final_status, "run_payload_json": merged, "updated_at": datetime.now(UTC)}
+        )
         return receipt
 
-    def mark_local_sim_projection_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+    def mark_local_sim_projection_retryable(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
-        merged = _merge_local_sim_projection_retryable(run_id=run_id, payload=current.run_payload_json, outbox_id=outbox_id, error=error)
+        merged = _merge_local_sim_projection_retryable(
+            run_id=run_id, payload=current.run_payload_json, outbox_id=outbox_id, error=error
+        )
         merged["last_stage"] = SimulationDailyRunStatus.FAILED_RETRYABLE.value
-        updated = current.model_copy(update={"status": SimulationDailyRunStatus.FAILED_RETRYABLE, "run_payload_json": merged, "updated_at": datetime.now(UTC)})
+        updated = current.model_copy(
+            update={
+                "status": SimulationDailyRunStatus.FAILED_RETRYABLE,
+                "run_payload_json": merged,
+                "updated_at": datetime.now(UTC),
+            }
+        )
         self.daily_runs[run_id] = updated
         return updated
 
@@ -2284,29 +4455,63 @@ class InMemorySimulationRuntimeRepository:
         self.daily_runs[run_id] = updated
         return updated
 
-    def readback_local_sim_projection_commit(self, *, run_id: str, receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+    def readback_local_sim_projection_commit(
+        self, *, run_id: str, receipt: LocalSimProjectionReceiptV1
+    ) -> SimulationDailyRun:
         run = self.get_simulation_daily_run(run_id)
         outbox = _local_sim_projection_outbox(run.run_payload_json)
         persisted = _local_sim_projection_receipt_map(run.run_payload_json).get(receipt.projection_receipt_id)
-        if outbox is None or outbox.outbox_id != receipt.outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-            raise InvalidStateTransitionError("LocalSIM projection outbox status independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id})
+        if (
+            outbox is None
+            or outbox.outbox_id != receipt.outbox_id
+            or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM projection outbox status independent readback failed",
+                context={"reason_code": "LOCALSIM_PROJECTION_STATUS_READBACK_FAILED", "run_id": run_id},
+            )
         if persisted is None or persisted.receipt_hash != receipt.receipt_hash:
-            raise InvalidStateTransitionError("LocalSIM projection receipt independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id})
+            raise InvalidStateTransitionError(
+                "LocalSIM projection receipt independent readback failed",
+                context={"reason_code": "LOCALSIM_PROJECTION_RECEIPT_READBACK_FAILED", "run_id": run_id},
+            )
         return run
 
-    def mark_local_sim_projection_readback_retryable(self, *, run_id: str, outbox_id: str, error: dict[str, Any]) -> SimulationDailyRun:
+    def mark_local_sim_projection_readback_retryable(
+        self, *, run_id: str, outbox_id: str, error: dict[str, Any]
+    ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         outbox = _local_sim_projection_outbox(current.run_payload_json)
         if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-            raise InvalidStateTransitionError("LocalSIM projection readback failure targets a non-projected outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
-        return self.update_simulation_daily_run(run_id, status=SimulationDailyRunStatus.FAILED_RETRYABLE, payload_patch={"local_sim_projection_readback_failure": error, "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value})
+            raise InvalidStateTransitionError(
+                "LocalSIM projection readback failure targets a non-projected outbox",
+                context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id},
+            )
+        return self.update_simulation_daily_run(
+            run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "local_sim_projection_readback_failure": error,
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            },
+        )
 
-    def clear_local_sim_projection_readback_failure(self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus) -> SimulationDailyRun:
+    def clear_local_sim_projection_readback_failure(
+        self, *, run_id: str, outbox_id: str, final_status: SimulationDailyRunStatus
+    ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         outbox = _local_sim_projection_outbox(current.run_payload_json)
         if outbox is None or outbox.outbox_id != outbox_id or outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
-            raise InvalidStateTransitionError("LocalSIM projection readback recovery targets a non-projected outbox", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id})
-        return self.update_simulation_daily_run(run_id, status=final_status, payload_patch={"last_stage": final_status.value}, payload_unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"))
+            raise InvalidStateTransitionError(
+                "LocalSIM projection readback recovery targets a non-projected outbox",
+                context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_CAS_CONFLICT", "run_id": run_id},
+            )
+        return self.update_simulation_daily_run(
+            run_id,
+            status=final_status,
+            payload_patch={"last_stage": final_status.value},
+            payload_unset=("local_sim_projection_readback_failure", "submit_failure", "local_sim_retry_diagnostics"),
+        )
 
     def merge_run_tca_capture_sidecar(
         self,
@@ -2337,7 +4542,10 @@ class InMemorySimulationRuntimeRepository:
             return CaptureMergeOutcome.IDENTITY_DRIFT
         else:
             sidecar = dict(existing)
-            if sidecar.get("execution_plan_id") != expected_plan_id or sidecar.get("execution_plan_hash") != expected_plan_hash:
+            if (
+                sidecar.get("execution_plan_id") != expected_plan_id
+                or sidecar.get("execution_plan_hash") != expected_plan_hash
+            ):
                 return CaptureMergeOutcome.IDENTITY_DRIFT
         if decision_capture is not None:
             outcome = merge_parent_first_write(

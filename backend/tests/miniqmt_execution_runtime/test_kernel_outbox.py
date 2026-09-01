@@ -18,6 +18,7 @@ from backend.services.miniqmt_execution_runtime.kernel_outbox import (
     KernelGatewayPreCallError,
     KernelOutboxDispatchError,
     KernelOutboxDispatcherV1,
+    KernelOutboxOutcomeIngressError,
     KernelOutboxRecoveryV1,
     KernelOutboxReconcilerV1,
     MiniQMTKernelGatewayAdapterV1,
@@ -180,6 +181,15 @@ def _cancel_command(
     )
 
 
+class _OutcomeIngress:
+    def __init__(self) -> None:
+        self.command_ids: list[str] = []
+
+    def ingest_outbox_outcome_v1(self, *, command_id: str) -> dict[str, str]:
+        self.command_ids.append(command_id)
+        return {"command_id": command_id}
+
+
 class _Repository:
     def __init__(
         self,
@@ -193,6 +203,7 @@ class _Repository:
         self.callback_watermark_reads = 0
         self.matching_callback_count = 0
         self.runtime_events: dict[str, Any] = {}
+        self.outcome_ingress = _OutcomeIngress()
 
     def read_callback_watermark(self, *, runtime_id: str) -> str:
         assert runtime_id == self.outbox.runtime_id
@@ -329,8 +340,23 @@ def _dispatcher(repository: _Repository, gateway: _Gateway, *, catalog: GatewayC
         repository=repository,
         gateway=gateway,
         gateway_catalog=catalog or _catalog(),
+        outcome_ingress=repository.outcome_ingress,
         lease_owner="worker_k2d:incarnation_k2d",
         process_incarnation_id="incarnation_k2d",
+    )
+
+
+def _reconciler(
+    repository: _Repository,
+    gateway: _Gateway,
+    *,
+    catalog: GatewayCapabilityCatalogV1 | None = None,
+) -> KernelOutboxReconcilerV1:
+    return KernelOutboxReconcilerV1(
+        repository=repository,
+        gateway=gateway,
+        gateway_catalog=catalog or _catalog(),
+        outcome_ingress=repository.outcome_ingress,
     )
 
 
@@ -356,6 +382,7 @@ def test_dispatcher_three_phase_submit_calls_gateway_once_and_commits_exact_ack(
     assert repository.mapping.broker_order_id is None
     assert repository.mapping.broker_identity_source_event_id is None
     assert result.broker_order_id == "broker_k2d_1"
+    assert repository.outcome_ingress.command_ids == [result.command_id]
     assert [item.stage.value for item in repository.attempts] == [
         "CLAIMED",
         "PRE_CALL",
@@ -363,6 +390,52 @@ def test_dispatcher_three_phase_submit_calls_gateway_once_and_commits_exact_ack(
         "GATEWAY_RETURNED",
         "COMPLETION_COMMITTED",
     ]
+
+
+def test_immediate_outcome_ingress_failure_is_visible_after_durable_ack_commit() -> None:
+    repository = _Repository()
+    gateway = _Gateway(
+        ack=MiniQMTGatewayOrderAck(
+            accepted=True,
+            broker_order_id="broker_k2d_committed",
+            message="accepted",
+            raw={"broker_called": True},
+        )
+    )
+
+    class FailingOutcomeIngress:
+        @staticmethod
+        def ingest_outbox_outcome_v1(*, command_id: str) -> None:
+            raise KernelOutboxOutcomeIngressError(
+                "MINIQMT_COMMAND_OUTCOME_TEST_INGRESS_FAILED",
+                "injected outcome ingress failure",
+                context={"command_id": command_id},
+            )
+
+    dispatcher = KernelOutboxDispatcherV1(
+        repository=repository,
+        gateway=gateway,
+        gateway_catalog=_catalog(),
+        outcome_ingress=FailingOutcomeIngress(),
+        lease_owner="worker_k2d:incarnation_k2d",
+        process_incarnation_id="incarnation_k2d",
+    )
+    with pytest.raises(KernelOutboxOutcomeIngressError, match="injected outcome ingress failure") as caught:
+        dispatcher.dispatch_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:01Z",
+            lease_expires_at_utc="2026-07-27T01:31:01Z",
+        )
+
+    assert repository.outbox.status is BrokerCommandOutboxStatusV1.ACKED
+    assert repository.outbox.broker_order_id == "broker_k2d_committed"
+    assert gateway.calls == 1
+    assert caught.value.context["stage"] == "OUTBOX_OUTCOME_POST_COMMIT_INGRESS"
+    assert caught.value.context["runtime_id"] == repository.outbox.runtime_id
+    assert caught.value.context["algo_instance_id"] == repository.outbox.algo_instance_id
+    assert caught.value.context["transition_id"] == repository.outbox.transition_id
+    assert caught.value.context["outbox_status"] == "ACKED"
+    assert caught.value.context["outbox_row_version"] == repository.outbox.row_version
 
 
 def test_gateway_exception_becomes_unknown_and_never_implicitly_resubmits() -> None:
@@ -384,6 +457,7 @@ def test_gateway_exception_becomes_unknown_and_never_implicitly_resubmits() -> N
             lease_expires_at_utc="2026-07-27T01:31:02Z",
         )
     assert gateway.calls == 1
+    assert repository.outcome_ingress.command_ids == [unknown.command_id]
 
 
 def test_gateway_exception_persists_unknown_without_live_snapshot_read() -> None:
@@ -418,6 +492,7 @@ def test_pre_call_failure_is_bounded_retryable_without_broker_call() -> None:
     assert result.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
     assert result.broker_called is False
     assert repository.mapping.mapping_status is CommandChildMappingStatusV1.RESERVED
+    assert repository.outcome_ingress.command_ids == []
 
 
 def test_callback_watermark_failure_is_pre_call_and_never_calls_broker() -> None:
@@ -453,6 +528,7 @@ def test_submit_rejection_closes_mapping_without_forged_event_identity() -> None
     assert result.status is BrokerCommandOutboxStatusV1.ACKED_REJECTED
     assert repository.mapping.mapping_status is CommandChildMappingStatusV1.BROKER_REJECTED
     assert repository.mapping.broker_identity_source_event_id is None
+    assert repository.outcome_ingress.command_ids == [result.command_id]
 
 
 def test_unknown_unique_snapshot_reconciles_without_new_gateway_dispatch() -> None:
@@ -475,11 +551,10 @@ def test_unknown_unique_snapshot_reconciles_without_new_gateway_dispatch() -> No
             trades=(),
         )
     ]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(),
-    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:10Z")
+    result = _reconciler(repository, gateway).reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:10Z",
+    )
     assert gateway.calls == 1
     assert result.status is BrokerCommandOutboxStatusV1.ACKED
     assert result.ack_receipt_json.source.value == "RECONCILIATION"
@@ -487,6 +562,7 @@ def test_unknown_unique_snapshot_reconciles_without_new_gateway_dispatch() -> No
     assert repository.mapping.mapping_status is CommandChildMappingStatusV1.OUTCOME_UNKNOWN
     assert repository.mapping.broker_order_id is None
     assert repository.mapping.broker_identity_source_event_id is None
+    assert repository.outcome_ingress.command_ids == [result.command_id, result.command_id]
 
 
 def test_reconcile_receipt_survives_cas_failure_and_retry_does_not_reread_gateway() -> None:
@@ -509,7 +585,7 @@ def test_reconcile_receipt_survives_cas_failure_and_retry_does_not_reread_gatewa
             trades=(),
         )
     ]
-    reconciler = KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog())
+    reconciler = _reconciler(repository, gateway)
     repository.fail_next_cas = True
     with pytest.raises(RuntimeError, match="injected reconciliation CAS failure"):
         reconciler.reconcile_one(
@@ -534,7 +610,7 @@ def test_not_found_without_idempotency_stays_reconcile_only_then_fails_terminal(
         observed_at_utc="2026-07-27T01:30:01Z",
         lease_expires_at_utc="2026-07-27T01:31:01Z",
     )
-    reconciler = KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog())
+    reconciler = _reconciler(repository, gateway)
     observed_at = "2026-07-27T01:30:02Z"
     for index in range(1, 11):
         result = reconciler.reconcile_one(
@@ -548,6 +624,7 @@ def test_not_found_without_idempotency_stays_reconcile_only_then_fails_terminal(
     assert result.broker_called is None
     assert repository.mapping.mapping_status is CommandChildMappingStatusV1.OUTCOME_UNKNOWN
     assert tuple(repository.reconciliation_receipts) == tuple(range(1, 11))
+    assert repository.outcome_ingress.command_ids == [result.command_id, result.command_id]
 
 
 def test_reconcile_cadence_rejects_early_poll_without_new_snapshot() -> None:
@@ -558,7 +635,7 @@ def test_reconcile_cadence_rejects_early_poll_without_new_snapshot() -> None:
         observed_at_utc="2026-07-27T01:30:01Z",
         lease_expires_at_utc="2026-07-27T01:31:01Z",
     )
-    reconciler = KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog())
+    reconciler = _reconciler(repository, gateway)
     first = reconciler.reconcile_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T01:30:02Z",
@@ -582,10 +659,10 @@ def test_exact_non_acceptance_allows_same_command_retry_only_when_catalog_says_i
         lease_expires_at_utc="2026-07-27T01:31:01Z",
     )
     gateway.snapshots = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(idempotent_submit=True),
+    result = _reconciler(
+        repository,
+        gateway,
+        catalog=_catalog(idempotent_submit=True),
     ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
     assert result.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
     assert result.broker_called is False
@@ -680,6 +757,7 @@ def test_missing_qmt_mutation_method_is_classified_before_dispatching_commit() -
         repository=repository,
         gateway=adapter,
         gateway_catalog=_catalog(),
+        outcome_ingress=repository.outcome_ingress,
         lease_owner="worker_k2d:incarnation_k2d",
         process_incarnation_id="incarnation_k2d",
     ).dispatch_one(
@@ -794,11 +872,10 @@ def test_reconciliation_rejects_conflicting_aliases_without_mutating_durable_sta
         )
     ]
     with pytest.raises(KernelOutboxDispatchError, match="conflicting identity aliases"):
-        KernelOutboxReconcilerV1(
-            repository=repository,
-            gateway=gateway,
-            gateway_catalog=_catalog(),
-        ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+        _reconciler(repository, gateway).reconcile_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:02Z",
+        )
     assert (repository.mapping, repository.outbox) == before
 
 
@@ -822,11 +899,10 @@ def test_reconciliation_normalizes_numeric_identity_and_nested_transport_values(
             trades=(),
         )
     ]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(),
-    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+    result = _reconciler(repository, gateway).reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:02Z",
+    )
     assert result.status is BrokerCommandOutboxStatusV1.ACKED
     assert result.broker_order_id == "123456"
 
@@ -884,11 +960,10 @@ def test_cancel_reconciliation_matches_numeric_broker_identity_without_secondary
             trades=(),
         )
     ]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(),
-    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:03Z")
+    result = _reconciler(repository, gateway).reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:03Z",
+    )
     assert result.status is BrokerCommandOutboxStatusV1.ACKED
     assert result.broker_order_id == "123456"
 
@@ -913,11 +988,10 @@ def test_reconciliation_rejects_negative_numeric_broker_identity() -> None:
         )
     ]
     with pytest.raises(KernelOutboxDispatchError, match="cannot be negative"):
-        KernelOutboxReconcilerV1(
-            repository=repository,
-            gateway=gateway,
-            gateway_catalog=_catalog(),
-        ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+        _reconciler(repository, gateway).reconcile_one(
+            command_id=repository.outbox.command_id,
+            observed_at_utc="2026-07-27T01:30:02Z",
+        )
 
 
 def test_pre_call_retry_uses_exact_one_two_four_eight_second_cadence() -> None:
@@ -954,6 +1028,7 @@ def test_pre_call_retry_uses_exact_one_two_four_eight_second_cadence() -> None:
             assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
             assert result.next_attempt_at_utc is None
     assert gateway.calls == 0
+    assert repository.outcome_ingress.command_ids == [result.command_id]
 
 
 def test_restart_recovers_expired_dispatching_as_unknown_without_broker_replay() -> None:
@@ -968,7 +1043,10 @@ def test_restart_recovers_expired_dispatching_as_unknown_without_broker_replay()
         )
     assert repository.outbox.status is BrokerCommandOutboxStatusV1.DISPATCHING
     assert repository.outbox.callback_watermark_before_call == "watermark_k2d_1"
-    recovered = KernelOutboxRecoveryV1(repository=repository).recover_stale_one(
+    recovered = KernelOutboxRecoveryV1(
+        repository=repository,
+        outcome_ingress=repository.outcome_ingress,
+    ).recover_stale_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T01:30:03Z",
     )
@@ -976,6 +1054,7 @@ def test_restart_recovers_expired_dispatching_as_unknown_without_broker_replay()
     assert recovered.unknown_outcome_receipt is not None
     assert recovered.unknown_outcome_receipt.callback_watermark == "watermark_k2d_1"
     assert gateway.calls == 0
+    assert repository.outcome_ingress.command_ids == [recovered.command_id]
 
 
 @pytest.mark.parametrize(
@@ -1076,13 +1155,17 @@ def test_restart_recovers_expired_claim_as_pre_call_retry_without_broker_fact() 
         updated_at_utc="2026-07-27T01:30:01Z",
         expected_row_version=1,
     )
-    recovered = KernelOutboxRecoveryV1(repository=repository).recover_stale_one(
+    recovered = KernelOutboxRecoveryV1(
+        repository=repository,
+        outcome_ingress=repository.outcome_ingress,
+    ).recover_stale_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T01:30:03Z",
     )
     assert recovered.status is BrokerCommandOutboxStatusV1.FAILED_RETRYABLE
     assert recovered.broker_called is False
     assert recovered.next_attempt_at_utc == "2026-07-27T01:30:04.000000Z"
+    assert repository.outcome_ingress.command_ids == []
 
 
 def test_matching_callback_in_watermark_interval_forbids_nonacceptance_retry() -> None:
@@ -1095,13 +1178,14 @@ def test_matching_callback_in_watermark_interval_forbids_nonacceptance_retry() -
     )
     repository.matching_callback_count = 1
     gateway.snapshots = [GatewayReconciliationSnapshotV1(orders=(), trades=())]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(idempotent_submit=True),
+    result = _reconciler(
+        repository,
+        gateway,
+        catalog=_catalog(idempotent_submit=True),
     ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
     assert result.status is BrokerCommandOutboxStatusV1.RECONCILING
     assert result.non_acceptance_receipt is None
+    assert repository.outcome_ingress.command_ids == [result.command_id]
 
 
 def test_eod_event_forces_final_snapshot_readback_and_terminalizes_not_found() -> None:
@@ -1134,17 +1218,14 @@ def test_eod_event_forces_final_snapshot_readback_and_terminalizes_not_found() -
         correlation={},
     )
     repository.runtime_events[eod.event_id] = eod
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(),
-    ).reconcile_one(
+    result = _reconciler(repository, gateway).reconcile_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T07:00:01Z",
         eod_event_id=eod.event_id,
     )
     assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
     assert gateway.snapshot_calls == 1
+    assert repository.outcome_ingress.command_ids == [result.command_id, result.command_id]
 
 
 def test_eod_replays_pre_eod_receipt_then_performs_a_fresh_final_readback() -> None:
@@ -1157,7 +1238,7 @@ def test_eod_replays_pre_eod_receipt_then_performs_a_fresh_final_readback() -> N
     )
     repository.fail_next_cas = True
     with pytest.raises(RuntimeError, match="injected reconciliation CAS failure"):
-        KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog()).reconcile_one(
+        _reconciler(repository, gateway).reconcile_one(
             command_id=repository.outbox.command_id,
             observed_at_utc="2026-07-27T01:30:02Z",
         )
@@ -1183,7 +1264,7 @@ def test_eod_replays_pre_eod_receipt_then_performs_a_fresh_final_readback() -> N
         correlation={},
     )
     repository.runtime_events[eod.event_id] = eod
-    reconciler = KernelOutboxReconcilerV1(repository=repository, gateway=gateway, gateway_catalog=_catalog())
+    reconciler = _reconciler(repository, gateway)
     replayed = reconciler.reconcile_one(
         command_id=repository.outbox.command_id,
         observed_at_utc="2026-07-27T07:00:01Z",
@@ -1198,6 +1279,7 @@ def test_eod_replays_pre_eod_receipt_then_performs_a_fresh_final_readback() -> N
     )
     assert terminal.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
     assert gateway.snapshot_calls == 2
+    assert repository.outcome_ingress.command_ids == [terminal.command_id, terminal.command_id]
 
 
 def test_conflicting_rejected_and_accepted_rows_for_same_order_are_not_collapsed() -> None:
@@ -1225,14 +1307,14 @@ def test_conflicting_rejected_and_accepted_rows_for_same_order_are_not_collapsed
             trades=(),
         )
     ]
-    result = KernelOutboxReconcilerV1(
-        repository=repository,
-        gateway=gateway,
-        gateway_catalog=_catalog(),
-    ).reconcile_one(command_id=repository.outbox.command_id, observed_at_utc="2026-07-27T01:30:02Z")
+    result = _reconciler(repository, gateway).reconcile_one(
+        command_id=repository.outbox.command_id,
+        observed_at_utc="2026-07-27T01:30:02Z",
+    )
     assert result.status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
     assert result.reconcile_receipt is not None
     assert result.reconcile_receipt.outcome.value == "CONFLICT"
+    assert repository.outcome_ingress.command_ids == [result.command_id, result.command_id]
 
 
 def _read_command(outbox: BrokerCommandOutboxV1) -> BrokerCommandV2:

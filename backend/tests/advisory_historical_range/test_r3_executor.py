@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
 from backend.services.advisory_historical_range.catalog_planner import HistoricalRangeSourceInputUnavailable
 from backend.services.advisory_historical_range.executor import (
@@ -476,7 +478,10 @@ def test_future_candidate_prefetch_failure_does_not_fail_current_day(tmp_path) -
         )
     )
 
+    attempts: list[date] = []
+
     def _produce(*, decision_trade_date, **_kwargs):
+        attempts.append(decision_trade_date)
         if decision_trade_date == future_date:
             raise RuntimeError("future prefetch unavailable")
         return SimpleNamespace(candidate_artifact_ref=candidate_ref)
@@ -492,3 +497,71 @@ def test_future_candidate_prefetch_failure_does_not_fail_current_day(tmp_path) -
         claim=claim,
         candidate_prefetch_per_program=2,
     ) == candidate_ref
+    future_claim = claim.model_copy(
+        update={
+            "day_run_id": "day_2",
+            "decision_trade_date": future_date,
+            "ordinal": 2,
+        }
+    )
+    with pytest.raises(RuntimeError, match="future prefetch unavailable"):
+        executor._produce_prefetched_candidates(
+            request_payload=request,
+            claim=future_claim,
+            candidate_prefetch_per_program=2,
+        )
+    assert attempts.count(future_date) == 2
+
+
+def test_candidate_prefetch_consumes_a_complete_chunk_before_refill(tmp_path) -> None:
+    store, batch, run, claim, _request_payload, _candidate_payload, candidate_ref, _mark_set, _mark_ref = (
+        _sealed_execution_context(tmp_path)
+    )
+    dates = tuple(date(2026, 6, day) for day in range(3, 19))
+    request = SimpleNamespace(
+        resolved_request=SimpleNamespace(
+            date_plan=SimpleNamespace(ordered_trade_dates=dates)
+        )
+    )
+    produced: list[date] = []
+
+    def _produce(*, decision_trade_date, **_kwargs):
+        produced.append(decision_trade_date)
+        return SimpleNamespace(candidate_artifact_ref=candidate_ref)
+
+    executor = HistoricalRangeDayExecutor(
+        repository=_Repository(batch=batch, run=run, claim=claim),
+        artifact_store=store,
+        candidate_producer=SimpleNamespace(produce=_produce),
+        decision_mark_provider=SimpleNamespace(),
+    )
+    claims = tuple(
+        claim.model_copy(
+            update={
+                "day_run_id": f"day_{ordinal}",
+                "decision_trade_date": trade_date,
+                "ordinal": ordinal,
+            }
+        )
+        for ordinal, trade_date in enumerate(dates, start=1)
+    )
+
+    for current in claims[:8]:
+        assert executor._produce_prefetched_candidates(
+            request_payload=request,
+            claim=current,
+            candidate_prefetch_per_program=8,
+        ) == candidate_ref
+
+    assert sorted(produced) == list(dates[:8])
+    assert len(produced) == 8
+
+    for current in claims[8:]:
+        assert executor._produce_prefetched_candidates(
+            request_payload=request,
+            claim=current,
+            candidate_prefetch_per_program=8,
+        ) == candidate_ref
+
+    assert sorted(produced) == list(dates)
+    assert len(produced) == 16

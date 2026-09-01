@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 372
+    assert legacy_tool_count() == 368
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 378
-    assert len(TOOL_MANIFEST_BY_NAME) == 378
+    assert len(TOOL_MANIFEST) == 374
+    assert len(TOOL_MANIFEST_BY_NAME) == 374
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -40,6 +40,16 @@ def test_module_tool_names_match_module_constants() -> None:
         imported = importlib.import_module(f"backend.mcp.modules.{module}")
         assert tuple(imported.TOOL_NAMES) == tuple(tool_names)
         assert imported.TOOL_COUNT == len(tool_names)
+
+
+def test_long_trend_quality_tool_is_discoverable_and_read_only() -> None:
+    entry = TOOL_MANIFEST_BY_NAME["qe_archive_query_long_trend_quality"]
+
+    assert entry.module == "qe_archive"
+    assert entry.backend_endpoint == "qe-archive/*"
+    assert entry.risk_level == "read_only"
+    assert entry.assistant_usable == "direct_or_catalog"
+    assert entry.requires_confirmation is False
 
 
 def test_high_risk_tools_have_preflight_metadata() -> None:
@@ -73,8 +83,8 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "execution_policy_plan_binding",
         "advisory_list_bindings",
         "advisory_get_active_binding",
-        "paper_v2_monitoring_get_scheduler_status",
-        "paper_v2_monitoring_get_scheduler_bootstrap_status",
+            "simulation_runtime_monitoring_scheduler_status",
+            "simulation_runtime_monitoring_scheduler_verification",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
         "qlib_export_plan_dataset_update",
@@ -90,6 +100,7 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "qe_archive_get_run_quality",
         "qe_archive_list_backfill_runs",
         "qe_archive_get_backfill_run",
+        "qe_archive_query_long_trend_quality",
         "qe_archive_query_run_leaderboard",
         "qe_archive_query_topk_quality",
         "list_validation_runs",
@@ -176,7 +187,7 @@ def test_migration_state_is_derived_and_overrideable() -> None:
     )
 
 
-def test_paper_v2_current_phase_excludes_runtime_control_tools() -> None:
+def test_simulation_runtime_monitoring_excludes_runtime_control_tools() -> None:
     forbidden_fragments = (
         "paper_v2_create_portfolio",
         "paper_v2_enable_auto_run",
@@ -195,7 +206,7 @@ def test_paper_v2_current_phase_excludes_runtime_control_tools() -> None:
     )
     exposed = {entry.tool_name for entry in TOOL_MANIFEST}
     assert not [name for name in exposed if any(fragment in name for fragment in forbidden_fragments)]
-    assert TOOL_MANIFEST_BY_NAME["paper_v2_monitoring_list_positions"].risk_level == "read_only"
+    assert TOOL_MANIFEST_BY_NAME["simulation_runtime_monitoring_get_ledger"].risk_level == "read_only"
     assert TOOL_MANIFEST_BY_NAME["qmt_broker_monitoring_get_snapshot"].risk_level == "read_only"
 
 

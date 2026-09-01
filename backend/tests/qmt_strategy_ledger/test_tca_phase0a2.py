@@ -24,10 +24,12 @@ from backend.services.qmt_strategy_ledger.tca_repository import ExecutionTcaEvid
 from backend.services.simulation_runtime.models import (
     ExecutionPlan,
     ExecutionPlanIntent,
-    SimulationBrokerBackend,
     SimulationDailyRun,
     TradingRuleDecision,
     canonical_json_sha256,
+)
+from backend.services.simulation_data.daily_context import (
+    SimulationBrokerBackend,
 )
 from backend.services.trading_core.models import OrderSide
 from backend.services.trading_core.tca_sidecar import TCA_OBSERVATION_KEY

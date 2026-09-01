@@ -51,10 +51,8 @@ class _Cursor:
     def fetchall(self):
         if "information_schema.columns" in self.sql:
             return [("daily_basic", "trade_date", "date")]
-        if "FROM market.sw_index_classify" in self.sql:
-            rows = [("L1", f"L1-{index:02d}", f"I1-{index:02d}", f"L1 Sector {index}") for index in range(31)]
-            rows.extend(("L2", f"L2-{index:03d}", f"I2-{index:03d}", f"L2 Sector {index}") for index in range(131))
-            return rows
+        if "SELECT DISTINCT l1_code,l1_name,l2_code,l2_name FROM market.sw_index_member" in self.sql:
+            return self.connection.classification_member_rows
         if "duplicates WHERE conflict_groups>0" in self.sql:
             return self.connection.duplicates
         if "SELECT cal_date::date FROM market.trading_calendar" in self.sql:
@@ -134,12 +132,27 @@ class _Connection:
     def __init__(self) -> None:
         self.executed = []
         self.duplicates = []
+        self.classification_member_rows = _complete_member_classification_rows()
         self.mapping_rows = []
         self.missing_rows = []
         self.stock_rows = []
 
     def cursor(self, name=None):
         return _Cursor(self, name=name)
+
+
+def _complete_member_classification_rows() -> list[tuple[str, str, str, str]]:
+    rows: list[tuple[str, str, str, str]] = []
+    for l2_index in range(131):
+        l1_index = l2_index % 31
+        canonical_l1 = f"801{l1_index:03d}.SI"
+        l1_name = f"L1 Sector {l1_index}"
+        l2_code = f"L2-{l2_index:03d}"
+        l2_name = f"L2 Sector {l2_index}"
+        rows.append((canonical_l1, l1_name, l2_code, l2_name))
+        if l1_index < 28:
+            rows.append((f"{110000 + l1_index * 10000:06d}", "", l2_code, l2_name))
+    return rows
 
 
 def _spec(*, circ_mv_history_start: date | None = None) -> subject.StockFactSourceSpec:
@@ -193,10 +206,37 @@ def test_reader_allows_identical_duplicates_but_rejects_conflicting_duplicate_ke
     reader.validate_fact_uniqueness()
 
     assert state["universe_key"] == "immutable_v1"
-    assert lookup[("L1", "I1-00")]["index_code"] == "L1-00"
+    assert lookup[("L1", "110000")]["index_code"] == "801000.SI"
+    assert not any("market.sw_index_classify" in sql for _, sql, _ in connection.executed)
     connection.duplicates = [("moneyflow_ts", 2)]
     with pytest.raises(StateModelSetError, match="conflicting duplicate keys"):
         reader.validate_fact_uniqueness()
+
+
+def test_member_classification_authority_rejects_ambiguous_l1_alias() -> None:
+    connection = _Connection()
+    first_l2 = connection.classification_member_rows[0][2]
+    connection.classification_member_rows.append(("120000", "L1 Sector 1", first_l2, "L2 Sector 0"))
+
+    with pytest.raises(StateModelSetError, match="L1 alias maps to multiple canonical identities"):
+        _reader(connection).load_classification_lookup()
+
+
+def test_member_classification_authority_rejects_incomplete_l2_catalog() -> None:
+    connection = _Connection()
+    connection.classification_member_rows = [row for row in connection.classification_member_rows if row[2] != "L2-130"]
+
+    with pytest.raises(StateModelSetError, match="canonical L1=31/L2=131; actual=31/130"):
+        _reader(connection).load_classification_lookup()
+
+
+def test_member_classification_authority_rejects_unknown_l1_code_representation() -> None:
+    connection = _Connection()
+    first_l2 = connection.classification_member_rows[0][2]
+    connection.classification_member_rows.append(("LEGACY-L1", "", first_l2, "L2 Sector 0"))
+
+    with pytest.raises(StateModelSetError, match="L1 code representation is invalid"):
+        _reader(connection).load_classification_lookup()
 
 
 def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
@@ -205,13 +245,13 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
         (
             date(2024, 1, 2),
             "000001.SZ",
-            "I1-00",
-            "I2-000",
+            "110000",
+            "L2-000",
             date(2020, 1, 1),
             None,
             date(2020, 1, 1),
             None,
-            "L1-00",
+            "801000.SI",
             "L1 Sector 0",
             "L2-000",
             "L2 Sector 0",
@@ -261,8 +301,8 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     l2_stock = next(reader.iter_stock_fact_rows(sector_level="L2"))
     assert list(reader.iter_missing_price_rows()) == []
 
-    assert mapping["source_l1_code"] == "I1-00"
-    assert mapping["l1_code"] == "L1-00"
+    assert mapping["source_l1_code"] == "110000"
+    assert mapping["l1_code"] == "801000.SI"
     assert stock["close_yuan"] == 10.5
     assert stock["volume_shares"] == 10_000.0
     assert stock["amount_cny"] == 1_000.0
@@ -284,7 +324,98 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     missing_queries = [sql for name, sql, _ in connection.executed if name and "missing_price_base" in name]
     assert missing_queries and all("missing_keys AS MATERIALIZED" in sql for sql in missing_queries)
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
+    assert all("market.sw_index_classify" not in sql for _, sql, _ in connection.executed)
+    assert all(
+        "JOIN l2_owner owner" in sql
+        for name, sql, _ in connection.executed
+        if name and ("mapping_source" in name or "stock_fact" in name)
+    )
     assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
+
+
+def test_all_stock_fact_query_paths_use_authoritative_full_day_suspension_before_price_lags() -> None:
+    connection = _Connection()
+    reader = _reader(connection)
+
+    reader._load_stock_base_rows(
+        window_start=date(2024, 1, 1),
+        window_end=date(2024, 1, 31),
+        fetch_size=100,
+        sector_level="L1",
+    )
+    reader._load_missing_price_base_rows(
+        window_start=date(2024, 1, 1),
+        window_end=date(2024, 1, 31),
+        fetch_size=100,
+        sector_level="L1",
+    )
+    list(
+        reader.iter_stock_fact_rows(
+            _window_start=date(2024, 1, 1),
+            _window_end=date(2024, 1, 31),
+        )
+    )
+
+    manifest = _identity_manifest()
+
+    class AliasManifest:
+        def alias_rows(self, source_dataset: str):
+            if source_dataset == "market.daily_basic":
+                return [
+                    {
+                        "canonical_ts_code": "000001.SZ",
+                        "source_ts_code": "000002.SZ",
+                        "effective_start": "2024-01-01",
+                        "effective_end": "2024-01-31",
+                        "security_identity_id": "test-alias",
+                        "row_hash": "a" * 64,
+                    }
+                ]
+            return manifest.alias_rows(source_dataset)
+
+        def resolve(self, *args, **kwargs):
+            return manifest.resolve(*args, **kwargs)
+
+        def evidence(self):
+            return manifest.evidence()
+
+    alias_reader = subject.PostgresStockFactReader(
+        connection,
+        _spec(),
+        security_identity_manifest=AliasManifest(),
+        provider_absence_manifest=_provider_absence_manifest(),
+    )
+    list(alias_reader.iter_missing_price_rows())
+
+    stock_queries = [
+        sql
+        for name, sql, _ in connection.executed
+        if name and (name.startswith("hmm_risk_stock_fact_base_") or name.startswith("hmm_risk_stock_fact_source_"))
+    ]
+    missing_queries = [
+        sql
+        for name, sql, _ in connection.executed
+        if name and (name.startswith("hmm_risk_missing_price_base_") or name == "hmm_risk_missing_price_source")
+    ]
+    assert len(stock_queries) == 2
+    assert len(missing_queries) == 2
+
+    for sql in (*stock_queries, *missing_queries):
+        assert "suspension.suspend_type='S'" in sql
+        assert "COALESCE(BTRIM(suspension.suspend_timing),'') IN ('','09:30-09:30')" in sql
+        assert "resume.suspend_type='R'" not in sql
+        assert "NOT ( EXISTS" in sql
+
+    for sql in stock_queries:
+        price_base = sql.split("price_base AS (", 1)[1].split("), price_history AS", 1)[0]
+        assert "market.suspend_d suspension" in price_base
+        assert "COALESCE(price.volume_hand,0)=0" in price_base
+        assert "COALESCE(price.amount_li,0)=0" in price_base
+
+
+def test_full_day_suspension_predicate_rejects_unregistered_sql_aliases() -> None:
+    with pytest.raises(ValueError, match="unsupported full-day suspension SQL identity"):
+        subject._full_day_suspension_exists_sql(trade_date="unsafe.trade_date", ts_code="unsafe.ts_code")
 
 
 def test_reader_uses_latest_causal_circ_mv_before_previous_market_day() -> None:
@@ -644,12 +775,13 @@ def test_reader_marks_missing_provider_moneyflow_as_na_with_identity_evidence() 
     assert row["moneyflow_fact_status"] == "provider_absence"
     assert row["net_mf_amount_cny"] is None
     assert row["moneyflow_source_identity"]["source_ts_code"] == "603595.SH"
-    assert row["moneyflow_provider_absence"]["provider_audit_receipt_sha256"] == (
-        "a96c19313e110e7ea3ce67f33d0027eaef3ef494898f5d8db7362c9e88670fec"
+    expected_evidence = _provider_absence_manifest().resolve(
+        canonical_ts_code="603595.SH",
+        source_dataset="market.moneyflow_ts",
+        source_ts_code="603595.SH",
+        trade_date=date(2024, 1, 8),
     )
-    assert row["moneyflow_provider_absence"]["row_hash"] == (
-        "7f7eb116ab9b800995eeea98c7c1d050bea6674702d7b6994906a2bcaee147b6"
-    )
+    assert row["moneyflow_provider_absence"] == expected_evidence.evidence()
 
     connection.stock_rows[0] = (date(2024, 1, 9), *connection.stock_rows[0][1:])
     with pytest.raises(StateModelSetError, match="provider_absence_unverified"):
@@ -807,6 +939,87 @@ def test_daily_aggregate_loader_hashes_raw_rows_and_returns_all_l1() -> None:
     assert len(manifest["raw_jsonl_sha256"]) == 64
     assert manifest["circ_mv_lookback_contract_version"] == "hmm_risk_causal_circ_mv_source_window_v1"
     assert manifest["circ_mv_pit_boundary_crossing_count"] == 0
+
+
+def test_daily_aggregate_loader_regroups_projected_l1_rows_and_missing_prices_by_day() -> None:
+    class ProjectedReader(_FactReader):
+        def __init__(self) -> None:
+            rows = list(super().iter_stock_fact_rows())
+            self.missing_rows = []
+            projected_rows = []
+            for row in rows:
+                l1_number = int(str(row["l1_code"]).removeprefix("L1-"))
+                stock_number = int(str(row["symbol"])[2:6])
+                projected = {
+                    **row,
+                    "symbol": f"{stock_number:02d}{l1_number:04d}.SZ",
+                }
+                if stock_number == 9 and l1_number in {0, 1}:
+                    self.missing_rows.append(
+                        {
+                            **projected,
+                            "open_yuan": None,
+                            "high_yuan": None,
+                            "low_yuan": None,
+                            "close_yuan": None,
+                            "volume_shares": None,
+                            "amount_cny": None,
+                            "prev_close_yuan": None,
+                            "prev_close_5_yuan": None,
+                            "prev_close_10_yuan": None,
+                            "buy_sm_amount_cny": None,
+                            "sell_sm_amount_cny": None,
+                            "buy_elg_amount_cny": None,
+                            "sell_elg_amount_cny": None,
+                            "net_mf_amount_cny": None,
+                            "up_limit_yuan": None,
+                        }
+                    )
+                else:
+                    projected_rows.append(projected)
+            self.stock_rows = sorted(projected_rows, key=lambda row: (row["trade_date"], row["symbol"]))
+            self.missing_rows.sort(key=lambda row: (row["trade_date"], row["symbol"]))
+
+        def iter_stock_fact_rows(self):
+            return iter(self.stock_rows)
+
+        def iter_missing_price_rows(self):
+            return iter(self.missing_rows)
+
+    aggregates, manifest = subject.load_daily_aggregates(ProjectedReader())
+
+    identities = [(item.trade_date, item.l1_code) for item in aggregates]
+    assert len(aggregates) == 31
+    assert len(identities) == len(set(identities))
+    assert identities == sorted(identities)
+    assert aggregates[0].count_coverage == pytest.approx(0.9)
+    assert aggregates[1].count_coverage == pytest.approx(0.9)
+    assert manifest["raw_row_count"] == 310
+    assert manifest["missing_non_suspended_price_row_count"] == 2
+
+
+def test_daily_aggregate_loader_rejects_non_monotonic_source_dates_before_aggregation() -> None:
+    class ReversedDateReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            rows = list(super().iter_stock_fact_rows())[:2]
+            yield {**rows[0], "trade_date": date(2024, 1, 3)}
+            yield {**rows[1], "trade_date": date(2024, 1, 2)}
+
+    with pytest.raises(StateModelSetError, match="hmm_risk_stock_fact_stream_order_invalid"):
+        subject.load_daily_aggregates(ReversedDateReader())
+
+
+def test_daily_aggregate_loader_rejects_incomplete_sort_identity_with_typed_reason() -> None:
+    class IncompleteIdentityReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            row = next(super().iter_stock_fact_rows())
+            yield {**row, "l1_code": None}
+
+    with pytest.raises(
+        StateModelSetError,
+        match="hmm_risk_stock_fact_stream_identity_invalid: aggregate sort identity lacks l1_code",
+    ):
+        subject.load_daily_aggregates(IncompleteIdentityReader())
 
 
 def test_daily_aggregate_uses_effective_circ_mv_history_contract_identity() -> None:

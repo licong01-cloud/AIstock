@@ -9,7 +9,12 @@ from typing import Any
 
 BUG_ID_RE = re.compile(r"^BUG-(\d{3,})$")
 BUG_FILE_RE = re.compile(r"BUG-(\d{3,})")
-ALLOWED_CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
+ALLOWED_CLOSE_SYNC_STATUSES = {
+    "fixed",
+    "fixed_source_pending_user_restart",
+    "closed",
+    "verified",
+}
 
 
 def _normalize_path(value: str) -> str:

@@ -1,0 +1,281 @@
+{
+  "actual": "Both MA-E05 WSL orthogonality_aware attempts fail before remote task creation with remote_runtime_artifact_binding_invalid on a valid /mnt/f/Dev/RD-Agent-state/artifact_cas/<sha256> object.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "tests/aistock_validation/bugs/20260803_BUG-967-local-wsl-cas-runtime-artifact-bindings-are-rejected-after-valid-path-ad.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-967",
+  "closed_at": "2026-08-03T17:12:16.591062Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-03T10:38:34.147791Z",
+  "description": "MA-E05 WSL orthogonality_aware attempts fail before remote task creation with remote_runtime_artifact_binding_invalid on a valid /mnt/f/Dev/RD-Agent-state/artifact_cas/<sha256> object. Post-restart retries proved that the durable execution adapter omitted the resolved compute node when building the remote WSL command, so the node-aware binding validator still received node=None.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260803-f3f10eb8492c",
+      "timestamp": "2026-08-03T10:38:34.147786Z"
+    },
+    {
+      "action": "reopen_after_runtime_reproduction",
+      "actor": "codex",
+      "note": "Post-restart MA-E05 retries reproduced the failure in durable_execution_adapter.py because the resolved node was not propagated to _remote_wsl_command.",
+      "timestamp": "2026-08-03T12:57:23.836075Z"
+    }
+  ],
+  "evidence_uris": [
+    "attempt=macba_c87c019c059594364f283cea9c2f76647c63c914f269df231db3f3b9fe4dabf6 reason_code=remote_runtime_artifact_binding_invalid",
+    "attempt=macba_a418bbc47af55dfdbad97364f8eb5dcb583f0d915e069bb811a37894bb9cac76 reason_code=remote_runtime_artifact_binding_invalid",
+    "attempt=macba_f5439f6abfc45fc130a91a5a54e0c0c3f0dc95a3e1cc761f4a083cf3acb4a578 reason_code=remote_runtime_artifact_binding_invalid",
+    "attempt=macba_3a7c20f07205b3d9a51e96cf22780aee0b3207d9b5d14cb85c04770f7f27fe64 reason_code=remote_runtime_artifact_binding_invalid"
+  ],
+  "expected": "A CAS object under the configured /mnt/<drive>/ artifact_store_root is accepted only for the loopback local-WSL compute node; genuine remote nodes remain fail closed.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/test_multi_alpha_remote_dispatch.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
+    ]
+  },
+  "first_seen_at": "2026-08-03T10:38:34.147791Z",
+  "fix_branch": null,
+  "fix_commit": "1dea9d0b55074b5165a18205d41b4a28c38052da",
+  "fixed_at": "2026-08-03T17:12:16.591038Z",
+  "github_issue_number": 3092,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3092",
+  "last_seen_at": "2026-08-03T12:57:23.836075Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3104",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/multi-alpha/combine-backtest/runs/macb_453ca2d0c5b21b40_20240701_20260629_20260803T100944839929Z_3fbba27f/children/macbc_066e70f4143ecd99e9b924832f5cc7e6f8c4f55db2cfd6348d7c8e71226df61f/attempts",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_453ca2d0c5b21b40_20240701_20260629_20260803T100944839929Z_3fbba27f",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded commit 282bd808 and completed backend/tests/test_multi_alpha_remote_dispatch.py: 43 passed, 1 skipped",
+      "Fresh Python process verified loopback WSL /mnt drive CAS binding acceptance plus remote/non-WSL/non-drive /mnt fail-closed cases: 6 passed",
+      "Fresh Python process compiled backend/services/multi_alpha/remote_dispatch.py and backend/tests/test_multi_alpha_remote_dispatch.py successfully",
+      "Fresh Python process loaded persistent commit 282bd808 and completed remote-dispatch matrix: 43 passed, 1 skipped",
+      "Fresh Python process loaded follow-up commit 8829b8b9 and completed durable-adapter plus remote-dispatch matrix: 60 passed, 1 skipped",
+      "Fresh Python process verified the durable submit path accepts /mnt/f CAS bindings only after propagating the resolved wsl2-5080 node: 1 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-967/post-restart-verify.json",
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "Local WSL CAS runtime artifact bindings are rejected after valid path admission",
+  "trigger_condition": {
+    "fingerprint": "f3f10eb8492ce7d0a1b5c033",
+    "source_event_id": "FE-20260803-f3f10eb8492c"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -k runtime_artifact_binding -q -> passed (6 direct binding/path cases)",
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -> passed (43 passed, 1 skipped)",
+    "python -m ruff check plus py_compile plus git diff --check -> passed",
+    "python -m nox -s l0 -> passed (0 blocking findings)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests)",
+    "post-restart backend-main identity and business smoke -> passed",
+    "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py::test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact -q -> passed (1 durable submit case)",
+    "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -q -> passed (60 passed, 1 skipped)"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from backend.mcp.common import sanitize_tail
-from backend.services.quantevolver.experiment_config import ALLOWED_LABEL_HORIZONS
 
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
@@ -61,7 +60,7 @@ TOOL_NAMES = (
 TOOL_COUNT = len(TOOL_NAMES)
 
 MAX_QE_NODE_PARALLELISM = 4
-QE_LABEL_HORIZONS = frozenset(ALLOWED_LABEL_HORIZONS)
+QE_LABEL_HORIZONS = frozenset({1, 3, 5, 10, 20, 30, 40, 60, 120, 180})
 QE_TEMPLATE_KINDS = {"single_experiment", "custom_evo"}
 
 

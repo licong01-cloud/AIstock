@@ -78,6 +78,19 @@ from backend.services.trading_core.errors import (
 )
 
 
+DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM = 2
+MAX_CANDIDATE_PREFETCH_PER_PROGRAM = 8
+
+
+def validate_candidate_prefetch_per_program(value: int) -> int:
+    if not 1 <= value <= MAX_CANDIDATE_PREFETCH_PER_PROGRAM:
+        raise ValueError(
+            "candidate_prefetch_per_program must be between 1 and "
+            f"{MAX_CANDIDATE_PREFETCH_PER_PROGRAM}"
+        )
+    return value
+
+
 LOGGER = logging.getLogger(__name__)
 EXECUTOR_CONTRACT_VERSION = "advisory_historical_range_r3_ordered_executor_v1"
 
@@ -192,14 +205,13 @@ class HistoricalRangeDayExecutor:
         batch_id: str,
         worker_id: str,
         max_program_concurrency: int = 2,
-        candidate_prefetch_per_program: int = 2,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
         max_day_commits_per_slice: int = 4,
         lease_seconds: int = 3600,
     ) -> tuple[HistoricalRangeDayExecutionResultV1, ...]:
         if not 1 <= max_program_concurrency <= 32:
             raise ValueError("max_program_concurrency must be between 1 and 32")
-        if not 1 <= candidate_prefetch_per_program <= 2:
-            raise ValueError("candidate_prefetch_per_program must be between 1 and 2")
+        validate_candidate_prefetch_per_program(candidate_prefetch_per_program)
         if not 1 <= max_day_commits_per_slice <= 500:
             raise ValueError("max_day_commits_per_slice must be between 1 and 500")
         if not 1 <= lease_seconds <= 86_400:
@@ -529,6 +541,12 @@ class HistoricalRangeDayExecutor:
         claim: HistoricalRangeClaimedDayV1,
         candidate_prefetch_per_program: int,
     ) -> HistoricalRangeArtifactRefV1:
+        current_key = (claim.range_run_id, claim.decision_trade_date)
+        with self._prefetch_lock:
+            current = self._prefetched_candidates.pop(current_key, None)
+        if current is not None:
+            return current
+
         dates = request_payload.resolved_request.date_plan.ordered_trade_dates[
             claim.ordinal - 1 : claim.ordinal - 1 + candidate_prefetch_per_program
         ]
@@ -576,7 +594,7 @@ class HistoricalRangeDayExecutor:
                             context={"range_run_id": claim.range_run_id, "decision_trade_date": str(trade_date)},
                         )
         with self._prefetch_lock:
-            current = self._prefetched_candidates.pop((claim.range_run_id, claim.decision_trade_date), None)
+            current = self._prefetched_candidates.pop(current_key, None)
         if current is None:
             raise HistoricalRangeContractError(
                 "ADVISORY_HR_CANDIDATE_PREFETCH_MISSING",
@@ -1078,7 +1096,7 @@ class HistoricalRangeBatchExecutionService:
         batch_id: str,
         worker_id: str,
         max_program_concurrency: int = 2,
-        candidate_prefetch_per_program: int = 2,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
         day_slice_size: int = 4,
         lease_seconds: int = 3600,
     ) -> HistoricalRangeBatchExecutionResultV1:
@@ -1122,10 +1140,11 @@ class HistoricalRangeBatchExecutionService:
         operation_idempotency_key: str,
         expected_batch_row_version: int,
         max_program_concurrency: int = 2,
-        candidate_prefetch_per_program: int = 2,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
         day_slice_size: int = 4,
         lease_seconds: int = 3600,
     ) -> HistoricalRangeBatchExecutionResultV1:
+        validate_candidate_prefetch_per_program(candidate_prefetch_per_program)
         operation_payload = {
             "schema_version": "advisory_historical_range_resume_operation_input_v1",
             "batch_id": batch_id,

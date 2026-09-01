@@ -1,0 +1,242 @@
+{
+  "actual": "The post-merge Code Intelligence Refresh workflow fails in prepare_self_hosted_workspace.py when clearing an existing Windows runner workspace. shutil.rmtree attempts to unlink read-only .git/objects files and raises WinError 5, leaving graph refresh failed. Cleanup must handle Windows read-only attributes safely within the runner workspace without broad deletion, preserve canonical source safety, and keep fail-closed behavior for unsafe destinations.",
+  "allowed_write_scope": [
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "scripts/aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260827_BUG-1204-code-intelligence-self-hosted-workspace-cleanup-rejects-read-only-git-ob.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1204",
+  "closed_at": "2026-08-27T03:45:12Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-27T02:48:45.393327Z",
+  "description": "The post-merge Code Intelligence Refresh workflow fails in prepare_self_hosted_workspace.py when clearing an existing Windows runner workspace. shutil.rmtree attempts to unlink read-only .git/objects files and raises WinError 5, leaving graph refresh failed. Cleanup must handle Windows read-only attributes safely within the runner workspace without broad deletion, preserve canonical source safety, and keep fail-closed behavior for unsafe destinations.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260827-889cabf3dba6",
+      "timestamp": "2026-08-27T02:48:45.393309Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
+    ],
+    "changed_files": [
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-08-27T02:48:45.393327Z",
+  "fix_branch": null,
+  "fix_commit": "b6cc2251a9952474dfaa40a5035c076ef3344a2e",
+  "fixed_at": "2026-08-27T03:45:12Z",
+  "github_issue_number": 3833,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3833",
+  "last_seen_at": "2026-08-27T02:48:45.393327Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3834",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1204",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e11c16ac8cb16a1c",
+    "recorded_at": "2026-08-27T03:49:27.339590Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "088e252cbc84eaae403248dd5a9d76240f2d840b",
+    "source_merge_commit": "b6cc2251a9952474dfaa40a5035c076ef3344a2e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3834",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py -q -> 4 passed",
+      "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 65 passed",
+      "python -m nox -s guardrail_changed_files -> Session guardrail_changed_files was successful; findings=0; blocking=0",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1204 -> PASS workflow_gate=passed; unexpected_dirty_paths=0",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "128f2c27da71892b1d24b945a6153a2ccfabc4893a41d665c14496a19ce5396a"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Code Intelligence self-hosted workspace cleanup rejects read-only Git objects on Windows",
+  "trigger_condition": {
+    "fingerprint": "889cabf3dba6bd0d17d9500a",
+    "source_event_id": "FE-20260827-889cabf3dba6"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py -q -> 4 passed",
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 65 passed",
+    "python -m nox -s guardrail_changed_files -> Session guardrail_changed_files was successful; findings=0; blocking=0",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1204 -> PASS workflow_gate=passed; unexpected_dirty_paths=0",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

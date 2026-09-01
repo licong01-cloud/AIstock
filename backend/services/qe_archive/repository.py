@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import date
 from typing import Any
 
 from psycopg2.extras import Json, execute_values
@@ -2072,6 +2073,66 @@ class QEArchiveRepository:
                     params,
                 )
                 return self._fetch_dicts(cur)
+
+    def query_operator_run_options(
+        self,
+        *,
+        search: str | None = None,
+        run_type: str | None = None,
+        model_type: str | None = None,
+        label_horizon: int | None = None,
+        completed_from: date | None = None,
+        completed_to: date | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        """Return bounded, business-labelled run choices for operator UI controls."""
+
+        bounded = max(1, min(int(limit or 30), 50))
+        filters = ["r.status = 'completed'"]
+        params: list[Any] = []
+        if run_type and run_type not in {"all", "*"}:
+            filters.append("r.run_type = %s")
+            params.append(run_type)
+        if model_type:
+            filters.append("r.model_type = %s")
+            params.append(model_type)
+        if label_horizon is not None:
+            filters.append("r.label_horizon = %s")
+            params.append(int(label_horizon))
+        if completed_from is not None:
+            filters.append("COALESCE(r.completed_at, r.archived_at)::date >= %s")
+            params.append(completed_from)
+        if completed_to is not None:
+            filters.append("COALESCE(r.completed_at, r.archived_at)::date <= %s")
+            params.append(completed_to)
+        if search and search.strip():
+            pattern = f"%{search.strip()}%"
+            filters.append(
+                "(COALESCE(t.task_name, '') ILIKE %s OR COALESCE(r.model_type, '') ILIKE %s "
+                "OR COALESCE(r.run_type, '') ILIKE %s OR COALESCE(r.status, '') ILIKE %s "
+                "OR COALESCE(r.completed_at, r.archived_at)::date::text ILIKE %s)"
+            )
+            params.extend([pattern] * 5)
+        params.append(bounded)
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.run_id AS value, t.task_name, r.run_type, r.model_type,
+                           r.label_horizon, r.factor_count, r.loop_index, r.status,
+                           r.completed_at, r.archived_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = r.task_id
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY COALESCE(r.completed_at, r.archived_at) DESC NULLS LAST,
+                             r.archived_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                items = self._fetch_dicts(cur)
+        return {"items": items, "limit": bounded}
 
     def list_prediction_artifact_link_candidates(
         self,

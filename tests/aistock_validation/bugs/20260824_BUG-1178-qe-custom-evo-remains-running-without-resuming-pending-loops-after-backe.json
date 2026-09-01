@@ -1,0 +1,238 @@
+{
+  "actual": "MA-E19R had 12 configured serial loops. backend-main restarted at 11:00:22 while Loop3 was active; Loop3 callback completed at 11:02:55, but the new process retained task status=running with submitted_loop_count=3 and never submitted Loop4. Node remained healthy and idle, resume_allowed=true, and no running loop existed. Require startup/reconciliation recovery to resume exactly once from the first unsubmitted custom-evo loop, preserve completed loops, avoid duplicate submissions, and fail closed on ambiguous active-loop state.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1178",
+  "closed_at": "2026-08-24T18:49:18.143494Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-24T10:50:14.939640Z",
+  "description": "MA-E19R had 12 configured serial loops. backend-main restarted at 11:00:22 while Loop3 was active; Loop3 callback completed at 11:02:55, but the new process retained task status=running with submitted_loop_count=3 and never submitted Loop4. Node remained healthy and idle, resume_allowed=true, and no running loop existed. Require startup/reconciliation recovery to resume exactly once from the first unsubmitted custom-evo loop, preserve completed loops, avoid duplicate submissions, and fail closed on ambiguous active-loop state.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260824-619f5a2e43b4",
+      "timestamp": "2026-08-24T10:50:14.939623Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
+      "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
+      "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ]
+  },
+  "first_seen_at": "2026-08-24T10:50:14.939640Z",
+  "fix_branch": null,
+  "fix_commit": "3c043b530b8fa7b72f4d63f333bfad625b61744a",
+  "fixed_at": "2026-08-24T16:22:37Z",
+  "github_issue_number": 3754,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3754",
+  "last_seen_at": "2026-08-24T10:50:14.939640Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3757",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "validation_module_registry_l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process imported tracked qe_reconciliation_coordinator and qe_evolution_service sources; verified zombie-task due discovery and process-local single-flight recovery -> passed",
+      "Fresh pytest process imported tracked qe_reconciliation_coordinator and qe_evolution_service sources; zombie due discovery and process-local single-flight recovery passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1178\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1178",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8090a9a76705e46182850210a0829ac08beda0679c8be0a56cb00770b2291a9e",
+      "contract_digest": "1c45dbc3200ae398eebc37935a64f8807c9509221010f0e9b057d6322389e008",
+      "expected_identity": "3c043b530b8fa7b72f4d63f333bfad625b61744a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-24T18:24:27.075480Z",
+      "mode": "read_only",
+      "observed_identity": "324fc707fc877c0398db0d7a6f72b14f724a599a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a7924eba763384475fd33d017f6d703daad24c35cd2dd45a98e99692f5c96f02",
+      "receipt_sha256": "6564732819ad0cbf7ba8ba05ae97ec45735794545b9471600f014f1ce5d68160",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "48a775c671f3930a397627341dbd2a0e2ac3bb60cbc14a137c92187db44b6a96",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom-evo remains running without resuming pending loops after backend restart",
+  "trigger_condition": {
+    "fingerprint": "619f5a2e43b4975a2da3a643",
+    "source_event_id": "FE-20260824-619f5a2e43b4"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_reconciliation_coordinator.py -q -> 21 passed",
+    "python -m pytest selected custom-evo recovery/config truth nodeids -q -> 3 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m ruff check changed Python files; python -m py_compile changed runtime sources; git diff --check -> passed",
+    "python -m ruff check changed Python files -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_pr"
+}

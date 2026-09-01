@@ -5,6 +5,7 @@ import sys
 import types
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -67,6 +68,96 @@ class _FakeRecorder:
         return str(self._run_dir)
 
 
+def _minute_config(minute_root: Path, day_root: Path | None = None) -> dict:
+    day_root = day_root or minute_root.parent / "day"
+    return {
+        "market": "filtered_pool_20260630",
+        "qlib_init": {"provider_uri": {"day": str(day_root), "1min": str(minute_root)}},
+        "port_analysis_config": {
+            "executor": {"class": "NestedExecutor"},
+            "backtest": {
+                "start_time": "2026-06-01",
+                "end_time": "2026-06-29",
+                "exchange_kwargs": {"freq": "1min"},
+            },
+        },
+    }
+
+
+def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    day_root = tmp_path / "day"
+    minute_root = tmp_path / "minute"
+    day_instruments = day_root / "instruments"
+    minute_instruments = minute_root / "instruments"
+    day_instruments.mkdir(parents=True)
+    minute_instruments.mkdir(parents=True)
+    (day_instruments / "all.txt").write_text(
+        "000001.SZ\t2018-08-01\t2026-06-30\n",
+        encoding="utf-8",
+    )
+    config = _minute_config(minute_root, day_root)
+
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_MISSING"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    minute_all = minute_instruments / "all.txt"
+    minute_all.write_text("000001.SZ\tnot-a-date\t2026-06-30\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_INVALID"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    minute_all.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    # Instrument membership is a trading-day contract: a minute span beginning
+    # at 09:30 on its first listed day must cover the day-level 00:00 boundary.
+    minute_all.write_text("000001.SZ\t2026-06-01 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    config["port_analysis_config"]["backtest"]["start_time"] = "not-a-date"
+    with pytest.raises(RuntimeError, match="QE_MINUTE_BACKTEST_WINDOW_INVALID"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    config = _minute_config(tmp_path / "minute")
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-06-01", "2026-06-02"]), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    prediction = pd.DataFrame({"score": [0.1, 0.2]}, index=index)
+
+    class Recorder:
+        indicators = pd.DataFrame({"count": [0, 0], "deal_amount": [0.0, 0.0]})
+
+        def load_object(self, name: str):
+            assert name == "portfolio_analysis/indicators_normal_1day.pkl"
+            return self.indicators
+
+    recorder = Recorder()
+    with pytest.raises(RuntimeError, match="QE_MINUTE_BACKTEST_ZERO_TRADES"):
+        runner._validate_pred_backtest_has_execution(recorder, config, prediction)
+
+    recorder.indicators = pd.DataFrame({"count": [1, 0], "deal_amount": [1000.0, 0.0]})
+    runner._validate_pred_backtest_has_execution(recorder, config, prediction)
+
+
+def test_qrun_minute_guards_do_not_change_non_minute_backtests(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    config = _minute_config(tmp_path / "missing-minute")
+    config["port_analysis_config"]["backtest"]["exchange_kwargs"]["freq"] = "day"
+
+    class Recorder:
+        def load_object(self, _name: str):
+            raise AssertionError("non-minute guard must not inspect execution artifacts")
+
+    prediction = pd.DataFrame()
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+    runner._validate_pred_backtest_has_execution(Recorder(), config, prediction)
+
+
 
 @pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
 def test_qrun_industry_provider_injection_only_for_industry_requested(tmp_path, monkeypatch, runner_path) -> None:
@@ -107,8 +198,11 @@ def test_qrun_industry_provider_injection_only_for_industry_requested(tmp_path, 
     ) is None
     assert calls[-1] == {"config": config_embedding, "cwd": tmp_path}
 
-def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatch, capsys) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_retries_empty_mlflow_metric_once(
+    tmp_path, monkeypatch, capsys, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class FlakyRecordTemp:
@@ -143,8 +237,11 @@ def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatc
     assert str(run_dir / "metrics" / "Rank IC") in out
 
 
-def test_qrun_record_check_keeps_true_missing_artifact_loud(tmp_path, monkeypatch, capsys) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_keeps_true_missing_artifact_loud(
+    tmp_path, monkeypatch, capsys, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class MissingArtifactRecordTemp:
@@ -173,8 +270,11 @@ def test_qrun_record_check_keeps_true_missing_artifact_loud(tmp_path, monkeypatc
     assert "transient MLflow empty metric read" not in capsys.readouterr().out
 
 
-def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV, "1")
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
@@ -207,8 +307,11 @@ def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, mo
     assert str(run_dir / "metrics" / "Rank IC") in message
 
 
-def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
 
     class OrderedAsyncRecorder(_FakeRecorder):
         def __init__(self, run_dir: Path) -> None:
@@ -250,8 +353,11 @@ def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(
     assert record.load_calls == 1
 
 
-def test_qrun_record_load_retries_wrapped_load_object_empty_metric(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_retries_wrapped_load_object_empty_metric(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class LoadObjectError(Exception):
@@ -286,8 +392,11 @@ def test_qrun_record_load_retries_wrapped_load_object_empty_metric(tmp_path, mon
     assert record.load_calls == 2
 
 
-def test_qrun_record_load_does_not_retry_unrelated_load_object_error(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_does_not_retry_unrelated_load_object_error(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
 
     class LoadObjectError(Exception):
         pass
@@ -317,8 +426,11 @@ def test_qrun_record_load_does_not_retry_unrelated_load_object_error(tmp_path, m
     assert record.load_calls == 1
 
 
-def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV, "0")
 
     class StalledRecorder(_FakeRecorder):
@@ -349,3 +461,65 @@ def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(tmp_pat
     with pytest.raises(runner.QEMlflowAsyncDrainError, match="barrier timed out"):
         record.load("pred.pkl")
     assert record.load_calls == 0
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_fails_before_enqueue_when_async_writer_is_dead(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
+
+    class DeadWorker:
+        @staticmethod
+        def is_alive() -> bool:
+            return False
+
+    class DeadAsyncLog:
+        def __init__(self) -> None:
+            self._t = DeadWorker()
+            self.enqueue_calls = 0
+
+        def __call__(self, _operation) -> None:
+            self.enqueue_calls += 1
+
+    class DeadWriterRecorder(_FakeRecorder):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__(run_dir)
+            self.async_log = DeadAsyncLog()
+
+    class NeverReadRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            return name
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = NeverReadRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    recorder = DeadWriterRecorder(tmp_path / "run")
+    record = record_temp.RecordTemp(recorder)
+
+    with pytest.raises(runner.QEMlflowAsyncDrainError, match="not alive"):
+        record.load("pred.pkl")
+    assert recorder.async_log.enqueue_calls == 0
+    assert record.load_calls == 0
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_installs_mlflow_retry_after_init_before_task_train(runner_path: Path) -> None:
+    source = runner_path.read_text(encoding="utf-8")
+    run_main = source[source.index("def _run_main") :]
+
+    init_index = run_main.index("qlib.init(")
+    install_index = run_main.index("_install_mlflow_metric_read_retry()")
+    train_index = run_main.index("recorder = _task_train_with_gats_industry_provider(")
+    assert init_index < install_index < train_index

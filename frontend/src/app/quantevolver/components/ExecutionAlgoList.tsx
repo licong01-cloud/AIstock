@@ -23,6 +23,10 @@ type ExecutionAlgo = {
   analysis_profile?: any;
   llm_analysis_at?: string;
   is_enabled?: boolean;
+  retired?: boolean;
+  selectable?: boolean;
+  activatable?: boolean;
+  retirement_reason_code?: string | null;
   sort_order?: number;
   created_at?: string;
   updated_at?: string;
@@ -104,6 +108,7 @@ export default function ExecutionAlgoList() {
 
   // ---- 单个分析 ----
   async function analyzeOne(algoCode: string) {
+    if (algos.find((item) => item.algo_code === algoCode)?.retired) return;
     setAnalyzingCode(algoCode);
     try {
       const res = await fetch(
@@ -166,7 +171,7 @@ export default function ExecutionAlgoList() {
   // ---- 选中分析 ----
   async function analyzeSelected() {
     if (selectedCodes.size === 0) return;
-    const codes = Array.from(selectedCodes);
+    const codes = Array.from(selectedCodes).filter(code => !algos.find(item => item.algo_code === code)?.retired);
     for (const code of codes) {
       setAnalyzingCode(code);
       try {
@@ -182,6 +187,7 @@ export default function ExecutionAlgoList() {
   }
 
   function toggleSelect(code: string) {
+    if (algos.find((item) => item.algo_code === code)?.retired) return;
     setSelectedCodes(prev => {
       const next = new Set(prev);
       if (next.has(code)) next.delete(code); else next.add(code);
@@ -190,15 +196,17 @@ export default function ExecutionAlgoList() {
   }
 
   function toggleSelectAll() {
-    if (selectedCodes.size === filtered.length) {
+    const selectable = filtered.filter(a => !a.retired);
+    if (selectedCodes.size === selectable.length) {
       setSelectedCodes(new Set());
     } else {
-      setSelectedCodes(new Set(filtered.map(a => a.algo_code)));
+      setSelectedCodes(new Set(selectable.map(a => a.algo_code)));
     }
   }
 
   // ---- 启用/禁用切换 ----
   async function toggleEnabled(algo: ExecutionAlgo) {
+    if (algo.retired) return;
     try {
       const res = await fetch(
         `${API}/quantevolver/execution-algorithms/${encodeURIComponent(algo.algo_code)}`,
@@ -368,7 +376,9 @@ export default function ExecutionAlgoList() {
                           type="checkbox"
                           checked={selectedCodes.has(algo.algo_code)}
                           onChange={() => toggleSelect(algo.algo_code)}
-                          style={{ cursor: "pointer" }}
+                          disabled={algo.retired}
+                          title={algo.retirement_reason_code || undefined}
+                          style={{ cursor: algo.retired ? "not-allowed" : "pointer" }}
                         />
                       </td>
                       <td style={{ ...tdStyle, fontWeight: 600 }}>
@@ -423,15 +433,16 @@ export default function ExecutionAlgoList() {
                       </td>
                       <td style={tdStyle}>
                         <span
-                          onClick={() => toggleEnabled(algo)}
+                          onClick={() => !algo.retired && toggleEnabled(algo)}
+                          title={algo.retirement_reason_code || undefined}
                           style={{
-                            fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer",
-                            background: algo.is_enabled ? "#d1fae5" : "#fee2e2",
-                            color: algo.is_enabled ? "#059669" : "#dc2626",
+                            fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: algo.retired ? "not-allowed" : "pointer",
+                            background: algo.retired ? "#f3f4f6" : algo.is_enabled ? "#d1fae5" : "#fee2e2",
+                            color: algo.retired ? "#6b7280" : algo.is_enabled ? "#059669" : "#dc2626",
                             fontWeight: 600,
                           }}
                         >
-                          {algo.is_enabled ? "启用" : "禁用"}
+                          {algo.retired ? "已退役" : algo.is_enabled ? "启用" : "禁用"}
                         </span>
                       </td>
                       <td style={tdStyle}>
@@ -443,14 +454,15 @@ export default function ExecutionAlgoList() {
                             {isExpanded ? "收起" : "展开"}
                           </span>
                           <span
-                            onClick={() => analyzingCode !== algo.algo_code && analyzeOne(algo.algo_code)}
+                            onClick={() => !algo.retired && analyzingCode !== algo.algo_code && analyzeOne(algo.algo_code)}
+                            title={algo.retirement_reason_code || undefined}
                             style={{
-                              color: analyzingCode === algo.algo_code ? "#9ca3af" : "#2563eb",
-                              cursor: analyzingCode === algo.algo_code ? "wait" : "pointer",
+                              color: algo.retired || analyzingCode === algo.algo_code ? "#9ca3af" : "#2563eb",
+                              cursor: algo.retired ? "not-allowed" : analyzingCode === algo.algo_code ? "wait" : "pointer",
                               fontSize: 11, borderBottom: "1px dashed", userSelect: "none",
                             }}
                           >
-                            {analyzingCode === algo.algo_code ? "分析中..." : "分析"}
+                            {algo.retired ? "不可分析" : analyzingCode === algo.algo_code ? "分析中..." : "分析"}
                           </span>
                         </div>
                       </td>

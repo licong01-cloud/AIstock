@@ -1,8 +1,8 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_merged_runtime_active_artifact_built_bug881_retry_selection_fix_in_review`
+> 文档状态：`implementation_merged_runtime_active_artifact_built_formal_4_policy_8_child_submitted_in_progress`
 > Feature tier：`F2`
-> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
+> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.24
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
 
 ## 1. Background / 背景
@@ -149,6 +149,18 @@ leadership_concentration, vol_crowding_risk
 
 未知 `l2_code_id=-1` 明确写入 `UNMAPPED`，策略不得把它当作 `NORMAL`。已映射但任一五分量缺失时写入 `INCOMPLETE`，并在 manifest 固化股票日数、板块日数和分量缺失计数。首轮实验对 `UNMAPPED/INCOMPLETE` 均保持原策略行为并单独统计覆盖，不借此淘汰样本或研究方向。
 
+#### 5.4.1 预测池键缺口的严格语义
+
+`sector_risk_overlay_strict=true` 同时约束 manifest 日期域和制品完整性，但不能把预测池相对 `daily_pv.h5` 多出的合法股票日误判为损坏制品。运行时按以下顺序处理：
+
+1. manifest 必须声明合法的 `output_start/output_end`，runtime 行必须全部位于该日期域内；边界缺失、非法或倒置时立即失败。
+2. 查询日期超出 manifest 日期域时立即失败，不允许使用最近日期、前向填充或绕过风险覆盖层。
+3. 仅当查询日期存在于 runtime 交易日日历、股票存在于 runtime，且缺失日位于该股票首末覆盖日之间时，才把不存在的 `(effective_trade_date, instrument)` 认定为局部覆盖空洞，并生成显式 `risk_state=UNMAPPED`、`source_status=MISSING_ARTIFACT_ROW` 的中性决策；五个风险分量保持缺失，目标暴露为 `1.00`，不阻止原策略买入。
+4. 每个此类股票日必须在 action ledger 写入唯一 `MISSING_ARTIFACT_ROW` 事件，包含日期、股票、`UNMAPPED`、中性倍率和明确原因。它是可审计的覆盖缺口，不得伪装为 `NORMAL`。
+5. 未知股票、runtime 整体缺失该交易日、查询日位于股票自身首末覆盖日之外，以及 hash 不一致、必需列缺失、重复键、非法日期、未知状态和 runtime 行越界继续 fail-fast；本规则不得通过设置 `strict=false` 实现。
+
+该语义只修复 overlay 构建股票池与 pred-backtest 预测池不完全相同的合法覆盖缺口，不改变 T+1、风险分数、状态阈值或四臂策略行为。
+
 ### 5.5 策略参数
 
 ```text
@@ -213,6 +225,7 @@ sector_risk_overlay_action_log: str
 - 源代码合入、后端重启、风险制品生成和 R13A 启动分别报告。
 - PR #2754、BUG-871 已合入，用户已完成后端重启，正式不可变风险制品已经生成。BUG-872 补齐精确 child 选择前不提交会自动膨胀 LOO 的错误 R13A 请求。
 - BUG-872 激活后先提交一个 `include_baseline=true/include_loo=false` 的两-child wiring canary，再按四个 policy run 提交 8 个正式 child；canary 只验证 wiring，不形成 Alpha 结论。
+- 2026-07-31 已按冻结合同提交四个正式 run：`macb_idem_fd513f8f…` none、`macb_idem_5445a95e…` entry_gate、`macb_idem_ef4430e2…` bounded_de_risk、`macb_idem_57af2233…` exit_reentry。每个 child plan 均精确为 `baseline:lgbm_g14_fp_h60 + scheme:equal`，无 LOO，共 8 个真实 CPU child；当前仍在运行，不提前形成 Alpha 结论。
 - 回滚停止创建新 overlay child，保留已生成 artifact、action ledger、run/child/attempt 和结果；代码按 PR revert，不删除研究记录。
 - 默认策略 hook 为 no-op，关闭 overlay 后必须恢复原有订单语义。
 
@@ -224,7 +237,7 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = canary_backtest_complete_terminal_persistence_and_reconciliation_bug888_bug889_in_fix
+r13a_experiment = formal_4_policy_8_child_submitted_in_progress
 non_qe_impact = prohibited
 ```
 
@@ -273,6 +286,10 @@ BUG-884 小文本字节保真补证（2026-07-27）：BUG-881/883 合入并重�
 BUG-887 CAS 符号链接校验补证（2026-07-27）：BUG-884 合入并重启后的第二次 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00` 再次准确规划两个 child，且 `small_text` 文件 `conf.yaml` 已按 manifest 的 157647 字节进入远端 workspace，证明 CRLF 字节保真修复生效。两个 child 随后均在首个 CAS-backed 文件 `aistock_models/__init__.py` 的 size 校验终止：manifest 期望 578，`stat -c %s` 返回 103。只读远端核验确认 103 是符号链接文本自身长度；`readlink` 指向 SHA 命名的正确 CAS 对象，`stat -Lc %s` 返回目标文件 578 字节，且 `sha256sum` 通过链接得到 manifest SHA。运行时校验必须使用解引用语义读取目标大小，同时继续对目标内容执行 SHA256；不得移除 size/SHA 校验、把 CAS 文件复制回 workspace，或以失败后降级路径继续回测。该 run 仅作为基础架构失败证据，不作 Alpha 判断；修复合入并重启后仍只重试同一原始 2-child canary。
 
 BUG-888 Recorder 固化配置身份补证（2026-07-28）：BUG-887 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T115722735654Z_6584f87f` 已使 baseline 与 equal 两个 child 完成全部 `483/483` 回测日和 `PortAnaRecord`，随后在 Recorder 固化阶段因完整 Qlib 配置同时包含顶层 `port_analysis_config` YAML anchor 定义及 `task.record[].kwargs.config` 执行引用，被旧递归扫描误判为两个可执行 overlay strategy。固化器改为优先解析 Qlib 实际执行的 `task.record` 子树；只有该权威执行路径不存在时才兼容扫描旧式直接策略配置。存在两个真实可执行 portfolio record 时仍显式失败，不按相同 class/kwargs 静默去重。定向回归覆盖真实 anchor/record 双路径和双 record 冲突；修复不改变回测指标、策略参数、风险动作或非 QE 模块。
+
+正式 MA-E01/R13A 启动 receipt（2026-07-31）：只读核验确认 BUG-888/889 后的 none canary `macb_453ca2d0c5b21b40_20240701_20260629_20260728T021052319863Z_00cf02ce` 已 `succeeded`，equal CAGR/Sharpe/Calmar 为 `74.47%/1.9224/3.5544`。随后通过既有 durable API 提交四个正式 policy run；四者共享 roster/OOS/费用/执行配置，唯一策略差异为冻结 policy mode 和 state multipliers。提交未执行 DDL、历史回填、服务启停或非 QE 动作。当前只确认 run/child plan 与运行状态，terminal metrics、动作 ledger、成本/换手、false early-exit 和重入延迟尚待回读。
+
+BUG-935 预测池覆盖缺口补证（2026-07-31）：正式 MA-E01 的 5 个远端失败 child 在 `PortAnaRecord` 暴露同一契约问题，具体缺失键为 `2024-07-03/603227.SH` 和 `2024-08-02/600027.SH`。真实制品只读核验确认两只股票均覆盖整个 OOS 主区间，缺失键前后存在正常 runtime 行，属于 `daily_pv.h5` 股票日与 pred-backtest 预测池之间的局部覆盖空洞；因此按 5.4.1 生成显式 `UNMAPPED/MISSING_ARTIFACT_ROW` 中性决策，并在 action ledger 单独留证。未知股票、runtime 整日缺失、股票覆盖域外查询、非法 manifest、hash/schema/重复键/非法日期仍 fail-fast。该修复不重新构建历史制品、不修改数据库、不关闭 strict，也不改变风险阈值或策略倍率。
 
 ## 12. DESIGN-COMPLIANCE-001
 

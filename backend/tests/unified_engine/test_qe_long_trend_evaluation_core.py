@@ -972,6 +972,48 @@ def test_execution_cause_coverage_only_requires_reasons_for_failed_events() -> N
     assert direct_cause.coverage["direct_cause_coverage"] == 1.0
 
 
+def test_execution_summary_preserves_entry_and_exit_block_reason_breakdown() -> None:
+    observations = pd.DataFrame(
+        {
+            "entry_execution_status": ["never_filled", "delayed_fill"],
+            "entry_execution_evidence_level": ["explicit_order_intent", "reconciled_trade"],
+            "entry_block_reason": ["blocked_limit_up", "blocked_suspension"],
+            "entry_delay_days": [np.nan, 2.0],
+            "missed_mfe_due_to_entry_block": [0.2, 0.1],
+            "missed_barrier_winner_due_to_entry_block": [True, False],
+        }
+    )
+    episodes = pd.DataFrame(
+        {
+            "exit_execution_status": ["delayed_exit", "never_exited"],
+            "exit_execution_evidence_level": ["position_transition", "qlib_indicator_object"],
+            "exit_block_reason": ["blocked_limit_down", "blocked_suspension"],
+            "exit_delay_days": [1.0, np.nan],
+            "blocked_exit_extra_drawdown": [0.03, 0.08],
+            "blocked_exit_extra_holding_days": [1.0, 4.0],
+        }
+    )
+
+    metric = long_trend_module.compute_execution_metrics(observations, episodes)[0]["value_json"]
+
+    assert metric["entry_block_reason_counts"] == {
+        "blocked_limit_up": 1,
+        "blocked_suspension": 1,
+    }
+    assert metric["exit_block_reason_counts"] == {
+        "blocked_limit_down": 1,
+        "blocked_suspension": 1,
+    }
+    assert metric["entry_evidence_level_counts"] == {
+        "explicit_order_intent": 1,
+        "reconciled_trade": 1,
+    }
+    assert metric["exit_evidence_level_counts"] == {
+        "position_transition": 1,
+        "qlib_indicator_object": 1,
+    }
+
+
 def test_one_entry_signal_cannot_attach_to_two_position_episodes() -> None:
     dates = pd.date_range("2026-01-05", periods=4, freq="B")
     episodes = pd.DataFrame(

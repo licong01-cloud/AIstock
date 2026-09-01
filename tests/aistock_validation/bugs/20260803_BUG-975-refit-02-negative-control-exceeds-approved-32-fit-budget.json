@@ -1,0 +1,210 @@
+{
+  "actual": "REFIT-02-A contract plans 48 terminal attempts but only 32 real HMM fits. Current matched_identity20_negative path calls fit_b3_preprocessed_train_only; when initialization succeeds it continues into HMM fit, so the completed two-process diagnostic recorded 48 actual fits. Negative controls must stop after the approved initialization-stage reproduction check: initialization failure records blocker reproduced, initialization success records typed blocker-not-reproduced with fit_performed=false. Treatment and harness remain the only 32 real fits. Preserve fail-closed report/readback, no D5/D6/model/READY/database/runtime actions.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+    "backend/services/hmm_risk/b3_training.py",
+    "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+    "backend/tests/hmm_risk/test_b3_training.py",
+    "tests/aistock_validation/bugs/20260803_BUG-975-refit-02-negative-control-exceeds-approved-32-fit-budget.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-975",
+  "closed_at": "2026-08-04T02:29:01Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-03T19:21:12.069801Z",
+  "description": "REFIT-02-A contract plans 48 terminal attempts but only 32 real HMM fits. Current matched_identity20_negative path calls fit_b3_preprocessed_train_only; when initialization succeeds it continues into HMM fit, so the completed two-process diagnostic recorded 48 actual fits. Negative controls must stop after the approved initialization-stage reproduction check: initialization failure records blocker reproduced, initialization success records typed blocker-not-reproduced with fit_performed=false. Treatment and harness remain the only 32 real fits. Preserve fail-closed report/readback, no D5/D6/model/READY/database/runtime actions.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260803-39aa5904303d",
+      "timestamp": "2026-08-03T19:21:12.069797Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_refit02_20260804_4127bd6a_prodread1/d1_controlled_refit.json#actual_hmm_fit_invocation_count=48"
+  ],
+  "expected": "Each fresh process keeps 24 terminal attempts but invokes HMM fit only for eight treatment and eight harness attempts. Matched negative controls execute the shared initialization contract only, persist reproduced/not-reproduced evidence with fit_performed=false, and the two-process actual fit count remains exactly 32.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/b3_training.py",
+        "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+        "backend/tests/hmm_risk/test_b3_training.py"
+      ],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+      "backend/tests/hmm_risk/test_b3_training.py"
+    ]
+  },
+  "first_seen_at": "2026-08-03T19:21:12.069801Z",
+  "fix_branch": null,
+  "fix_commit": "f5059ff08e7f39c0d675bc4f416374f0fe65a5be",
+  "fixed_at": "2026-08-04T02:29:01Z",
+  "github_issue_number": 3121,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3121",
+  "last_seen_at": "2026-08-03T19:21:12.069801Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3125",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run C-008-B3-REMEDIATION-D1-B-REFIT-02-A against the frozen request and current A5 authority; the failed report records planned_hmm_fit_count=32 and actual_hmm_fit_invocation_count=48.",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "REFIT-02 negative control exceeds approved 32-fit budget",
+  "trigger_condition": {
+    "fingerprint": "39aa5904303d63a7c6ac5238",
+    "source_event_id": "FE-20260803-39aa5904303d"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped",
+    "python -m nox -s hmm_risk_backend -> 262 passed; coverage 74.54%"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

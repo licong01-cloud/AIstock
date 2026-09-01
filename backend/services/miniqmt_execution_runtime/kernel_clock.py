@@ -13,6 +13,8 @@ from enum import StrEnum
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
+from backend.execution_algos.adaptive_is.contracts import MarketPhase
+
 from .plugin_canonical import (
     canonical_utc_datetime_v1,
     hash_hex_v1,
@@ -33,6 +35,7 @@ from .plugin_contracts import (
     TimerMutationTypeV1,
     TimerMutationV1,
 )
+from .quote_eligibility import phase_for_shanghai_time
 from .plugin_registry import PluginCatalogRuntimeV2
 
 
@@ -131,6 +134,69 @@ class KernelClockRepositoryV1(Protocol):
     ) -> tuple[ExecutionAlgoTimerScheduleV1, ExecutionAlgoTimerOccurrenceV1]: ...
 
 
+def _normalized_session_segments_v1(
+    authority: ExchangeSessionAuthorityV1,
+) -> tuple[tuple[time, time], ...]:
+    segments = tuple(thaw_json_v1(item) for item in authority.ordered_session_segments)
+    normalized: list[tuple[time, time]] = []
+    for ordinal, segment in enumerate(segments):
+        if not isinstance(segment, dict) or set(segment) != {"start_local", "end_local"}:
+            raise KernelClockError(
+                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
+                "session segment does not use exact start_local/end_local fields",
+                context={"runtime_id": authority.runtime_id, "ordinal": ordinal, "segment": segment},
+            )
+        try:
+            start = time.fromisoformat(segment["start_local"])
+            end = time.fromisoformat(segment["end_local"])
+        except (TypeError, ValueError) as exc:
+            raise KernelClockError(
+                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
+                "session segment contains an invalid local time",
+                context={"runtime_id": authority.runtime_id, "ordinal": ordinal, "exception": exc},
+            ) from exc
+        if start.tzinfo is not None or end.tzinfo is not None or start >= end:
+            raise KernelClockError(
+                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
+                "session segment must contain ordered timezone-free local times",
+                context={"runtime_id": authority.runtime_id, "ordinal": ordinal, "segment": segment},
+            )
+        if normalized and normalized[-1][1] > start:
+            raise KernelClockError(
+                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
+                "ordered session segments must not overlap or move backwards",
+                context={"runtime_id": authority.runtime_id, "ordinal": ordinal, "segment": segment},
+            )
+        normalized.append((start, end))
+    return tuple(normalized)
+
+
+def _continuous_session_segments_v1(
+    authority: ExchangeSessionAuthorityV1,
+) -> tuple[tuple[time, time], tuple[time, time]]:
+    trade_date = date.fromisoformat(authority.exchange_trade_date)
+    continuous: list[tuple[time, time]] = []
+    for start, end in _normalized_session_segments_v1(authority):
+        start_local = datetime.combine(trade_date, start, tzinfo=_EXCHANGE_TZ)
+        final_instant_local = datetime.combine(trade_date, end, tzinfo=_EXCHANGE_TZ) - timedelta(microseconds=1)
+        if (
+            phase_for_shanghai_time(start_local.astimezone(UTC)) is MarketPhase.CONTINUOUS
+            and phase_for_shanghai_time(final_instant_local.astimezone(UTC)) is MarketPhase.CONTINUOUS
+        ):
+            continuous.append((start, end))
+    if len(continuous) != 2 or continuous[0][1] >= continuous[1][0]:
+        raise KernelClockError(
+            "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
+            "ExchangeSessionClock requires the exact AM/PM continuous segment pair inside the durable calendar",
+            context={
+                "runtime_id": authority.runtime_id,
+                "segment_count": len(authority.ordered_session_segments),
+                "continuous_segment_count": len(continuous),
+            },
+        )
+    return continuous[0], continuous[1]
+
+
 def _strict_authority(authority: Any) -> ExchangeSessionAuthorityV1:
     if not isinstance(authority, ExchangeSessionAuthorityV1):
         raise KernelClockError(
@@ -146,43 +212,7 @@ def _strict_authority(authority: Any) -> ExchangeSessionAuthorityV1:
             "exchange-session authority strict readback failed",
             context={"exception": exc, "runtime_id": getattr(authority, "runtime_id", None)},
         ) from exc
-    segments = tuple(thaw_json_v1(item) for item in strict.ordered_session_segments)
-    if len(segments) != 2:
-        raise KernelClockError(
-            "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
-            "ExchangeSessionClock requires the exact AM/PM continuous segment pair",
-            context={"runtime_id": strict.runtime_id, "segment_count": len(segments)},
-        )
-    normalized: list[tuple[time, time]] = []
-    for ordinal, segment in enumerate(segments):
-        if not isinstance(segment, dict) or set(segment) != {"start_local", "end_local"}:
-            raise KernelClockError(
-                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
-                "session segment does not use exact start_local/end_local fields",
-                context={"runtime_id": strict.runtime_id, "ordinal": ordinal, "segment": segment},
-            )
-        try:
-            start = time.fromisoformat(segment["start_local"])
-            end = time.fromisoformat(segment["end_local"])
-        except (TypeError, ValueError) as exc:
-            raise KernelClockError(
-                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
-                "session segment contains an invalid local time",
-                context={"runtime_id": strict.runtime_id, "ordinal": ordinal, "exception": exc},
-            ) from exc
-        if start.tzinfo is not None or end.tzinfo is not None or start >= end:
-            raise KernelClockError(
-                "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
-                "session segment must contain ordered timezone-free local times",
-                context={"runtime_id": strict.runtime_id, "ordinal": ordinal, "segment": segment},
-            )
-        normalized.append((start, end))
-    if normalized[0][1] >= normalized[1][0]:
-        raise KernelClockError(
-            "MINIQMT_EXCHANGE_SESSION_SEGMENTS_INVALID",
-            "AM and PM continuous segments must have one positive lunch interval",
-            context={"runtime_id": strict.runtime_id, "segments": segments},
-        )
+    _continuous_session_segments_v1(strict)
     return strict
 
 
@@ -195,10 +225,9 @@ def _session_intervals(authority: ExchangeSessionAuthorityV1) -> tuple[tuple[dat
     strict = _strict_authority(authority)
     trade_date = date.fromisoformat(strict.exchange_trade_date)
     intervals: list[tuple[datetime, datetime]] = []
-    for segment in strict.ordered_session_segments:
-        payload = thaw_json_v1(segment)
-        start_local = datetime.combine(trade_date, time.fromisoformat(payload["start_local"]), tzinfo=_EXCHANGE_TZ)
-        end_local = datetime.combine(trade_date, time.fromisoformat(payload["end_local"]), tzinfo=_EXCHANGE_TZ)
+    for start, end in _continuous_session_segments_v1(strict):
+        start_local = datetime.combine(trade_date, start, tzinfo=_EXCHANGE_TZ)
+        end_local = datetime.combine(trade_date, end, tzinfo=_EXCHANGE_TZ)
         intervals.append((start_local.astimezone(UTC), end_local.astimezone(UTC)))
     return tuple(intervals)
 
@@ -257,12 +286,17 @@ def project_exchange_session_v1(
             },
         )
     (am_start, am_end), (pm_start, pm_end) = _session_intervals(strict)
+    scheduled_phase = phase_for_shanghai_time(observed)
     if am_start <= observed < am_end:
         phase = SessionPhaseV1.CONTINUOUS_AM
     elif am_end <= observed < pm_start:
         phase = SessionPhaseV1.LUNCH_BREAK
     elif pm_start <= observed < pm_end:
         phase = SessionPhaseV1.CONTINUOUS_PM
+    elif scheduled_phase is MarketPhase.PRE_OPEN:
+        phase = SessionPhaseV1.OPEN_AUCTION
+    elif scheduled_phase is MarketPhase.CLOSING_AUCTION:
+        phase = SessionPhaseV1.CLOSE_AUCTION
     else:
         phase = SessionPhaseV1.CLOSED
     active = max(0, int((min(observed, am_end) - am_start).total_seconds()))

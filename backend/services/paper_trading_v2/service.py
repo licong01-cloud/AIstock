@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from math import sqrt
-from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
@@ -16,7 +14,6 @@ from backend.services.strategy_package.execution_policy import (
     normalize_execution_policy_json,
 )
 from backend.services.strategy_package.models import StrategyPackageLiveApproval
-from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus, derive_locked_core_hash
@@ -34,6 +31,11 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     TradingCoreError,
 )
+from backend.services.trading_core.execution_algo_retirement import (
+    execution_algo_retirement_projection,
+    require_execution_algo_active,
+    require_execution_policy_active,
+)
 from backend.services.trading_core.ledger import FeeModel
 from backend.services.selection_center.runtime_profile import (
     attach_activation_runtime_profile_binding,
@@ -41,17 +43,25 @@ from backend.services.selection_center.runtime_profile import (
     normalize_selection_runtime_config,
     validate_runtime_profile_binding,
 )
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
+    freeze_canonical_pit_runtime_binding,
+    has_canonical_pit_runtime_profile,
+    inherit_canonical_pit_runtime_binding,
+    validate_canonical_pit_runtime_profile,
+)
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
 )
+from backend.services.simulation_execution.broker import BrokerBackendId
 
-from .market_data import (
+from backend.services.simulation_data.contracts import (
     MinuteDataSource,
     assert_broker_market_source_match,
 )
 from .models import (
     BrokerAccountBindingStatus,
-    BrokerBackendId,
     ConfigChangeType,
     PaperBrokerAccountBinding,
     PaperConfigChangeAudit,
@@ -67,6 +77,7 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
+from .canonical_pit_control import plan_paper_runtime_profile_migration
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     auto_run_live_source_for_broker,
@@ -104,6 +115,7 @@ RUNTIME_PROFILE_INPUT_KEYS = {
     "selection_artifact",
     "model",
     "metadata",
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
 }
 RUNTIME_PROFILE_VERSION_ALLOWED_KEYS = {
     "runtime_profile",
@@ -113,6 +125,7 @@ RUNTIME_PROFILE_VERSION_ALLOWED_KEYS = {
     "selection_artifact",
     "model",
     "metadata",
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
 }
 
 
@@ -139,11 +152,13 @@ class PaperTradingV2PortfolioService:
         validator: StrategyPackageValidator | None = None,
         runtime_release_service: StrategyRuntimeReleaseService | Any | None = None,
         asset_eligibility_service: Any | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or PaperTradingV2Repository()
         self.validator = validator or StrategyPackageValidator()
         self.runtime_release_service = runtime_release_service or StrategyRuntimeReleaseService()
+        self.pit_authority_resolver = pit_authority_resolver
         # Kept as a constructor compatibility seam for callers that still inject
         # the former runtime checker. StrategyPackage admission is completed at
         # the package entry boundary; portfolio creation must not revalidate it.
@@ -254,6 +269,12 @@ class PaperTradingV2PortfolioService:
             manifest=manifest,
             requested_policy=execution_policy,
         )
+        if broker_backend != "local_sim":
+            require_execution_policy_active(
+                validated_policy.policy_json,
+                operation="paper_v2_portfolio_create",
+                context={"package_id": package_id, "broker_backend": broker_backend},
+            )
         portfolio = PaperPortfolio(
             portfolio_name=portfolio_name,
             package_id=package_id,
@@ -574,7 +595,9 @@ class PaperTradingV2PortfolioService:
                         "broker_account_id": account_id,
                     },
                 )
-            allocation_mode = MINIQMT_ACCOUNT_GROUP_BINDING_MODE if broker_backend == "minqmt_sim" else "virtual_portfolio"
+            allocation_mode = (
+                MINIQMT_ACCOUNT_GROUP_BINDING_MODE if broker_backend == "minqmt_sim" else "virtual_portfolio"
+            )
             binding = self.repository.create_broker_account_binding(
                 PaperBrokerAccountBinding(
                     broker_backend=broker_backend,
@@ -664,7 +687,9 @@ class PaperTradingV2PortfolioService:
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
         merged = self._deep_merge(dict(portfolio.auto_run_config or {}), patch)
-        normalized = normalize_auto_run_config(merged, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
+        normalized = normalize_auto_run_config(
+            merged, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend
+        )
         config_sha256 = compute_auto_run_config_sha256(normalized)
         portfolio = self.repository.update_portfolio_auto_run(
             portfolio_id,
@@ -687,7 +712,9 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         sessions = self.repository.list_active_sessions(portfolio_id)
         bindings = self.repository.list_active_broker_account_bindings(portfolio_id)
-        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
+        config = normalize_auto_run_config(
+            portfolio.auto_run_config, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend
+        )
         return {
             "portfolio_id": portfolio_id,
             "enabled": portfolio.auto_run_enabled,
@@ -799,30 +826,38 @@ class PaperTradingV2PortfolioService:
         for portfolio_id in portfolio_ids:
             try:
                 portfolio = handler(portfolio_id)
-                results.append({"portfolio_id": portfolio_id, "ok": True, "portfolio": portfolio.model_dump(mode="json")})
+                results.append(
+                    {"portfolio_id": portfolio_id, "ok": True, "portfolio": portfolio.model_dump(mode="json")}
+                )
             except TradingCoreError as exc:
-                results.append({
-                    "portfolio_id": portfolio_id,
-                    "ok": False,
-                    "error_code": exc.error_code,
-                    "message": str(exc),
-                    "context": getattr(exc, "context", {}),
-                })
+                results.append(
+                    {
+                        "portfolio_id": portfolio_id,
+                        "ok": False,
+                        "error_code": exc.error_code,
+                        "message": str(exc),
+                        "context": getattr(exc, "context", {}),
+                    }
+                )
         return {"action": action, "results": results}
 
     def bulk_delete_portfolios(self, portfolio_ids: list[str]) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
         for portfolio_id in portfolio_ids:
             try:
-                results.append({"portfolio_id": portfolio_id, "ok": True, "deleted_counts": self.delete_portfolio(portfolio_id)})
+                results.append(
+                    {"portfolio_id": portfolio_id, "ok": True, "deleted_counts": self.delete_portfolio(portfolio_id)}
+                )
             except TradingCoreError as exc:
-                results.append({
-                    "portfolio_id": portfolio_id,
-                    "ok": False,
-                    "error_code": exc.error_code,
-                    "message": str(exc),
-                    "context": getattr(exc, "context", {}),
-                })
+                results.append(
+                    {
+                        "portfolio_id": portfolio_id,
+                        "ok": False,
+                        "error_code": exc.error_code,
+                        "message": str(exc),
+                        "context": getattr(exc, "context", {}),
+                    }
+                )
         return {"results": results}
 
     def performance_report(self, portfolio_id: str) -> dict[str, Any]:
@@ -882,7 +917,9 @@ class PaperTradingV2PortfolioService:
             else:
                 insufficient_data_reasons.append("volatility and sharpe require at least two daily returns")
         else:
-            insufficient_data_reasons.append("annualized return, volatility, and sharpe require at least two daily snapshots")
+            insufficient_data_reasons.append(
+                "annualized return, volatility, and sharpe require at least two daily snapshots"
+            )
         return {
             "portfolio_id": portfolio_id,
             "initial_nav": initial_nav,
@@ -903,6 +940,7 @@ class PaperTradingV2PortfolioService:
 
     def list_execution_policies(self, portfolio_id: str) -> list[dict[str, Any]]:
         portfolio = self.repository.get_portfolio(portfolio_id)
+        local_sim_twap_only = str(portfolio.broker_backend) == "local_sim"
         default_policy_id = str(portfolio.execution_policy.get("validated_execution_policy_id") or "")
         rows: list[dict[str, Any]] = []
         seen_policy_ids: set[str] = set()
@@ -910,10 +948,21 @@ class PaperTradingV2PortfolioService:
             payload = self._paper_execution_policy_payload(policy)
             payload["is_portfolio_default"] = policy.policy_id == default_policy_id
             payload["matches_portfolio_manifest"] = policy.manifest_sha256 == portfolio.manifest_sha256
-            payload["runtime_selectable"] = policy.manifest_sha256 == portfolio.manifest_sha256
-            payload["runtime_diagnostics"] = [
-                "execution policy is runtime configuration; platform checks happen when the run starts"
-            ]
+            algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
+            retirement = execution_algo_retirement_projection(algo_code)
+            payload.update(retirement)
+            payload["runtime_selectable"] = (
+                retirement["selectable"]
+                and policy.manifest_sha256 == portfolio.manifest_sha256
+                and (not local_sim_twap_only or algo_code == "TWAP")
+            )
+            payload["runtime_diagnostics"] = (
+                [str(retirement["retirement_reason_code"])]
+                if retirement["retired"]
+                else ["LocalSIM is in explicit TWAP-only runtime mode; this policy cannot be activated"]
+                if local_sim_twap_only and algo_code != "TWAP"
+                else ["execution policy is runtime configuration; platform checks happen when the run starts"]
+            )
             rows.append(payload)
             seen_policy_ids.add(policy.policy_id)
         for policy in self._vnpy_style_template_policies_for_portfolio(portfolio):
@@ -925,12 +974,16 @@ class PaperTradingV2PortfolioService:
                 {
                     "is_portfolio_default": policy.policy_id == default_policy_id,
                     "matches_portfolio_manifest": policy.manifest_sha256 == portfolio.manifest_sha256,
-                    "runtime_selectable": True,
+                    "runtime_selectable": not local_sim_twap_only,
                     "activation_policy_source": "vnpy_style_asset_template",
                     "source_attribution": spec.metadata()["source_attribution"],
                     "asset_version": spec.version,
                     "runtime_diagnostics": [
-                        "vn.py-style MiniQMT asset template; broker quote/order/trade state is authoritative",
+                        *(
+                            ["LocalSIM is in explicit TWAP-only runtime mode; MiniQMT assets cannot be activated"]
+                            if local_sim_twap_only
+                            else ["vn.py-style MiniQMT asset template; broker quote/order/trade state is authoritative"]
+                        ),
                         "no TWAP/default fallback is allowed when the selected asset cannot run",
                     ],
                 }
@@ -970,6 +1023,26 @@ class PaperTradingV2PortfolioService:
                 },
             )
         policy = self._resolve_activation_execution_policy(portfolio=portfolio, policy_id=policy_id)
+        algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
+        require_execution_algo_active(
+            algo_code,
+            operation="paper_v2_execution_policy_activate",
+            semantic_path="paper_execution_policy_activation.policy_json.algo_code",
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "policy_id": policy_id},
+        )
+        if str(portfolio.broker_backend) == "local_sim" and algo_code != "TWAP":
+            raise RuntimeConfigInvalidError(
+                "LocalSIM execution policy activation only accepts TWAP",
+                context={
+                    "reason_code": "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED",
+                    "portfolio_id": portfolio_id,
+                    "trade_date": trade_date.isoformat(),
+                    "requested_policy_id": policy_id,
+                    "requested_algo_code": algo_code or None,
+                    "required_algo_code": "TWAP",
+                    "fallback_used": False,
+                },
+            )
         existing_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if existing_activation is not None:
             if not replace_existing:
@@ -1068,7 +1141,9 @@ class PaperTradingV2PortfolioService:
             paper_enabled=False,
         )
 
-    def _resolve_activation_execution_policy(self, *, portfolio: PaperPortfolio, policy_id: str) -> ValidatedExecutionPolicy:
+    def _resolve_activation_execution_policy(
+        self, *, portfolio: PaperPortfolio, policy_id: str
+    ) -> ValidatedExecutionPolicy:
         vnpy_algo_code = self._vnpy_style_algo_code_from_policy_id(policy_id)
         if vnpy_algo_code:
             if str(portfolio.broker_backend).strip().lower() != "minqmt_sim":
@@ -1213,7 +1288,7 @@ class PaperTradingV2PortfolioService:
             )
         config = self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
         versions = self.repository.list_runtime_profile_versions(profile_id, limit=10_000)
-        next_no = (max((item.version_no for item in versions), default=0) + 1)
+        next_no = max((item.version_no for item in versions), default=0) + 1
         current = next((item for item in versions if item.profile_version_id == profile.current_version_id), None)
         version = PaperRuntimeProfileVersion(
             profile_id=profile_id,
@@ -1251,6 +1326,55 @@ class PaperTradingV2PortfolioService:
         limit: int = 100,
     ) -> list[PaperRuntimeProfileVersion]:
         return self.repository.list_runtime_profile_versions(profile_id, limit=limit)
+
+    def plan_runtime_profile_canonical_pit_migration(
+        self,
+        *,
+        portfolio_id: str,
+        profile_version_id: str,
+    ) -> dict[str, Any]:
+        version = self.repository.get_runtime_profile_version(profile_version_id)
+        profile = self.repository.get_runtime_profile(version.profile_id)
+        if profile.portfolio_id != portfolio_id:
+            raise RuntimeConfigInvalidError(
+                "runtime profile version does not belong to portfolio",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_id": profile.profile_id,
+                    "profile_version_id": profile_version_id,
+                },
+            )
+        return plan_paper_runtime_profile_migration(version)
+
+    def migrate_runtime_profile_version_to_canonical_pit(
+        self,
+        *,
+        portfolio_id: str,
+        profile_version_id: str,
+        created_by: str | None = None,
+        reason: str | None = None,
+    ) -> PaperRuntimeProfileVersion:
+        plan = self.plan_runtime_profile_canonical_pit_migration(
+            portfolio_id=portfolio_id,
+            profile_version_id=profile_version_id,
+        )
+        if plan["action"] != "CREATE_NEW_CANONICAL_VERSION":
+            raise InvalidStateTransitionError(
+                "runtime profile version is already canonical; migration would be a duplicate",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": profile_version_id,
+                    "action": plan["action"],
+                },
+            )
+        source = self.repository.get_runtime_profile_version(profile_version_id)
+        return self.create_runtime_profile_version(
+            portfolio_id=portfolio_id,
+            profile_id=source.profile_id,
+            config_json=plan["target_config_json"],
+            created_by=created_by,
+            reason=reason or f"canonical PIT migration from {profile_version_id}",
+        )
 
     def activate_runtime_config(
         self,
@@ -1306,6 +1430,15 @@ class PaperTradingV2PortfolioService:
                     "profile_version_id": profile_version_id,
                     "validation_status": version.validation_status.value,
                     "validation_errors": version.validation_errors,
+                },
+            )
+        if validate_canonical_pit_runtime_profile(version.config_json) != CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+            raise RuntimeConfigInvalidError(
+                "new Paper runtime activations require a canonical PIT pointer profile version",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": profile_version_id,
+                    "required_profile_schema": CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
                 },
             )
         normalize_runtime_config_with_backtest_contract(
@@ -1418,6 +1551,15 @@ class PaperTradingV2PortfolioService:
             )
         runtime_version = self.repository.get_runtime_profile_version(runtime_activation.profile_version_id)
         runtime_profile = self.repository.get_runtime_profile(runtime_version.profile_id)
+        if validate_canonical_pit_runtime_profile(runtime_version.config_json) != CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+            raise LiveApprovalRequiredError(
+                "live approval candidate requires a canonical PIT runtime profile version",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": runtime_version.profile_version_id,
+                    "required_profile_schema": CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+                },
+            )
         execution_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if execution_activation is None:
             raise LiveApprovalRequiredError(
@@ -1448,6 +1590,7 @@ class PaperTradingV2PortfolioService:
                 "trade_date": trade_date.isoformat(),
                 "runtime_config_activation_id": runtime_activation.activation_id,
                 "execution_policy_activation_id": execution_activation.activation_id,
+                CANONICAL_PIT_RUNTIME_PROFILE_KEY: runtime_version.config_json[CANONICAL_PIT_RUNTIME_PROFILE_KEY],
             },
             effective_from=trade_date,
             created_by=requested_by,
@@ -1502,7 +1645,9 @@ class PaperTradingV2PortfolioService:
             "simulation_binding_hash": broker_binding.binding_hash,
             **dict(broker_compatibility or {}),
         }
-        return StrategyPackageService(repository=self.package_repository, validator=self.validator).create_live_approval_candidate(
+        return StrategyPackageService(
+            repository=self.package_repository, validator=self.validator
+        ).create_live_approval_candidate(
             package_id=portfolio.package_id,
             manifest_sha256=portfolio.manifest_sha256,
             alpha_core_sha256=derive_locked_core_hash(portfolio.frozen_manifest),
@@ -1539,7 +1684,9 @@ class PaperTradingV2PortfolioService:
         risk_note: str,
         rollback_plan: str,
     ) -> StrategyPackageLiveApproval:
-        return StrategyPackageService(repository=self.package_repository, validator=self.validator).submit_live_approval(
+        return StrategyPackageService(
+            repository=self.package_repository, validator=self.validator
+        ).submit_live_approval(
             package_id=package_id,
             approval_id=approval_id,
             requested_by=requested_by,
@@ -1556,7 +1703,9 @@ class PaperTradingV2PortfolioService:
         risk_note: str | None = None,
         rollback_plan: str | None = None,
     ) -> StrategyPackageLiveApproval:
-        return StrategyPackageService(repository=self.package_repository, validator=self.validator).approve_live_approval(
+        return StrategyPackageService(
+            repository=self.package_repository, validator=self.validator
+        ).approve_live_approval(
             package_id=package_id,
             approval_id=approval_id,
             approved_by=approved_by,
@@ -1572,7 +1721,9 @@ class PaperTradingV2PortfolioService:
         rejected_by: str,
         rejection_reason: str,
     ) -> StrategyPackageLiveApproval:
-        return StrategyPackageService(repository=self.package_repository, validator=self.validator).reject_live_approval(
+        return StrategyPackageService(
+            repository=self.package_repository, validator=self.validator
+        ).reject_live_approval(
             package_id=package_id,
             approval_id=approval_id,
             rejected_by=rejected_by,
@@ -1587,7 +1738,9 @@ class PaperTradingV2PortfolioService:
         retired_by: str,
         retirement_reason: str,
     ) -> StrategyPackageLiveApproval:
-        return StrategyPackageService(repository=self.package_repository, validator=self.validator).retire_live_approval(
+        return StrategyPackageService(
+            repository=self.package_repository, validator=self.validator
+        ).retire_live_approval(
             package_id=package_id,
             approval_id=approval_id,
             retired_by=retired_by,
@@ -1637,6 +1790,7 @@ class PaperTradingV2PortfolioService:
         portfolio: PaperPortfolio,
         trade_date: date,
         runtime_config: dict[str, Any] | None,
+        inherit_existing_pit_lease: bool = False,
     ) -> dict[str, Any]:
         config = dict(runtime_config or {})
         runtime_variant = self._resolve_runtime_variant_for_portfolio(portfolio, config)
@@ -1654,7 +1808,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         if config.get("runtime_profile_activation"):
             config = self._with_platform_runtime_defaults(portfolio, config)
             config = attach_activation_runtime_profile_binding(
@@ -1670,7 +1828,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         activation = self.repository.get_active_runtime_config_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
             config = self._with_platform_runtime_defaults(portfolio, config)
@@ -1684,7 +1846,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         version = self.repository.get_runtime_profile_version(activation.profile_version_id)
         profile = self.repository.get_runtime_profile(version.profile_id)
         if profile.portfolio_id != portfolio.portfolio_id:
@@ -1724,7 +1890,33 @@ class PaperTradingV2PortfolioService:
             normalized,
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
         )
-        return normalized
+        return self._bind_canonical_pit_runtime(
+            normalized,
+            trade_date=trade_date,
+            inherit_existing_pit_lease=inherit_existing_pit_lease,
+        )
+
+    def _bind_canonical_pit_runtime(
+        self,
+        runtime_config: dict[str, Any],
+        *,
+        trade_date: date,
+        inherit_existing_pit_lease: bool,
+    ) -> dict[str, Any]:
+        if not has_canonical_pit_runtime_profile(runtime_config):
+            return runtime_config
+        if inherit_existing_pit_lease:
+            inherited, _lease = inherit_canonical_pit_runtime_binding(
+                runtime_config,
+                trade_date=trade_date,
+            )
+            return inherited
+        frozen, _lease = freeze_canonical_pit_runtime_binding(
+            runtime_config,
+            trade_date=trade_date,
+            authority_resolver=self.pit_authority_resolver,
+        )
+        return frozen
 
     def _resolve_runtime_variant_for_portfolio(self, portfolio: PaperPortfolio, config: dict[str, Any]) -> Any | None:
         raw_id = config.get("runtime_variant_id")
@@ -1828,9 +2020,7 @@ class PaperTradingV2PortfolioService:
             if isinstance(original_profile, dict) and isinstance(original_profile.get("selection"), dict)
             else {}
         )
-        daily_id_explicit = (
-            "daily_strategy_id" in original_config or "daily_strategy_id" in original_selection
-        )
+        daily_id_explicit = "daily_strategy_id" in original_config or "daily_strategy_id" in original_selection
         daily_params_explicit = (
             "daily_strategy_params" in original_config or "daily_strategy_params" in original_selection
         )
@@ -2003,12 +2193,7 @@ class PaperTradingV2PortfolioService:
 
     @staticmethod
     def _complete_platform_algo_config(algo_code: str, algo_config: dict[str, Any]) -> dict[str, Any]:
-        config = dict(algo_config)
-        if algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}:
-            cache_root = _platform_model_cache_root()
-            config.setdefault("early_model_path", str(cache_root / algo_code / "v25_early_net_joint_fixed.pt"))
-            config.setdefault("late_model_path", str(cache_root / algo_code / "v25_late_net_joint_fixed.pt"))
-        return config
+        return dict(algo_config)
 
     def _select_default_manifest_execution_policy(
         self,
@@ -2071,7 +2256,7 @@ class PaperTradingV2PortfolioService:
 
     @staticmethod
     def _paper_execution_policy_payload(policy: ValidatedExecutionPolicy) -> dict[str, Any]:
-        return {
+        payload = {
             "policy_id": policy.policy_id,
             "validated_execution_policy_id": policy.policy_id,
             "policy_sha256": policy.policy_sha256,
@@ -2082,7 +2267,5 @@ class PaperTradingV2PortfolioService:
             "source_backtest_status": policy.source_backtest_status,
             "validation_status": policy.validation_status.value,
         }
-
-
-def _platform_model_cache_root() -> Path:
-    return Path(os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT)
+        payload.update(execution_algo_retirement_projection(policy.algo_code))
+        return payload

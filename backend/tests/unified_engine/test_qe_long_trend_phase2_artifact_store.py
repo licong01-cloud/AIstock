@@ -65,6 +65,15 @@ def test_dedicated_cas_publishes_atomically_and_is_idempotent(tmp_path: Path) ->
         "worker_terminal_receipt": terminal_meta,
         "worker_compact_receipt": compact_meta,
     }
+    contradictory_path = tmp_path / "signal_observations.parquet"
+    contradictory_meta = _write_json(contradictory_path, {"not": "used"})
+    with pytest.raises(QELongTrendArtifactStoreError, match="typed-absent artifacts were also supplied"):
+        store.publish(
+            evaluation_id=EVALUATION_ID,
+            worker_terminal=terminal,
+            artifact_files={**files, "signal_observations": contradictory_path},
+            expected_catalog={**catalog, "signal_observations": contradictory_meta},
+        )
 
     first = store.publish(
         evaluation_id=EVALUATION_ID,
@@ -95,6 +104,20 @@ def test_dedicated_cas_publishes_atomically_and_is_idempotent(tmp_path: Path) ->
     assert store.load_manifest(first["uri"])["artifact_manifest_sha256"] == first["artifact_manifest_sha256"]
     assert set(first["typed_absence"]) == {"signal_observations", "holding_episodes"}
 
+    manifest_path = store.manifest_path(EVALUATION_ID)
+    manifest_bytes = manifest_path.read_bytes()
+    tampered_manifest = json.loads(manifest_bytes)
+    tampered_manifest["identity"]["node_id"] = "tampered-node"
+    manifest_path.write_text(json.dumps(tampered_manifest), encoding="utf-8")
+    with pytest.raises(QELongTrendArtifactStoreError, match="manifest hash is invalid"):
+        store.publish(
+            evaluation_id=EVALUATION_ID,
+            worker_terminal=terminal,
+            artifact_files=files,
+            expected_catalog=catalog,
+        )
+    manifest_path.write_bytes(manifest_bytes)
+
     published_receipt = {
         "schema_version": "qe_long_trend_published_compact_v1",
         "evaluation_id": EVALUATION_ID,
@@ -108,6 +131,41 @@ def test_dedicated_cas_publishes_atomically_and_is_idempotent(tmp_path: Path) ->
     assert published["sha256"] == hashlib.sha256(
         json.dumps(published_receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    assert store.load_json_artifact(
+        evaluation_id=EVALUATION_ID,
+        artifact_type="worker_terminal_receipt",
+    ) == terminal
+    loaded_published, loaded_meta = store.load_published_compact_receipt(EVALUATION_ID)
+    assert loaded_published == published_receipt
+    assert loaded_meta == {key: value for key, value in published.items() if key != "path"}
+    assert "path" not in loaded_meta
+
+    with pytest.raises(QELongTrendArtifactStoreError, match="not a manifest JSON receipt"):
+        store.load_json_artifact(
+            evaluation_id=EVALUATION_ID,
+            artifact_type="published_compact_receipt",
+        )
+
+    manifest_item = next(
+        item for item in first["artifacts"] if item["artifact_type"] == "worker_terminal_receipt"
+    )
+    store.blob_path(manifest_item["sha256"]).write_bytes(b"tampered")
+    with pytest.raises(QELongTrendArtifactStoreError, match="differs from manifest"):
+        store.load_json_artifact(
+            evaluation_id=EVALUATION_ID,
+            artifact_type="worker_terminal_receipt",
+        )
+
+    published_path = store.root / "evaluations" / EVALUATION_ID / "published_compact_receipt.json"
+    published_path.write_text(
+        json.dumps({**published_receipt, "artifact_manifest_sha256": "0" * 64}),
+        encoding="utf-8",
+    )
+    with pytest.raises(QELongTrendArtifactStoreError, match="differs from the immutable manifest"):
+        store.load_published_compact_receipt(EVALUATION_ID)
+    published_path.unlink()
+    with pytest.raises(QELongTrendArtifactStoreError, match="missing or linked"):
+        store.load_published_compact_receipt(EVALUATION_ID)
 
 
 def test_same_evaluation_with_different_terminal_content_conflicts(tmp_path: Path) -> None:

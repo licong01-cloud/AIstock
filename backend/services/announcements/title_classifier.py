@@ -12,15 +12,33 @@ import hashlib
 import json
 import re
 from bisect import bisect_left, bisect_right
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from typing import Iterable, Mapping, Optional, Pattern, Sequence
 from zoneinfo import ZoneInfo
 
 
-RULE_VERSION = "aistock_announcement_title_rules_v1_20260506"
+RULE_VERSION = "aistock_announcement_title_rules_v2_20260817"
 ENGINE_NAME = "AnnouncementTitleClassifier"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+ISSUER_BOUND_EVENT_TYPES = frozenset(
+    {
+        "stock_delisting_confirmed",
+        "stock_delisting_predecision",
+        "stock_delisting_risk_warning",
+        "stock_st_imposed",
+        "stock_st_added_or_continued",
+        "bankruptcy_restructuring",
+    }
+)
+ISSUER_UNVERIFIED_EVENT_TYPES = {
+    "stock_delisting_reference_unverified": (
+        "Delisting reference lacks issuer-bound terminal proof and must remain review-only."
+    ),
+    "stock_event_issuer_unverified": (
+        "Issuer-bound stock event could not be verified and must remain review-only."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -62,11 +80,47 @@ class EffectiveDateResult:
     available_at: Optional[dt.datetime] = None
 
 
+@dataclass(frozen=True)
+class IssuerBindingResult:
+    """Auditable issuer/security binding for terminal announcement evidence."""
+
+    status: str
+    reason: str
+    ts_code: str
+    announcement_name: str
+    security_name: str
+    security_fullname: str
+    security_list_status: str
+    name_match: bool
+    fullname_match: bool
+    terminal_subject: str
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 def rx(pattern: str) -> Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 
 RULES: list[TitleRule] = [
+    TitleRule(
+        "stock_delisting_risk_warning",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"股票.*(可转债|可转换公司债券).*(可能|存在|风险|事先告知).*(终止上市|退市)"),
+        "Stock and its convertible bond face delisting risk; retain the stock hard-risk signal.",
+    ),
+    TitleRule(
+        "stock_delisting_confirmed",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"股票.*(可转债|可转换公司债券).*(终止上市决定|进入退市整理期|终止上市|摘牌)"),
+        "Stock and its convertible bond have a confirmed terminal event.",
+        exclude=rx(r"(可能|存在.*风险|风险提示|事先告知|听证)"),
+    ),
     # ST-first rules are ordered deliberately: bond-like delisting/repayment
     # notices and removal/continuation cases must not fall through to stock
     # hard-block rules just because the title also contains "摘牌" or "风险警示".
@@ -120,22 +174,57 @@ RULES: list[TitleRule] = [
         exclude=rx(r"(申请|拟申请|进展|部分|继续|仍将|仍被)"),
     ),
     TitleRule(
-        "stock_delisting_confirmed",
-        "P0_BLOCK",
-        "block_buy",
+        "listing_guidance_terminated",
+        "P4_NEUTRAL",
+        "record_only",
         "NO",
-        rx(r"(终止上市|强制退市|退市整理期|股票.*摘牌|将被终止上市|股票.*将.*摘牌|收到.*终止上市.*决定|作出.*终止上市.*决定)"),
-        "Confirmed or near-confirmed stock delisting event.",
-        exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽|可能|触及|风险提示)"),
+        rx(r"(终止|结束).*(上市辅导|IPO辅导)|(上市辅导|IPO辅导).*(终止|结束)"),
+        "Termination of listing guidance is not a listed-stock delisting event.",
+    ),
+    TitleRule(
+        "related_entity_delisting",
+        "P2_REVIEW",
+        "warn_review",
+        "YES",
+        rx(r"(子公司|控股子公司|参股公司|孙公司|旗下公司|所持.*公司).*(终止上市|摘牌)"),
+        "A related entity, rather than the announcement issuer's stock, is delisted.",
+    ),
+    TitleRule(
+        "stock_delisting_negated",
+        "P4_NEUTRAL",
+        "record_only",
+        "NO",
+        rx(r"(不存在|不涉及|未触及|不会|避免|消除).*(终止上市|退市)|(终止上市|退市).*(情形已.*消除|风险已.*消除)"),
+        "The title explicitly negates or clears a stock-delisting condition.",
     ),
     TitleRule(
         "stock_delisting_risk_warning",
         "P0_BLOCK",
         "block_buy",
         "NO",
-        rx(r"(可能被终止上市|触及.*终止上市|股票.*停牌.*可能被终止上市|股票.*终止上市.*风险提示|财务类终止上市情形)"),
+        rx(
+            r"(可能被终止上市|存在.*终止上市.*风险|被终止上市风险|终止上市风险|"
+            r"触及.*终止上市|股票.*停牌.*可能被终止上市|股票.*终止上市.*风险提示|财务类终止上市情形)"
+        ),
         "Stock may be delisted or has touched delisting conditions.",
         exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽)"),
+    ),
+    TitleRule(
+        "stock_delisting_predecision",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"(终止上市.*事先告知|事先告知.*终止上市|终止上市.*听证|终止上市.*监管工作函)"),
+        "A pre-decision notice or regulatory process is high risk but not final terminal evidence.",
+    ),
+    TitleRule(
+        "stock_delisting_confirmed",
+        "P0_BLOCK",
+        "block_buy",
+        "NO",
+        rx(r"(终止上市|强制退市|退市整理期|股票.*摘牌|将被终止上市|股票.*将.*摘牌|收到.*终止上市.*决定|作出.*终止上市.*决定)"),
+        "Confirmed or near-confirmed stock delisting event.",
+        exclude=rx(r"(可转债|转债|可转换公司债券|公司债券|企业债券|债券持有人|中期票据|短期融资券|资产支持证券|ABS|撤销|取消|申请撤销|摘帽|可能|触及|风险|不存在|不涉及|未触及|不会|避免|消除|子公司|控股子公司|参股公司|孙公司|上市辅导|IPO辅导)"),
     ),
     TitleRule(
         "stock_st_imposed",
@@ -420,6 +509,47 @@ class AnnouncementTitleClassifier:
             )
         return ClassificationResult(**{**asdict(DEFAULT_RESULT), "rule_version": self.rule_version})
 
+    def classify_with_issuer(
+        self,
+        title: str,
+        *,
+        ts_code: str,
+        announcement_name: str,
+        security_name: str,
+        security_fullname: str,
+        security_list_status: str = "",
+    ) -> tuple[ClassificationResult, IssuerBindingResult]:
+        """Classify and fail closed when confirmed delisting lacks issuer proof."""
+
+        result = self.classify(title)
+        binding = verify_announcement_issuer(
+            ts_code=ts_code,
+            announcement_name=announcement_name,
+            title=title,
+            security_name=security_name,
+            security_fullname=security_fullname,
+            security_list_status=security_list_status,
+            require_terminal_subject=result.event_type == "stock_delisting_confirmed",
+        )
+        if result.event_type in ISSUER_BOUND_EVENT_TYPES and binding.status != "verified":
+            unverified_type = (
+                "stock_delisting_reference_unverified"
+                if result.event_type == "stock_delisting_confirmed"
+                else "stock_event_issuer_unverified"
+            )
+            result = replace(
+                result,
+                event_type=unverified_type,
+                risk_level="P2_REVIEW",
+                action="warn_review",
+                needs_llm="YES",
+                matched_rule=unverified_type,
+                confidence=Decimal("0.50"),
+                severity_score=Decimal("0.50"),
+                description=f"Delisting reference lacks issuer-bound terminal proof: {binding.reason}",
+            )
+        return result, binding
+
     def infer_effective_date(
         self,
         ann_date: dt.date,
@@ -456,19 +586,22 @@ class AnnouncementTitleClassifier:
                 "midnight_default_next_trading_day",
             )
 
-        ann_idx = bisect_left(trading_days, ann_date)
-        ann_is_trading = ann_idx < len(trading_days) and trading_days[ann_idx] == ann_date
+        observable_date = max(ann_date, local_time.date())
+        observable_idx = bisect_left(trading_days, observable_date)
+        observable_is_trading = (
+            observable_idx < len(trading_days) and trading_days[observable_idx] == observable_date
+        )
         if local_time.time().replace(tzinfo=None) <= self.pre_open_cutoff:
             effective = (
-                ann_date
-                if ann_is_trading
-                else self._next_trading_day(trading_days, ann_date, strictly_after=False)
+                observable_date
+                if observable_is_trading
+                else self._next_trading_day(trading_days, observable_date, strictly_after=False)
             )
             return EffectiveDateResult("EXACT", effective, "exact_before_preopen", local_time)
 
         return EffectiveDateResult(
             "EXACT",
-            self._next_trading_day(trading_days, ann_date, strictly_after=True),
+            self._next_trading_day(trading_days, observable_date, strictly_after=True),
             "exact_after_preopen_next_trading_day",
             local_time,
         )
@@ -521,6 +654,81 @@ class AnnouncementTitleClassifier:
         return trading_days[idx]
 
 
+def normalize_security_name(value: str) -> str:
+    normalized = re.sub(r"[\s·•・]", "", value or "").upper()
+    normalized = re.sub(r"[（(]退[）)]$", "", normalized)
+    normalized = re.sub(r"^(?:S\*?ST|\*?ST|SST|ST|PT)", "", normalized)
+    normalized = re.sub(r"^(?:退市|退)", "", normalized)
+    normalized = re.sub(r"退$", "", normalized)
+    return normalized
+
+
+def verify_announcement_issuer(
+    *,
+    ts_code: str,
+    announcement_name: str,
+    title: str,
+    security_name: str,
+    security_fullname: str,
+    security_list_status: str = "",
+    require_terminal_subject: bool = False,
+) -> IssuerBindingResult:
+    normalized_title = AnnouncementTitleClassifier.normalize_title(title)
+    ann_name = normalize_security_name(announcement_name)
+    stock_name = normalize_security_name(security_name)
+    fullname = normalize_security_name(security_fullname)
+    name_match = bool(ann_name and stock_name and ann_name == stock_name)
+    fullname_match = bool(fullname and fullname in normalize_security_name(normalized_title))
+    short_name_match = bool(stock_name and stock_name in normalize_security_name(normalized_title))
+
+    if not ts_code or not security_name:
+        status, reason = "unverified", "security_master_missing"
+    elif ann_name and not name_match:
+        status, reason = "unverified", "announcement_name_does_not_match_security"
+    elif name_match:
+        status, reason = "verified", "announcement_name_matches_security"
+    elif not (fullname_match or short_name_match):
+        status, reason = "unverified", "security_name_not_proven"
+    else:
+        status, reason = "verified", "title_name_or_fullname_match"
+
+    terminal_subject = "not_required"
+    if require_terminal_subject:
+        if re.search(r"(子公司|控股子公司|参股公司|孙公司|旗下公司|所持.*公司).*(终止上市|摘牌)", normalized_title):
+            terminal_subject = "related_entity"
+            status, reason = "unverified", "related_entity_is_terminal_subject"
+        else:
+            generic_self = bool(
+                re.search(r"(?:^|关于)(?:本公司|公司|本行)?股票.*(终止上市|摘牌)", normalized_title)
+                or re.search(r"收到.*股票?终止上市.*决定", normalized_title)
+            )
+            normalized_ann_name = normalize_security_name(announcement_name)
+            explicit_name_subject = bool(
+                normalized_ann_name
+                and re.search(
+                    re.escape(normalized_ann_name) + r".{0,6}(股票|股份).*(终止上市|摘牌)",
+                    normalize_security_name(normalized_title),
+                )
+            )
+            explicit_self = fullname_match or explicit_name_subject
+            terminal_subject = "self" if generic_self or explicit_self else "unknown"
+            if status == "verified" and terminal_subject != "self":
+                status, reason = "unverified", "terminal_subject_not_proven"
+
+    return IssuerBindingResult(
+        status=status,
+        reason=reason,
+        ts_code=ts_code,
+        announcement_name=announcement_name,
+        security_name=security_name,
+        security_fullname=security_fullname,
+        security_list_status=security_list_status,
+        name_match=name_match,
+        fullname_match=fullname_match,
+        terminal_subject=terminal_subject,
+    )
+
+
 def taxonomy_rows(rules: Iterable[TitleRule] = RULES) -> list[dict[str, str]]:
     """Return one row per event type for seeding market.ann_event_taxonomy."""
 
@@ -542,6 +750,17 @@ def taxonomy_rows(rules: Iterable[TitleRule] = RULES) -> list[dict[str, str]]:
                 "default_action": rule.action,
                 "needs_llm": rule.needs_llm,
                 "description": rule.description,
+            },
+        )
+    for event_type, description in ISSUER_UNVERIFIED_EVENT_TYPES.items():
+        rows.setdefault(
+            event_type,
+            {
+                "event_type": event_type,
+                "risk_level": "P2_REVIEW",
+                "default_action": "warn_review",
+                "needs_llm": "YES",
+                "description": description,
             },
         )
     return sorted(rows.values(), key=lambda row: row["event_type"])

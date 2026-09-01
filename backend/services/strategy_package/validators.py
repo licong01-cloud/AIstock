@@ -9,6 +9,7 @@ from backend.services.trading_core.execution_algo_capabilities import (
     normalize_execution_algo_code,
     validate_runtime_asset_paths,
 )
+from backend.services.trading_core.execution_algo_retirement import require_execution_policy_active
 from backend.services.trading_core.errors import (
     ExecutionAlgoError,
     PackageAssetInvalidError,
@@ -67,8 +68,14 @@ class StrategyPackageValidator:
         require_runtime_assets: bool = True,
     ) -> None:
         normalized_policy = normalize_execution_policy_json(policy_json)
+        require_execution_policy_active(
+            normalized_policy,
+            operation="strategy_package_execution_policy_validation",
+            context={"package_id": package_id},
+        )
         algo_code = normalize_execution_algo_code(normalized_policy.get("algo_code"))
-        if algo_code not in ALGO_REGISTRY:
+        vnpy_style_algo = is_vnpy_style_algo(algo_code)
+        if not vnpy_style_algo and algo_code not in ALGO_REGISTRY:
             raise UnsupportedFeatureError(
                 "minute execution algorithm is not registered",
                 context={
@@ -78,12 +85,7 @@ class StrategyPackageValidator:
                 },
             )
         algo_config = dict(normalized_policy.get("algo_config") or {})
-        if algo_code == "V25_TWO_STAGE" and bool(algo_config.get("allow_default_day_features")):
-            raise RuntimeConfigInvalidError(
-                "V25_TWO_STAGE allow_default_day_features is diagnostic-only and cannot enter Paper Trading v2",
-                context={"package_id": package_id, "algo_code": algo_code},
-            )
-        if is_vnpy_style_algo(algo_code):
+        if vnpy_style_algo:
             try:
                 validate_vnpy_style_config(algo_code, algo_config)
             except Exception as exc:
@@ -104,6 +106,15 @@ class StrategyPackageValidator:
             )
         if not instantiate_runtime:
             return
+        if vnpy_style_algo:
+            raise ExecutionAlgoError(
+                f"{algo_code} is an event-driven MiniQMT plugin and cannot be instantiated through the minute registry",
+                context={
+                    "package_id": package_id,
+                    "algo_code": algo_code,
+                    "required_runtime_owner": "MINIQMT_EXECUTION_KERNEL_V3",
+                },
+            )
         try:
             get_algo(algo_code, config=normalized_policy.get("algo_config") or {})
         except Exception as exc:

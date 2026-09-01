@@ -29,11 +29,16 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_validation_center_ui": "validation_center_ui",
     "nox_advisory_dev_input_onboarding_backend": "advisory_dev_input_onboarding_backend",
     "nox_advisory_historical_range_backend": "advisory_historical_range_backend",
+    "nox_advisory_modeling_backend": "advisory_modeling_backend",
+    "nox_advisory_phase0b_backend": "advisory_phase0b_backend",
     "nox_qe_data_contract_backend": "qe_data_contract_backend",
     "nox_qe_long_trend_phase2_backend": "qe_long_trend_phase2_backend",
+    "nox_qe_long_trend_phase3_platform": "qe_long_trend_phase3_platform",
+    "nox_qe_long_trend_phase4_ui": "qe_long_trend_phase4_ui",
     "nox_qe_sector_risk_overlay_backend": "qe_sector_risk_overlay_backend",
     "nox_hmm_evolution_backend": "hmm_evolution_backend",
     "nox_hmm_risk_backend": "hmm_risk_backend",
+    "nox_platform_api_backend": "platform_api_backend",
     "nox_qe_archive_backend": "qe_archive_backend",
     "nox_qe_archive_data_quality": "qe_archive_data_quality",
     "nox_qe_archive_l3": "qe_archive_l3",
@@ -59,6 +64,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_paper_v2_backend": "paper_v2_backend",
     "nox_paper_v2_l3": "paper_v2_l3",
     "nox_simulation_core_l2": "simulation_core_l2",
+    "nox_localsim_successor_core_dev_db": "localsim_successor_core_dev_db",
     "nox_miniqmt_execution_runtime_l2": "miniqmt_execution_runtime_l2",
     "nox_hmm_data_source_backend": "hmm_data_source_backend",
     "nox_localsim_unattended_l3": "localsim_unattended_l3",
@@ -113,13 +119,11 @@ def load_allowed_command_keys_from_source(source_path: Path) -> dict[str, str]:
         try:
             raw = ast.literal_eval(value_node)
         except (ValueError, TypeError) as exc:
-            raise ValidationCatalogError(
-                f"Validation command allowlist must be a literal dict: {source_path}"
-            ) from exc
-        if not isinstance(raw, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in raw.items()):
-            raise ValidationCatalogError(
-                f"Validation command allowlist must be dict[str, str]: {source_path}"
-            )
+            raise ValidationCatalogError(f"Validation command allowlist must be a literal dict: {source_path}") from exc
+        if not isinstance(raw, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in raw.items()
+        ):
+            raise ValidationCatalogError(f"Validation command allowlist must be dict[str, str]: {source_path}")
         return dict(raw)
 
     raise ValidationCatalogError(f"Validation command allowlist not found: {source_path}")
@@ -216,9 +220,7 @@ class ValidationPlanCatalog:
         plan["requires_confirmation"] = bool(plan.get("requires_confirmation", False))
         plan["runner_enabled"] = bool(plan.get("runner_enabled", False))
         plan["mock_api_used"] = bool(plan.get("mock_api_used", False))
-        plan["positive_business_success_expected"] = bool(
-            plan.get("positive_business_success_expected", False)
-        )
+        plan["positive_business_success_expected"] = bool(plan.get("positive_business_success_expected", False))
         plan["negative_failfast_only"] = bool(plan.get("negative_failfast_only", False))
         if plan["writes_business_state"] and not plan["requires_confirmation"]:
             raise ValidationCatalogError(

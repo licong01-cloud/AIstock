@@ -1,0 +1,239 @@
+{
+  "actual": "Latest origin/main fails simulation_core_l2 at backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch. PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs now has the authoritative five-field return contract, but this test still unpacks four values. Update the test to assert the fifth limit-price source without changing runtime code, then restore the required simulation_core_l2 baseline.",
+  "allowed_write_scope": [
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1227",
+  "closed_at": "2026-08-29T03:44:06Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-28T11:20:00.409932Z",
+  "description": "Latest origin/main fails simulation_core_l2 at backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch. PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs now has the authoritative five-field return contract, but this test still unpacks four values. Update the test to assert the fifth limit-price source without changing runtime code, then restore the required simulation_core_l2 baseline.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260828-5880c20161c3",
+      "timestamp": "2026-08-28T11:20:00.409915Z"
+    }
+  ],
+  "evidence_uris": [
+    "origin/main:3f2b78b2d46a847a7bfeee0670dd017b0a0b77ee simulation_core_l2 1 failed, 697 passed, 2 skipped"
+  ],
+  "expected": "The test consumes all five authoritative frozen daily input fields and explicitly asserts both pre-close and limit-price source identities; simulation_core_l2 returns green without runtime-code changes.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-28T11:20:00.409932Z",
+  "fix_branch": null,
+  "fix_commit": "0b34658a5531db692913f8ff74671c1f7a269a6a",
+  "fixed_at": "2026-08-29T03:44:06Z",
+  "github_issue_number": 3893,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3893",
+  "last_seen_at": "2026-08-28T11:20:00.409932Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3897",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch -q",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1227",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3ddff7dbf72fe007",
+    "recorded_at": "2026-08-29T03:45:30.417088Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "24e1d1baf092e8d27332ee6d9ded45db5985ed1b",
+    "source_merge_commit": "0b34658a5531db692913f8ff74671c1f7a269a6a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3897",
+    "validation_evidence": [
+      "validation-receipt: id=e3e6142af3fe46df commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch -q` result=`1 passed`",
+      "validation-receipt: id=cf37648858f5c788 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=348a7d8adabf7ee4 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+      "validation-receipt: id=7f29979af23eec8f commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`695 passed, 2 skipped`",
+      "validation-receipt: id=577d7c5315aa1860 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=ruff plan=direct status=passed command=`python -m ruff check backend/tests/simulation_runtime/test_daily_trading_context.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "aaa0d4b74c2f55e6120414921098f8ca5ec975679bf5932d680d2df85be5fda7"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "Simulation daily context test still unpacks the retired four-field frozen input contract",
+  "trigger_condition": {
+    "fingerprint": "5880c20161c341fdd7c00948",
+    "source_event_id": "FE-20260828-5880c20161c3"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=e3e6142af3fe46df commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch -q` result=`1 passed`",
+    "validation-receipt: id=cf37648858f5c788 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=348a7d8adabf7ee4 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+    "validation-receipt: id=7f29979af23eec8f commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`695 passed, 2 skipped`",
+    "validation-receipt: id=577d7c5315aa1860 commit=21c39a46854cfabd130fbc30ed88a0968e2f9a5b kind=ruff plan=direct status=passed command=`python -m ruff check backend/tests/simulation_runtime/test_daily_trading_context.py` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

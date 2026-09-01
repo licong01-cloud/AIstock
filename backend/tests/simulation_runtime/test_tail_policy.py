@@ -3,21 +3,23 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from backend.services.paper_trading_v2.broker.base import CancelAck, OrderHandle, OrderHandleStatus
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_execution.broker import CancelAck, OrderHandle, OrderHandleStatus
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
     SimulationLifecycleScheduler,
     SimulationRunContext,
     StaticSimulationRunContextProvider,
-    StrategyPackageSelectionResult,
     StrategyRuntimeReleaseService,
     TailHandlingPolicyService,
+)
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
+    StrategyPackageSelectionResult,
 )
 from backend.services.simulation_runtime.bridges import LocalSimExecutionSnapshot
 from backend.services.simulation_runtime.models import (
@@ -27,7 +29,16 @@ from backend.services.simulation_runtime.models import (
 )
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
-from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, PositionLot
+from backend.services.trading_core.models import (
+    AccountSnapshot,
+    Fill,
+    Order,
+    OrderEvent,
+    OrderEventType,
+    OrderSide,
+    OrderStatus,
+    PositionLot,
+)
 from backend.tests.simulation_runtime.test_lifecycle_scheduler import FakePackageRepository
 
 
@@ -128,7 +139,9 @@ class FakeSelectionService:
     def run_selection(self, **kwargs):
         candidates = _candidates()
         return StrategyPackageSelectionResult(
-            runtime_config={"runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}},
+            runtime_config={
+                "runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}
+            },
             package_results={self.release.package_id: candidates},
             aggregate_results=candidates,
             excluded_results={self.release.package_id: []},
@@ -283,7 +296,13 @@ class TailAwareLocalBroker:
                 side=fill.side,
                 notional=Decimal(str(float(fill.quantity) * float(fill.price))),
                 fee=Decimal("0"),
-                cash_delta=Decimal(str(-float(fill.quantity) * float(fill.price) if fill.side == OrderSide.BUY else float(fill.quantity) * float(fill.price))),
+                cash_delta=Decimal(
+                    str(
+                        -float(fill.quantity) * float(fill.price)
+                        if fill.side == OrderSide.BUY
+                        else float(fill.quantity) * float(fill.price)
+                    )
+                ),
                 cash_after=Decimal("90000"),
             )
             for fill in fills
@@ -359,16 +378,16 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
     broker = TailAwareLocalBroker(states)
     scheduler.context_provider = StaticSimulationRunContextProvider(
         by_binding_id={
-                binding.binding_id: SimulationRunContext(
-                    portfolio_id="portfolio_tail",
-                    current_positions=initial_context.current_positions,
-                    current_prices=initial_context.current_prices,
-                    cash=100_000.0,
-                    local_broker=broker,  # type: ignore[arg-type]
-                    market_data_source=MinuteDataSource.DB_HISTORICAL.value,
-                    tail_policy_payload={"policy": "cancel_unfilled_at_close"},
-                    tail_policy_service=TailHandlingPolicyService(),
-                )
+            binding.binding_id: SimulationRunContext(
+                portfolio_id="portfolio_tail",
+                current_positions=initial_context.current_positions,
+                current_prices=initial_context.current_prices,
+                cash=100_000.0,
+                local_broker=broker,  # type: ignore[arg-type]
+                market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+                tail_policy_payload={"policy": "cancel_unfilled_at_close"},
+                tail_policy_service=TailHandlingPolicyService(),
+            )
         }
     )
 

@@ -14,9 +14,14 @@ from enum import Enum
 from typing import Any
 
 from ..execution_manifest import build_and_audit_execution_manifest
-from ..experiment_config import ExperimentConfig, extract_qe_random_seed
+from ..experiment_config import (
+    ExperimentConfig,
+    LongTrendEvaluationOptIn,
+    extract_qe_random_seed,
+)
 from ..long_trend_evaluation_bundle import build_long_trend_evaluator_bundle
 from ..long_trend_evaluation_contract import get_long_trend_profile
+from ..long_trend_snapshot_resolver import QELongTrendSnapshotResolver
 from ..qe_active_execution_capacity import (
     QEExecutionSourceClaimFactory,
     QEWorkspaceSubmissionCoordinator,
@@ -52,6 +57,7 @@ class BacktestExecutor(BaseExecutor):
         client: Any,
         *,
         submission_coordinator: Any | None = None,
+        long_trend_snapshot_resolver: QELongTrendSnapshotResolver | None = None,
     ):
         """
         Args:
@@ -61,6 +67,9 @@ class BacktestExecutor(BaseExecutor):
         self.composer = composer
         self.client = client
         self.submission_coordinator = submission_coordinator or QEWorkspaceSubmissionCoordinator()
+        self.long_trend_snapshot_resolver = (
+            long_trend_snapshot_resolver or QELongTrendSnapshotResolver()
+        )
 
     async def submit(
         self,
@@ -99,7 +108,20 @@ class BacktestExecutor(BaseExecutor):
             custom_params["_seed_ensemble_config"] = seed_ensemble
         strategy_params = config.build_strategy_params()
         long_trend_descriptor: dict[str, Any] | None = None
-        if config.long_trend_evaluation is not None:
+        long_trend_evaluation = config.long_trend_evaluation
+        if long_trend_evaluation is None and config.long_trend_profile_id is not None:
+            if not ctx.node_id:
+                raise ValueError("QE long-trend task profile requires an explicit node_id")
+            primary_root = await asyncio.to_thread(
+                self.long_trend_snapshot_resolver.primary_factor_data_root,
+                ctx.node_id,
+            )
+            long_trend_evaluation = LongTrendEvaluationOptIn(
+                profile_id=config.long_trend_profile_id,
+                feature_data_root_uri=primary_root,
+                outcome_data_root_uri=primary_root,
+            )
+        if long_trend_evaluation is not None:
             if not ctx.node_id:
                 raise ValueError("QE long-trend normal postprocess requires an explicit node_id")
             if not all(
@@ -115,11 +137,11 @@ class BacktestExecutor(BaseExecutor):
             environment = await self.client.get_execution_environment()
             feature_dataset = await self.client.get_dataset_identity(
                 node_id=ctx.node_id,
-                data_root_uri=config.long_trend_evaluation.feature_data_root_uri,
+                data_root_uri=long_trend_evaluation.feature_data_root_uri,
             )
             outcome_dataset = await self.client.get_dataset_identity(
                 node_id=ctx.node_id,
-                data_root_uri=config.long_trend_evaluation.outcome_data_root_uri,
+                data_root_uri=long_trend_evaluation.outcome_data_root_uri,
             )
             bundle = build_long_trend_evaluator_bundle(
                 repo_root=Path(__file__).resolve().parents[4],
@@ -129,21 +151,21 @@ class BacktestExecutor(BaseExecutor):
                     "manifest": environment.manifest,
                 },
             )
-            profile = get_long_trend_profile(config.long_trend_evaluation.profile_id)
+            profile = get_long_trend_profile(long_trend_evaluation.profile_id)
             long_trend_descriptor = {
                 "schema_version": "qe_long_trend_postprocess_descriptor_v1",
                 "task_id": ctx.task_id,
                 "loop_index": int(ctx.loop_index),
                 "node_id": ctx.node_id,
                 "run_id": None,
-                "backtest_freq": config.long_trend_evaluation.backtest_freq,
+                "backtest_freq": long_trend_evaluation.backtest_freq,
                 "label_horizon": config.label_horizon,
                 "strategy_topk": (
                     int(strategy_params["topk"])
                     if strategy_params and strategy_params.get("topk") is not None
                     else None
                 ),
-                "long_trend_evaluation": config.long_trend_evaluation.model_dump(mode="json"),
+                "long_trend_evaluation": long_trend_evaluation.model_dump(mode="json"),
                 "frozen_identity": {
                     "profile_sha256": profile.profile_sha256,
                     "evaluator_source_sha256": bundle.evaluator_source_sha256,
@@ -343,9 +365,16 @@ class BacktestExecutor(BaseExecutor):
         node_id = str(ctx.node_id or "").strip()
         source_kind = str(ctx.submission_source_kind or "").strip()
         source_execution_id = str(ctx.submission_source_execution_id or "").strip()
-        if not node_id or not source_kind or not source_execution_id:
+        # Normal submissions use one identity for both purposes. Retries keep
+        # a unique reservation identity but claim their canonical source row.
+        source_claim_id = (
+            source_execution_id
+            if ctx.submission_source_claim_id is None
+            else str(ctx.submission_source_claim_id).strip()
+        )
+        if not node_id or not source_kind or not source_execution_id or not source_claim_id:
             raise QEWorkspaceSubmissionCoordinatorError(
-                "BacktestExecutor requires explicit node and source execution identity",
+                "BacktestExecutor requires explicit node, source execution, and source claim identity",
                 reason_code="qe_execution_source_identity_missing",
                 context={
                     "task_id": ctx.task_id,
@@ -353,17 +382,18 @@ class BacktestExecutor(BaseExecutor):
                     "node_id": node_id or None,
                     "source_kind": source_kind or None,
                     "source_execution_id": source_execution_id or None,
+                    "source_claim_id": source_claim_id or None,
                 },
             )
         loop_id = f"Loop{ctx.loop_index}"
         if source_kind == "qe_evolution_loop":
             claim_source, record_waiting = QEExecutionSourceClaimFactory.evolution_loop(
-                loop_id=source_execution_id,
+                loop_id=source_claim_id,
                 node_id=node_id,
             )
         elif source_kind == "qe_experiment":
             claim_source, record_waiting = QEExecutionSourceClaimFactory.experiment(
-                experiment_id=source_execution_id,
+                experiment_id=source_claim_id,
                 node_id=node_id,
                 qe_task_id=ctx.task_id,
                 qe_loop_id=loop_id,

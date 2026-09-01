@@ -38,6 +38,11 @@ from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
+from backend.services.multi_alpha.qe_subprocess_env import (
+    qe_subprocess_credential_scrub_command,
+    scrubbed_qe_subprocess_env,
+)
+from backend.services.quantevolver.config_composer import QE_STRATEGY_RUNTIME_HELPER_FILES
 
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
@@ -65,6 +70,8 @@ DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
 DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
+_AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_SECTOR_RISK_OVERLAY_MODES = frozenset({"none", "entry_gate", "bounded_de_risk", "exit_reentry"})
 RUNTIME_EXTERNAL_DATA_LINK_NAMES = frozenset(
     {
         "bak_basic.h5",
@@ -277,6 +284,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_qrun",
+                env=read_env,
                 error_context={**error_context, "stage": "qrun"},
             )
             if qrun.returncode != 0:
@@ -306,6 +314,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest",
+                env=scrubbed_qe_subprocess_env(),
                 error_context={**error_context, "stage": "custom_command"},
             )
             if completed.returncode != 0:
@@ -341,6 +350,11 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
             _copy_runtime_template_via_wsl(src=src, workspace=workspace, backtest_config=backtest_config)
         else:
             _copy_runtime_template_native(src=src, workspace=workspace, backtest_config=backtest_config)
+
+    _refresh_sector_risk_overlay_runtime_assets(
+        workspace=workspace,
+        backtest_config=backtest_config,
+    )
 
     missing = [name for name in _required_runtime_files() if not (workspace / name).exists()]
     if missing:
@@ -397,6 +411,62 @@ def _runtime_template_source(*, backtest_config: Mapping[str, Any], workspace: P
             context={"runtime_template_dir": str(src), "workspace": str(workspace) if workspace is not None else None},
         )
     return src
+
+
+def _refresh_sector_risk_overlay_runtime_assets(
+    *,
+    workspace: Path,
+    backtest_config: Mapping[str, Any],
+) -> None:
+    """Overlay current strategy helpers after copying a frozen runtime template.
+
+    A multi-alpha retry intentionally reuses its frozen qrun template, but the
+    template is not authoritative for the strategy implementation selected by
+    the new request.  Without this post-copy overlay an old template can
+    silently replace the current sector-risk wrapper and omit its dedicated V2
+    parents.  Only sector-overlay runs take this path; other frozen runtimes are
+    left byte-for-byte unchanged.
+    """
+
+    strategy_kwargs = backtest_config.get("strategy_kwargs")
+    if not isinstance(strategy_kwargs, Mapping):
+        return
+    raw_enabled = strategy_kwargs.get("sector_risk_overlay_enabled")
+    enabled = (
+        raw_enabled
+        if isinstance(raw_enabled, bool)
+        else str(raw_enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    mode = str(strategy_kwargs.get("sector_risk_overlay_mode") or "").strip().lower()
+    if not enabled and mode not in _SECTOR_RISK_OVERLAY_MODES - {"none"}:
+        return
+
+    scripts_dir = _AISTOCK_PROJECT_ROOT / "scripts"
+    missing = [
+        helper_name
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES
+        if not (scripts_dir / helper_name).is_file()
+    ]
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "current sector-risk runtime helper set is incomplete",
+            reason_code="pred_backtest_sector_risk_runtime_asset_missing",
+            context={
+                "workspace": str(workspace),
+                "scripts_dir": str(scripts_dir),
+                "missing": missing,
+            },
+        )
+    for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
+        shutil.copy2(scripts_dir / helper_name, workspace / helper_name)
+    logger.info(
+        "Refreshed sector-risk pred-backtest runtime helpers",
+        extra={
+            "workspace": str(workspace),
+            "mode": mode or None,
+            "helper_files": list(QE_STRATEGY_RUNTIME_HELPER_FILES),
+        },
+    )
 
 
 def _required_runtime_files() -> tuple[str, ...]:
@@ -566,8 +636,11 @@ def _wsl_runtime_settings(
 def _default_local_pred_backtest_commands(
     *, workspace: Path, pred_name: str, backtest_config: Mapping[str, Any]
 ) -> tuple[list[str], list[str], Mapping[str, str] | None]:
+    # The QE data plane is file-only: qrun/read_exp_res must never inherit the
+    # backend PostgreSQL credentials or have any database fallback. Start from a
+    # scrubbed child env and only add the explicit recorder contract.
+    read_env = scrubbed_qe_subprocess_env()
     if not _is_windows_host():
-        read_env = dict(os.environ)
         read_env["QE_REQUIRE_RECORDER_ID"] = "1"
         return (
             [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_name],
@@ -576,6 +649,7 @@ def _default_local_pred_backtest_commands(
         )
     distro, conda_sh, conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
+    scrub_credentials = qe_subprocess_credential_scrub_command()
     prefix = (
         "set -eo pipefail; "
         f"source {shlex.quote(str(conda_sh))}; "
@@ -583,13 +657,14 @@ def _default_local_pred_backtest_commands(
         "set -u; "
         f"cd {shlex.quote(workspace_wsl)}; "
         "if [ -f .factor_env ]; then . ./.factor_env; fi; "
+        f"{scrub_credentials}; "
     )
     qrun_script = prefix + f"python qrun_limit_minute.py conf.yaml --pred-backtest {shlex.quote(pred_name)}"
     read_script = prefix + "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
     return (
-        ["wsl", "-d", distro, "bash", "-lc", qrun_script],
-        ["wsl", "-d", distro, "bash", "-lc", read_script],
-        None,
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", qrun_script],
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", read_script],
+        read_env,
     )
 
 
@@ -603,10 +678,19 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
 
     topk = backtest_config.get("topk")
     initial_cash = backtest_config.get("initial_cash")
+    raw_oos_start = backtest_config.get("oos_start")
+    raw_oos_end = backtest_config.get("oos_end")
+    has_oos_override = raw_oos_start is not None or raw_oos_end is not None
     strategy_overrides = backtest_config.get("strategy_kwargs")
     has_strategy_overrides = strategy_overrides is not None
-    if topk is None and initial_cash is None and not has_strategy_overrides:
+    if topk is None and initial_cash is None and not has_strategy_overrides and not has_oos_override:
         return
+    if (raw_oos_start is None) != (raw_oos_end is None):
+        raise MultiAlphaCombineBacktestError(
+            "oos_start and oos_end must be provided together before pred-backtest conf override",
+            reason_code="pred_backtest_window_invalid",
+            context={"workspace": str(workspace), "oos_start": raw_oos_start, "oos_end": raw_oos_end},
+        )
     if has_strategy_overrides and not isinstance(strategy_overrides, Mapping):
         raise MultiAlphaCombineBacktestError(
             "strategy_kwargs must be a mapping before pred-backtest conf override",
@@ -615,6 +699,14 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         )
     topk_int = _positive_int(topk, field_name="topk") if topk is not None else None
     initial_cash_int = _positive_int(initial_cash, field_name="initial_cash") if initial_cash is not None else None
+    oos_start = _strict_iso_date(raw_oos_start, field_name="oos_start") if has_oos_override else None
+    oos_end = _strict_iso_date(raw_oos_end, field_name="oos_end") if has_oos_override else None
+    if oos_start is not None and oos_end is not None and oos_end < oos_start:
+        raise MultiAlphaCombineBacktestError(
+            "oos_end must be on or after oos_start before pred-backtest conf override",
+            reason_code="pred_backtest_window_invalid",
+            context={"workspace": str(workspace), "oos_start": oos_start, "oos_end": oos_end},
+        )
     conf_path = workspace / "conf.yaml"
     strategy_keys: list[str] = []
     if isinstance(strategy_overrides, Mapping):
@@ -625,6 +717,8 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         conf_path=conf_path,
         topk=topk_int,
         initial_cash=initial_cash_int,
+        oos_start=oos_start,
+        oos_end=oos_end,
         strategy_overrides=strategy_overrides if isinstance(strategy_overrides, Mapping) else {},
     )
     conf_path.write_text(updated_conf, encoding="utf-8")
@@ -634,9 +728,30 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
             "workspace": str(workspace),
             "effective_topk": topk_int,
             "effective_initial_cash": initial_cash_int,
+            "effective_oos_start": oos_start,
+            "effective_oos_end": oos_end,
             "strategy_kwargs_keys": sorted(strategy_keys),
         },
     )
+
+
+def _strict_iso_date(value: Any, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must be an ISO date",
+            reason_code="pred_backtest_window_invalid",
+            context={"field": field_name, "value": text},
+        ) from exc
+    if parsed.isoformat() != text:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must use canonical YYYY-MM-DD form",
+            reason_code="pred_backtest_window_invalid",
+            context={"field": field_name, "value": text},
+        )
+    return text
 
 
 def _apply_pred_backtest_overrides_text(
@@ -646,6 +761,8 @@ def _apply_pred_backtest_overrides_text(
     conf_path: Path,
     topk: int | None,
     initial_cash: int | None,
+    oos_start: str | None,
+    oos_end: str | None,
     strategy_overrides: Mapping[str, Any],
 ) -> str:
     lines = text.splitlines(keepends=True)
@@ -658,7 +775,7 @@ def _apply_pred_backtest_overrides_text(
         workspace=workspace,
     )
     port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
-    if initial_cash is not None:
+    if initial_cash is not None or oos_start is not None:
         backtest_idx, backtest_indent = _find_conf_mapping_key(
             lines,
             key="backtest",
@@ -675,19 +792,37 @@ def _apply_pred_backtest_overrides_text(
             end=backtest_end,
             parent_indent=backtest_indent,
         )
-        _replace_or_insert_conf_mapping_key(
-            lines,
-            key="account",
-            value=initial_cash,
-            start=backtest_idx + 1,
-            end=backtest_end,
-            parent_indent=backtest_indent,
-            child_indent=backtest_child_indent,
-            conf_path=conf_path,
-            workspace=workspace,
-            field_prefix="port_analysis_config.backtest",
-            required=False,
-        )
+        if initial_cash is not None:
+            delta = _replace_or_insert_conf_mapping_key(
+                lines,
+                key="account",
+                value=initial_cash,
+                start=backtest_idx + 1,
+                end=backtest_end,
+                parent_indent=backtest_indent,
+                child_indent=backtest_child_indent,
+                conf_path=conf_path,
+                workspace=workspace,
+                field_prefix="port_analysis_config.backtest",
+                required=False,
+            )
+            backtest_end += delta
+        if oos_start is not None and oos_end is not None:
+            for key, value in (("start_time", oos_start), ("end_time", oos_end)):
+                delta = _replace_or_insert_conf_mapping_key(
+                    lines,
+                    key=key,
+                    value=value,
+                    start=backtest_idx + 1,
+                    end=backtest_end,
+                    parent_indent=backtest_indent,
+                    child_indent=backtest_child_indent,
+                    conf_path=conf_path,
+                    workspace=workspace,
+                    field_prefix="port_analysis_config.backtest",
+                    required=False,
+                )
+                backtest_end += delta
         port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
     strategy_idx, strategy_indent = _find_conf_mapping_key(
         lines,
@@ -739,6 +874,69 @@ def _apply_pred_backtest_overrides_text(
             required=False,
         )
         kwargs_end += delta
+    if oos_start is not None and oos_end is not None:
+        task_idx, task_indent = _find_conf_mapping_key(
+            lines,
+            key="task",
+            start=0,
+            end=len(lines),
+            conf_path=conf_path,
+            workspace=workspace,
+        )
+        task_end = _conf_block_end(lines, start=task_idx + 1, parent_indent=task_indent)
+        dataset_idx, dataset_indent = _find_conf_mapping_key(
+            lines,
+            key="dataset",
+            start=task_idx + 1,
+            end=task_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset",
+        )
+        dataset_end = _conf_block_end(lines, start=dataset_idx + 1, parent_indent=dataset_indent)
+        dataset_kwargs_idx, dataset_kwargs_indent = _find_conf_mapping_key(
+            lines,
+            key="kwargs",
+            start=dataset_idx + 1,
+            end=dataset_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset.kwargs",
+        )
+        dataset_kwargs_end = _conf_block_end(
+            lines,
+            start=dataset_kwargs_idx + 1,
+            parent_indent=dataset_kwargs_indent,
+        )
+        segments_idx, segments_indent = _find_conf_mapping_key(
+            lines,
+            key="segments",
+            start=dataset_kwargs_idx + 1,
+            end=dataset_kwargs_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset.kwargs.segments",
+        )
+        segments_end = _conf_block_end(lines, start=segments_idx + 1, parent_indent=segments_indent)
+        segments_child_indent = _infer_conf_child_indent(
+            lines,
+            start=segments_idx + 1,
+            end=segments_end,
+            parent_indent=segments_indent,
+        )
+        _replace_or_insert_conf_mapping_key(
+            lines,
+            key="test",
+            value=[oos_start, oos_end],
+            start=segments_idx + 1,
+            end=segments_end,
+            parent_indent=segments_indent,
+            child_indent=segments_child_indent,
+            conf_path=conf_path,
+            workspace=workspace,
+            field_prefix="task.dataset.kwargs.segments",
+            required=True,
+        )
     return "".join(lines)
 
 
@@ -836,8 +1034,22 @@ def _replace_or_insert_conf_mapping_key(
     idx, indent = matches[0]
     rendered = _render_conf_mapping_value(key=key, value=value, indent=indent, newline=_conf_line_newline(lines[idx]) or _conf_newline(lines))
     replacement = rendered.splitlines(keepends=True)
-    lines[idx : idx + 1] = replacement
-    return len(replacement) - 1
+    existing_end = idx + 1
+    existing_value = lines[idx].split(":", 1)[1].strip()
+    if not existing_value:
+        while existing_end < len(lines):
+            stripped = lines[existing_end].strip()
+            if not stripped or stripped.startswith("#"):
+                existing_end += 1
+                continue
+            line_indent = _conf_line_indent(lines[existing_end])
+            if line_indent > indent or (line_indent == indent and stripped.startswith("- ")):
+                existing_end += 1
+                continue
+            break
+    replaced_count = existing_end - idx
+    lines[idx:existing_end] = replacement
+    return len(replacement) - replaced_count
 
 
 def _render_conf_mapping_value(*, key: str, value: Any, indent: int, newline: str) -> str:
@@ -3022,6 +3234,8 @@ def per_window_weights_payload(result: Any, *, scheme: str) -> list[dict[str, An
 def runtime_backtest_config(request: CombineBacktestRequest) -> dict[str, Any]:
     config = dict(request.backtest_config)
     config["topk"] = request.topk
+    config["oos_start"] = request.oos_start
+    config["oos_end"] = request.oos_end
     config.setdefault("timeout_seconds", request.scheme_timeout_seconds)
     config.setdefault("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)
     config["run_timeout_seconds"] = request.run_timeout_seconds

@@ -1,11 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
 import pytest
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -22,6 +23,7 @@ from backend.services.trading_core.errors import InvalidStateTransitionError, Ru
 from backend.services.trading_core.models import RunStatus
 
 from backend.tests.paper_trading_v2.test_day_runner import (
+    ActiveCanonicalPitResolver,
     FakeCalendar,
     FakeLimitProvider,
     FakeSuspendLookup,
@@ -77,6 +79,7 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
                 "coefficients_path": None,
                 "auto_compute": True,
                 "manual_snapshot_required": False,
+                "missing_sector_policy": "fail",
             },
             "tradability": {"exclude_suspended": True},
             "selection": {"top_k": 2},
@@ -129,10 +132,15 @@ def test_runtime_profile_activation_is_copied_into_day_run() -> None:
         config_json={"runtime_profile": {"selection": {"top_k": 2}, "tradability": {"exclude_suspended": True}}},
         created_by="unit_test",
     )
+    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     activation = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="run top2",
     )
@@ -155,6 +163,7 @@ def test_runtime_profile_activation_is_copied_into_day_run() -> None:
         ),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     ).run_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
@@ -163,7 +172,7 @@ def test_runtime_profile_activation_is_copied_into_day_run() -> None:
     runtime_config = result.run.runtime_config
     assert runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
     assert runtime_config["runtime_profile_activation"]["profile_id"] == profile.profile_id
-    assert runtime_config["runtime_profile_activation"]["config_sha256"] == version.config_sha256
+    assert runtime_config["runtime_profile_activation"]["config_sha256"] == canonical_version.config_sha256
     assert runtime_config["runtime_profile"]["selection"]["top_k"] == 2
     assert len(result.orders) == 2
 
@@ -175,10 +184,14 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
         profile_name="replace test",
         config_json={"runtime_profile": {"selection": {"top_k": 2}}},
     )
+    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+    )
     first = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         reason="first",
     )
 
@@ -186,17 +199,20 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
         service.activate_runtime_config(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 2),
-            profile_version_id=version.profile_version_id,
+            profile_version_id=canonical_version.profile_version_id,
         )
     second = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         replace_existing=True,
         reason="replace with audit",
     )
     assert second.activation_id != first.activation_id
-    assert {item.status.value for item in service.list_runtime_config_activations(portfolio.portfolio_id)} == {"ACTIVE", "SUPERSEDED"}
+    assert {item.status.value for item in service.list_runtime_config_activations(portfolio.portfolio_id)} == {
+        "ACTIVE",
+        "SUPERSEDED",
+    }
 
     paper_repo.create_run(
         PaperRun(
@@ -210,21 +226,23 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
         service.activate_runtime_config(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 3),
-            profile_version_id=version.profile_version_id,
+            profile_version_id=canonical_version.profile_version_id,
             replace_existing=True,
             reason="too late",
         )
 
 
 def test_runtime_profile_accepts_platform_owned_event_signal_policy() -> None:
-    _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture(custom_params={
-        "event_signal_policy": {
-            "enabled": True,
-            "event_signal_profile_id": "evt_profile_001",
-            "asof_policy": "effective_trade_date",
-            "signal_merge_policy": "block_first",
+    _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture(
+        custom_params={
+            "event_signal_policy": {
+                "enabled": True,
+                "event_signal_profile_id": "evt_profile_001",
+                "asof_policy": "effective_trade_date",
+                "signal_merge_policy": "block_first",
+            }
         }
-    })
+    )
     config_json = {
         "runtime_profile": {
             "risk_policy": {

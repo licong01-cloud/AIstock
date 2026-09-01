@@ -1,0 +1,338 @@
+{
+  "actual": "PR #3918 CodeQL Python completed at 04:39:31Z, another main analysis acquired the runner at 04:39:36Z, and the one-second PR verdict could not start until 04:47:37Z.",
+  "allowed_write_scope": [
+    ".github/workflows/codeql.yml",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "tests/aistock_validation/bugs/20260829_BUG-1240-codeql-verdict-reacquires-the-single-security-runner-after-analysis.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1240",
+  "closed_at": "2026-08-29T05:29:29Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-29T05:03:56.796168Z",
+  "description": "PR #3918 CodeQL Python completed at 04:39:31Z, another main analysis acquired the runner at 04:39:36Z, and the one-second PR verdict could not start until 04:47:37Z.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260829-119b7284bff6",
+      "timestamp": "2026-08-29T05:03:56.796168Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33233951520"
+  ],
+  "expected": "One CodeQL run should publish the stable CodeQL verdict from one security-runner allocation while preserving changed-language analysis, SARIF upload, main baseline scans, and fail-closed behavior.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/codeql.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "tests/aistock_validation/bugs/20260829_BUG-1240-codeql-verdict-reacquires-the-single-security-runner-after-analysis.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/codeql.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "tests/aistock_validation/bugs/20260829_BUG-1240-codeql-verdict-reacquires-the-single-security-runner-after-analysis.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/codeql.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "scripts",
+        "tests.backend",
+        "docs.standards"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/codeql.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        ".github/workflows/codeql.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/codeql.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/codeql.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ]
+  },
+  "first_seen_at": "2026-08-29T05:03:56.796168Z",
+  "fix_branch": null,
+  "fix_commit": "9b5c53923dd21f9c197871c7b2190c74cf0b2db2",
+  "fixed_at": "2026-08-29T05:29:29Z",
+  "github_issue_number": 3940,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3940",
+  "last_seen_at": "2026-08-29T05:03:56.796168Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3942",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "gh run view 33233951520 --json jobs",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1240",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fc6b4d28494d89fe",
+    "recorded_at": "2026-08-29T05:30:50.639334Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "10d036ec781da37d3b34ee646821180ddda0d0cf",
+    "source_merge_commit": "9b5c53923dd21f9c197871c7b2190c74cf0b2db2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3942",
+    "validation_evidence": [
+      "validation-receipt: id=eea4a080a4a5c595 commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`84 passed`",
+      "validation-receipt: id=a0479c31b8339c6c commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, blocking=0, ownership 7/7`",
+      "validation-receipt: id=f4b3d1e2e314dfcb commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 passed, ownership 14/14`",
+      "validation-receipt: id=207fadf68451b903 commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=workflow_smoke plan=direct status=passed command=`rtk python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1240 --module validation` result=`passed, unexpected_dirty_paths=0`",
+      "validation-receipt: id=aacdbaad59ddbd3e commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "82630573a4b1f84b2802974fa23ef85e179db03f16ea5e80323958dda64289b7"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CodeQL verdict reacquires the single security runner after analysis",
+  "trigger_condition": {
+    "fingerprint": "119b7284bff654718d420c12",
+    "source_event_id": "FE-20260829-119b7284bff6"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=eea4a080a4a5c595 commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`84 passed`",
+    "validation-receipt: id=a0479c31b8339c6c commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, blocking=0, ownership 7/7`",
+    "validation-receipt: id=f4b3d1e2e314dfcb commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 passed, ownership 14/14`",
+    "validation-receipt: id=207fadf68451b903 commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=workflow_smoke plan=direct status=passed command=`rtk python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1240 --module validation` result=`passed, unexpected_dirty_paths=0`",
+    "validation-receipt: id=aacdbaad59ddbd3e commit=10d036ec781da37d3b34ee646821180ddda0d0cf kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

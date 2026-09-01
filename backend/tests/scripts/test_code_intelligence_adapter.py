@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import scripts.code_intelligence_adapter as adapter
@@ -179,7 +180,7 @@ def test_ua_skip_refuses_to_publish_incomplete_state(tmp_path: Path, monkeypatch
 
     payload = adapter.refresh_understand_anything(root=tmp_path)
 
-    assert payload["workflow_gate"] == "warning"
+    assert payload["workflow_gate"] == "failed"
     assert payload["publish_ready"] is False
     assert "structural fingerprints are missing or unreadable" in payload["integrity"]["issues"]
 
@@ -332,6 +333,35 @@ def test_codegraph_sync_uses_incremental_sync_for_existing_index(tmp_path: Path,
     assert payload["publish_ready"] is True
 
 
+def test_codegraph_sync_force_reindexes_when_incremental_sync_stays_stale(tmp_path: Path, monkeypatch) -> None:
+    index = tmp_path / ".codegraph" / "codegraph.db"
+    index.parent.mkdir()
+    index.write_text("index", encoding="utf-8")
+    commands: list[list[str]] = []
+    freshness_results = iter(
+        [
+            {"freshness": "stale", "workflow_gate": "warning"},
+            {"freshness": "fresh", "workflow_gate": "ready"},
+        ]
+    )
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, **kwargs: commands.append(args) or {"ok": True, "returncode": 0, "stdout": "ok", "stderr": ""},
+    )
+    monkeypatch.setattr(adapter, "build_codegraph_freshness_artifact", lambda **kwargs: next(freshness_results))
+
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+
+    root = str(tmp_path.resolve())
+    assert commands == [["codegraph", "sync", root], ["codegraph", "index", "--force", root]]
+    assert payload["action"] == "sync_then_reindex"
+    assert payload["recovery_reason"] == "incremental_sync_not_publish_ready"
+    assert payload["freshness"]["freshness"] == "fresh"
+    assert payload["publish_ready"] is True
+
+
 def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
@@ -347,6 +377,37 @@ def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_
     assert payload["action"] == "index"
     assert payload["workflow_gate"] == "warning"
     assert payload["publish_ready"] is False
+
+
+def test_graph_refresh_commands_fail_when_publish_ready_is_required(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "sync_codegraph_index",
+        lambda **kwargs: {
+            "workflow_gate": "warning",
+            "action": "sync",
+            "publish_ready": False,
+            "freshness": {"freshness": "stale"},
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "refresh_understand_anything",
+        lambda **kwargs: {
+            "workflow_gate": "failed",
+            "action": "incremental_update",
+            "publish_ready": False,
+            "max_budget_usd": 2.0,
+        },
+    )
+
+    codegraph_result = adapter.main(
+        ["codegraph-sync", "--root", str(tmp_path), "--require-publish-ready"]
+    )
+    ua_result = adapter.main(["ua-refresh", "--root", str(tmp_path), "--require-publish-ready"])
+
+    assert codegraph_result == 1
+    assert ua_result == 1
 
 
 def test_ua_semantic_refresh_uses_plugin_budget_and_isolated_workspace(tmp_path: Path, monkeypatch) -> None:
@@ -395,30 +456,49 @@ def test_ua_semantic_refresh_uses_plugin_budget_and_isolated_workspace(tmp_path:
     assert payload["publish_ready"] is True
 
 
-def test_graph_refresh_workflows_are_warning_only_deduplicated_and_source_scoped() -> None:
-    push_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
+def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scoped() -> None:
+    refresh_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
     nightly = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
-    assert "push:\n    branches: [main]\n    paths-ignore:" in push_workflow
-    assert "tests/aistock_validation/bugs/**" in push_workflow
-    assert "pull_request:" not in push_workflow
-    assert "group: code-intelligence-refresh-main" in push_workflow
-    assert "continue-on-error: true" in push_workflow
-    assert "GITHUB_OUTPUT" not in push_workflow
-    assert "if ($result.publish_ready)" in push_workflow
-    assert "--output \"$outDir/codegraph-state-export.json\"" in push_workflow
-    assert "steps.codegraph.outputs.publish_ready" not in push_workflow
-    assert "refresh-plan `\n            --trigger main_push" in push_workflow
-    assert "ua-refresh" not in push_workflow
+    assert not re.search(r"(?m)^\s{2}push:\s*$", refresh_workflow)
+    assert "pull_request:" not in refresh_workflow
+    assert "schedule:" in refresh_workflow
+    assert "workflow_dispatch:" in refresh_workflow
+    assert "- cron: '30 18 * * *'" in refresh_workflow
+    assert "group: code-intelligence-refresh-main" in refresh_workflow
+    assert "cancel-in-progress: false" in refresh_workflow
+    assert "continue-on-error: true" not in refresh_workflow
+    assert "GITHUB_OUTPUT" not in refresh_workflow
+    assert "--require-publish-ready" in refresh_workflow
+    assert "--output \"$outDir/codegraph-state-export.json\"" in refresh_workflow
+    assert "steps.codegraph.outputs.publish_ready" not in refresh_workflow
+    assert "refresh-plan `\n            --trigger main_push" in refresh_workflow
+    assert "run_paid_ua_refresh:" in refresh_workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh" in refresh_workflow
+    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in refresh_workflow
+    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in refresh_workflow
+    assert "scripts/code_intelligence_adapter.py ua-refresh" in refresh_workflow
+    assert "actions/upload-artifact@" not in refresh_workflow
+    assert "actions/download-artifact@" not in refresh_workflow
     assert "code-intelligence-refresh-main" in nightly
     assert "name: Code intelligence daily graph refresh and summary" in nightly
     assert "scripts/code_intelligence_adapter.py codegraph-sync" in nightly
     assert "scripts/code_intelligence_adapter.py ua-refresh" in nightly
-    assert "--max-budget-usd 2" in nightly
-    assert "if ($ua.publish_ready)" in nightly
-    assert "GITHUB_STEP_SUMMARY" in push_workflow
-    assert "::warning title=Code intelligence refresh" in push_workflow
-    assert "artifact is unreadable" in push_workflow
+    assert "run_paid_ua_refresh:" in nightly
+    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in nightly
+    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in nightly
+    assert "Paid Understand Anything refresh skipped" in nightly
+    assert nightly.count("--require-publish-ready") >= 2
+    assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in refresh_workflow
+    assert "ua_max_budget_usd:" in refresh_workflow
+    assert "type: number" in refresh_workflow
+    assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in nightly
+    assert "continue-on-error: true\n    concurrency:" not in nightly
+    assert "id: graph_refresh\n        continue-on-error: true" not in nightly
+    assert "--max-age-hours 24" in nightly
+    assert "GITHUB_STEP_SUMMARY" in refresh_workflow
+    assert "::warning title=Code intelligence refresh" in refresh_workflow
+    assert "artifact is unreadable" in refresh_workflow
     assert "GITHUB_STEP_SUMMARY" in nightly
     assert "::warning title=Daily graph refresh" in nightly
     assert "artifact is unreadable" in nightly
@@ -1392,7 +1472,7 @@ def test_codegraph_freshness_warns_for_stale_index_when_status_unchecked(tmp_pat
     assert any("age exceeds" in item for item in payload["warnings"])
 
 
-def test_codegraph_freshness_trusts_up_to_date_status_over_old_mtime(tmp_path: Path, monkeypatch) -> None:
+def test_codegraph_freshness_rejects_old_mtime_even_when_status_is_up_to_date(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".codegraph").mkdir()
     index = tmp_path / ".codegraph" / "codegraph.db"
     index.write_text("db", encoding="utf-8")
@@ -1419,12 +1499,10 @@ def test_codegraph_freshness_trusts_up_to_date_status_over_old_mtime(tmp_path: P
 
     payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1)
 
-    assert payload["workflow_gate"] == "ready"
-    assert payload["freshness"] == "fresh"
-    assert payload["freshness_basis"] == "codegraph_status"
-    assert not payload["warnings"]
-    assert any("mtime exceeds" in item for item in payload["notes"])
-    assert "### Notes" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"] == "stale"
+    assert payload["freshness_basis"] == "mtime"
+    assert any("age exceeds" in item for item in payload["warnings"])
 
 
 def test_latest_codegraph_freshness_reads_newest_artifact_without_external_call(tmp_path: Path) -> None:
@@ -2188,7 +2266,8 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
     payload = adapter.build_understand_anything_summary(module="paper_v2", root=tmp_path)
 
     assert payload["schema_version"] == "aistock_understand_anything_summary_v1"
-    assert payload["status"] == "ok"
+    assert payload["status"] == "degraded"
+    assert payload["freshness"] == "unknown"
     assert payload["blocking_for_issue_workflow"] is False
     assert payload["nodes_used"] == 1
     assert (tmp_path / payload["artifact_path"]).exists()
@@ -2220,7 +2299,8 @@ def test_ua_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypat
     stdout = capsys.readouterr().out
 
     assert result == 0
-    assert stdout.startswith("PASS ua-summary ")
+    assert stdout.startswith("WARN ua-summary ")
+    assert "status=degraded" in stdout
     assert "summary_ref=" in stdout
     assert "artifact_path=" in stdout
     assert "selected_nodes" not in stdout
@@ -2276,7 +2356,7 @@ def test_ua_summary_all_command_defaults_to_compact_stdout(tmp_path: Path, monke
     assert "summary_refs" not in stdout
 
 
-def test_understand_anything_summary_marks_ancestor_graph_as_base_current(tmp_path: Path, monkeypatch) -> None:
+def test_understand_anything_summary_marks_ancestor_graph_as_stale(tmp_path: Path, monkeypatch) -> None:
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
     graph_path.write_text(
@@ -2299,12 +2379,13 @@ def test_understand_anything_summary_marks_ancestor_graph_as_base_current(tmp_pa
     payload = adapter.build_understand_anything_summary(module="validation", root=tmp_path)
     manifest = adapter.build_understand_anything_summary_manifest(modules=["validation"], root=tmp_path)
 
-    assert payload["freshness"] == "base_current"
-    assert payload["status"] == "ok"
+    assert payload["freshness"] == "stale_ancestor"
+    assert payload["status"] == "degraded"
     assert payload["graph_commit"] == "base123"
     assert payload["current_git_commit"] == "feature456"
-    assert manifest["workflow_gate"] == "ready"
-    assert manifest["summary_refs"][0]["freshness"] == "base_current"
+    assert manifest["workflow_gate"] == "warning"
+    assert manifest["stale_summary_count"] == 1
+    assert manifest["summary_refs"][0]["freshness"] == "stale_ancestor"
 
 
 def test_configure_understand_anything_writes_config_and_ignore(
@@ -2449,8 +2530,8 @@ def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_sum
 
     payload = adapter.understand_anything_status(tmp_path, skip_external=True)
 
-    assert payload["freshness"] == "base_current"
-    assert payload["latest_summary_manifest_freshness"] == "base_current"
+    assert payload["freshness"] == "stale_ancestor"
+    assert payload["latest_summary_manifest_freshness"] == "stale_ancestor"
 
 
 def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_path: Path, monkeypatch) -> None:

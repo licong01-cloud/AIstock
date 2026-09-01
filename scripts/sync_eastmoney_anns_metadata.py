@@ -20,6 +20,7 @@ import re
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -29,8 +30,18 @@ import psycopg2.extras as pgx
 import requests
 from dotenv import load_dotenv
 
-
+# BUG-1155: the scheduler launches the anns chain as a plain subprocess
+# (``python scripts/sync_anns_metadata_incremental.py``) without cwd/PYTHONPATH
+# overrides, so sys.path only contains scripts/ and ``backend`` is not
+# importable. Follow the repo convention and bootstrap the repo root before any
+# ``backend.*`` import (see advisory_*_prepare_request.py).
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.services.announcements.title_classifier import verify_announcement_issuer  # noqa: E402
+
+
 load_dotenv(ROOT / ".env", override=True)
 
 DB_CFG = dict(
@@ -59,6 +70,8 @@ HEADERS = {
 
 TAG_RE = re.compile(r"<[^>]+>")
 THREAD_LOCAL = threading.local()
+SECURITY_IDENTITIES_LOCK = threading.Lock()
+SECURITY_IDENTITIES: Optional[Dict[str, Tuple[str, str]]] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,7 +236,28 @@ def fetch_page(
     raise RuntimeError(f"Eastmoney page failed date={query_date} page={page_index}: {last_error}")
 
 
-def rows_from_item(item: Dict[str, Any], query_date: dt.date) -> List[Tuple[Any, ...]]:
+def load_security_identities(conn: psycopg2.extensions.connection) -> Dict[str, Tuple[str, str]]:
+    global SECURITY_IDENTITIES
+    with SECURITY_IDENTITIES_LOCK:
+        if SECURITY_IDENTITIES is None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ts_code, COALESCE(name, ''), COALESCE(fullname, '') "
+                    "FROM market.stock_basic WHERE exchange IN ('SSE', 'SZSE')"
+                )
+                SECURITY_IDENTITIES = {
+                    str(ts_code): (str(name), str(fullname))
+                    for ts_code, name, fullname in cur.fetchall()
+                }
+        return SECURITY_IDENTITIES
+
+
+def rows_from_item(
+    item: Dict[str, Any],
+    query_date: dt.date,
+    security_identities: Dict[str, Tuple[str, str]],
+    audit: Optional[Counter[str]] = None,
+) -> List[Tuple[Any, ...]]:
     raw_title = normalize_text(item.get("title_ch") or item.get("title"))
     if not raw_title:
         return []
@@ -236,7 +270,7 @@ def rows_from_item(item: Dict[str, Any], query_date: dt.date) -> List[Tuple[Any,
     )
     art_code = normalize_text(item.get("art_code"))
     codes = item.get("codes") or []
-    out: List[Tuple[Any, ...]] = []
+    verified: List[Tuple[Any, ...]] = []
     for code_item in codes:
         if not isinstance(code_item, dict):
             continue
@@ -251,14 +285,37 @@ def rows_from_item(item: Dict[str, Any], query_date: dt.date) -> List[Tuple[Any,
         url = f"{EASTMONEY_DETAIL_PREFIX}/{stock_code}/{art_code}.html" if art_code and stock_code else ""
         if not url:
             continue
-        out.append((ann_date, ts_code, name, title, url, rec_time, "pending"))
-    return out
+        if audit is not None:
+            audit["issuer_candidate_count"] += 1
+        security_name, security_fullname = security_identities.get(ts_code, ("", ""))
+        binding = verify_announcement_issuer(
+            ts_code=ts_code,
+            announcement_name=name,
+            title=raw_title,
+            security_name=security_name,
+            security_fullname=security_fullname,
+        )
+        if binding.status != "verified":
+            if audit is not None:
+                audit["issuer_rejected_count"] += 1
+            continue
+        verified.append((ann_date, ts_code, name, title, url, rec_time, "pending"))
+    unique_codes = {str(row[1]) for row in verified}
+    if len(unique_codes) != 1:
+        if audit is not None and verified:
+            audit["issuer_ambiguous_document_count"] += 1
+            audit["issuer_rejected_count"] += len(verified)
+        return []
+    if audit is not None:
+        audit["issuer_verified_count"] += len(verified)
+    return verified
 
 
 def fetch_eastmoney_date(
     query_date: dt.date,
     request_sleep: float,
     max_retries: int,
+    security_identities: Dict[str, Tuple[str, str]],
 ) -> Tuple[List[Tuple[Any, ...]], Dict[str, Any]]:
     session = get_session()
     first = fetch_page(session, query_date, 1, max_retries=max_retries)
@@ -284,6 +341,7 @@ def fetch_eastmoney_date(
     duplicate_count = 0
     empty_pages: List[int] = []
     empty_pages_recovered: List[int] = []
+    issuer_audit: Counter[str] = Counter()
 
     for page in range(1, expected_pages + 1):
         payload = first if page == 1 else fetch_page(session, query_date, page, max_retries=max_retries)
@@ -306,7 +364,7 @@ def fetch_eastmoney_date(
         for item in items:
             if not isinstance(item, dict):
                 continue
-            for row in rows_from_item(item, query_date):
+            for row in rows_from_item(item, query_date, security_identities, issuer_audit):
                 normalized_count += 1
                 key = (row[1], row[0], row[3])
                 if key in rows_by_key:
@@ -327,6 +385,7 @@ def fetch_eastmoney_date(
         "pagination_complete": raw_documents >= source_total,
         "empty_pages": empty_pages,
         "empty_pages_recovered": empty_pages_recovered,
+        **dict(issuer_audit),
     }
     return list(rows_by_key.values()), audit
 
@@ -388,23 +447,36 @@ def sync_one_date(
 ) -> Dict[str, Any]:
     conn = get_conn(bulk_session_tune=bulk_session_tune)
     try:
-        rows, audit = fetch_eastmoney_date(query_date, request_sleep=request_sleep, max_retries=max_retries)
+        security_identities = load_security_identities(conn)
+        rows, audit = fetch_eastmoney_date(
+            query_date,
+            request_sleep=request_sleep,
+            max_retries=max_retries,
+            security_identities=security_identities,
+        )
         touched = upsert_rows(conn, rows, source="eastmoney", job_id=job_id)
         db_count_after = db_count_for_date(conn, query_date)
         conn.commit()
         audit.update({"status": "success", "upsert_touched": touched, "db_count_after": db_count_after})
         return audit
     except Exception as exc:  # noqa: BLE001
+        rollback_error: Optional[Dict[str, str]] = None
         try:
             conn.rollback()
-        except Exception:
-            pass
-        return {
+        except Exception as rollback_exc:  # noqa: BLE001
+            rollback_error = {
+                "error_type": type(rollback_exc).__name__,
+                "error": str(rollback_exc),
+            }
+        failure = {
             "ann_date": query_date.isoformat(),
             "status": "failed",
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+        if rollback_error is not None:
+            failure["rollback_error"] = rollback_error
+        return failure
 
 
 def missing_dates(start: dt.date, end: dt.date) -> List[dt.date]:

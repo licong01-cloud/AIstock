@@ -2,18 +2,21 @@
 
 const apiBase = process.env.QE_API_BASE || process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8011/api/v1";
 
-test("QE UI catalog and generated config execute V25 plus suspend_d without fallback", async ({ page, request }) => {
+test("QE UI and API project V25 retirement without fallback", async ({ page, request }) => {
   const catalogResp = await request.get(`${apiBase}/quantevolver/execution-algorithms`);
   expect(catalogResp.ok()).toBeTruthy();
   const catalog = await catalogResp.json();
   const byCode = new Map<string, any>((catalog.items || []).map((item: any) => [item.algo_code, item]));
-  expect(byCode.get("V25_TWO_STAGE")?.qe_supported).toBe(true);
-  expect(byCode.get("V25_TWO_STAGE")?.qe_effective_module).toContain("tail_twap_v25_strategy");
+  expect(byCode.get("V25_TWO_STAGE")?.qe_supported).toBe(false);
+  expect(byCode.get("V25_TWO_STAGE")?.retired).toBe(true);
+  expect(byCode.get("V25_TWO_STAGE")?.is_enabled).toBe(false);
+  expect(byCode.get("V25_TWO_STAGE")?.retirement_reason_code).toBe("V25_EXECUTION_ALGO_RETIRED");
+  expect(byCode.get("V25_TWO_STAGE")?.qe_effective_module).toBeNull();
   expect(byCode.get("VWAP")?.qe_supported).toBe(false);
 
   await page.goto("/quantevolver/compose");
   await page.locator('[data-testid="qe-step-3"]').click();
-  await expect.poll(async () => page.locator('option[value="V25_TWO_STAGE"]').count()).toBeGreaterThan(0);
+  await expect(page.locator('option[value="V25_TWO_STAGE"]')).toHaveCount(0);
   await expect(page.locator('option[value="VWAP"]')).toHaveCount(0);
   await page.locator('[data-testid="qe-step-5"]').click();
   await expect(page.locator('[data-testid="qe-filter-suspended"]')).toBeVisible();
@@ -42,14 +45,8 @@ test("QE UI catalog and generated config execute V25 plus suspend_d without fall
       },
     },
   });
-  expect(genResp.ok()).toBeTruthy();
-  const generated = await genResp.json();
-  expect(generated.ok).toBe(true);
-  expect(generated.conf_yaml_preview).toContain('Ref($close, -6) / Ref($close, -1) - 1');
-
-  const confResp = await request.get(`${apiBase}/quantevolver/experiments/${generated.experiment_id}`);
-  expect(confResp.ok()).toBeTruthy();
-  const detail = await confResp.json();
-  expect(detail.experiment?.custom_params?.execution_algo).toBe("V25_TWO_STAGE");
-  expect(detail.experiment?.custom_params?.filter_suspended_on_signal).toBe(true);
+  expect(genResp.status()).toBe(422);
+  const rejected = await genResp.json();
+  expect(rejected.detail?.error_code).toBe("V25_EXECUTION_ALGO_RETIRED");
+  expect(rejected.detail?.context?.fallback_used).toBe(false);
 });

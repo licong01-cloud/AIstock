@@ -5,6 +5,15 @@ from datetime import date
 import pytest
 
 from backend.services.selection_center.models import SelectionCandidate
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    PitConsumerBinding,
+    canonical_rule_parameters_digest,
+)
+from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
 from backend.services.selection_center.risk_policy import (
     RiskDecision,
     StPitRiskDecisionProvider,
@@ -137,3 +146,90 @@ def test_st_pit_provider_rejects_qe_namespace_even_if_profile_validation_is_bypa
             trade_date=date(2026, 7, 17),
             profile=profile,
         )
+
+
+class _Cursor:
+    def __init__(self) -> None:
+        self.sql = ""
+        self.params = ()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, sql, params):
+        self.sql = sql
+        self.params = params
+
+    def fetchall(self):
+        return [
+            (
+                "000001.SZ",
+                date(2025, 1, 1),
+                date(2026, 7, 31),
+                "IPO_WARMUP_COMPLETE",
+                None,
+                CANONICAL_PIT_RULE_VERSION,
+                {},
+            )
+        ]
+
+
+class _Connection:
+    def __init__(self, cursor: _Cursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_st_pit_provider_uses_frozen_canonical_generation_and_rule() -> None:
+    cursor = _Cursor()
+    lease = SelectionPitRuntimeLease.from_binding(
+        PitConsumerBinding(
+            authority_id=CANONICAL_PIT_AUTHORITY_ID,
+            authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            rule_parameters_digest=canonical_rule_parameters_digest(),
+            activation_generation=3,
+            activation_envelope_digest="b" * 64,
+            expected_source_commit="source-commit",
+            state_source_digest="a" * 64,
+            coverage_start=date(2018, 8, 1),
+            coverage_end=date(2026, 7, 31),
+        )
+    )
+    profile = RuntimeRiskPolicyProfile.model_validate(
+        {
+            "enabled": True,
+            "providers": ["st_pit"],
+            "canonical_pit_runtime_lease": lease.as_dict(),
+        }
+    )
+
+    decisions = StPitRiskDecisionProvider(
+        conn_factory=lambda: _Connection(cursor),
+    ).evaluate(
+        symbols=["000001.SZ", "000002.SZ"],
+        trade_date=date(2026, 7, 31),
+        profile=profile,
+        current_positions={"000002.SZ": _position("000002.SZ")},
+    )
+
+    assert "rule_version = %s" in cursor.sql
+    assert cursor.params[-1] == CANONICAL_PIT_RULE_VERSION
+    assert cursor.params[0] == CANONICAL_PIT_UNIVERSE_KEY
+    assert decisions["000001.SZ"].can_buy is True
+    assert decisions["000001.SZ"].source_events[0]["activation_generation"] == 3
+    assert decisions["000002.SZ"].can_buy is False
+    assert decisions["000002.SZ"].force_exit is True
+    assert decisions["000002.SZ"].source_events[0]["activation_generation"] == 3

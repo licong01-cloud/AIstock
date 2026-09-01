@@ -8,6 +8,9 @@ import pytest
 from scripts import build_stock_universe_pit_spans as pit_builder
 
 from backend.services.stock_universe_pit_service import (
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_UNIVERSE_KEY,
     DEFAULT_ST_PIT_UNIVERSE_KEY,
     DEFAULT_ST_PIT_RULE_VERSION,
     StockUniversePitError,
@@ -16,6 +19,32 @@ from backend.services.stock_universe_pit_service import (
     require_live_st_pit_universe_key,
     require_qe_immutable_st_pit_universe_key,
 )
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
+    PitAuthorityStatus,
+    PitConsumerBinding,
+    canonical_rule_parameters_digest,
+)
+
+
+def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() -> None:
+    source = inspect.getsource(StockUniversePitService.compute_source_fingerprint)
+
+    assert "CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT" in source
+    assert "evidence->>'terminal_evidence_contract' = %s" in source
+    assert "evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'" in source
+    assert "evidence#>>'{{issuer_binding,status}}' = 'EXACT'" in source
+    assert "evidence#>>'{{issuer_binding,actionable}}' = 'true'" in source
+    assert "evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code" in source
+    assert "evidence#>>'{{terminal_cross_check,matched}}'" in source
+    assert "evidence#>>'{{terminal_cross_check,terminal}}'" in source
+    assert "evidence#>>'{{st_cross_check,matched}}'" in source
+    assert "evidence#>>'{{st_cross_check,terminal}}'" in source
+    assert "COALESCE" in source
+    assert "FROM market.stock_namechange" in source
+    assert 'fingerprint["stock_namechange"]' in source
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
 
 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
@@ -46,6 +75,198 @@ def test_live_st_pit_service_paths_reject_qe_namespace_before_database_access() 
             universe_key=QE_SNAPSHOT_KEY,
             ensure=False,
         )
+
+
+def test_canonical_query_requires_resolver_binding_before_database_access() -> None:
+    service = StockUniversePitService()
+    with pytest.raises(StockUniversePitError, match="resolver-issued authority_binding"):
+        service.get_eligible_codes(
+            trade_date=dt.date(2026, 7, 31),
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            ensure=False,
+            consumer="selection",
+        )
+
+
+def test_canonical_query_accepts_validated_binding(monkeypatch) -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params):
+            assert params[0] == CANONICAL_PIT_UNIVERSE_KEY
+
+        def fetchall(self):
+            return [("000001.SZ",), ("600000.SH",)]
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    binding = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=1,
+        activation_envelope_digest="a" * 64,
+        coverage_start=dt.date(2018, 8, 1),
+        coverage_end=dt.date(2026, 7, 31),
+    )
+    class Resolver:
+        def resolve_live_binding(self):
+            return binding
+
+    service = StockUniversePitService(authority_resolver=Resolver())
+    monkeypatch.setattr(
+        service,
+        "ensure_canonical_pit_universe",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("canonical read path must not rebuild")),
+    )
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Conn())
+    assert service.get_eligible_codes(
+        trade_date=dt.date(2026, 7, 31),
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        ensure=True,
+        authority_binding=binding,
+        consumer="selection",
+    ) == ["000001.SZ", "600000.SH"]
+
+
+def test_canonical_query_rejects_stale_binding_before_span_query() -> None:
+    current = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=2,
+        activation_envelope_digest="b" * 64,
+        coverage_start=dt.date(2018, 8, 1),
+        coverage_end=dt.date(2026, 7, 31),
+    )
+
+    class Resolver:
+        def resolve_live_binding(self):
+            return current
+
+    stale = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=1,
+        activation_envelope_digest="a" * 64,
+        coverage_start=dt.date(2018, 8, 1),
+        coverage_end=dt.date(2026, 7, 31),
+    )
+    with pytest.raises(StockUniversePitError, match="stale relative"):
+        StockUniversePitService(authority_resolver=Resolver()).get_eligible_codes(
+            trade_date=dt.date(2026, 7, 31),
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            ensure=False,
+            authority_binding=stale,
+            consumer="selection",
+        )
+
+
+def test_canonical_query_rejects_date_outside_live_coverage() -> None:
+    binding = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=1,
+        activation_envelope_digest="a" * 64,
+        coverage_start=dt.date(2018, 8, 1),
+        coverage_end=dt.date(2026, 7, 31),
+    )
+
+    class Resolver:
+        def resolve_live_binding(self):
+            return binding
+
+    with pytest.raises(StockUniversePitError, match="outside the live authority coverage"):
+        StockUniversePitService(authority_resolver=Resolver()).get_eligible_codes(
+            trade_date=dt.date(2026, 8, 1),
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            ensure=False,
+            authority_binding=binding,
+            consumer="selection",
+        )
+
+
+def test_canonical_query_rejects_empty_authoritative_pool(monkeypatch) -> None:
+    binding = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=1,
+        activation_envelope_digest="a" * 64,
+        coverage_start=dt.date(2018, 8, 1),
+        coverage_end=dt.date(2026, 7, 31),
+    )
+
+    class Resolver:
+        def resolve_live_binding(self):
+            return binding
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params):
+            pass
+
+        def fetchall(self):
+            return []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Conn())
+    with pytest.raises(StockUniversePitError, match="empty authoritative stock pool"):
+        StockUniversePitService(authority_resolver=Resolver()).get_eligible_codes(
+            trade_date=dt.date(2026, 7, 31),
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            ensure=False,
+            authority_binding=binding,
+            consumer="selection",
+        )
+
+
+def test_mark_canonical_dirty_uses_v2_identity(monkeypatch) -> None:
+    service = StockUniversePitService()
+    captured = {}
+    monkeypatch.setattr(service, "_mark_dirty", lambda **kwargs: captured.update(kwargs) or kwargs)
+    service.mark_canonical_dirty(reason="source_refresh", source_dataset="stock_st_events")
+    assert captured["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
+    assert captured["rule_version"] == CANONICAL_PIT_RULE_VERSION
+    assert captured["scope"] == CANONICAL_PIT_SCOPE
 
 
 def _ready_immutable_state() -> dict[str, object]:
@@ -538,3 +759,192 @@ def test_ensure_preserves_later_shared_coverage_for_shorter_refresh_request(monk
 def test_pit_rebuild_paths_do_not_refresh_global_data_stats() -> None:
     assert "refresh_data_stats" not in inspect.getsource(StockUniversePitService.rebuild_st_pit_universe)
     assert "refresh_data_stats" not in inspect.getsource(pit_builder.build)
+
+
+def test_canonical_ensure_uses_exact_v2_scope_and_source_policy(monkeypatch) -> None:
+    service = StockUniversePitService()
+    captured: dict[str, object] = {}
+    source = {"confirmed_delisting_events": {"row_count": 12}}
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: {"status": "missing", "dirty": True})
+
+    def fingerprint(**kwargs):
+        assert kwargs["include_canonical_terminal_events"] is True
+        return source
+
+    monkeypatch.setattr(service, "compute_source_fingerprint", fingerprint)
+    monkeypatch.setattr(
+        service,
+        "rebuild_canonical_pit_universe",
+        lambda **kwargs: captured.update(kwargs) or {"status": "ready", "rebuilt": True},
+    )
+
+    result = service.ensure_canonical_pit_universe(
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 7, 31),
+    )
+
+    assert result["status"] == "ready"
+    assert captured["source_fingerprint"] == source
+
+
+def test_canonical_monthly_plan_is_readonly_and_reports_exact_rebuild_reason(monkeypatch) -> None:
+    service = StockUniversePitService()
+    state = {
+        "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+        "rule_version": CANONICAL_PIT_RULE_VERSION,
+        "scope": CANONICAL_PIT_SCOPE,
+        "start_date": dt.date(2018, 8, 1),
+        "end_date": dt.date(2026, 7, 31),
+        "status": "ready",
+        "dirty": False,
+        "source_fingerprint_sha256": "old",
+        "last_build_summary": {"validation": {}},
+    }
+    monkeypatch.setattr(
+        service,
+        "ensure_tables",
+        lambda: (_ for _ in ()).throw(AssertionError("plan must not ensure tables")),
+    )
+    monkeypatch.setattr(service, "get_status_readonly", lambda **_kwargs: state)
+    monkeypatch.setattr(
+        service,
+        "compute_source_fingerprint",
+        lambda **kwargs: {
+            "fingerprint_end_date": kwargs["end_date"].isoformat(),
+            "confirmed_delisting_events": {"row_count": 1},
+        },
+    )
+
+    result = service.plan_canonical_pit_universe(
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 8, 31),
+    )
+
+    assert result["zero_write"] is True
+    assert result["needs_rebuild"] is True
+    assert result["reason"] == "end_coverage_insufficient"
+    assert result["decision"] == "REBUILD_REQUIRED"
+    assert result["requested_end_date"] == dt.date(2026, 8, 31)
+    assert result["effective_end_date"] == dt.date(2026, 8, 31)
+
+
+def test_canonical_monthly_plan_rejects_inverted_window_before_database_access() -> None:
+    with pytest.raises(StockUniversePitError, match="end_date must be on or after"):
+        StockUniversePitService().plan_canonical_pit_universe(
+            start_date=dt.date(2026, 8, 31),
+            end_date=dt.date(2026, 8, 1),
+        )
+
+
+def test_get_status_readonly_does_not_create_state_table(monkeypatch) -> None:
+    executed: list[str] = []
+
+    class Cursor:
+        def __init__(self):
+            self.calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            executed.append(sql)
+            self.calls += 1
+
+        def fetchone(self):
+            if self.calls == 1:
+                return {
+                    "state_table": "market.stock_universe_pit_state",
+                    "spans_table": "market.stock_universe_pit_spans",
+                    "events_table": "market.stock_universe_pit_events",
+                }
+            return {
+                "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                "status": "ready",
+                "dirty": False,
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    service = StockUniversePitService()
+    monkeypatch.setattr(
+        service,
+        "ensure_tables",
+        lambda: (_ for _ in ()).throw(AssertionError("readonly status must not ensure tables")),
+    )
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Connection())
+
+    result = service.get_status_readonly(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
+
+    assert result["status"] == "ready"
+    assert all("CREATE " not in sql.upper() and "INSERT " not in sql.upper() for sql in executed)
+
+
+def test_get_status_readonly_reports_missing_schema_without_creating_it(monkeypatch) -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchone(self):
+            return {
+                "state_table": "market.stock_universe_pit_state",
+                "spans_table": None,
+                "events_table": "market.stock_universe_pit_events",
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Connection())
+
+    result = StockUniversePitService().get_status_readonly(
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY
+    )
+
+    assert result["status"] == "missing"
+    assert result["reason"] == "schema_contract_missing"
+    assert result["missing_tables"] == ["spans_table"]
+
+
+def test_canonical_rebuild_passes_exact_builder_contract(monkeypatch) -> None:
+    service = StockUniversePitService()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        service,
+        "_rebuild_st_pit_universe",
+        lambda **kwargs: captured.update(kwargs) or {"status": "ready"},
+    )
+    service.rebuild_canonical_pit_universe(
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 7, 31),
+    )
+    assert captured["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
+    assert captured["rule_version"] == CANONICAL_PIT_RULE_VERSION
+    assert captured["scope"] == CANONICAL_PIT_SCOPE
+    assert captured["ipo_filter_days"] == 252
+    assert captured["ipo_filter_unit"] == "trading_sessions"
+    assert captured["include_canonical_terminal_events"] is True

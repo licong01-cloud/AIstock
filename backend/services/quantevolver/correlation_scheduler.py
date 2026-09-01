@@ -237,7 +237,7 @@ class CorrelationScheduler:
         dispatch_task_id = str(created["task_id"])
         initial_status = str(created.get("status") or "queued")
         local_status = self._map_dispatch_status(initial_status)
-        self._update_job_status(str(job_id), local_status, {
+        initial_summary = {
             "dispatch_task_id": dispatch_task_id,
             "remote_task_id": created.get("remote_task_id"),
             "node_id": node_id,
@@ -245,7 +245,9 @@ class CorrelationScheduler:
             "counters": self._build_counters(local_status, 0),
             "progress": 0,
             "eligible_factor_count": factor_count,
-        })
+            "message": created.get("log_tail"),
+        }
+        self._update_job_status(str(job_id), local_status, initial_summary)
 
         if local_status in {"failed", "canceled"}:
             if schedule_id:
@@ -259,6 +261,7 @@ class CorrelationScheduler:
             schedule_id,
             dispatch_task_id,
             factor_count,
+            self._dispatch_summary_fingerprint(local_status, initial_summary),
         )
         self._tracker.add(key, future)
         future.add_done_callback(lambda _: self._tracker.remove(key))
@@ -278,11 +281,22 @@ class CorrelationScheduler:
         schedule_id: Optional[str],
         dispatch_task_id: str,
         factor_count: int,
+        initial_fingerprint: Optional[str] = None,
     ) -> None:
-        """轮询 dispatch 任务状态并回写 ingestion_jobs。"""
+        """Consume process-local dispatch observations and mirror real changes."""
+        generation = 0
+        last_fingerprint = initial_fingerprint
         try:
             while not self._stop_event.is_set():
-                task = self._dispatch_service.get_task(dispatch_task_id)
+                wait_observation = getattr(self._dispatch_service, "wait_for_task_observation", None)
+                if callable(wait_observation):
+                    generation, task = wait_observation(
+                        dispatch_task_id,
+                        after_generation=generation,
+                        timeout=65.0,
+                    )
+                else:
+                    task = self._dispatch_service.get_task(dispatch_task_id)
                 if not task:
                     raise RuntimeError(f"dispatch task 不存在: {dispatch_task_id}")
 
@@ -291,7 +305,7 @@ class CorrelationScheduler:
                 local_status = self._map_dispatch_status(dispatch_status)
 
                 if dispatch_status not in _TERMINAL_DISPATCH_STATUSES:
-                    self._update_job_status(job_id, local_status, {
+                    summary = {
                         "dispatch_task_id": dispatch_task_id,
                         "remote_task_id": task.get("remote_task_id"),
                         "node_id": task.get("node_id"),
@@ -300,8 +314,13 @@ class CorrelationScheduler:
                         "message": task.get("log_tail"),
                         "eligible_factor_count": factor_count,
                         "counters": self._build_counters(local_status, progress),
-                    })
-                    time.sleep(2)
+                    }
+                    fingerprint = self._dispatch_summary_fingerprint(local_status, summary)
+                    if fingerprint != last_fingerprint:
+                        self._update_job_status(job_id, local_status, summary)
+                        last_fingerprint = fingerprint
+                    if not callable(wait_observation):
+                        self._stop_event.wait(60.0)
                     continue
 
                 result_bundle = asyncio.run(self._dispatch_service.get_task_results(dispatch_task_id))
@@ -323,6 +342,16 @@ class CorrelationScheduler:
             })
             if schedule_id:
                 self._update_schedule_status(schedule_id, last_status="failed")
+
+    @staticmethod
+    def _dispatch_summary_fingerprint(status: str, summary: Dict[str, Any]) -> str:
+        return json.dumps(
+            {"status": status, "summary": summary},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
 
     @staticmethod
     def _build_terminal_summary(

@@ -6,7 +6,7 @@ import pytest
 
 from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS
 from backend.routers import execution_policy
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import (
     PaperTradingV2PortfolioService,
@@ -35,9 +35,7 @@ def _service_and_portfolio(*, broker_backend: str = "minqmt_sim"):
         initial_cash=100_000,
         start_date=date(2024, 1, 2),
         data_source=(
-            MinuteDataSource.MINIQMT_REALTIME
-            if broker_backend == "minqmt_sim"
-            else MinuteDataSource.TDX_REALTIME
+            MinuteDataSource.MINIQMT_REALTIME if broker_backend == "minqmt_sim" else MinuteDataSource.TDX_REALTIME
         ),
         broker_backend=broker_backend,  # type: ignore[arg-type]
     )
@@ -92,9 +90,7 @@ def test_minqmt_portfolio_lists_vnpy_style_runtime_template_policies() -> None:
 
     rows = service.list_execution_policies(portfolio.portfolio_id)
     templates = {
-        item["algo_code"]: item
-        for item in rows
-        if item.get("activation_policy_source") == "vnpy_style_asset_template"
+        item["algo_code"]: item for item in rows if item.get("activation_policy_source") == "vnpy_style_asset_template"
     }
 
     assert set(templates) == set(VNPY_STYLE_ASSETS)

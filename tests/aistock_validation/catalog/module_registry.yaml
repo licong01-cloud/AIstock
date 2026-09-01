@@ -1,5 +1,13 @@
 schema_version: aistock_module_registry_v1
 modules:
+  - module_id: advisory.model_first
+    display_name: Advisory model-first WSL training
+    module_type: data_pipeline
+    risk_level: high
+    description: File-only runtime-equivalent candidate reconstruction, fresh HMM, real WSL reranker training, and isolated experimental bundles without Historical Range or trading-runtime dependencies.
+    description_zh: 荐股模型优先链路，使用 QE 文件重建当前运行候选、重新拟合 HMM、在 WSL 真实训练重排序模型并发布隔离实验 bundle，不依赖历史证据工程或交易运行时。
+    test_plans:
+      required_on_change: [l0, advisory_modeling_backend]
   - module_id: advisory.historical_range
     display_name: Advisory historical range research
     module_type: data_pipeline
@@ -8,6 +16,22 @@ modules:
     description_zh: 荐股历史范围研究的显式日期契约、独立 CAS、持久化状态和 append-only 证据，不接入交易运行时。
     test_plans:
       required_on_change: [l0, advisory_historical_range_backend]
+  - module_id: advisory.candidate_quality
+    display_name: Advisory candidate quality research
+    module_type: data_pipeline
+    risk_level: high
+    description: Research-only Phase 0B candidate-quality audit over explicit SEALED historical snapshots, isolated from selection and trading runtimes.
+    description_zh: Phase 0B 荐股候选质量研究，仅审计显式 SEALED 历史快照，并与选股和交易运行时隔离。
+    test_plans:
+      required_on_change: [l0, advisory_phase0b_backend]
+  - module_id: advisory.modeling
+    display_name: Advisory short-rebound modeling
+    module_type: data_pipeline
+    risk_level: high
+    description: Isolated static contracts, deterministic feature and label semantics, temporal split plans, immutable artifacts, and shadow-result identities for Advisory short-rebound reranking research.
+    description_zh: 荐股超跌反弹重排序研究的隔离静态合同、确定性特征与标签语义、时间切分、不可变工件和影子结果身份，不接入选股或交易运行时。
+    test_plans:
+      required_on_change: [l0, advisory_modeling_backend]
   - module_id: advisory.dev_input_onboarding
     display_name: Advisory DEV input onboarding
     module_type: data_pipeline
@@ -32,10 +56,12 @@ modules:
     parent_module: qe
     module_type: data_pipeline
     risk_level: high
-    description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, and dedicated CAS lifecycle.
-    description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算及独立 CAS 生命周期。
+    description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, dedicated CAS, compact warehouse, bounded API/MCP, and DB-restored Loop/Archive UI.
+    description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算、独立 CAS、紧凑数仓、有界 API/MCP 及 DB 恢复型 Loop/Archive UI。
+    ui_routes: [/quantevolver/evolution, /qe-archive]
+    api_routes: [/api/v1/quantevolver/evolution/*/long-trend-*, /api/v1/qe-archive/analytics/long-trend-quality, /api/v1/qe-archive/analytics/long-trend-options]
     test_plans:
-      required_on_change: [l0, qe_long_trend_phase2_backend]
+      required_on_change: [l0, qe_long_trend_phase2_backend, qe_long_trend_phase3_platform, qe_long_trend_phase4_ui]
       recommended: [qe_read_backend]
   - module_id: qe.sector_risk_overlay
     display_name: QE sector-risk overlay
@@ -143,13 +169,32 @@ modules:
     test_plans:
       required_on_change: [l0, simulation_core_l2]
       recommended: [localsim_unattended_l3, simulation_runtime_ops_ui, simulation_dual_backend_l4, miniqmt_sim_trading_hours_l5]
+  - module_id: simulation.localsim_successor_core
+    display_name: LocalSIM successor account and replay core
+    parent_module: simulation_runtime
+    module_type: product_feature
+    risk_level: critical
+    description: Internal LocalSIM account, immutable release binding, retained-account lineage, replay cursor, safe-boundary transition, and additive schema authority.
+    description_zh: LocalSIM 内部账户、不可变 release binding、保留账户 lineage、回放游标、安全边界切换与新增 schema 权威。
+    ui_routes: [/simulation/localsim]
+    test_plans:
+      required_on_change: [l0, simulation_core_l2, localsim_successor_core_dev_db]
+  - module_id: simulation.layer_foundation
+    display_name: Simulation data signal execution layer foundation
+    parent_module: simulation_runtime
+    module_type: product_feature
+    risk_level: critical
+    description: Cross-module contract, source-isolation, import-boundary, and no-drift tests for the LocalSIM layer foundation.
+    description_zh: LocalSIM 数据层、信号层、执行层基础迁移的跨模块契约、数据源隔离、import 边界和无漂移测试。
+    test_plans:
+      required_on_change: [l0, simulation_core_l2]
   - module_id: paper_v2
     display_name: Paper Trading v2
     module_type: product_feature
     risk_level: critical
     description: Paper Trading v2 portfolios, sessions, day runner, ledger, and replay.
     description_zh: 覆盖 Paper Trading v2 的组合、交易会话、日内执行、账本、回放和未来准实盘模拟链路。
-    ui_routes: [/paper-v2, /paper-v2/packages, /paper-v2/selection, /paper-v2/portfolios, /paper-v2/model-hmm]
+    ui_routes: [/paper-v2/packages, /paper-v2/selection, /paper-v2/model-hmm]
     api_routes: [/api/v1/paper-v2/*]
     test_plans:
       required_on_change: [l0, paper_v2_backend]
@@ -599,7 +644,7 @@ modules:
     parent_module: validation
     module_type: cross_cutting
     risk_level: high
-    description: Development standards guardrails, design-compliance review controls, changed-file gates, and baseline scans.
+    description: Development standards guardrails, design-compliance review controls, RTK/restart ownership contracts, runtime-target checks, changed-file gates, and baseline scans.
     description_zh: 覆盖开发规范 guardrail、设计方案完整实现复核、变更文件扫描、基线问题识别和高风险规则阻断。
     test_plans:
       required_on_change: [l0, guardrail_changed_files]
@@ -637,6 +682,8 @@ modules:
     risk_level: high
     description: FastAPI app assembly, shared routers, middleware, and API contracts.
     description_zh: 覆盖 FastAPI 应用装配、共享路由、中间件、OpenAPI 合约和 API 运行边界。
+    test_plans:
+      required_on_change: [l0, platform_api_backend]
   - module_id: platform.db
     display_name: Platform database
     parent_module: platform
@@ -645,6 +692,8 @@ modules:
     description: PostgreSQL pools, migrations, schema bootstraps, and DB comments.
     description_zh: 覆盖 PostgreSQL/TimescaleDB 连接池、迁移、schema 初始化和字段注释规范。
     ui_routes: [/rdagent/dispatch/db-monitor]
+    test_plans:
+      required_on_change: [l0, validation_catalog_integrity]
   - module_id: platform.config
     display_name: Platform config
     parent_module: platform

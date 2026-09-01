@@ -1,0 +1,280 @@
+{
+  "actual": "Selection result enrichment catches ValueError and falls back to trade_date; watchlist bulk quote lookup contains two except Exception: pass paths.",
+  "allowed_write_scope": [
+    "backend/services/selection_center/result_enrichment.py",
+    "backend/tests/selection_center/test_result_enrichment.py",
+    "backend/services/watchlist_service.py",
+    "backend/tests/watchlist/test_realtime_amount_units.py",
+    "tests/aistock_validation/bugs/20260818_BUG-1123-selection-center-pit-invalid-date-and-watchlist-quote-fallback-remain-si.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1123",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-18T01:28:33.806440Z",
+  "description": "Selection result enrichment catches ValueError and falls back to trade_date; watchlist bulk quote lookup contains two except Exception: pass paths.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260818-dd8b78fabb1f",
+      "timestamp": "2026-08-18T01:28:33.806420Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/585"
+  ],
+  "expected": "Malformed PIT reference dates fail closed with typed context; expected quote-source fallback remains functional but every provider/row failure is auditable.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/selection_center/result_enrichment.py",
+      "backend/tests/selection_center/test_result_enrichment.py",
+      "backend/services/watchlist_service.py",
+      "backend/tests/watchlist/test_realtime_amount_units.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/selection_center/result_enrichment.py",
+        "backend/tests/selection_center/test_result_enrichment.py",
+        "backend/services/watchlist_service.py",
+        "backend/tests/watchlist/test_realtime_amount_units.py"
+      ],
+      "impacted_modules": [
+        "selection_center",
+        "paper_v2",
+        "strategy_package",
+        "hmm",
+        "watchlist",
+        "local_data",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/selection_center/result_enrichment.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/selection_center/test_result_enrichment.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/services/watchlist_service.py",
+          "impact_modules": [
+            "local_data"
+          ],
+          "primary_module": "watchlist",
+          "risk_level": "high",
+          "rule_id": "watchlist_services"
+        },
+        {
+          "file": "backend/tests/watchlist/test_realtime_amount_units.py",
+          "impact_modules": [
+            "local_data"
+          ],
+          "primary_module": "watchlist",
+          "risk_level": "high",
+          "rule_id": "watchlist_services"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/selection_center/result_enrichment.py",
+        "backend/tests/selection_center/test_result_enrichment.py",
+        "backend/services/watchlist_service.py",
+        "backend/tests/watchlist/test_realtime_amount_units.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/selection_center/result_enrichment.py",
+      "backend/tests/selection_center/test_result_enrichment.py",
+      "backend/services/watchlist_service.py",
+      "backend/tests/watchlist/test_realtime_amount_units.py"
+    ]
+  },
+  "first_seen_at": "2026-08-18T01:28:33.806440Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 585,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/585",
+  "last_seen_at": "2026-08-18T01:28:33.806440Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "watchlist_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process passed",
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process 14 passed",
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process 15 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "Selection Center PIT invalid date and watchlist quote fallback remain silent",
+  "trigger_condition": {
+    "fingerprint": "dd8b78fabb1f24f0c2295717",
+    "source_event_id": "FE-20260818-dd8b78fabb1f"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "selection_center",
+        "paper_v2",
+        "watchlist"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "watchlist_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "selection_center",
+          "paper_v2",
+          "watchlist"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "watchlist_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

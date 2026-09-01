@@ -11,11 +11,17 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+from pydantic import ValidationError
 
+from backend.services.strategy_package.advisory_input_projection import (
+    AdvisoryInputProjectionError,
+    project_historical_range_inputs,
+)
 from backend.services.strategy_package.historical_selection_providers import (
     build_historical_range_read_only_providers,
     historical_read_only_connection_factory,
 )
+from backend.services.strategy_package.manifest import compute_manifest_sha256
 from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.selection_computation import StrategyPackageSelectionComputation
@@ -33,7 +39,11 @@ from .decision_mark_provider import (
     HistoricalRangeDecisionMarkProvider,
     PostgresHistoricalRangeDecisionMarkReader,
 )
-from .executor import HistoricalRangeBatchExecutionService, HistoricalRangeDayExecutor
+from .executor import (
+    DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+    HistoricalRangeBatchExecutionService,
+    HistoricalRangeDayExecutor,
+)
 from .repository import (
     PostgresHistoricalRangePreclaimFailureRepository,
     PostgresHistoricalRangeRepository,
@@ -110,7 +120,7 @@ from .runtime_factories import (
     R5_QUERY_REGISTRY_VERSION,
 )
 from backend.services.advisory_program import AdvisoryProgramPGRepository
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.models import PackageStatus, StrategyPackageManifest
 
 
 def build_historical_range_candidate_producer(
@@ -512,6 +522,7 @@ def build_historical_range_r5_application_service(
     query_runtime_factory: RuntimeFactory,
     mutation_runtime_factory: RuntimeFactory,
     failure_recorder_factory: Callable[[], Any] | None = None,
+    candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
 ) -> HistoricalRangeApplicationService:
     """Compose R5 without request-scoped connections or implicit dependencies."""
 
@@ -521,6 +532,7 @@ def build_historical_range_r5_application_service(
         query_runtime_factory=query_runtime_factory,
         mutation_runtime_factory=mutation_runtime_factory,
         failure_recorder_factory=failure_recorder_factory,
+        candidate_prefetch_per_program=candidate_prefetch_per_program,
     )
 
 
@@ -560,6 +572,10 @@ def build_explicit_historical_range_r5_runtime_factory(
             context={"invalid_configuration": invalid},
         )
     repository_root = repository_root.resolve(strict=True)
+    task_runtime_root = task_runtime_root.resolve(strict=True)
+    catalog_source_cache_root = task_runtime_root / "catalog-source-cache"
+    catalog_source_cache_root.mkdir(parents=True, exist_ok=True)
+    catalog_source_cache_root = catalog_source_cache_root.resolve(strict=True)
     policy_component_root.mkdir(parents=True, exist_ok=True)
     policy_component_root = policy_component_root.resolve(strict=True)
     artifact_store = HistoricalRangeArtifactStore(root=artifact_root)
@@ -594,7 +610,13 @@ def build_explicit_historical_range_r5_runtime_factory(
             ),
             requirement_planner=HistoricalRangeSourceRequirementPlanner(),
             catalog_executor=PostgresHistoricalRangeCatalogExecutor(
-                conn_factory=read_only_factory
+                conn_factory=read_only_factory,
+                process_worker_dsn=getattr(
+                    conn_factory,
+                    "_aistock_process_worker_dsn",
+                    None,
+                ),
+                source_cache_root=catalog_source_cache_root,
             ),
             repository=repository,
             artifact_store=artifact_store,
@@ -690,7 +712,10 @@ def build_explicit_historical_range_r5_runtime_factory(
     return runtime
 
 
-def build_environment_historical_range_r5_application_service() -> HistoricalRangeApplicationService:
+def build_environment_historical_range_r5_application_service(
+    *,
+    candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+) -> HistoricalRangeApplicationService:
     """Build the HTTP service from explicit environment configuration only."""
 
     conn_factory = explicit_historical_range_connection_factory()
@@ -756,6 +781,7 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
         failure_recorder_factory=lambda: PostgresHistoricalRangePreclaimFailureRepository(
             conn_factory=conn_factory
         ),
+        candidate_prefetch_per_program=candidate_prefetch_per_program,
     )
 
 
@@ -792,6 +818,11 @@ def explicit_historical_range_connection_factory() -> Callable[[], Any]:
     def connect() -> Any:
         return psycopg2.connect(**config)
 
+    setattr(
+        connect,
+        "_aistock_process_worker_dsn",
+        psycopg2.extensions.make_dsn(**config),
+    )
     return connect
 
 
@@ -826,7 +857,7 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT package_id, package_name, alpha_mode,
+                    SELECT package_id, package_name, alpha_mode, manifest_json,
                            jsonb_array_length(
                                COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)
                            ) AS alpha_count,
@@ -841,6 +872,8 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
         finally:
             conn.rollback()
     for record in package_rows:
+        if not _is_historical_range_package_ready(record):
+            continue
         packages.append(
             {
                 "package_id": str(record["package_id"]),
@@ -866,6 +899,24 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
             },
         },
     }
+
+
+def _is_historical_range_package_ready(record: dict[str, Any]) -> bool:
+    try:
+        manifest = StrategyPackageManifest.model_validate(record["manifest_json"])
+        if (
+            manifest.package_id != str(record["package_id"])
+            or manifest.package_version != str(record["package_version"])
+            or manifest.manifest_sha256 != str(record["manifest_sha256"])
+            or compute_manifest_sha256(manifest) != str(record["manifest_sha256"])
+            or set(manifest.alpha_combination_policy.weights)
+            != {component.alpha_id for component in manifest.alpha_components}
+        ):
+            return False
+        project_historical_range_inputs(manifest)
+    except (KeyError, ValidationError, AdvisoryInputProjectionError):
+        return False
+    return True
 
 
 def _historical_range_code_set_hash(

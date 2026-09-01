@@ -19,6 +19,7 @@ import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
 import EvolutionTrajectory, { type DataSourceAdapter } from "../../components/EvolutionTrajectory";
+import LongTrendEvaluationPanel from "./LongTrendEvaluationPanel";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import type { JsonObject } from "@/lib/paper-v2/types";
 
@@ -120,6 +121,7 @@ const DETAIL_TABS = [
   { key: "returns", label: "收益曲线" },
   { key: "trade", label: "交易效率" },
   { key: "prediction", label: "预测行为" },
+  { key: "long-trend", label: "长期趋势" },
 ];
 
 const VIEW_OPTIONS = [
@@ -491,6 +493,14 @@ export default React.memo(function LoopDetailPanel({
                   <div style={{ color: "#94a3b8", textAlign: "center", padding: 40 }}>暂无预测行为数据</div>
                 )}
               </div>
+            )}
+
+            {detailTab === "long-trend" && activeTaskId && !isCombine && (
+              <LongTrendEvaluationPanel
+                taskId={activeTaskId}
+                loopIndex={activeLoopData.loop_index}
+                loopStatus={activeLoopData.status}
+              />
             )}
           </div>
         </>

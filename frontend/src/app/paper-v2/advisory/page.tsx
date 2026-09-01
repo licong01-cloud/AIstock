@@ -6,8 +6,13 @@ import {
   advisoryApi,
   type AdvisoryBindingPayload,
   type AdvisoryEpisode,
+  type AdvisoryForwardRun,
+  type AdvisoryForwardRunDetail,
+  type AdvisoryForwardModelMetrics,
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
+  type AdvisoryModelShadowResponse,
+  type AdvisoryOutcomeCandidate,
   type AdvisoryPackageMode,
   type AdvisoryProgram,
   type AdvisoryQualityReport,
@@ -101,6 +106,17 @@ function fmtPct(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-";
 }
 
+function calibratedMetric(
+  state: "CALIBRATED" | "UNCALIBRATED" | undefined,
+  calibrated: ReactNode,
+  raw: ReactNode,
+): ReactNode {
+  if (state === "CALIBRATED") {
+    return <><strong>校准 {calibrated}</strong><small className="pv2-muted">raw {raw}</small></>;
+  }
+  return <><span>{raw}</span>{state === "UNCALIBRATED" ? <small className="pv2-muted">UNCALIBRATED</small> : null}</>;
+}
+
 function fmtBps(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value / 100).toFixed(2)}%` : "-";
 }
@@ -121,8 +137,39 @@ function fmtNumber(value: number | null | undefined, digits = 0): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
 
+function shadowBaselineMetric(
+  shadow: AdvisoryModelShadowResponse | null,
+  baseline: string,
+  metric = "mean_excess_return_5",
+): number | null {
+  const row = shadow?.baselines?.[baseline];
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const value = (row as JsonObject)[metric];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+const OUTCOME_HORIZONS = [1, 3, 5, 10, 20] as const;
+type OutcomeHorizon = (typeof OUTCOME_HORIZONS)[number];
+
+function outcomeHorizon(
+  candidate: AdvisoryOutcomeCandidate,
+  horizon: OutcomeHorizon,
+) {
+  return candidate.horizons.find((item) => item.horizon_days === horizon) || null;
+}
+
 function fmtPrice(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function fmtPriceBand(value: { low: number; high: number } | null | undefined): string {
+  return value ? `${fmtPrice(value.low)} - ${fmtPrice(value.high)}` : "-";
+}
+
+function forwardPrediction(detail: AdvisoryForwardRunDetail | null): AdvisoryModelShadowResponse | null {
+  const payload = detail?.model_observation?.prediction_payload_json;
+  if (!payload || payload.status !== "EXPERIMENTAL_SHADOW" || !Array.isArray(payload.candidates)) return null;
+  return payload as unknown as AdvisoryModelShadowResponse;
 }
 
 function short(value: unknown, len = 10): string {
@@ -632,6 +679,15 @@ function AdvisoryPageContent() {
   const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
   const [listVersions, setListVersions] = useState<AdvisoryRecommendationListVersion[]>([]);
   const [listVersionDetail, setListVersionDetail] = useState<AdvisoryListVersionDetail | null>(null);
+  const [modelShadow, setModelShadow] = useState<AdvisoryModelShadowResponse | null>(null);
+  const [modelShadowLoading, setModelShadowLoading] = useState(false);
+  const [modelShadowError, setModelShadowError] = useState<string | null>(null);
+  const [forwardRuns, setForwardRuns] = useState<AdvisoryForwardRun[]>([]);
+  const [latestForwardDetail, setLatestForwardDetail] = useState<AdvisoryForwardRunDetail | null>(null);
+  const [forwardModelMetrics, setForwardModelMetrics] = useState<AdvisoryForwardModelMetrics | null>(null);
+  const [forwardModelMetricsLoading, setForwardModelMetricsLoading] = useState(false);
+  const [forwardError, setForwardError] = useState<string | null>(null);
+  const [outcomeHorizonDays, setOutcomeHorizonDays] = useState<OutcomeHorizon>(5);
   const [selectedListVersionId, setSelectedListVersionId] = useState("");
   const [listVersionLoadingId, setListVersionLoadingId] = useState("");
   const [listDetailSource, setListDetailSource] = useState<ListDetailSource>("latest");
@@ -660,10 +716,15 @@ function AdvisoryPageContent() {
   const listDetailRef = useRef<HTMLDivElement | null>(null);
   const refreshSeqRef = useRef(0);
   const detailsSeqRef = useRef(0);
+  const modelShadowSeqRef = useRef(0);
 
   const selectedProgram = useMemo(
     () => programs.find((item) => item.program_id === selectedProgramId) || programs[0],
     [programs, selectedProgramId],
+  );
+  const latestForwardPrediction = useMemo(
+    () => forwardPrediction(latestForwardDetail),
+    [latestForwardDetail],
   );
 
   const activeColumns = useMemo<ActivePoolColumn[]>(() => [
@@ -726,6 +787,24 @@ function AdvisoryPageContent() {
     setReviewTotalCount(pageData.total_count);
   }
 
+  async function loadModelShadow(programId: string, version: AdvisoryRecommendationListVersion) {
+    const requestSeq = ++modelShadowSeqRef.current;
+    const targetDate = dateContextFromListVersion(version).targetTradeDate || version.trade_date;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(true);
+    try {
+      const shadow = await advisoryApi.modelShadow(programId, targetDate);
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadow(shadow);
+    } catch (exc) {
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadowError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestSeq === modelShadowSeqRef.current) setModelShadowLoading(false);
+    }
+  }
+
   function applyPackageOptions(packageOptions: SelectablePackage[]) {
     setSelectablePackages(packageOptions);
     setPackageRows((rows) => {
@@ -746,6 +825,15 @@ function AdvisoryPageContent() {
     const requestSeq = ++detailsSeqRef.current;
     const stillCurrent = () => requestSeq === detailsSeqRef.current;
     const offset = (Math.max(page, 1) - 1) * pageSize;
+    modelShadowSeqRef.current += 1;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(false);
+    setForwardRuns([]);
+    setLatestForwardDetail(null);
+    setForwardModelMetrics(null);
+    setForwardModelMetricsLoading(true);
+    setForwardError(null);
     const [poolRows, reviewPageData, bindingRows, versionRows] = await Promise.all([
       advisoryApi.activePool(programId),
       advisoryApi.reviews(programId, pageSize, offset),
@@ -758,6 +846,30 @@ function AdvisoryPageContent() {
     setReviewTotalCount(reviewPageData.total_count);
     setBindings(bindingRows);
     setListVersions(versionRows);
+    void advisoryApi.forwardRuns(programId, 20)
+      .then((forwardRows) => {
+        if (!stillCurrent()) return;
+        setForwardRuns(forwardRows);
+        if (!forwardRows[0]) return;
+        return advisoryApi.forwardRunDetail(forwardRows[0].forward_run_id);
+      })
+      .then((detail) => {
+        if (detail && stillCurrent()) setLatestForwardDetail(detail);
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
+    void advisoryApi.forwardModelMetrics(programId)
+      .then((metrics) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetrics(metrics);
+        setForwardModelMetricsLoading(false);
+      })
+      .catch((exc) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetricsLoading(false);
+        setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
     setLoadedDetailsProgramId(programId);
     if (versionRows[0]) {
       const latestVersion = versionRows[0];
@@ -765,6 +877,7 @@ function AdvisoryPageContent() {
       setSelectedListVersionId(latestVersion.list_version_id);
       setListDetailSource("latest");
       setListVersionLoadingId(latestVersion.list_version_id);
+      void loadModelShadow(programId, latestVersion);
       advisoryApi.listVersionDetail(latestVersion.list_version_id)
         .then((detail) => {
           if (!stillCurrent()) return;
@@ -782,6 +895,9 @@ function AdvisoryPageContent() {
       setListVersionDetail(null);
       setSelectedListVersionId("");
       setListDetailSource("latest");
+      setModelShadow(null);
+      setModelShadowError(null);
+      setModelShadowLoading(false);
     }
     setReturns([]);
     advisoryApi.returns(programId)
@@ -1186,6 +1302,7 @@ function AdvisoryPageContent() {
       setSelectedListVersionId(detail.list_version.list_version_id);
       setListDetailSource("timeline");
       setReviewResult(null);
+      void loadModelShadow(detail.list_version.program_id, detail.list_version);
       window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -1737,6 +1854,105 @@ function AdvisoryPageContent() {
             </div>
           ) : null}
         </div>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-forward-publication">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">每日前向</div>
+              <h3>基线发布与模型观察</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${forwardRuns[0]?.publication_status === "PUBLISHED" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {forwardRuns[0]?.publication_status || "NO_FORWARD_RUN"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{forwardRuns[0]?.settlement_status || "NOT_DUE"}</span>
+              <span className={`pv2-badge ${latestForwardDetail?.model_observation?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {latestForwardDetail?.model_observation?.status || "MODEL_UNAVAILABLE"}
+              </span>
+            </div>
+          </div>
+          {forwardError ? <div className="pv2-error" data-testid="advisory-forward-error">{forwardError}</div> : null}
+          {forwardRuns[0] ? (
+            <div data-testid="advisory-forward-latest">
+              <strong>目标日 {forwardRuns[0].target_trade_date}</strong>
+              <span className="pv2-muted"> 数据截止 {forwardRuns[0].decision_as_of_trade_date}；阶段 {forwardRuns[0].last_stage}；发布 {short(forwardRuns[0].published_at, 16)}；结算 {short(forwardRuns[0].settled_at, 16)}</span>
+              {forwardRuns[0].last_reason_code ? <div className="pv2-muted" style={{ marginTop: 6 }}>原因：{forwardRuns[0].last_reason_code}</div> : null}
+              {latestForwardDetail?.model_observation ? (
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-model-identity">
+                  模型 {short(latestForwardDetail.model_observation.bundle_id, 14)}；Top5 {latestForwardDetail.model_observation.shortlist_count}/{latestForwardDetail.model_observation.candidate_count}；成熟日 {latestForwardDetail.model_observation.maturity_trade_date || "尚无"}
+                  {latestForwardDetail.model_observation.reason_code ? `；${latestForwardDetail.model_observation.reason_code}` : ""}
+                </div>
+              ) : null}
+              <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid="advisory-forward-model-metrics">
+                <div className="pv2-row-actions">
+                  <strong>模型前向效果</strong>
+                  <span className={`pv2-badge ${forwardModelMetrics?.status === "READY" ? "pv2-badge-success" : forwardModelMetrics?.status === "FAILED" ? "pv2-badge-danger" : "pv2-badge-neutral"}`}>
+                    {forwardModelMetricsLoading ? "LOADING" : forwardModelMetrics?.status || "UNAVAILABLE"}
+                  </span>
+                </div>
+                {forwardModelMetricsLoading ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>正在加载模型前向证据…</div>
+                ) : forwardModelMetrics?.evaluation ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    成熟 observation {forwardModelMetrics.evaluation.matured_outcome_count}/{forwardModelMetrics.evaluation.due_observation_count}；
+                    已退出 episode {forwardModelMetrics.evaluation.metrics_json.exited_episode_count ?? 0}；
+                    胜率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.completed_episode_hit_rate)}；
+                    日均净收益 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_return_bps)}；
+                    日均超额 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_excess_return_bps)}；
+                    最大回撤 {fmtPct(forwardModelMetrics.evaluation.metrics_json.maximum_drawdown)}；
+                    平均换手 {fmtPct(forwardModelMetrics.evaluation.metrics_json.mean_turnover_fraction)}；
+                    覆盖率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.coverage)}
+                  </div>
+                ) : forwardModelMetrics ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    已记录 {forwardModelMetrics?.observation_count ?? 0} 条 P0-D observation，
+                    当前到期 {forwardModelMetrics?.due_observation_count ?? 0} 条；
+                    {forwardModelMetrics?.next_maturity_trade_date
+                      ? `下一成熟日 ${forwardModelMetrics.next_maturity_trade_date}`
+                      : "尚无可结算样本"}
+                    {forwardModelMetrics?.reason_code ? `；${forwardModelMetrics.reason_code}` : ""}
+                  </div>
+                ) : (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>模型前向指标不可用，请查看上方错误。</div>
+                )}
+              </div>
+              {latestForwardPrediction ? (
+                <>
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-child-status">
+                  收益/周期 {latestForwardPrediction.outcome?.status || "OUTCOME_UNAVAILABLE"}；价格区间 {latestForwardPrediction.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                </div>
+                <div className="pv2-table-wrap" style={{ marginTop: 10 }} data-testid="advisory-forward-prediction-table">
+                  <table className="pv2-table">
+                    <thead><tr><th>模型排名</th><th>股票</th><th>建议周期</th><th>5日收益区间</th><th>买入区间</th><th>止盈区间</th><th>止损区间</th></tr></thead>
+                    <tbody>
+                      {latestForwardPrediction.candidates
+                        .filter((candidate) => candidate.is_top5)
+                        .sort((left, right) => left.advisory_model_rank - right.advisory_model_rank)
+                        .map((candidate) => {
+                          const outcomeCandidate = latestForwardPrediction.outcome?.candidates.find((row) => row.symbol === candidate.symbol);
+                          const horizon = outcomeCandidate ? outcomeHorizon(outcomeCandidate, 5) : null;
+                          const price = latestForwardPrediction.price_range?.candidates.find((row) => row.symbol === candidate.symbol);
+                          return (
+                            <tr key={candidate.symbol} data-testid="advisory-forward-prediction-row">
+                              <td>{candidate.advisory_model_rank}</td>
+                              <td><strong>{candidate.symbol}</strong></td>
+                              <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
+                              <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
+                              <td>{fmtPriceBand(price?.calibrated_entry_price ?? price?.entry_price)}</td>
+                              <td>{fmtPriceBand(price?.take_profit_price)}</td>
+                              <td>{fmtPriceBand(price?.stop_loss_price)}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="pv2-muted" data-testid="advisory-forward-empty">尚未产生自然前向发布日期；自动前向只从启用后当前交易日开始，不回填历史缺口。</div>
+          )}
+        </div>
         {reviewResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
             <strong>复评状态： {reviewResult.review_status}</strong>
@@ -1794,6 +2010,179 @@ function AdvisoryPageContent() {
             <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
           </div>
         )}
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-model-shadow">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">模型影子排序</div>
+              <h3>实验 Top5</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${modelShadow?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {modelShadowLoading ? "LOADING" : modelShadow?.status || "MODEL_UNAVAILABLE"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{modelShadow?.calibration_state || "UNCALIBRATED"}</span>
+            </div>
+          </div>
+          {modelShadowLoading ? <div className="pv2-muted" data-testid="advisory-model-shadow-loading">正在读取实时特征并执行影子推理...</div> : null}
+          {modelShadowError ? (
+            <div className="pv2-error" data-testid="advisory-model-shadow-request-error">{modelShadowError}</div>
+          ) : null}
+          {!modelShadowLoading && modelShadow?.status === "MODEL_UNAVAILABLE" ? (
+            <div data-testid="advisory-model-shadow-unavailable">
+              <strong>{modelShadow.reason_code || "MODEL_UNAVAILABLE"}</strong>
+              <span className="pv2-muted"> {modelShadow.message || "模型影子结果不可用"}</span>
+            </div>
+          ) : null}
+          {modelShadow?.status === "EXPERIMENTAL_SHADOW" ? (
+            <>
+              <div className="pv2-muted" data-testid="advisory-model-shadow-context">
+                数据截止 {modelShadow.decision_as_of_trade_date || "-"}；目标日 {modelShadow.target_trade_date}；候选 {modelShadow.candidate_count}；Top5 {modelShadow.shortlist_count}；HMM 行业不可用 {modelShadow.hmm_unavailable.length}
+              </div>
+              <div className="pv2-row-actions" style={{ marginTop: 8 }} data-testid="advisory-model-shadow-baselines">
+                <span>模型 5日超额 {fmtPct(shadowBaselineMetric(modelShadow, "model_top5"))}</span>
+                <span>原 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "selection_rank_top5"))}</span>
+                <span>随机 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "random_top5"))}</span>
+              </div>
+              <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                <table className="pv2-table" data-testid="advisory-model-shadow-table">
+                  <thead><tr><th>股票</th><th>原排名</th><th>模型排名</th><th>模型分</th><th>Top5</th><th>主要贡献</th></tr></thead>
+                  <tbody>
+                    {modelShadow.candidates.map((candidate) => (
+                      <tr key={candidate.symbol} data-testid="advisory-model-shadow-row">
+                        <td>{candidate.symbol}</td>
+                        <td>{candidate.selection_effective_rank} / {fmtNumber(candidate.selection_score, 4)}</td>
+                        <td>{candidate.advisory_model_rank}</td>
+                        <td>{fmtNumber(candidate.advisory_model_score, 6)}</td>
+                        <td>{candidate.is_top5 ? "Y" : "-"}</td>
+                        <td className="pv2-mono">
+                          {candidate.top_feature_contributions.map((item) => `${item.feature} ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(4)}`).join("; ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-outcome-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">收益与持股周期</div>
+                    <h3>实验预测</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.outcome?.status || "OUTCOME_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.outcome?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                {modelShadow.outcome?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-outcome-unavailable">
+                    <strong>{modelShadow.outcome?.reason_code || "ADVISORY_OUTCOME_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.outcome?.message || "收益与持股周期模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <>
+                    <div className="pv2-tabs" role="tablist" aria-label="预测周期" data-testid="advisory-outcome-horizons">
+                      {OUTCOME_HORIZONS.map((horizon) => (
+                        <button
+                          key={horizon}
+                          className={`pv2-tab ${outcomeHorizonDays === horizon ? "pv2-tab-active" : ""}`}
+                          data-testid={`advisory-outcome-horizon-${horizon}`}
+                          onClick={() => setOutcomeHorizonDays(horizon)}
+                          role="tab"
+                          aria-selected={outcomeHorizonDays === horizon}
+                          type="button"
+                        >
+                          {horizon}日
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                      <table className="pv2-table" data-testid="advisory-outcome-table">
+                        <thead>
+                          <tr><th>股票</th><th>M2排名</th><th>超额收益 q10 / q50 / q90</th><th>正收益</th><th>信号存活</th><th>MFE q50 / q90</th><th>MAE q50 / q90</th><th>持股范围</th></tr>
+                        </thead>
+                        <tbody>
+                          {modelShadow.outcome.candidates.map((candidate) => {
+                            const horizon = outcomeHorizon(candidate, outcomeHorizonDays);
+                            const rank = modelShadow.candidates.find((item) => item.symbol === candidate.symbol)?.advisory_model_rank;
+                            return (
+                              <tr key={candidate.symbol} data-testid="advisory-outcome-row">
+                                <td>{candidate.symbol}</td>
+                                <td>{rank ?? "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.return_interval_calibration_state, <>{fmtPct(horizon.excess_return_calibrated_q10)} / {fmtPct(horizon.excess_return_calibrated_q50)} / {fmtPct(horizon.excess_return_calibrated_q90)}</>, <>{fmtPct(horizon.excess_return_q10)} / {fmtPct(horizon.excess_return_q50)} / {fmtPct(horizon.excess_return_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.positive_probability_calibration_state, fmtPct(horizon.positive_probability_calibrated), fmtPct(horizon.positive_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.signal_survival_probability_calibration_state, fmtPct(horizon.signal_survival_probability_calibrated), fmtPct(horizon.signal_survival_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mfe_calibration_state, <>{fmtPct(horizon.path_mfe_calibrated_q50)} / {fmtPct(horizon.path_mfe_calibrated_q90)}</>, <>{fmtPct(horizon.path_mfe_q50)} / {fmtPct(horizon.path_mfe_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mae_loss_calibration_state, <>{fmtPct(horizon.path_mae_loss_calibrated_q50)} / {fmtPct(horizon.path_mae_loss_calibrated_q90)}</>, <>{fmtPct(horizon.path_mae_loss_q50)} / {fmtPct(horizon.path_mae_loss_q90)}</>) : "-"}</td>
+                                <td>{candidate.holding_period.range_low_days}-{candidate.holding_period.range_high_days}日（{candidate.holding_period.mode_days}日）{candidate.holding_period.calibration_state ? <small className="pv2-muted">{candidate.holding_period.calibration_state}</small> : null}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-price-range-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">价格范围（实验影子）</div>
+                    <h3>买入、止盈、保护与止损参考</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.price_range?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-basis">
+                  未复权 CNY；仅供学术研究。买入范围条件于下一交易日可执行，止盈、保护和止损进一步条件于按预测中位价建仓。
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-source">
+                  M4 {short(modelShadow.price_range?.price_range_bundle_id, 14)} · M2 {short(modelShadow.price_range?.parent_bundle_id, 14)} · M3 {short(modelShadow.price_range?.outcome_bundle_id, 14)} · {modelShadow.price_range?.price_basis || "UNADJUSTED_CNY_DECISION_CLOSE"}
+                </div>
+                {modelShadow.price_range?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-price-range-unavailable">
+                    <strong>{modelShadow.price_range?.reason_code || "ADVISORY_PRICE_RANGE_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.price_range?.message || "价格范围模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="pv2-table" data-testid="advisory-price-range-table">
+                      <thead>
+                        <tr><th>股票</th><th>可执行概率</th><th>决策参考价</th><th>条件买入范围</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                      </thead>
+                      <tbody>
+                        {modelShadow.price_range.candidates.map((candidate) => (
+                          <tr key={candidate.symbol} data-testid="advisory-price-range-row">
+                            <td>{candidate.symbol}</td>
+                            <td>{fmtPct(candidate.entry_executable_probability)}</td>
+                            <td>{fmtPrice(candidate.decision_reference_price)}</td>
+                            <td>{candidate.calibrated_entry_price ? <>{fmtPriceBand(candidate.calibrated_entry_price)}（中位 {fmtPrice(candidate.calibrated_entry_price.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price ? fmtPriceBand(candidate.entry_price) : "-"}</span></> : candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
+                            <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
+                            <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
+                            <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
+                            <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration_state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">可执行概率 {candidate.entry_executable_calibration_state || "UNCALIBRATED"}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table" data-testid="advisory-list-items-table">
             <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>

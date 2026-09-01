@@ -23,7 +23,16 @@ from .gateway import (
 )
 from .models import MiniQMTChildOrder, MiniQMTChildOrderStatus
 from .plugin_canonical import canonical_decimal_string_v1, hash_hex_v1, thaw_json_v1
+from .kernel_callback_events import (
+    build_kernel_command_outcome_event_payload_from_durable_v1,
+    derive_kernel_command_outcome_authority_v1,
+    derive_kernel_command_outcome_broker_order_id_v1,
+    strict_readback_kernel_event_payload_v1,
+)
+from .kernel_ingress import KernelIngressCoordinatorV1
+from .plugin_registry import PluginCatalogRuntimeV2
 from .plugin_contracts import (
+    AlgoDeliveryPersistenceV1,
     BrokerAckSourceV1,
     BrokerCommandAckReceiptV1,
     BrokerCommandOutboxStatusV1,
@@ -43,7 +52,13 @@ from .plugin_contracts import (
     EventTypeV2,
     GatewayCapabilityCatalogV1,
     KernelErrorEvidenceV1,
+    KernelCommandOutcomeMappingClosureModeV1,
+    KernelCommandOutcomeMappingClosureV1,
+    KernelCommandOutcomeV1,
+    NormalizedOrderStatusV1,
+    RuntimeEventIngressReceiptV1,
     RuntimeEventEnvelopeV2,
+    SessionPhaseV1,
     canonical_utc_datetime_v1,
     kernel_lease_fence_token_v1,
 )
@@ -124,6 +139,167 @@ class KernelOutboxRepositoryV1(Protocol):
     ) -> int: ...
 
     def read_runtime_event(self, event_id: str) -> RuntimeEventEnvelopeV2: ...
+
+    def read_algo_instance(self, algo_instance_id: str) -> Any: ...
+
+    def read_runtime_last_event_sequence(self, runtime_id: str) -> int: ...
+
+    def _read_exchange_session_projection(self, *, runtime_id: str, observed_at_utc: Any) -> Any: ...
+
+    def read_event_transaction(self, event_id: str) -> dict[str, Any]: ...
+
+    def ingest_routed_event_atomic(self, **values: Any) -> RuntimeEventIngressReceiptV1: ...
+
+    def list_outbox_outcome_candidates(
+        self, *, after: tuple[str, str, str] | None, limit: int
+    ) -> tuple[BrokerCommandOutboxV1, ...]: ...
+
+
+class KernelOutboxOutcomeIngressError(RuntimeError):
+    def __init__(self, reason_code: str, message: str, *, context: dict[str, Any]) -> None:
+        self.reason_code = reason_code
+        self.context = dict(context)
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class KernelOutboxOutcomeIngressReceiptV1:
+    event: RuntimeEventEnvelopeV2
+    mapping_closure: KernelCommandOutcomeMappingClosureV1
+    ingress_receipt: RuntimeEventIngressReceiptV1
+    idempotent: bool
+
+
+class KernelOutboxOutcomeIngressV1:
+    """Convert one exact durable outbox outcome into COMMAND_OUTCOME ingress."""
+
+    def __init__(self, *, repository: KernelOutboxRepositoryV1, catalog_runtime: PluginCatalogRuntimeV2) -> None:
+        self.repository = repository
+        self.coordinator = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=catalog_runtime)
+
+    def ingest_outbox_outcome_v1(self, *, command_id: str) -> KernelOutboxOutcomeIngressReceiptV1:
+        mapping, outbox = _strict_chain(self.repository.read_command_identity_chain(command_id), command_id=command_id)
+        try:
+            payload = build_kernel_command_outcome_event_payload_from_durable_v1(
+                mapping=mapping,
+                outbox=outbox,
+            )
+        except (TypeError, ValueError) as exc:
+            raise KernelOutboxOutcomeIngressError(
+                "MINIQMT_COMMAND_OUTCOME_DURABLE_AUTHORITY_INVALID",
+                f"durable outbox outcome cannot produce an exact COMMAND_OUTCOME payload: {_bounded_text(exc)}",
+                context={
+                    "command_id": command_id,
+                    "mapping_id": mapping.mapping_id,
+                    "outbox_status": outbox.status.value,
+                    "exception_type": type(exc).__name__,
+                },
+            ) from exc
+        outcome = payload.outcome
+        command = _command(outbox)
+        broker_order_id = payload.broker_order_id
+        session = self.repository._read_exchange_session_projection(
+            runtime_id=outbox.runtime_id,
+            observed_at_utc=outbox.updated_at_utc,
+        )
+        if session.runtime_id != outbox.runtime_id:
+            raise KernelOutboxOutcomeIngressError(
+                "MINIQMT_COMMAND_OUTCOME_SESSION_AUTHORITY_INVALID",
+                "exchange-session projection does not belong to the outbox runtime",
+                context={"command_id": command_id, "runtime_id": outbox.runtime_id},
+            )
+        base_correlation = {
+            "algo_instance_id": mapping.algo_instance_id,
+            "mapping_id": mapping.mapping_id,
+            "reference_command_id": outbox.command_id,
+            "exchange_trade_date": session.exchange_trade_date,
+            "session_epoch": session.session_epoch,
+            "session_phase": session.session_phase.value,
+        }
+        event_values = dict(
+            runtime_id=outbox.runtime_id,
+            event_type=EventTypeV2.COMMAND_OUTCOME,
+            event_time_utc=outbox.updated_at_utc,
+            monotonic_ns=None,
+            source=EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+            symbol=mapping.symbol,
+            payload_schema_version="miniqmt_command_outcome_v1",
+            payload=payload.model_dump(mode="json"),
+            source_identity={"receipt_id": payload.receipt_id, "receipt_sha256": payload.receipt_sha256},
+            correlation=base_correlation,
+        )
+        identity_event = RuntimeEventEnvelopeV2.create(sequence=1, **event_values)
+        try:
+            existing = self.repository.read_event_transaction(identity_event.event_id)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            persisted_event = existing["event"]
+            persisted_closure = _persisted_outcome_closure_v1(
+                event=persisted_event,
+                command_id=outbox.command_id,
+                mapping_id=outbox.mapping_id,
+            )
+            expected = RuntimeEventEnvelopeV2.create(
+                sequence=persisted_event.sequence,
+                **{
+                    **event_values,
+                    "correlation": thaw_json_v1(persisted_event.correlation),
+                },
+            )
+            if persisted_event != expected:
+                raise KernelOutboxOutcomeIngressError(
+                    "MINIQMT_COMMAND_OUTCOME_IDEMPOTENCY_CONFLICT",
+                    "existing COMMAND_OUTCOME event differs from deterministic outbox outcome",
+                    context={"command_id": command_id, "event_id": identity_event.event_id},
+                )
+            return KernelOutboxOutcomeIngressReceiptV1(
+                event=persisted_event,
+                mapping_closure=persisted_closure,
+                ingress_receipt=existing["receipt"],
+                idempotent=True,
+            )
+        sequence = self.repository.read_runtime_last_event_sequence(outbox.runtime_id) + 1
+        provisional_event = RuntimeEventEnvelopeV2.create(sequence=sequence, **event_values)
+        closure = _command_outcome_mapping_closure_v1(
+            mapping=mapping,
+            outbox=outbox,
+            command=command,
+            event=provisional_event,
+            outcome=outcome,
+            broker_order_id=broker_order_id,
+            repository=self.repository,
+        )
+        event = RuntimeEventEnvelopeV2.create(
+            sequence=sequence,
+            **{
+                **event_values,
+                "correlation": {
+                    **base_correlation,
+                    "command_outcome_mapping_closure": closure.model_dump(mode="json"),
+                },
+            },
+        )
+        if event.event_id != provisional_event.event_id:
+            raise KernelOutboxOutcomeIngressError(
+                "MINIQMT_COMMAND_OUTCOME_CLOSURE_IDENTITY_CONFLICT",
+                "persisting the command-outcome closure changed deterministic event identity",
+                context={"command_id": command_id, "event_id": provisional_event.event_id},
+            )
+        ingress_receipt = self.coordinator.ingest(
+            event=event,
+            command_outcome_mapping_closure=closure,
+        )
+        return KernelOutboxOutcomeIngressReceiptV1(
+            event=event,
+            mapping_closure=closure,
+            ingress_receipt=ingress_receipt,
+            idempotent=False,
+        )
+
+
+class KernelOutboxOutcomePublisherV1(Protocol):
+    def ingest_outbox_outcome_v1(self, *, command_id: str) -> Any: ...
 
 
 class KernelGatewayAdapterV1(Protocol):
@@ -264,6 +440,7 @@ class KernelOutboxDispatcherV1:
         repository: KernelOutboxRepositoryV1,
         gateway: KernelGatewayAdapterV1,
         gateway_catalog: GatewayCapabilityCatalogV1,
+        outcome_ingress: KernelOutboxOutcomePublisherV1,
         lease_owner: str,
         process_incarnation_id: str,
     ) -> None:
@@ -272,6 +449,9 @@ class KernelOutboxDispatcherV1:
         self.gateway_catalog = GatewayCapabilityCatalogV1.model_validate(
             gateway_catalog.model_dump(mode="python"), strict=True
         )
+        if not callable(getattr(outcome_ingress, "ingest_outbox_outcome_v1", None)):
+            raise TypeError("outcome_ingress must expose ingest_outbox_outcome_v1")
+        self.outcome_ingress = outcome_ingress
         self.lease_owner = _identity(lease_owner, "lease_owner")
         self.process_incarnation_id = _identity(process_incarnation_id, "process_incarnation_id")
         if not self.lease_owner.endswith(f":{self.process_incarnation_id}"):
@@ -505,6 +685,7 @@ class KernelOutboxDispatcherV1:
             expected_lease_epoch=claimed.lease_epoch,
             expected_lease_fence_token=claimed.lease_fence_token,
         )
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=successor)
         return successor
 
     def _close_ack(
@@ -622,6 +803,7 @@ class KernelOutboxDispatcherV1:
                 authority_receipt_sha256=receipt.receipt_sha256,
             )
         )
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=final_outbox)
         return final_outbox
 
     def _close_unknown(
@@ -692,14 +874,47 @@ class KernelOutboxDispatcherV1:
             expected_lease_epoch=dispatching.lease_epoch,
             expected_lease_fence_token=dispatching.lease_fence_token,
         )
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=unknown)
         return unknown
 
 
 class KernelOutboxRecoveryV1:
     """Recover expired durable leases without guessing whether broker was called."""
 
-    def __init__(self, *, repository: KernelOutboxRepositoryV1) -> None:
+    def __init__(
+        self,
+        *,
+        repository: KernelOutboxRepositoryV1,
+        outcome_ingress: KernelOutboxOutcomePublisherV1,
+    ) -> None:
         self.repository = repository
+        if not callable(getattr(outcome_ingress, "ingest_outbox_outcome_v1", None)):
+            raise TypeError("outcome_ingress must expose ingest_outbox_outcome_v1")
+        self.outcome_ingress = outcome_ingress
+
+    def run_once(
+        self,
+        *,
+        page_size: int = 100,
+        max_rows: int = 1000,
+    ) -> tuple[KernelOutboxOutcomeIngressReceiptV1, ...]:
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+        if type(max_rows) is not int or not 1 <= max_rows <= 1000:
+            raise ValueError("max_rows must be between 1 and 1000")
+        receipts: list[KernelOutboxOutcomeIngressReceiptV1] = []
+        cursor: tuple[str, str, str] | None = None
+        while len(receipts) < max_rows:
+            limit = min(page_size, max_rows - len(receipts))
+            rows = self.repository.list_outbox_outcome_candidates(after=cursor, limit=limit)
+            if not rows:
+                break
+            for outbox in rows:
+                receipts.append(self.outcome_ingress.ingest_outbox_outcome_v1(command_id=outbox.command_id))
+                cursor = (outbox.runtime_id, outbox.updated_at_utc, outbox.command_id)
+            if len(rows) < limit:
+                break
+        return tuple(receipts)
 
     def recover_stale_one(self, *, command_id: str, observed_at_utc: Any) -> BrokerCommandOutboxV1:
         now = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
@@ -756,6 +971,7 @@ class KernelOutboxRecoveryV1:
                 closed_at_utc=now if terminal else None,
             )
             self._cas(mapping=mapping, outbox=outbox, successor_mapping=mapping, successor_outbox=successor)
+            _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=successor)
             return successor
         watermark = outbox.callback_watermark_before_call
         if watermark is None or outbox.dispatch_attempt_id is None or outbox.lease_fence_token is None:
@@ -799,6 +1015,7 @@ class KernelOutboxRecoveryV1:
             successor_mapping=successor_mapping,
             successor_outbox=successor,
         )
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=successor)
         return successor
 
     def _cas(
@@ -829,12 +1046,16 @@ class KernelOutboxReconcilerV1:
         repository: KernelOutboxRepositoryV1,
         gateway: KernelGatewayAdapterV1,
         gateway_catalog: GatewayCapabilityCatalogV1,
+        outcome_ingress: KernelOutboxOutcomePublisherV1,
     ) -> None:
         self.repository = repository
         self.gateway = gateway
         self.gateway_catalog = GatewayCapabilityCatalogV1.model_validate(
             gateway_catalog.model_dump(mode="python"), strict=True
         )
+        if not callable(getattr(outcome_ingress, "ingest_outbox_outcome_v1", None)):
+            raise TypeError("outcome_ingress must expose ingest_outbox_outcome_v1")
+        self.outcome_ingress = outcome_ingress
 
     def reconcile_one(
         self,
@@ -995,6 +1216,7 @@ class KernelOutboxReconcilerV1:
             closed_at_utc=now,
         )
         self._cas(mapping=mapping, successor_mapping=final_mapping, outbox=outbox, successor_outbox=final)
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=final)
         return final
 
     def _close_not_found(
@@ -1128,6 +1350,7 @@ class KernelOutboxReconcilerV1:
             closed_at_utc=now,
         )
         self._cas(mapping=mapping, successor_mapping=terminal_mapping, outbox=outbox, successor_outbox=terminal)
+        _publish_committed_outcome_v1(outcome_ingress=self.outcome_ingress, outbox=terminal)
         return terminal
 
     def _cas(
@@ -1147,6 +1370,292 @@ class KernelOutboxReconcilerV1:
             expected_lease_epoch=outbox.lease_epoch,
             expected_lease_fence_token=outbox.lease_fence_token,
         )
+
+
+def _publish_committed_outcome_v1(
+    *,
+    outcome_ingress: KernelOutboxOutcomePublisherV1,
+    outbox: BrokerCommandOutboxV1,
+) -> None:
+    if outbox.status not in {
+        BrokerCommandOutboxStatusV1.ACKED,
+        BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+        BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+        BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+    }:
+        return
+    try:
+        outcome_ingress.ingest_outbox_outcome_v1(command_id=outbox.command_id)
+    except Exception as exc:
+        reason_code = (
+            exc.reason_code
+            if isinstance(exc, KernelOutboxOutcomeIngressError)
+            else "MINIQMT_COMMAND_OUTCOME_POST_COMMIT_INGRESS_FAILED"
+        )
+        original_context = exc.context if isinstance(exc, KernelOutboxOutcomeIngressError) else {}
+        raise KernelOutboxOutcomeIngressError(
+            reason_code,
+            f"committed outbox outcome ingress failed: {_bounded_text(exc)}",
+            context={
+                **original_context,
+                "stage": "OUTBOX_OUTCOME_POST_COMMIT_INGRESS",
+                "runtime_id": outbox.runtime_id,
+                "algo_instance_id": outbox.algo_instance_id,
+                "event_id": None,
+                "delivery_id": None,
+                "transition_id": outbox.transition_id,
+                "command_id": outbox.command_id,
+                "outbox_status": outbox.status.value,
+                "outbox_row_version": outbox.row_version,
+                "exception_type": type(exc).__name__,
+            },
+        ) from exc
+
+
+def _outcome_authority_v1(outbox: BrokerCommandOutboxV1) -> tuple[KernelCommandOutcomeV1, str]:
+    try:
+        return derive_kernel_command_outcome_authority_v1(outbox)
+    except (TypeError, ValueError) as exc:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_DURABLE_AUTHORITY_INVALID",
+            "outbox lacks one exact approved outcome authority",
+            context={"command_id": outbox.command_id, "status": outbox.status.value},
+        ) from exc
+
+
+def _outcome_broker_order_id_v1(
+    *,
+    mapping: ExecutionCommandChildMappingV1,
+    outbox: BrokerCommandOutboxV1,
+    command: BrokerCommandV2,
+    outcome: KernelCommandOutcomeV1,
+) -> str | None:
+    try:
+        return derive_kernel_command_outcome_broker_order_id_v1(
+            mapping=mapping,
+            outbox=outbox,
+            command=command,
+            outcome=outcome,
+        )
+    except (TypeError, ValueError) as exc:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_BROKER_ID_CONFLICT",
+            "outbox outcome does not close to one exact broker order identity",
+            context={"command_id": command.command_id, "mapping_id": mapping.mapping_id},
+        ) from exc
+
+
+def _callback_precedence_v1(
+    *,
+    mapping: ExecutionCommandChildMappingV1,
+    outbox: BrokerCommandOutboxV1,
+    repository: KernelOutboxRepositoryV1,
+) -> tuple[RuntimeEventEnvelopeV2, AlgoDeliveryPersistenceV1] | None:
+    event_id = mapping.updated_by_event_id
+    watermark = outbox.callback_watermark_before_call
+    if event_id is None or watermark is None:
+        return None
+    try:
+        transaction = repository.read_event_transaction(event_id)
+    except KeyError as exc:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_CALLBACK_PRECEDENCE_MISSING",
+            "mapping references a callback event that is absent from durable event authority",
+            context={
+                "command_id": outbox.command_id,
+                "mapping_id": mapping.mapping_id,
+                "callback_event_id": event_id,
+                "callback_watermark": watermark,
+            },
+        ) from exc
+    event = transaction["event"]
+    if event.event_type not in {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}:
+        return None
+    prefix = f"{mapping.runtime_id}:"
+    if not watermark.startswith(prefix) or not watermark[len(prefix) :].isdigit():
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_CALLBACK_WATERMARK_INVALID",
+            "outbox callback watermark is not a canonical runtime sequence",
+            context={"command_id": outbox.command_id, "callback_watermark": watermark},
+        )
+    if event.sequence <= int(watermark[len(prefix) :]):
+        return None
+    deliveries = tuple(item for item in transaction["deliveries"] if item.algo_instance_id == mapping.algo_instance_id)
+    if len(deliveries) != 1:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_CALLBACK_DELIVERY_CONFLICT",
+            "preceding callback does not have one exact algo delivery",
+            context={"event_id": event.event_id, "delivery_count": len(deliveries)},
+        )
+    return event, deliveries[0]
+
+
+def _outcome_mapping_successor_v1(
+    *,
+    previous: ExecutionCommandChildMappingV1,
+    command: BrokerCommandV2,
+    event: RuntimeEventEnvelopeV2,
+    outcome: KernelCommandOutcomeV1,
+    broker_order_id: str | None,
+) -> ExecutionCommandChildMappingV1:
+    if command.command_type is BrokerCommandTypeV2.CANCEL_ORDER:
+        status = CommandChildMappingStatusV1.BROKER_ACCEPTED
+        next_broker_order_id = previous.broker_order_id
+        broker_source = previous.broker_identity_source_event_id
+    elif outcome is KernelCommandOutcomeV1.ACCEPTED:
+        status = CommandChildMappingStatusV1.BROKER_ACCEPTED
+        next_broker_order_id = broker_order_id
+        broker_source = event.event_id
+    elif outcome in {KernelCommandOutcomeV1.REJECTED, KernelCommandOutcomeV1.PRE_CALL_TERMINAL}:
+        status = CommandChildMappingStatusV1.BROKER_REJECTED
+        next_broker_order_id = None
+        broker_source = None
+    else:
+        status = CommandChildMappingStatusV1.OUTCOME_UNKNOWN
+        next_broker_order_id = broker_order_id
+        broker_source = previous.broker_identity_source_event_id
+    payload = previous.model_dump(mode="python")
+    payload.update(
+        broker_order_id=next_broker_order_id,
+        broker_identity_source_event_id=broker_source,
+        mapping_status=status,
+        mapping_version=previous.mapping_version + 1,
+        updated_by_event_id=event.event_id,
+        updated_at_utc=event.event_time_utc,
+    )
+    receipt_payload = previous.canonical_payload_v1(exclude={"mapping_receipt_sha256"})
+    receipt_payload.update(
+        broker_order_id=next_broker_order_id,
+        broker_identity_source_event_id=broker_source,
+        mapping_status=status.value,
+        mapping_version=previous.mapping_version + 1,
+        updated_by_event_id=event.event_id,
+        updated_at_utc=event.event_time_utc,
+    )
+    payload["mapping_receipt_sha256"] = hash_hex_v1("miniqmt_command_child_mapping_receipt_v1", receipt_payload)
+    successor = ExecutionCommandChildMappingV1.model_validate(payload)
+    successor.validate_successor_v1(previous)
+    return successor
+
+
+def _command_outcome_mapping_closure_v1(
+    *,
+    mapping: ExecutionCommandChildMappingV1,
+    outbox: BrokerCommandOutboxV1,
+    command: BrokerCommandV2,
+    event: RuntimeEventEnvelopeV2,
+    outcome: KernelCommandOutcomeV1,
+    broker_order_id: str | None,
+    repository: KernelOutboxRepositoryV1,
+) -> KernelCommandOutcomeMappingClosureV1:
+    algo = repository.read_algo_instance(mapping.algo_instance_id)
+    precedence = _callback_precedence_v1(mapping=mapping, outbox=outbox, repository=repository)
+    if precedence is not None:
+        callback_event, callback_delivery = precedence
+        _validate_callback_outcome_precedence_v1(
+            callback_event=callback_event,
+            command=command,
+            outcome=outcome,
+        )
+        return KernelCommandOutcomeMappingClosureV1.create(
+            mode=KernelCommandOutcomeMappingClosureModeV1.VERIFY_CALLBACK_PRECEDENCE,
+            mapping=mapping,
+            reference_command_id=outbox.command_id,
+            expected_mapping_version=mapping.mapping_version,
+            expected_algo_row_version=algo.row_version,
+            preceding_callback_event_id=callback_event.event_id,
+            preceding_callback_payload_sha256=callback_event.payload_sha256,
+            preceding_callback_delivery_id=callback_delivery.delivery_id,
+            preceding_callback_delivery_status=callback_delivery.status,
+        )
+    successor = _outcome_mapping_successor_v1(
+        previous=mapping,
+        command=command,
+        event=event,
+        outcome=outcome,
+        broker_order_id=broker_order_id,
+    )
+    return KernelCommandOutcomeMappingClosureV1.create(
+        mode=KernelCommandOutcomeMappingClosureModeV1.ADVANCE_MAPPING,
+        mapping=successor,
+        reference_command_id=outbox.command_id,
+        expected_mapping_version=mapping.mapping_version,
+        expected_algo_row_version=algo.row_version,
+        preceding_callback_event_id=None,
+        preceding_callback_payload_sha256=None,
+        preceding_callback_delivery_id=None,
+        preceding_callback_delivery_status=None,
+    )
+
+
+def _validate_callback_outcome_precedence_v1(
+    *,
+    callback_event: RuntimeEventEnvelopeV2,
+    command: BrokerCommandV2,
+    outcome: KernelCommandOutcomeV1,
+) -> None:
+    if command.command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT:
+        return
+    payload = strict_readback_kernel_event_payload_v1(callback_event)
+    normalized_status = getattr(payload, "normalized_order_status", None)
+    callback_rejected = normalized_status is NormalizedOrderStatusV1.REJECTED
+    conflict = (
+        outcome is KernelCommandOutcomeV1.PRE_CALL_TERMINAL
+        or (outcome is KernelCommandOutcomeV1.ACCEPTED and callback_rejected)
+        or (outcome is KernelCommandOutcomeV1.REJECTED and not callback_rejected)
+    )
+    if conflict:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_CALLBACK_OUTCOME_CONFLICT",
+            "preceding callback and SUBMIT command outcome conflict",
+            context={
+                "command_id": command.command_id,
+                "callback_event_id": callback_event.event_id,
+                "callback_event_type": callback_event.event_type.value,
+                "callback_order_status": (None if normalized_status is None else normalized_status.value),
+                "outcome": outcome.value,
+            },
+        )
+
+
+def _persisted_outcome_closure_v1(
+    *, event: RuntimeEventEnvelopeV2, command_id: str, mapping_id: str
+) -> KernelCommandOutcomeMappingClosureV1:
+    correlation = thaw_json_v1(event.correlation)
+    expected_fields = {
+        "algo_instance_id",
+        "mapping_id",
+        "reference_command_id",
+        "exchange_trade_date",
+        "session_epoch",
+        "session_phase",
+        "command_outcome_mapping_closure",
+    }
+    if set(correlation) != expected_fields:
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_IDEMPOTENT_CLOSURE_INVALID",
+            "persisted COMMAND_OUTCOME correlation does not contain the exact mapping closure",
+            context={"command_id": command_id, "event_id": event.event_id},
+        )
+    closure = KernelCommandOutcomeMappingClosureV1.model_validate_json(
+        json.dumps(correlation["command_outcome_mapping_closure"], sort_keys=True, separators=(",", ":"))
+    )
+    if (
+        correlation["mapping_id"] != mapping_id
+        or correlation["reference_command_id"] != command_id
+        or closure.mapping.mapping_id != mapping_id
+        or closure.reference_command_id != command_id
+        or closure.mapping.algo_instance_id != correlation["algo_instance_id"]
+        or type(correlation["exchange_trade_date"]) is not str
+        or type(correlation["session_epoch"]) is not str
+        or correlation["session_phase"] not in {item.value for item in SessionPhaseV1}
+    ):
+        raise KernelOutboxOutcomeIngressError(
+            "MINIQMT_COMMAND_OUTCOME_IDEMPOTENT_CLOSURE_INVALID",
+            "persisted COMMAND_OUTCOME closure conflicts with its correlation owner",
+            context={"command_id": command_id, "event_id": event.event_id},
+        )
+    return closure
 
 
 def _validate_gateway_authority(

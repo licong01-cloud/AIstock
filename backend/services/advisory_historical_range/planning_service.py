@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from threading import Event, Lock, Thread
+from typing import Any, Mapping
 
 from .artifact_store import HistoricalRangeArtifactStore
 from .calendar_resolver import HistoricalRangeCalendarResolver
@@ -46,6 +47,64 @@ PLANNING_PRODUCER_CONTRACT_VERSION = "phase1r_r2b"
 class HistoricalRangeCatalogChunkExecutionResult:
     operation: dict[str, Any]
     sealed_batch: SealedHistoricalRangeBatch | None = None
+
+
+class _CatalogLeaseHeartbeatSupervisor:
+    """Renew one catalog claim without changing its durable ownership identity."""
+
+    def __init__(
+        self,
+        *,
+        repository: PostgresHistoricalRangeRepository,
+        operation: Mapping[str, Any],
+        lease_duration: timedelta,
+    ) -> None:
+        self._repository = repository
+        self._operation = dict(operation)
+        self._lease_duration = lease_duration
+        self._interval_seconds = min(60.0, max(0.1, lease_duration.total_seconds() / 3))
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._error: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"ahr-catalog-heartbeat-{operation['operation_id']}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> dict[str, Any]:
+        self._stop_event.set()
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        with self._lock:
+            return dict(self._operation)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_seconds):
+            try:
+                with self._lock:
+                    current = dict(self._operation)
+                refreshed = self._repository.transition_operation(
+                    operation_id=str(current["operation_id"]),
+                    expected_row_version=int(current["row_version"]),
+                    target_status=HistoricalRangeOperationStatus.RUNNING,
+                    attempt_no=int(current["attempt_no"]),
+                    worker_id=str(current["worker_id"]),
+                    lease_token=str(current["lease_token"]),
+                    lease_expires_at=datetime.now(UTC) + self._lease_duration,
+                    fencing_token=int(current["fencing_token"]),
+                    stable_keyset_cursor_json=current.get("stable_keyset_cursor_json"),
+                )
+                with self._lock:
+                    self._operation = dict(refreshed)
+            except BaseException as exc:  # surfaced synchronously by stop()
+                self._error = exc
+                self._stop_event.set()
+                return
 
 
 class HistoricalRangePlanningService:
@@ -157,9 +216,23 @@ class HistoricalRangePlanningService:
         expected_fencing_token: int,
         next_worker_id: str,
         next_lease_token: str,
-        next_lease_expires_at: datetime,
+        next_lease_expires_at: datetime | None = None,
+        next_lease_duration: timedelta | None = None,
         chunk_size: int = 32,
     ) -> HistoricalRangeCatalogChunkExecutionResult:
+        if (next_lease_expires_at is None) == (next_lease_duration is None):
+            raise ValueError(
+                "catalog rollover requires exactly one lease deadline or duration"
+            )
+        if next_lease_duration is not None and next_lease_duration <= timedelta(0):
+            raise ValueError("catalog rollover lease duration must be positive")
+
+        def rollover_lease_expires_at() -> datetime:
+            if next_lease_duration is not None:
+                return datetime.now(UTC) + next_lease_duration
+            assert next_lease_expires_at is not None
+            return next_lease_expires_at
+
         state = self._repository.load_catalog_planning_state(operation_id=operation_id)
         operation = state.operation
         if (
@@ -177,6 +250,30 @@ class HistoricalRangePlanningService:
         previous_ref, previous_checkpoint = (
             state.checkpoint_chain[-1] if state.checkpoint_chain else (None, None)
         )
+        heartbeat = (
+            _CatalogLeaseHeartbeatSupervisor(
+                repository=self._repository,
+                operation=operation,
+                lease_duration=next_lease_duration,
+            )
+            if next_lease_duration is not None
+            else None
+        )
+        if heartbeat is not None:
+            heartbeat.start()
+
+        def stop_heartbeat(*, cause: BaseException | None = None) -> None:
+            nonlocal expected_row_version
+            if heartbeat is None:
+                return
+            try:
+                current = heartbeat.stop()
+            except BaseException as heartbeat_exc:
+                if cause is not None:
+                    raise heartbeat_exc from cause
+                raise
+            expected_row_version = int(current["row_version"])
+
         try:
             chunk = self._catalog_executor.resolve_chunk(
                 plan=state.plan,
@@ -190,6 +287,7 @@ class HistoricalRangePlanningService:
                 chunk_size=chunk_size,
             )
         except HistoricalRangeContractError as exc:
+            stop_heartbeat(cause=exc)
             if exc.reason_code != REASON_SOURCE_REVISION_DRIFT:
                 raise
             drift_checkpoint = self._drift_checkpoint(state=state, ordinal=cursor, error=exc)
@@ -201,10 +299,14 @@ class HistoricalRangePlanningService:
                 drift_receipt_ref=drift_ref,
                 next_worker_id=next_worker_id,
                 next_lease_token=next_lease_token,
-                next_lease_expires_at=next_lease_expires_at,
+                next_lease_expires_at=rollover_lease_expires_at(),
                 error_json={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
             )
             return HistoricalRangeCatalogChunkExecutionResult(operation=restarted)
+        except BaseException as exc:
+            stop_heartbeat(cause=exc)
+            raise
+        stop_heartbeat()
         checkpoint_ref = self._publish_checkpoint(state=state, checkpoint=chunk.checkpoint)
         if chunk.waiting_input:
             reasons = tuple(item.reason_code for item in chunk.checkpoint.unresolved_requirement_delta)
@@ -245,7 +347,7 @@ class HistoricalRangePlanningService:
             advance_to_verify=chunk.phase_complete,
             next_worker_id=next_worker_id,
             next_lease_token=next_lease_token,
-            next_lease_expires_at=next_lease_expires_at,
+            next_lease_expires_at=rollover_lease_expires_at(),
         )
         return HistoricalRangeCatalogChunkExecutionResult(operation=updated)
 

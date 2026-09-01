@@ -68,6 +68,11 @@ class KernelRepositoryDiagnosticsMixin:
                         "oldest_delivery_lag_seconds": 0,
                         "oldest_due_timer_lag_seconds": 0,
                         "runtime_status": "UNKNOWN",
+                        "product_route": {
+                            "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+                            "status": "SCHEMA_NOT_APPLIED",
+                            "read_only": True,
+                        },
                         "recent_command_chains": [],
                         "limit": limit,
                         "truncated": False,
@@ -99,6 +104,79 @@ class KernelRepositoryDiagnosticsMixin:
                         (runtime_id, runtime_id, runtime_id, runtime_id),
                     )
                     runtime_status = "ACTIVE" if int(cur.fetchone()["count"]) > 0 else "NOT_ACTIVATED"
+                cur.execute(
+                    "SELECT to_regclass('qmt_strategy.execution_product_route_cutover') IS NOT NULL AS cutover,"
+                    "to_regclass('qmt_strategy.execution_product_route_owner') IS NOT NULL AS owner,"
+                    "to_regclass('qmt_strategy.execution_dependent_buy_coordination') IS NOT NULL AS coordination"
+                )
+                product_tables = cur.fetchone()
+                if not all(product_tables.values()):
+                    product_route = {
+                        "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+                        "status": "SCHEMA_NOT_APPLIED",
+                        "read_only": True,
+                    }
+                else:
+                    cur.execute(
+                        "SELECT binding_id FROM qmt_strategy.execution_product_route_owner "
+                        "WHERE runtime_id=%s AND trade_date=%s ORDER BY binding_id",
+                        (runtime_id, trade_date),
+                    )
+                    route_rows = tuple(cur.fetchall())
+                    if len(route_rows) > 1:
+                        raise ValueError("runtime has multiple K6-D product route owners")
+                    if route_rows:
+                        route_owner, route_receipt = self._read_product_route_owner_with_cursor(
+                            cur,
+                            runtime_id=runtime_id,
+                            binding_id=str(route_rows[0]["binding_id"]),
+                            trade_date=trade_date,
+                            lock=False,
+                        )
+                        current_legacy_count, current_kernel_count = self._active_route_instance_counts_with_cursor(
+                            cur,
+                            runtime_id=runtime_id,
+                        )
+                        product_route = {
+                            "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+                            "status": "ACTIVE",
+                            "runtime_id": runtime_id,
+                            "binding_id": route_owner.binding_id,
+                            "trade_date": trade_date.isoformat(),
+                            "route_owner": route_owner.route_owner.value,
+                            "route_epoch": route_owner.current_route_epoch,
+                            "effective_new_instance_sequence": route_owner.effective_new_instance_sequence,
+                            "owner_row_version": route_owner.row_version,
+                            "owner_sha256": route_owner.owner_sha256,
+                            "current_receipt_sha256": route_owner.current_receipt_sha256,
+                            "legacy_active_instance_count": current_legacy_count,
+                            "kernel_active_instance_count": current_kernel_count,
+                            "cutover_legacy_active_instance_count": route_receipt.legacy_active_instance_count,
+                            "cutover_kernel_active_instance_count": route_receipt.kernel_active_instance_count,
+                            "catalog_sha256": route_receipt.catalog_sha256,
+                            "gateway_capability_catalog_sha256": route_receipt.gateway_capability_catalog_sha256,
+                            "exchange_session_authority_sha256": route_receipt.exchange_session_authority_sha256,
+                            "migration_readback_sha256": route_receipt.migration_readback_sha256,
+                            "product_authority_schema_sha256": route_receipt.product_authority_schema_sha256,
+                            "read_only": True,
+                        }
+                    else:
+                        product_route = {
+                            "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+                            "status": "NOT_ACTIVATED",
+                            "runtime_id": runtime_id,
+                            "trade_date": trade_date.isoformat(),
+                            "read_only": True,
+                        }
+                    cur.execute(
+                        "SELECT status,COUNT(*)::bigint AS count "
+                        "FROM qmt_strategy.execution_dependent_buy_coordination "
+                        "WHERE runtime_id=%s AND trade_date=%s GROUP BY status ORDER BY status",
+                        (runtime_id, trade_date),
+                    )
+                    product_route["coordination_status_counts"] = {
+                        str(row["status"]): int(row["count"]) for row in cur.fetchall()
+                    }
                 event_type_counts = self._diagnostic_group_counts(
                     cur,
                     table="execution_runtime_event",
@@ -274,6 +352,7 @@ class KernelRepositoryDiagnosticsMixin:
             "oldest_delivery_lag_seconds": oldest_delivery_lag_seconds,
             "oldest_due_timer_lag_seconds": oldest_due_timer_lag_seconds,
             "runtime_status": runtime_status,
+            "product_route": product_route,
             "recent_command_chains": chains,
             "limit": limit,
             "truncated": len(command_rows) > limit,

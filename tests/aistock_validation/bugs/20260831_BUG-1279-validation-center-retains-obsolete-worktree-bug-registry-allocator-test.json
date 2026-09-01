@@ -1,0 +1,252 @@
+{
+  "actual": "validation_center_backend completes after the import-deadlock fix but fails backend/tests/test_aistock_mcp_server.py::test_report_bug_uses_worktree_registry_max_when_allocator_is_stale. Production allocator intentionally stopped enumerating every worktree in BUG-1009 and now uses the shared reservation ledger, but the May-era test still requires scanning an arbitrary worktree BUG JSON. Replace the stale test with an exact shared-reservation-ledger contract test; do not reintroduce broad worktree scans or weaken collision prevention.",
+  "allowed_write_scope": [
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/test_aistock_mcp_server.py",
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20260831_BUG-1279-validation-center-retains-obsolete-worktree-bug-registry-allocator-test.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1279",
+  "closed_at": "2026-08-31T10:10:26Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-31T08:52:08.962524Z",
+  "description": "validation_center_backend completes after the import-deadlock fix but fails backend/tests/test_aistock_mcp_server.py::test_report_bug_uses_worktree_registry_max_when_allocator_is_stale. Production allocator intentionally stopped enumerating every worktree in BUG-1009 and now uses the shared reservation ledger, but the May-era test still requires scanning an arbitrary worktree BUG JSON. Replace the stale test with an exact shared-reservation-ledger contract test; do not reintroduce broad worktree scans or weaken collision prevention.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260831-e0e613a5b2e0",
+      "timestamp": "2026-08-31T08:52:08.962499Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_aistock_mcp_server.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1279-validation-center-retains-obsolete-worktree-bug-registry-allocator-test.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/test_aistock_mcp_server.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1279-validation-center-retains-obsolete-worktree-bug-registry-allocator-test.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/test_aistock_mcp_server.py"
+      ],
+      "impacted_modules": [
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/test_aistock_mcp_server.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/tests/test_aistock_mcp_server.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/test_aistock_mcp_server.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/test_aistock_mcp_server.py"
+    ]
+  },
+  "first_seen_at": "2026-08-31T08:52:08.962524Z",
+  "fix_branch": null,
+  "fix_commit": "d9e531344f8a718d34be737b62e0544b21480981",
+  "fixed_at": "2026-08-31T10:10:26Z",
+  "github_issue_number": 4058,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4058",
+  "last_seen_at": "2026-08-31T08:52:08.962524Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4059",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1279",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7208d846278ebb27",
+    "recorded_at": "2026-08-31T10:11:43.533704Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc",
+    "source_merge_commit": "d9e531344f8a718d34be737b62e0544b21480981",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4059",
+    "validation_evidence": [
+      "validation-receipt: id=7b16d1aea05e9ca7 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_aistock_mcp_server.py -q -p no:cacheprovider` result=`39 passed`",
+      "validation-receipt: id=c25f905f272b7c91 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider` result=`73 passed`",
+      "validation-receipt: id=6592376581e4d4cb commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed and ownership 14/14`",
+      "validation-receipt: id=780e6519f0597273 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed (staged 0; explicit 4-file historical scan blocking 0)`",
+      "validation-receipt: id=575b70c4f3bf33f9 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/ci_change_classifier.py --module validation` result=`passed`",
+      "validation-receipt: id=c65d20c20fa9038d commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=ruff plan=direct status=passed command=`python -m ruff check backend/tests/test_aistock_mcp_server.py scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py` result=`passed`",
+      "validation-receipt: id=74b787c343efd4ea commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=compile plan=direct status=passed command=`python -m py_compile scripts/ci_change_classifier.py backend/tests/test_aistock_mcp_server.py backend/tests/scripts/test_ci_change_classifier.py` result=`passed`",
+      "validation-receipt: id=f2ecd8f62c91d1cd commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "af1aec2cbb95e59c334a5d3593685d820d14bb6407d6c0c843dc02f35c223a95"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation Center retains obsolete worktree BUG registry allocator test contract",
+  "trigger_condition": {
+    "fingerprint": "e0e613a5b2e0a9d25a381059",
+    "source_event_id": "FE-20260831-e0e613a5b2e0"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=7b16d1aea05e9ca7 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_aistock_mcp_server.py -q -p no:cacheprovider` result=`39 passed`",
+    "validation-receipt: id=c25f905f272b7c91 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider` result=`73 passed`",
+    "validation-receipt: id=6592376581e4d4cb commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed and ownership 14/14`",
+    "validation-receipt: id=780e6519f0597273 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed (staged 0; explicit 4-file historical scan blocking 0)`",
+    "validation-receipt: id=575b70c4f3bf33f9 commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/ci_change_classifier.py --module validation` result=`passed`",
+    "validation-receipt: id=c65d20c20fa9038d commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=ruff plan=direct status=passed command=`python -m ruff check backend/tests/test_aistock_mcp_server.py scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py` result=`passed`",
+    "validation-receipt: id=74b787c343efd4ea commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=compile plan=direct status=passed command=`python -m py_compile scripts/ci_change_classifier.py backend/tests/test_aistock_mcp_server.py backend/tests/scripts/test_ci_change_classifier.py` result=`passed`",
+    "validation-receipt: id=f2ecd8f62c91d1cd commit=f7ca3a8a8a810f5f6714717e2b655eb73c3aa4fc kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

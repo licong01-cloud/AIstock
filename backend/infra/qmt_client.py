@@ -9,8 +9,9 @@ Design goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import math
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,11 @@ import threading
 import time
 import logging
 from zoneinfo import ZoneInfo
+
+# Python 3.10 compatibility: ``datetime.UTC`` exists only in 3.11+ and is the
+# identical singleton ``datetime.timezone.utc`` (same tzinfo object, offset,
+# and isoformat output).
+UTC = timezone.utc
 
 
 _GLOBAL_QMT_CLIENT: Optional["BaseQMTClient"] = None
@@ -272,7 +278,6 @@ def _subscribe_best_effort(trader: Any, account: Any) -> None:
         logger.debug("miniQMT subscribe failed; continuing with query APIs: %r", exc, exc_info=True)
 
 
-
 def _normalize_qmt_symbols(stock_list: List[str]) -> List[str]:
     return list(dict.fromkeys(str(symbol or "").strip() for symbol in stock_list if str(symbol or "").strip()))
 
@@ -365,7 +370,9 @@ def _parse_miniqmt_quote_timestamp(value: Any, *, trade_date: date | None = None
     return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
 
 
-def _extract_miniqmt_quote_timestamp(row: Dict[str, Any], *, trade_date: date | None = None) -> tuple[Any, datetime | None]:
+def _extract_miniqmt_quote_timestamp(
+    row: Dict[str, Any], *, trade_date: date | None = None
+) -> tuple[Any, datetime | None]:
     for key in ("time", "timetag", "datetime", "quote_time", "quoteTime", "timestamp", "ServerTime", "server_time"):
         if key in row and row.get(key) not in (None, ""):
             raw = row.get(key)
@@ -426,6 +433,7 @@ def _quote_staleness_evidence(
         "is_stale": bool(stale_symbols or missing_timestamp_symbols or missing_quote_symbols),
     }
 
+
 def _register_xtquant_dll_dir(path: Path) -> None:
     add_dll_directory = getattr(os, "add_dll_directory", None)
     if not callable(add_dll_directory):
@@ -436,6 +444,8 @@ def _register_xtquant_dll_dir(path: Path) -> None:
 
 class QMTNotAvailableError(RuntimeError):
     """Raised when xtquant is missing or QMT connection is unavailable."""
+
+
 class BaseQMTClient:
     """Minimal client interface used by API layer."""
 
@@ -458,12 +468,7 @@ class BaseQMTClient:
         raise NotImplementedError
 
     def download_history_data(
-        self, 
-        stock_list: List[str], 
-        period: str, 
-        start_time: str = "", 
-        end_time: str = "",
-        task_id: str | None = None
+        self, stock_list: List[str], period: str, start_time: str = "", end_time: str = "", task_id: str | None = None
     ) -> None:
         raise NotImplementedError
 
@@ -487,6 +492,16 @@ class BaseQMTClient:
 
     def get_instrument_detail(self, stock_code: str) -> Dict[str, Any]:
         """Return complete, read-only xtdata instrument authority for one exact symbol."""
+
+        raise NotImplementedError
+
+    def get_instrument_details(
+        self,
+        stock_list: List[str],
+        *,
+        total_timeout_seconds: float | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return one bounded, exact-symbol instrument-detail batch."""
 
         raise NotImplementedError
 
@@ -526,6 +541,7 @@ def reset_qmt_client_singleton() -> None:
 
     global _GLOBAL_QMT_CLIENT
     _GLOBAL_QMT_CLIENT = None
+
 
 class SimulatorQMTClient(BaseQMTClient):
     """Fallback simulator: returns zero assets and empty positions."""
@@ -575,12 +591,7 @@ class SimulatorQMTClient(BaseQMTClient):
         return {"start": None, "end": None, "count": 0}
 
     def download_history_data(
-        self, 
-        stock_list: List[str], 
-        period: str, 
-        start_time: str = "", 
-        end_time: str = "",
-        task_id: str | None = None
+        self, stock_list: List[str], period: str, start_time: str = "", end_time: str = "", task_id: str | None = None
     ) -> None:
         pass
 
@@ -589,6 +600,7 @@ class SimulatorQMTClient(BaseQMTClient):
 
     def get_latest_trading_day(self) -> str:
         import datetime
+
         return datetime.date.today().strftime("%Y%m%d")
 
     def get_task_progress(self, task_id: str) -> Dict[str, Any]:
@@ -609,6 +621,16 @@ class SimulatorQMTClient(BaseQMTClient):
         return []
 
     def get_instrument_detail(self, stock_code: str) -> Dict[str, Any]:
+        raise QMTNotAvailableError(
+            "MINIQMT_INSTRUMENT_DETAIL_UNAVAILABLE: simulator QMT client has no xtdata instrument authority"
+        )
+
+    def get_instrument_details(
+        self,
+        stock_list: List[str],
+        *,
+        total_timeout_seconds: float | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
         raise QMTNotAvailableError(
             "MINIQMT_INSTRUMENT_DETAIL_UNAVAILABLE: simulator QMT client has no xtdata instrument authority"
         )
@@ -644,11 +666,11 @@ class SimulatorQMTClient(BaseQMTClient):
 class XtQuantQMTClient(BaseQMTClient):
     """xtquant-backed QMT client.
 
-Notes:
-- We lazy-import xtquant to keep it optional.
-- We serialize connect/query operations using a lock to reduce race conditions
-  in typical FastAPI multi-worker/thread environments.
-"""
+    Notes:
+    - We lazy-import xtquant to keep it optional.
+    - We serialize connect/query operations using a lock to reduce race conditions
+      in typical FastAPI multi-worker/thread environments.
+    """
 
     def __init__(
         self,
@@ -775,17 +797,19 @@ Notes:
                     raise QMTNotAvailableError("xttrader 模块未正确导入，无法创建 XtQuantTrader")
                 if self._xttype_mod is None:
                     raise QMTNotAvailableError("xttype 模块未正确导入，无法创建 StockAccount")
-                
+
                 # 验证参数（防御性编程）
                 if not self._userdata_path:
                     raise ValueError("_userdata_path 为空，无法创建 XtQuantTrader")
                 if session_id is None:
                     raise ValueError("session_id 为 None，无法创建 XtQuantTrader")
-                
+
                 # 验证 XtQuantTrader 类是否存在
-                if not hasattr(self._xttrader_mod, 'XtQuantTrader'):
-                    raise QMTNotAvailableError(f"xttrader 模块中没有 XtQuantTrader 类，可用属性: {dir(self._xttrader_mod)}")
-                
+                if not hasattr(self._xttrader_mod, "XtQuantTrader"):
+                    raise QMTNotAvailableError(
+                        f"xttrader 模块中没有 XtQuantTrader 类，可用属性: {dir(self._xttrader_mod)}"
+                    )
+
                 # Per bundled doc: XtQuantTrader(path, session_id)
                 # 添加详细的错误信息以便诊断
                 try:
@@ -798,7 +822,7 @@ Notes:
                         f"session_id={session_id!r} (type={type(session_id).__name__})\n"
                         f"XtQuantTrader 签名: {self._xttrader_mod.XtQuantTrader.__init__ if hasattr(self._xttrader_mod.XtQuantTrader, '__init__') else 'N/A'}"
                     ) from e
-                
+
                 self._account = self._xttype_mod.StockAccount(self._account_id)
 
                 # Start API thread then connect.
@@ -882,6 +906,7 @@ Notes:
                 self._connected = False
                 # 添加详细的错误信息，包括参数值（用于调试）
                 import traceback
+
                 error_details = f"连接 miniQMT 失败: {e!r}"
                 if isinstance(e, TypeError) and "missing" in str(e):
                     # 如果是参数缺失错误，添加参数信息
@@ -895,6 +920,7 @@ Notes:
                 self._last_error = error_details
                 # 使用 logging 记录详细错误（不输出到控制台，避免干扰）
                 import logging
+
                 logger = logging.getLogger(self.__class__.__name__)
                 logger.error(f"连接 miniQMT 失败: {error_details}", exc_info=True)
                 # 清理可能部分初始化的对象
@@ -1038,8 +1064,7 @@ Notes:
             try:
                 query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
                 positions = (
-                    _call_with_timeout(lambda: self._trader.query_stock_positions(self._account), query_timeout_s)
-                    or []
+                    _call_with_timeout(lambda: self._trader.query_stock_positions(self._account), query_timeout_s) or []
                 )
                 result: List[Dict[str, Any]] = []
                 for pos in positions:
@@ -1133,8 +1158,7 @@ Notes:
             try:
                 query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
                 trades = (
-                    _call_with_timeout(lambda: self._trader.query_stock_trades(self._account), query_timeout_s)
-                    or []
+                    _call_with_timeout(lambda: self._trader.query_stock_trades(self._account), query_timeout_s) or []
                 )
                 result: List[Dict[str, Any]] = []
                 for trade in trades:
@@ -1168,21 +1192,17 @@ Notes:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
-                
+
                 # xtdata.get_local_data 返回的是 dict {field: DataFrame}
                 # 我们只需要知道时间范围，所以取任意一个字段即可
                 field_list = [] if period == "tick" else ["close"]
-                res = xtdata.get_local_data(
-                    field_list=field_list,
-                    stock_list=[stock_code],
-                    period=period,
-                    count=-1
-                )
-                
+                res = xtdata.get_local_data(field_list=field_list, stock_list=[stock_code], period=period, count=-1)
+
                 import logging
+
                 logger = logging.getLogger(self.__class__.__name__)
                 logger.info(f"get_local_data 返回: {res}")
-                
+
                 if not res:
                     logger.warning(f"get_local_data 返回空: {res}")
                     return {"start": None, "end": None, "count": 0}
@@ -1210,11 +1230,7 @@ Notes:
                         return {"start": None, "end": None, "count": 0}
 
                     logger.info(f"数据范围: {times[0]} ~ {times[-1]}, 共 {len(times)} 条")
-                    return {
-                        "start": str(times[0]),
-                        "end": str(times[-1]),
-                        "count": len(times)
-                    }
+                    return {"start": str(times[0]), "end": str(times[-1]), "count": len(times)}
 
                 df = None
                 if "close" in res:
@@ -1256,29 +1272,21 @@ Notes:
 
                 logger.info(f"数据范围: {times[0]} ~ {times[-1]}, 共 {len(times)} 条")
 
-                return {
-                    "start": str(times[0]),
-                    "end": str(times[-1]),
-                    "count": len(times)
-                }
+                return {"start": str(times[0]), "end": str(times[-1]), "count": len(times)}
             except Exception as e:
                 import logging
+
                 logger = logging.getLogger(self.__class__.__name__)
                 logger.error(f"查询本地数据范围失败 ({stock_code}, {period}): {e}", exc_info=True)
                 return {"start": None, "end": None, "count": 0}
 
     def download_history_data(
-        self, 
-        stock_list: List[str], 
-        period: str, 
-        start_time: str = "", 
-        end_time: str = "",
-        task_id: str | None = None
+        self, stock_list: List[str], period: str, start_time: str = "", end_time: str = "", task_id: str | None = None
     ) -> None:
         with self._lock:
             self._ensure_xtquant()
             from xtquant import xtdata
-            
+
             total_count = len(stock_list)
             finished_count = 0
 
@@ -1286,7 +1294,7 @@ Notes:
                 nonlocal finished_count
                 if not task_id:
                     return
-                
+
                 # xtdata 回调数据通常是一个字典，包含当前处理的股票信息
                 # 这里的逻辑是每完成一个股票，进度加一
                 with self._task_lock:
@@ -1298,7 +1306,7 @@ Notes:
                         "finished": finished_count,
                         "total": total_count,
                         "last_stock": data.get("stock_code") if isinstance(data, dict) else None,
-                        "updated_at": time.time()
+                        "updated_at": time.time(),
                     }
 
             # 初始化任务状态
@@ -1309,19 +1317,15 @@ Notes:
                         "progress": 0,
                         "finished": 0,
                         "total": total_count,
-                        "updated_at": time.time()
+                        "updated_at": time.time(),
                     }
 
             try:
                 # 使用 download_history_data2 支持批量下载和回调
                 xtdata.download_history_data2(
-                    stock_list=stock_list,
-                    period=period,
-                    start_time=start_time,
-                    end_time=end_time,
-                    callback=on_progress
+                    stock_list=stock_list, period=period, start_time=start_time, end_time=end_time, callback=on_progress
                 )
-                
+
                 # 标记完成
                 if task_id:
                     with self._task_lock:
@@ -1340,22 +1344,15 @@ Notes:
         with self._lock:
             self._ensure_xtquant()
             from xtquant import xtdata
-            
+
             if task_id:
                 with self._task_lock:
-                    self._active_tasks[task_id] = {
-                        "status": "downloading",
-                        "progress": 20,
-                        "updated_at": time.time()
-                    }
+                    self._active_tasks[task_id] = {"status": "downloading", "progress": 20, "updated_at": time.time()}
 
             try:
                 # 财务数据下载（xtquant 暂不支持财务数据的细粒度进度回调）
-                xtdata.download_financial_data(
-                    stock_list=stock_list,
-                    table_list=table_list
-                )
-                
+                xtdata.download_financial_data(stock_list=stock_list, table_list=table_list)
+
                 if task_id:
                     with self._task_lock:
                         self._active_tasks[task_id]["status"] = "success"
@@ -1485,6 +1482,72 @@ Notes:
             )
         return dict(payload)
 
+    def get_instrument_details(
+        self,
+        stock_list: List[str],
+        *,
+        total_timeout_seconds: float | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        raw_symbols = [str(symbol or "").strip() for symbol in stock_list]
+        symbols = _normalize_qmt_symbols(stock_list)
+        if (
+            not symbols
+            or len(raw_symbols) != len(symbols)
+            or any(
+                not symbol or symbol != symbol.upper() or re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", symbol) is None
+                for symbol in raw_symbols
+            )
+        ):
+            raise QMTNotAvailableError(
+                "MINIQMT_INSTRUMENT_DETAIL_BATCH_IDENTITY_INVALID: exact unique symbols are required"
+            )
+        configured_per_read = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+        total_timeout = (
+            float(total_timeout_seconds)
+            if total_timeout_seconds is not None
+            else _env_float("MINIQMT_INSTRUMENT_BATCH_TIMEOUT_SECONDS", default=10.0)
+        )
+        if not math.isfinite(total_timeout) or total_timeout <= 0:
+            raise QMTNotAvailableError(
+                "MINIQMT_INSTRUMENT_DETAIL_BATCH_TIMEOUT_INVALID: total timeout must be positive and finite"
+            )
+        started_at = time.monotonic()
+        rows: Dict[str, Dict[str, Any]] = {}
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+            except Exception as exc:  # noqa: BLE001 - translate optional SDK availability once.
+                raise QMTNotAvailableError(
+                    "MINIQMT_INSTRUMENT_DETAIL_BATCH_UNAVAILABLE: xtquant authority is unavailable"
+                ) from exc
+
+            for symbol in symbols:
+                remaining = total_timeout - (time.monotonic() - started_at)
+                if remaining <= 0:
+                    raise QMTNotAvailableError(
+                        "MINIQMT_INSTRUMENT_DETAIL_BATCH_TIMEOUT: total batch deadline was exhausted"
+                    )
+                try:
+                    payload = _call_with_timeout(
+                        lambda symbol=symbol: xtdata.get_instrument_detail(symbol, iscomplete=True),
+                        min(configured_per_read, remaining),
+                    )
+                except Exception as exc:  # noqa: BLE001 - translate the bounded authority read once.
+                    raise QMTNotAvailableError(
+                        "MINIQMT_INSTRUMENT_DETAIL_BATCH_UNAVAILABLE: exact instrument authority read failed"
+                    ) from exc
+                if not isinstance(payload, dict) or not payload:
+                    raise QMTNotAvailableError(
+                        "MINIQMT_INSTRUMENT_DETAIL_BATCH_UNAVAILABLE: xtdata returned an empty authority row"
+                    )
+                rows[symbol] = dict(payload)
+        if tuple(rows) != tuple(symbols):
+            raise QMTNotAvailableError(
+                "MINIQMT_INSTRUMENT_DETAIL_BATCH_COVERAGE_INVALID: batch result does not exactly cover symbols"
+            )
+        return rows
+
     def get_full_tick(
         self,
         stock_list: List[str],
@@ -1598,6 +1661,7 @@ Notes:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
+
                 query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
                 return _call_with_timeout(lambda: xtdata.get_stock_list_in_sector(sector_name), query_timeout_s) or []
             except Exception as e:  # noqa: BLE001
@@ -1608,6 +1672,7 @@ Notes:
             try:
                 self._ensure_xtquant()
                 from xtquant import xtdata
+
                 query_timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
                 return _call_with_timeout(lambda: xtdata.get_trading_calendar(market), query_timeout_s) or []
             except Exception as e:  # noqa: BLE001
@@ -1850,15 +1915,11 @@ Notes:
             except Exception as e:  # noqa: BLE001
                 raise QMTNotAvailableError(f"查询新股信息失败: {e!r}") from e
 
-    def bank_transfer_in(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
+    def bank_transfer_in(self, bank_no: str, bank_account: str, bank_pwd: str, amount: float) -> Tuple[bool, str]:
         with self._lock:
             self._require_connected()
             try:
-                result = self._trader.bank_transfer_in(
-                    self._account, bank_no, bank_account, bank_pwd, amount
-                )
+                result = self._trader.bank_transfer_in(self._account, bank_no, bank_account, bank_pwd, amount)
                 if isinstance(result, tuple) and len(result) == 2:
                     success, msg = result
                     return bool(success), str(msg)
@@ -1866,15 +1927,11 @@ Notes:
             except Exception as e:  # noqa: BLE001
                 return False, f"银行转证券失败: {e!r}"
 
-    def bank_transfer_out(
-        self, bank_no: str, bank_account: str, bank_pwd: str, amount: float
-    ) -> Tuple[bool, str]:
+    def bank_transfer_out(self, bank_no: str, bank_account: str, bank_pwd: str, amount: float) -> Tuple[bool, str]:
         with self._lock:
             self._require_connected()
             try:
-                result = self._trader.bank_transfer_out(
-                    self._account, bank_no, bank_account, bank_pwd, amount
-                )
+                result = self._trader.bank_transfer_out(self._account, bank_no, bank_account, bank_pwd, amount)
                 if isinstance(result, tuple) and len(result) == 2:
                     success, msg = result
                     return bool(success), str(msg)
@@ -1912,28 +1969,25 @@ def _env_bool(key: str, default: bool = False) -> bool:
 def build_qmt_client_from_env() -> BaseQMTClient:
     """Factory: build a QMT client from environment variables.
 
-Env keys (existing + new optional):
-- MINIQMT_ENABLED: true/false
-- MINIQMT_ACCOUNT_ID: account id (sim or live)
-- MINIQMT_MODE: SIM/LIVE (optional, default SIM)
-- MINIQMT_USERDATA_PATH: miniQMT安装目录下的userdata_mini路径（必需）
-- MINIQMT_SESSION_ID: 会话ID（可选，如果不提供则使用PID）
+    Env keys (existing + new optional):
+    - MINIQMT_ENABLED: true/false
+    - MINIQMT_ACCOUNT_ID: account id (sim or live)
+    - MINIQMT_MODE: SIM/LIVE (optional, default SIM)
+    - MINIQMT_USERDATA_PATH: miniQMT安装目录下的userdata_mini路径（必需）
+    - MINIQMT_SESSION_ID: 会话ID（可选，如果不提供则使用PID）
 
-注意：如果MINIQMT_ENABLED=true，必须正确配置所有必需参数，否则会抛出异常。
-不允许fallback到模拟模式。
-"""
+    注意：如果MINIQMT_ENABLED=true，必须正确配置所有必需参数，否则会抛出异常。
+    不允许fallback到模拟模式。
+    """
 
     enabled = _env_bool("MINIQMT_ENABLED", default=False)
-    
+
     # 如果未启用，返回模拟客户端（仅用于未启用的情况）
     if not enabled:
         return SimulatorQMTClient(
-            enabled=False, 
-            account_id=None, 
-            mode="SIM", 
-            reason="QMT未启用（MINIQMT_ENABLED=false）"
+            enabled=False, account_id=None, mode="SIM", reason="QMT未启用（MINIQMT_ENABLED=false）"
         )
-    
+
     # 如果启用了QMT，必须正确配置所有参数
     account_id = (os.getenv("MINIQMT_ACCOUNT_ID") or "").strip() or None
     mode = (os.getenv("MINIQMT_MODE") or "SIM").strip().upper()
@@ -1948,23 +2002,19 @@ Env keys (existing + new optional):
 
     # 验证必需参数
     if not account_id:
-        raise ValueError(
-            "MINIQMT_ENABLED=true 但未配置 MINIQMT_ACCOUNT_ID。"
-            "请检查 .env 文件中的配置。"
-        )
-    
+        raise ValueError("MINIQMT_ENABLED=true 但未配置 MINIQMT_ACCOUNT_ID。请检查 .env 文件中的配置。")
+
     if not userdata_path:
         raise ValueError(
             "MINIQMT_ENABLED=true 但未配置 MINIQMT_USERDATA_PATH。"
             "请设置 miniQMT 安装目录下的 userdata_mini 路径。"
             "例如: MINIQMT_USERDATA_PATH=F:\\国金QMT交易端模拟\\userdata_mini"
         )
-    
+
     # 如果路径不存在，给出明确错误
     if not os.path.exists(userdata_path):
         raise ValueError(
-            f"MINIQMT_USERDATA_PATH 指定的路径不存在: {userdata_path}\n"
-            f"请检查路径是否正确，或确认 miniQMT 已正确安装。"
+            f"MINIQMT_USERDATA_PATH 指定的路径不存在: {userdata_path}\n请检查路径是否正确，或确认 miniQMT 已正确安装。"
         )
 
     # 创建客户端（如果失败，直接抛出异常，不允许fallback）
@@ -1975,7 +2025,3 @@ Env keys (existing + new optional):
         userdata_path=userdata_path,
         session_id=session_id,
     )
-
-
-
-

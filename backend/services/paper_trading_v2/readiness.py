@@ -7,9 +7,15 @@ from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
+from backend.services.selection_center.canonical_pit_runtime import (
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+)
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
     refresh_generated_runtime_profile_binding,
@@ -20,6 +26,7 @@ from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
     validate_runtime_profile_matches_backtest_contract,
 )
+from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_context
 from backend.services.strategy_package.runtime import (
     RebalanceEngine,
     StrategyPackageRuntime,
@@ -68,6 +75,7 @@ class PaperTradingReadinessService:
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -84,6 +92,7 @@ class PaperTradingReadinessService:
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
+        self.pit_authority_resolver = pit_authority_resolver
 
     def check_day(
         self,
@@ -118,6 +127,7 @@ class PaperTradingReadinessService:
         config = PaperTradingV2PortfolioService(
             package_repository=self.package_repository,
             repository=self.repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=trade_date,
@@ -140,6 +150,7 @@ class PaperTradingReadinessService:
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
         )
         runtime_profile = parse_selection_runtime_profile(config)
+        self._require_current_pit(config)
         PaperTradingDayRunner._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
@@ -170,7 +181,9 @@ class PaperTradingReadinessService:
         )
 
         self.calendar_provider.ensure_trading_day(trade_date)
-        checks.append(PaperReadinessCheck(check_name="trading_calendar", context={"trade_date": trade_date.isoformat()}))
+        checks.append(
+            PaperReadinessCheck(check_name="trading_calendar", context={"trade_date": trade_date.isoformat()})
+        )
 
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
@@ -183,7 +196,9 @@ class PaperTradingReadinessService:
                     "existing_status": existing_run.status.value,
                 },
             )
-        checks.append(PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()}))
+        checks.append(
+            PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()})
+        )
 
         if portfolio.broker_backend == "minqmt_sim":
             checks.extend(
@@ -249,6 +264,7 @@ class PaperTradingReadinessService:
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
             selection_artifact_service=self.selection_artifact_service,
+            pit_authority_resolver=self.pit_authority_resolver,
         )
         artifact_runner._ensure_authoritative_selection_artifact(
             manifest=manifest,
@@ -342,7 +358,11 @@ class PaperTradingReadinessService:
             current_positions=current_positions,
             target_positions=targets,
         )
-        checks.append(PaperReadinessCheck(check_name="rebalance", context={"target_count": len(targets), "order_intent_count": len(intents)}))
+        checks.append(
+            PaperReadinessCheck(
+                check_name="rebalance", context={"target_count": len(targets), "order_intent_count": len(intents)}
+            )
+        )
 
         checked_symbols = sorted(set(current_positions) | {intent.symbol for intent in intents})
         if portfolio.broker_backend == "minqmt_sim":
@@ -362,7 +382,6 @@ class PaperTradingReadinessService:
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
-            require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
             if not checked_symbols:
                 raise DataUnavailableError(
                     "paper readiness produced no symbols to check",
@@ -375,7 +394,6 @@ class PaperTradingReadinessService:
                     source=portfolio.data_source,
                     min_bars=required_bars,
                     require_suspend_status=True,
-                    require_day_features=require_day_features,
                 )
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
@@ -388,11 +406,11 @@ class PaperTradingReadinessService:
                     context={
                         "symbol_count": len(checked_symbols),
                         "min_required_bars": required_bars,
-                        "require_day_features": require_day_features,
                     },
                 )
             )
 
+        self._require_current_pit(config)
         return PaperDayReadinessResult(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -407,13 +425,23 @@ class PaperTradingReadinessService:
             runtime_config_keys=sorted(str(key) for key in config),
         )
 
+    def _require_current_pit(self, runtime_config: dict[str, Any]) -> None:
+        if has_canonical_pit_runtime_profile(runtime_config):
+            require_canonical_pit_generation_current(
+                runtime_config,
+                authority_resolver=self.pit_authority_resolver,
+            )
+
     @staticmethod
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
         top_k = runtime_profile.selection.top_k
         if top_k is None:
             raise RuntimeConfigInvalidError(
                 "Paper v2 readiness requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         return int(top_k)
 
@@ -509,7 +537,6 @@ class PaperTradingReadinessService:
                 source=MinuteDataSource.DB_HISTORICAL,
                 min_bars=1,
                 require_suspend_status=True,
-                require_day_features=False,
             )
             if not market_input.minute_bars:
                 raise DataUnavailableError(
@@ -571,7 +598,7 @@ class PaperTradingReadinessService:
             activation = self.repository.get_active_execution_policy_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
             return PaperTradingDayRunner._execution_policy_context(portfolio)
-        return {
+        context = {
             "validated_execution_policy_id": activation.policy_id,
             "policy_sha256": activation.policy_sha256,
             "policy_name": activation.policy_name,
@@ -586,3 +613,6 @@ class PaperTradingReadinessService:
             "validation_status": "BACKTEST_VALIDATED",
             "policy_json": activation.policy_json,
         }
+        if str(getattr(portfolio, "broker_backend", "local_sim")) == "local_sim":
+            return local_sim_twap_only_policy_context(context)
+        return context

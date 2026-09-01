@@ -4,6 +4,10 @@ import os
 import logging
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_v24_v25_test", semantic_path="cli.execution_algo")
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -58,3 +62,4 @@ else:
     logger.error('✗ 计划生成失败')
 
 logger.info('测试完成')
+# ruff: noqa: E402, F541
