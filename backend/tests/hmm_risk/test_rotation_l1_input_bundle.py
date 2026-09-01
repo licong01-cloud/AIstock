@@ -106,10 +106,18 @@ def _inputs(*, offset: float = 0.0) -> dict[str, object]:
             "security_identity_intervals": [
                 {
                     "canonical_security_id": "000001.SZ",
+                    "source_dataset": "market.daily_basic",
                     "valid_from": subject.SOURCE_START.isoformat(),
                     "valid_to": subject.SOURCE_END.isoformat(),
                     "source_code": "000001.SZ",
-                }
+                },
+                {
+                    "canonical_security_id": "000001.SZ",
+                    "source_dataset": "market.moneyflow_ts",
+                    "valid_from": subject.SOURCE_START.isoformat(),
+                    "valid_to": subject.SOURCE_END.isoformat(),
+                    "source_code": "000001.SZ",
+                },
             ],
             "industry_projection_intervals": [
                 {
@@ -237,6 +245,10 @@ def test_bundle_round_trip_is_complete_and_restores_only_model_inputs(tmp_path: 
     assert loaded["input_bundle_evidence"]["unavailable_reason"][0]["reason_code"] == (
         "hmm_risk_rotation_l1_feature_warmup"
     )
+    assert {row["source_dataset"] for row in loaded["input_bundle_evidence"]["security_identity_intervals"]} == {
+        "market.daily_basic",
+        "market.moneyflow_ts",
+    }
     assert "database" not in loaded
     assert set(loaded["input_bundle_identity"]) == {
         "bundle_canonical_sha256",
@@ -325,6 +337,18 @@ def test_self_hashed_metadata_drift_is_rejected_by_independent_readback(tmp_path
         subject.read_rotation_l1_input_bundle(root, forbidden_roots=(Path(__file__).resolve().parents[3],))
 
     assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_legacy_v1_bundle_manifest_is_rejected_without_silent_upgrade(tmp_path: Path) -> None:
+    root, _ = _write(tmp_path)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["schema_version"] = "hmm_risk_rotation_l1_input_bundle_manifest_v1"
+    _rewrite_manifest_and_receipt(root, manifest)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.read_rotation_l1_input_bundle(root, forbidden_roots=(Path(__file__).resolve().parents[3],))
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
 
 
 def test_missing_panel_key_and_resource_receipt_fail_closed(tmp_path: Path) -> None:
@@ -569,6 +593,110 @@ def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: 
             active_spans=((subject.SOURCE_START, subject.SOURCE_END),),
         )
     assert exc_info.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+
+def test_security_intervals_preserve_dataset_specific_source_aliases() -> None:
+    canonical = "302132.SZ"
+    start = subject.SOURCE_START
+    end = start + timedelta(days=2)
+
+    class Security:
+        rows = [
+            SimpleNamespace(
+                canonical_ts_code=canonical,
+                source_dataset=dataset,
+                effective_start=start,
+                effective_end=end,
+            )
+            for dataset in ("market.daily_basic", "market.moneyflow_ts")
+        ]
+
+        @staticmethod
+        def resolve(symbol: str, day: date, dataset: str) -> SimpleNamespace:
+            assert symbol == canonical
+            assert start <= day <= end
+            return SimpleNamespace(source_ts_code="300114.SZ" if dataset == "market.moneyflow_ts" else canonical)
+
+    assert subject._security_intervals(Security(), {canonical: [(start, end)]}) == [
+        {
+            "canonical_security_id": canonical,
+            "source_dataset": "market.daily_basic",
+            "valid_from": start.isoformat(),
+            "valid_to": end.isoformat(),
+            "source_code": canonical,
+        },
+        {
+            "canonical_security_id": canonical,
+            "source_dataset": "market.moneyflow_ts",
+            "valid_from": start.isoformat(),
+            "valid_to": end.isoformat(),
+            "source_code": "300114.SZ",
+        },
+    ]
+
+
+def test_security_interval_evidence_rejects_legacy_datasetless_rows(tmp_path: Path) -> None:
+    legacy = _inputs()
+    for row in legacy["input_bundle_evidence"]["security_identity_intervals"]:
+        row.pop("source_dataset")
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=legacy,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "legacy-security-evidence",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    [
+        ("unknown_dataset", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("missing_dataset", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("per_symbol_missing_dataset", subject.REASON_AUTHORITY_AMBIGUOUS),
+        ("overlap", subject.REASON_AUTHORITY_AMBIGUOUS),
+    ],
+)
+def test_security_interval_evidence_rejects_dataset_scope_or_overlap(
+    tmp_path: Path, mutation: str, reason_code: str
+) -> None:
+    invalid = _inputs()
+    rows = invalid["input_bundle_evidence"]["security_identity_intervals"]
+    if mutation == "unknown_dataset":
+        rows[0]["source_dataset"] = "market.daily"
+    elif mutation == "missing_dataset":
+        rows.pop()
+    elif mutation == "per_symbol_missing_dataset":
+        rows.append({**rows[0], "canonical_security_id": "000002.SZ"})
+    else:
+        rows.append(
+            {
+                **rows[0],
+                "valid_from": (subject.SOURCE_START + timedelta(days=1)).isoformat(),
+                "source_code": "000002.SZ",
+            }
+        )
+        rows.sort(
+            key=lambda row: (
+                row["canonical_security_id"],
+                row["source_dataset"],
+                row["valid_from"],
+                row["source_code"],
+            )
+        )
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=invalid,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / mutation,
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == reason_code
 
 
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
