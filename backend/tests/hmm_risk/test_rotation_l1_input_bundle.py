@@ -567,6 +567,30 @@ def test_qlib_qfq_values_are_reconstructed_to_raw_units_and_invalid_factor_fails
     assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
 
 
+def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
+    missing = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        missing[field] = np.nan
+    assert subject._qlib_row_is_fully_missing(missing) is True
+
+    non_finite = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        non_finite[field] = np.inf
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(non_finite)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+    partial = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        partial[field] = 1.0
+    partial["factor"] = np.nan
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(partial)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+    assert subject._qlib_row_is_fully_missing(np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]) is False
+
+
 def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: Path) -> None:
     qlib = tmp_path / "qlib"
     feature_root = qlib / "features" / "000001.sz"
@@ -593,6 +617,278 @@ def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: 
             active_spans=((subject.SOURCE_START, subject.SOURCE_END),),
         )
     assert exc_info.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+
+def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_active_spans(tmp_path: Path) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    calendar = tuple(subject.SOURCE_START + timedelta(days=index) for index in range(6))
+    for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = np.asarray(
+            [0.0, *(field_index * 100.0 + index for index in range(len(calendar)))],
+            dtype="<f4",
+        )
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[1]), (calendar[4], calendar[5])),
+    )
+
+    expected = np.zeros(4, dtype=subject._QLIB_SOURCE_DTYPE)
+    for output_index, calendar_index in enumerate((0, 1, 4, 5)):
+        expected[output_index]["trade_date"] = int(calendar[calendar_index].strftime("%Y%m%d"))
+        expected[output_index]["symbol"] = b"000001.SZ"
+        for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+            expected[output_index][field] = field_index * 100.0 + calendar_index
+
+    assert rows.dtype == subject._QLIB_SOURCE_DTYPE
+    assert rows.flags.c_contiguous
+    assert rows.tobytes() == expected.tobytes()
+
+
+def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
+    class Labels:
+        shape = (8,)
+        values = (0, 0, 1, 1, 1, 3, 4, 4)
+
+        def __init__(self) -> None:
+            self.reads: list[int] = []
+
+        def __getitem__(self, index: int) -> int:
+            self.reads.append(index)
+            return self.values[index]
+
+    labels = Labels()
+
+    assert subject._fixed_h5_label_lower_bound(labels, 1) == 2
+    assert subject._fixed_h5_label_lower_bound(labels, 2) == 5
+    assert subject._fixed_h5_label_lower_bound(labels, 5) == 8
+    assert len(labels.reads) <= 12
+
+
+def test_day_level_grouping_preserves_symbol_order_and_projects_only_l2_after_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000001.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2B",
+            "l2_name": "B2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000002.SZ",
+            "l1_code": "L1A",
+            "l1_name": "A",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000003.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+    ]
+    observed: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def capture(group, *, level, **_kwargs):
+        observed.append((level, [(str(row["symbol"]), str(row["l1_code"])) for row in group]))
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._append_day_level_aggregates(
+        rows,
+        l1_aggregates=[],
+        l2_aggregates=[],
+        unavailable={},
+        contributor_eligibility={},
+    )
+
+    assert observed == [
+        ("L1", [("000002.SZ", "L1A")]),
+        ("L1", [("000001.SZ", "L1B"), ("000003.SZ", "L1B")]),
+        ("L2", [("000002.SZ", "L2A"), ("000003.SZ", "L2A")]),
+        ("L2", [("000001.SZ", "L2B")]),
+    ]
+
+
+def test_security_resolution_index_preserves_explicit_intervals_and_caches_identical_defaults() -> None:
+    explicit = SimpleNamespace(
+        source_dataset="market.daily_basic",
+        canonical_ts_code="000001.SZ",
+        source_ts_code="000001.OLD",
+        effective_start=date(2022, 1, 1),
+        effective_end=date(2022, 1, 31),
+    )
+
+    class Manifest:
+        rows = (explicit,)
+
+        def __init__(self) -> None:
+            self.resolve_calls: list[tuple[str, date, str]] = []
+
+        def resolve(self, symbol, day, dataset):
+            self.resolve_calls.append((symbol, day, dataset))
+            return SimpleNamespace(
+                source_dataset=dataset,
+                canonical_ts_code=symbol,
+                source_ts_code=symbol,
+                effective_start=None,
+                effective_end=None,
+            )
+
+        @staticmethod
+        def evidence():
+            return {"manifest": "evidence"}
+
+    manifest = Manifest()
+    index = subject._SecurityResolutionIndex(manifest)
+
+    assert index.resolve("000001.SZ", date(2022, 1, 3), "market.daily_basic") is explicit
+    first = index.resolve("000001.SZ", date(2022, 2, 1), "market.daily_basic")
+    second = index.resolve("000001.SZ", date(2022, 3, 1), "market.daily_basic")
+    assert first is second
+    assert manifest.resolve_calls == [("000001.SZ", date(2022, 2, 1), "market.daily_basic")]
+    assert index.evidence() == {"manifest": "evidence"}
+
+
+def test_industry_projection_index_uses_all_authority_transition_boundaries() -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(4))
+
+    class Resolver:
+        def __init__(self, transition):
+            self.transition = transition
+
+        def transition_dates(self, _symbol):
+            return (self.transition,)
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, date]] = []
+            self.classification_resolver = Resolver(dates[1])
+            self.index_membership_resolver = Resolver(dates[2])
+
+        def resolve(self, symbol, day):
+            self.calls.append((symbol, day))
+            code = "801010.SI" if day < dates[1] else ("801020.SI" if day < dates[2] else "801030.SI")
+            return SimpleNamespace(
+                status="resolved",
+                l1_code=code,
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+                reason_code=None,
+                classification_receipt_hash="a" * 64,
+                index_membership_receipt_hash="b" * 64,
+                classification_row_hashes=("c" * 64,),
+                index_membership_row_hashes=("d" * 64,),
+                alignment_state="aligned",
+                classification_research_basis="stable_taxonomy_backcast",
+                non_as_known_taxonomy=True,
+            )
+
+    adapter = Adapter()
+    index = subject._IndustryProjectionIndex(adapter, calendar=dates)
+
+    assert [index.resolve("000001.SZ", day).l1_code for day in dates] == [
+        "801010.SI",
+        "801020.SI",
+        "801030.SI",
+        "801030.SI",
+    ]
+    assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[2])]
+
+
+def test_canonical_sector_codes_use_c013_constituents_for_l2_not_l1_alias_lookup() -> None:
+    adapter = SimpleNamespace(
+        constituents={
+            "801010.SI": {"l1_code": "801010.SI", "l2_codes": ["801011.SI", "801012.SI"]},
+            "801020.SI": {"l1_code": "801020.SI", "l2_codes": ["801021.SI"]},
+        },
+        classification_lookup={("L1", "801010.SI"): {"index_code": "801010.SI"}},
+    )
+
+    assert subject._canonical_sector_codes(adapter) == (
+        ("801010.SI", "801020.SI"),
+        ("801011.SI", "801012.SI", "801021.SI"),
+    )
+
+
+def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = (
+        date(2022, 1, 30),
+        date(2022, 1, 31),
+        date(2022, 2, 1),
+        date(2022, 2, 2),
+    )
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220130, 20220131, 20220201, 20220202]
+        rows["symbol"] = symbol.encode("ascii")
+        rows["close"] = np.arange(len(dates), dtype=np.float32)
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=dates,
+        spans={"000002.SZ": ((dates[0], dates[-1]),), "000001.SZ": ((dates[0], dates[-1]),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin", "202202.bin"]
+    january = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    february = np.fromfile(paths[1], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert january[["trade_date", "symbol"]].tolist() == [
+        (20220130, b"000001.SZ"),
+        (20220131, b"000001.SZ"),
+        (20220130, b"000002.SZ"),
+        (20220131, b"000002.SZ"),
+    ]
+    assert february[["trade_date", "symbol"]].tolist() == [
+        (20220201, b"000001.SZ"),
+        (20220202, b"000001.SZ"),
+        (20220201, b"000002.SZ"),
+        (20220202, b"000002.SZ"),
+    ]
+
+
+def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    day = date(2022, 1, 3)
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        if symbol == "000001.SZ":
+            return np.zeros(0, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220103]
+        rows["symbol"] = symbol.encode("ascii")
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=(day,),
+        spans={"000001.SZ": ((day, day),), "000002.SZ": ((day, day),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin"]
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows[["trade_date", "symbol"]].tolist() == [(20220103, b"000002.SZ")]
 
 
 def test_security_intervals_preserve_dataset_specific_source_aliases() -> None:
@@ -702,7 +998,7 @@ def test_security_interval_evidence_rejects_dataset_scope_or_overlap(
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(6))
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(7))
     symbol = "000001.SZ"
     source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
     for index, day in enumerate(dates):
@@ -718,13 +1014,15 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
         source_rows[index]["prev_close"] = 9.0 + index
         source_rows[index]["up_limit_price"] = 20.0 + index
         source_rows[index]["down_limit_price"] = 5.0 + index
+    for field in subject.QLIB_STOCK_FIELDS:
+        source_rows[-2][field] = np.nan
     month_path = tmp_path / "202201.bin"
     source_rows.tofile(month_path)
 
     index = pd.MultiIndex.from_arrays([pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"])
     basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
-    basic["db_total_mv"] = np.arange(200.0, 206.0, dtype=np.float32)
-    basic["db_circ_mv"] = np.arange(100.0, 106.0, dtype=np.float32)
+    basic["db_total_mv"] = np.arange(200.0, 207.0, dtype=np.float32)
+    basic["db_circ_mv"] = np.arange(100.0, 107.0, dtype=np.float32)
     moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
 
     def load_window(_path, *, expected_columns, **_kwargs):
@@ -735,7 +1033,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
     class Adapter:
         @staticmethod
         def resolve(_symbol, day):
-            if day == dates[-2]:
+            if day in {dates[-3], dates[-2]}:
                 return SimpleNamespace(status="unavailable", reason_code="classification:missing")
             return SimpleNamespace(
                 status="resolved",
@@ -779,7 +1077,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
 
     final = next(row for row in captured if row["trade_date"] == dates[-1])
     assert final["prev_close_5_yuan"] == 10.0
-    assert final["prev_circ_mv_cny"] == 104.0 * 10_000.0
+    assert final["prev_circ_mv_cny"] == 105.0 * 10_000.0
 
 
 def test_csi300_benchmark_return_is_recomputed_from_frozen_close_and_preclose(tmp_path: Path) -> None:
