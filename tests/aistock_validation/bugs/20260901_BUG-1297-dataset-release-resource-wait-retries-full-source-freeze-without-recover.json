@@ -1,0 +1,191 @@
+{
+  "actual": "在 qe_hmm_full_v2 initial-migration sample dss_55a9ef70855368a44d1dd942fecdfc33 中，resolution source-stage 三次收到 RESOURCE_OS_LOW_MEMORY_SIGNAL，并正确返回 WAITING_RESOURCE、零 candidate/DB/production writes。但 worker._finish_resolution 将所有 WAITING disposition 映射为 WAITING_SOURCE，_requeue_one_due_retry 在固定 30 秒后无资源恢复判定即重新 QUEUED_RESOLUTION，导致同一全值 source freeze 从头重复（fence 42/43/44），再次压低主机可用内存。期望保持显式 OS low-memory 安全 checkpoint，但资源等待必须在真实 resource-ready/信号清除后才重排队；source-not-ready 与 resource-wait typed 语义不得混用；不得新增 host available/commit 数值硬门禁、不得缩减数据范围、不得触碰数据集或生产 DB。关联 BUG-1290 / Issue #4093 以及该真实 submission/attempt receipt。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260901_BUG-1297-dataset-release-resource-wait-retries-full-source-freeze-without-recover.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1297",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-01T02:23:00.237453Z",
+  "description": "在 qe_hmm_full_v2 initial-migration sample dss_55a9ef70855368a44d1dd942fecdfc33 中，resolution source-stage 三次收到 RESOURCE_OS_LOW_MEMORY_SIGNAL，并正确返回 WAITING_RESOURCE、零 candidate/DB/production writes。但 worker._finish_resolution 将所有 WAITING disposition 映射为 WAITING_SOURCE，_requeue_one_due_retry 在固定 30 秒后无资源恢复判定即重新 QUEUED_RESOLUTION，导致同一全值 source freeze 从头重复（fence 42/43/44），再次压低主机可用内存。期望保持显式 OS low-memory 安全 checkpoint，但资源等待必须在真实 resource-ready/信号清除后才重排队；source-not-ready 与 resource-wait typed 语义不得混用；不得新增 host available/commit 数值硬门禁、不得缩减数据范围、不得触碰数据集或生产 DB。关联 BUG-1290 / Issue #4093 以及该真实 submission/attempt receipt。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260901-0082e8ef9225",
+      "timestamp": "2026-09-01T02:23:00.237415Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-01T02:23:00.237453Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4108,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4108",
+  "last_seen_at": "2026-09-01T02:23:00.237453Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Dataset release resource wait retries full source freeze without recovery",
+  "trigger_condition": {
+    "fingerprint": "0082e8ef9225ab7619914a70",
+    "source_event_id": "FE-20260901-0082e8ef9225"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
