@@ -1055,6 +1055,58 @@ class _SecurityResolutionIndex:
         return self._manifest.evidence()
 
 
+def _industry_projection_identity(value: Any) -> tuple[Any, ...]:
+    return (
+        value.status,
+        value.l1_code,
+        value.l1_name,
+        value.l2_code,
+        value.l2_name,
+        value.reason_code,
+        value.classification_receipt_hash,
+        value.index_membership_receipt_hash,
+        tuple(value.classification_row_hashes),
+        tuple(value.index_membership_row_hashes),
+        value.alignment_state,
+        value.classification_research_basis,
+        value.non_as_known_taxonomy,
+    )
+
+
+class _TrainProjectionCache:
+    def __init__(self, adapter: HMMIndustryPitAdapter, *, calendar: Sequence[date]) -> None:
+        self._adapter = adapter
+        self._calendar_position = {day: index for index, day in enumerate(calendar)}
+        self._intervals: dict[str, list[tuple[int, int, tuple[Any, ...], Any]]] = defaultdict(list)
+        self._recording = True
+
+    def resolve(self, symbol: str, trade_date: date) -> Any:
+        try:
+            position = self._calendar_position[trade_date]
+        except KeyError as exc:
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection date escapes source calendar") from exc
+        intervals = self._intervals.get(symbol, [])
+        if not self._recording:
+            for start, end, _identity, projection in intervals:
+                if start <= position <= end:
+                    return projection
+            return self._adapter.resolve(symbol, trade_date)
+        if intervals and position <= intervals[-1][1]:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "train projection cache input is not strictly date ordered")
+        projection = self._adapter.resolve(symbol, trade_date)
+        identity = _industry_projection_identity(projection)
+        if intervals and intervals[-1][1] + 1 == position and intervals[-1][2] == identity:
+            start, _end, previous_identity, previous = intervals[-1]
+            intervals[-1] = (start, position, previous_identity, previous)
+        else:
+            intervals.append((position, position, identity, projection))
+            self._intervals[symbol] = intervals
+        return projection
+
+    def freeze(self) -> None:
+        self._recording = False
+
+
 def _spool_qlib_months(
     qlib_root: Path,
     *,
@@ -1657,14 +1709,16 @@ def build_rotation_l1_inputs_from_assets(
         calendar=calendar,
     )
     benchmark = _load_benchmark_returns(assets["files"]["index_context"], calendar=calendar)
+    projection_cache = _TrainProjectionCache(adapter, calendar=calendar)
     contributor_eligibility, eligibility_receipt = _build_train_only_contributor_eligibility(
         spans=spans,
         calendar=calendar,
-        adapter=adapter,
+        adapter=projection_cache,
         security=security,
         provider_absence=provider_absence,
         suspension_keys=suspension_keys,
     )
+    projection_cache.freeze()
     work_parent = Path(work_parent).resolve()
     work_parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-source-", dir=work_parent) as raw_temporary:
@@ -1688,7 +1742,7 @@ def build_rotation_l1_inputs_from_assets(
             assets=assets,
             calendar=calendar,
             spans=spans,
-            adapter=adapter,
+            adapter=projection_cache,
             security=security,
             provider_absence=provider_absence,
             suspension_keys=suspension_keys,

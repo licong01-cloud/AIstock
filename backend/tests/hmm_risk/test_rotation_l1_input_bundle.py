@@ -712,6 +712,46 @@ def test_security_resolution_index_preserves_explicit_intervals_and_caches_ident
     assert index.evidence() == {"manifest": "evidence"}
 
 
+def test_train_projection_cache_reuses_only_recorded_contiguous_trade_dates() -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(4))
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, date]] = []
+
+        def resolve(self, symbol, day):
+            self.calls.append((symbol, day))
+            return SimpleNamespace(
+                status="resolved",
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+                reason_code=None,
+                classification_receipt_hash="a" * 64,
+                index_membership_receipt_hash="b" * 64,
+                classification_row_hashes=("c" * 64,),
+                index_membership_row_hashes=("d" * 64,),
+                alignment_state="aligned",
+                classification_research_basis="stable_taxonomy_backcast",
+                non_as_known_taxonomy=True,
+            )
+
+    adapter = Adapter()
+    cache = subject._TrainProjectionCache(adapter, calendar=dates)
+    cache.resolve("000001.SZ", dates[0])
+    cache.resolve("000001.SZ", dates[1])
+    cache.resolve("000001.SZ", dates[3])
+    cache.freeze()
+
+    cache.resolve("000001.SZ", dates[0])
+    cache.resolve("000001.SZ", dates[1])
+    cache.resolve("000001.SZ", dates[3])
+    assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[3])]
+    cache.resolve("000001.SZ", dates[2])
+    assert adapter.calls[-1] == ("000001.SZ", dates[2])
+
+
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
