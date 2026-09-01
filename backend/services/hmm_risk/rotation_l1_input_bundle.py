@@ -1492,7 +1492,9 @@ def _build_stock_fact_aggregates(
                 previous_10 = prices[-10] if len(prices) >= 10 else None
                 moneyflow_status = "available"
                 provider_evidence = None
-                if flow_row is None:
+                if qlib_missing:
+                    moneyflow_status = "not_applicable_price_unavailable"
+                elif flow_row is None:
                     try:
                         provider_evidence = provider_absence.resolve(
                             canonical_ts_code=symbol,
@@ -1565,11 +1567,11 @@ def _build_stock_fact_aggregates(
                             "total_mv_cny": None if basic_row is None else float(basic_row[14]) * 10_000.0,
                             "prev_circ_mv_cny": prior_circ,
                             "up_limit_yuan": None,
-                            "buy_sm_amount_cny": None if flow_row is None else float(flow_row[1]),
-                            "sell_sm_amount_cny": None if flow_row is None else float(flow_row[3]),
-                            "buy_elg_amount_cny": None if flow_row is None else float(flow_row[13]),
-                            "sell_elg_amount_cny": None if flow_row is None else float(flow_row[15]),
-                            "net_mf_amount_cny": None if flow_row is None else float(flow_row[17]),
+                            "buy_sm_amount_cny": None,
+                            "sell_sm_amount_cny": None,
+                            "buy_elg_amount_cny": None,
+                            "sell_elg_amount_cny": None,
+                            "net_mf_amount_cny": None,
                             "moneyflow_fact_status": moneyflow_status,
                             "moneyflow_source_identity": flow_resolution.evidence(),
                             "moneyflow_provider_absence": (
