@@ -669,7 +669,7 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/llm_provider_adapter.py --json triage-quality-smoke `
-            --provider github_models `
+            --provider deepseek_api `
             --output "$outDir/llm-triage-quality.json"
 
       - name: Build LLM test-plan advisor smoke
@@ -855,7 +855,7 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/llm_provider_adapter.py --json prompt-evaluation `
-            --provider github_models `
+            --provider deepseek_api `
             --changed-file prompt_packs/validation_llm/triage_failure.prompt.yml `
             --output "$outDir/llm-prompt-evaluation.json"
 
@@ -864,7 +864,7 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/llm_provider_adapter.py --json guarded-rollout-gate `
-            --provider github_models `
+            --provider deepseek_api `
             --mode warning_only `
             --module validation.runner `
             --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `

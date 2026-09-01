@@ -382,6 +382,15 @@ rules:
     layer: validation_catalog
     risk_level: high
     ownership_reason: Code-intelligence refresh and context budgets are validation pipeline policy.
+  - rule_id: validation_llm_triage_config
+    priority: 110
+    include:
+      - configs/validation/llm_triage.yaml
+    primary_module: validation.runner
+    impact_modules: [validation.guardrails, validation.module_quality]
+    layer: validation_config
+    risk_level: high
+    ownership_reason: Validation LLM provider, model, credential-source, budget, and rollout settings are Nightly and CI runner contracts.
   - rule_id: noxfile_validation_runner
     priority: 100
     include:
