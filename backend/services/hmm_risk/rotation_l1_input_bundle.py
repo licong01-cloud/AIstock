@@ -912,11 +912,14 @@ def _load_suspend_keys(
         return frozenset()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="raise").dt.date
     frame["ts_code"] = frame["ts_code"].astype(str).str.upper()
-    invalid = frame[(frame["suspend_type"] != "S") | frame["suspend_timing"].notna()]
-    if not invalid.empty:
-        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d includes non-full-day rows")
+    if (frame["suspend_type"] != "S").any():
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d includes rows outside suspend_type S")
+    intraday = frame["suspend_timing"].notna()
+    if frame.loc[intraday, "suspend_timing"].map(lambda value: not isinstance(value, str) or not value.strip()).any():
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d intraday timing is invalid")
+    full_day = frame.loc[~intraday]
     calendar_set = set(calendar)
-    keys = [(row.trade_date, row.ts_code) for row in frame.itertuples(index=False) if row.trade_date in calendar_set]
+    keys = [(row.trade_date, row.ts_code) for row in full_day.itertuples(index=False) if row.trade_date in calendar_set]
     if len(keys) != len(set(keys)):
         raise _fail(REASON_DUPLICATE_KEY, "suspend_d contains duplicate stock/date rows")
     return frozenset(keys)
