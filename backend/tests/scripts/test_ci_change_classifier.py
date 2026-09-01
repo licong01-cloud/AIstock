@@ -212,6 +212,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert alpha_audit_payload["dev_db_required"] is False
     assert alpha_audit_payload["unmapped_code_files"] == []
 
+    independent_alpha_audit_payload = classifier.classify_changed_files(
+        ["scripts/advisory_independent_package_alpha_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert independent_alpha_audit_payload["classification"] == "targeted_ci_required"
+    assert independent_alpha_audit_payload["backend_required"] is True
+    assert independent_alpha_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert independent_alpha_audit_payload["dev_db_required"] is False
+    assert independent_alpha_audit_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
@@ -1196,7 +1206,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert attach_step["id"] == "frontend_dependencies"
     assert attach_step["shell"] == "powershell"
     assert "--attach-frontend-only" in attach_step["run"]
-    assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    assert (
+        '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    )
     frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
     assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_runs
     assert "node node_modules/next/dist/bin/next lint" in frontend_runs
