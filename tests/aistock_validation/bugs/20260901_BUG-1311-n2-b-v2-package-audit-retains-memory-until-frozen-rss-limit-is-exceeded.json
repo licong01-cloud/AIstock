@@ -1,6 +1,8 @@
 {
-  "actual": "The formal N2-B v2 two-survivor audit request advpkgareq_d97d22508f04d27f1b37b82c fails at package_batch_prediction after 15603.392 seconds because peak RSS reaches 17413373952 bytes above the frozen 17179869184-byte limit. The complete 386-day, 57-factor, two-package PIT/parity workload must finish within the existing RSS/temp fail-closed contract without raising limits, disabling resource checks, trimming factors/dates/universe, substituting retired packages, or changing prediction values, dtype, index, or hashes.",
+  "actual": "The formal N2-B v2 two-survivor audit request advpkgareq_d97d22508f04d27f1b37b82c fails at package_batch_prediction after 15603.392 seconds because peak RSS reaches 17413373952 bytes above the frozen 17179869184-byte limit. The same run writes an undeclared model/__pycache__/model.cpython-310.pyc into the PKG_378EB9 frozen workspace, so a subsequent read fails the roster-drift guard. The complete 386-day, 57-factor, two-package PIT/parity workload must finish within the existing RSS/temp fail-closed contract without raising limits, disabling resource checks, trimming factors/dates/universe, substituting retired packages, mutating frozen workspaces, or changing prediction values, dtype, index, or hashes.",
   "allowed_write_scope": [
+    "backend/services/advisory_model_first/strategy_package_batch_prediction.py",
+    "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py",
     "tests/aistock_validation/bugs/20260901_BUG-1311-n2-b-v2-package-audit-retains-memory-until-frozen-rss-limit-is-exceeded.json"
   ],
   "assigned_agent": null,
@@ -19,10 +21,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260901-b9c7f86e9375",
       "timestamp": "2026-09-01T17:47:52.911483Z"
+    },
+    {
+      "action": "diagnose_formal_resource_and_workspace_mutation",
+      "actor": "codex",
+      "note": "The failed formal run held about 9.1-9.4 GB resident but reached a transient 17,413,373,952-byte peak in the full future-poison factor window. Direct code review found redundant post-fancy-index daily/static copies plus an extra static copy before precompute. Readback also found one undeclared model/__pycache__/model.cpython-310.pyc created at model load. The fix removes only redundant adapter copies, disables bytecode during frozen model load, and revalidates the workspace roster after each load; factor code, window, PIT, parity, model outputs and resource limits remain frozen.",
+      "timestamp": "2026-09-02T02:25:11.7647049+08:00"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_n2b_independent_package_alpha_audit_survivors_v2_20260901",
+    "F:/Dev/AIstock_model_artifacts/BUG-1311_n2b_future_poison_memory_probe_20260902"
+  ],
+  "expected": "The unchanged two-survivor, 386-day, 57-factor N2-B v2 workload must preserve exact PIT, future-poison, file-backed parity, prediction value/dtype/index/hash, frozen workspace roster, RSS and temporary-space fail-closed semantics while avoiding redundant full-panel copies that push peak RSS above 17179869184 bytes or interpreter bytecode writes into package assets.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +46,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/advisory_model_first/strategy_package_batch_prediction.py",
+      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/advisory_model_first/strategy_package_batch_prediction.py",
+      "backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py"
+    ]
   },
   "first_seen_at": "2026-09-01T17:47:52.911495Z",
   "fix_branch": null,
@@ -54,7 +71,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Get-Content F:/Dev/AIstock_model_artifacts/advisory_n2b_independent_package_alpha_audit_survivors_v2_20260901/run_stdout.log -Tail 1",
   "required_verification": [
     "l0"
   ],

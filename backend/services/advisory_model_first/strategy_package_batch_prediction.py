@@ -261,20 +261,29 @@ class StrategyPackageBatchPredictionRunner:
 
         loaded_models: dict[str, LoadedPackageModel] = {}
         model_load_counts = {arm_id: 0 for arm_id in PACKAGE_ARM_IDS}
-        for arm in request.packages:
-            workspace = workspaces[arm.arm_id]
-            model, model_kind, inner_model, expected_count = self._model_loader(workspace / "model" / "params.pkl")
-            model_load_counts[arm.arm_id] += 1
-            loaded_models[arm.arm_id] = LoadedPackageModel(
-                arm=arm,
-                workspace=workspace,
-                model=model,
-                model_kind=model_kind,
-                inner_model=inner_model,
-                expected_feature_count=int(expected_count or 0),
-                factor_order=tuple(factor_orders[arm.arm_id]),
-                primary_assets=_workspace_primary_assets(workspace),
-            )
+        old_dont_write_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            for arm in request.packages:
+                workspace = workspaces[arm.arm_id]
+                model, model_kind, inner_model, expected_count = self._model_loader(workspace / "model" / "params.pkl")
+                # Pickle may import package-owned model.py.  The frozen
+                # workspace must remain byte-for-byte unchanged, including no
+                # interpreter-created __pycache__ entries.
+                _verified_workspace(arm)
+                model_load_counts[arm.arm_id] += 1
+                loaded_models[arm.arm_id] = LoadedPackageModel(
+                    arm=arm,
+                    workspace=workspace,
+                    model=model,
+                    model_kind=model_kind,
+                    inner_model=inner_model,
+                    expected_feature_count=int(expected_count or 0),
+                    factor_order=tuple(factor_orders[arm.arm_id]),
+                    primary_assets=_workspace_primary_assets(workspace),
+                )
+        finally:
+            sys.dont_write_bytecode = old_dont_write_bytecode
 
         temp_path = Path(temp_root)
         temp_path.mkdir(parents=True, exist_ok=True)
@@ -1202,9 +1211,11 @@ def _prepare_static_panel(
     *,
     canonicalized: bool = False,
 ) -> pd.DataFrame:
-    static = (
-        static_raw.copy() if canonicalized else _canonical_panel_index(static_raw, label="static raw input")
-    ).rename(columns=_STATIC_FIELD_MAPPING)
+    # ``compute_precomputed_factors`` owns the one defensive deep copy before
+    # adding derived columns.  Copying the canonical panel here as well doubled
+    # the largest future-poison static input without adding isolation.
+    static_input = static_raw if canonicalized else _canonical_panel_index(static_raw, label="static raw input")
+    static = static_input.rename(columns=_STATIC_FIELD_MAPPING, copy=False)
     try:
         static = compute_precomputed_factors(static, daily)
     except Exception as exc:
@@ -1800,7 +1811,11 @@ def _slice_panel(
     if instruments is not None:
         normalized = {normalize_ts_code(item) for item in instruments}
         keep = bounded.index.get_level_values("instrument").astype(str).isin(normalized)
+        # Integer-array selection already materializes an independent frame.
+        # A second deep copy here doubled both daily and static future-poison
+        # panels and pushed the otherwise valid formal run above 16 GiB.
         bounded = bounded.iloc[np.flatnonzero(keep)]
+        return bounded
     return bounded.copy()
 
 
