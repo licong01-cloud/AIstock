@@ -34,20 +34,34 @@
   "evidence_uris": [],
   "expected": "Allow explicit per-BUG source PR mappings, validate durable source PR receipts when BUG JSON evidence is absent, provide authorized aggregate PR merge/root-sync/cleanup aftercare, and route Codex/Claude owners to this path when two or more eligible independently merged non-runtime BUGs are already available without delaying a single BUG for batching.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/aistock_issue_workflow.py",
+    "actual_changed_files": [
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
       "backend/tests/scripts/test_aistock_issue_workflow.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
-      ".codex/skills/aistock-task-router/SKILL.md",
-      ".codex/skills/aistock-merge-aftercare/SKILL.md",
-      ".codex/skills/fix-aistock-issue/SKILL.md",
-      ".claude/commands/aistock-task-router.md",
-      ".claude/commands/aistock-merge-aftercare.md",
-      ".claude/commands/fix-aistock-issue.md"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1312-close-sync-aggregate-is-unreachable-for-normal-merged-bug-records-and-cl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/fix-aistock-issue.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/fix-aistock-issue/SKILL.md",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1312-close-sync-aggregate-is-unreachable-for-normal-merged-bug-records-and-cl.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -242,10 +256,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
