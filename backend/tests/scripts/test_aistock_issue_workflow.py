@@ -2117,6 +2117,45 @@ def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
+def test_hmm_rotation_input_bundle_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_input_bundle.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
 def test_bug_1125_offline_hmm_holdout_runtime_contract_is_none_and_exact() -> None:
     changed_files = [
         "backend/services/hmm_risk/market_relative_ridge_holdout.py",

@@ -51,13 +51,6 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
     state_rows,
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256, sha256_bytes
-from backend.services.hmm_risk.industry_pit_adapter import (
-    HMM_G2A_DATA_A_CONTRACT_VERSION,
-    HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA,
-    HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA,
-    HMM_L1_CODE_PROJECTION_SCHEMA,
-    HMM_L1_CODE_PROJECTION_VERSION,
-)
 
 CONTRACT_VERSION = "C-011-P2-3B-D1-D6"
 ALGORITHM_VERSION = "hmm_risk_market_relative_ridge_candidate_v1"
@@ -84,17 +77,17 @@ P2_3C_FEATURES = (*RELATIVE_FEATURES, *P2_3C_INTERACTION_FEATURES)
 RL1_CONTRACT_VERSION = "C-012-RL1-RW1-D1-D6"
 RL1_ALGORITHM_VERSION = "hmm_risk_rotation_l1_market_conditioned_rolling_ridge_v1"
 RL1_MODEL_ORIGIN = "rotation_l1_market_conditioned_rolling_ridge_v1"
-RL1_REQUEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_request_v1"
-RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_child_v1"
-RL1_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_acceptance_v1"
-RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v3"
-RL1_BUNDLE_SCHEMA_VERSION = "hmm_risk_capability_bundle_v3"
+RL1_REQUEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_request_v2_input_bundle"
+RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_child_v2_input_bundle"
+RL1_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_acceptance_v2_input_bundle"
+RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v4_input_bundle"
+RL1_BUNDLE_SCHEMA_VERSION = "hmm_risk_capability_bundle_v4_input_bundle"
 RL1_MARKET_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_market_component_v1"
 RL1_DEVELOPMENT_START = date(2022, 1, 4)
 RL1_DEVELOPMENT_END = date(2026, 3, 31)
 RL1_HOLDOUT_START = date(2026, 4, 1)
 RL1_HOLDOUT_END = date(2026, 9, 30)
-RL1_SOURCE_REVISION = "c013-g2a-industry-pit-development-v1"
+RL1_SOURCE_REVISION = "c013-g2a-hmm-input-bundle-v1"
 RL1_FIXED_ALPHA = 100.0
 RL1_METRIC_COVERAGE_RATIO = 0.80
 RL1_MEDIAN_RANK_IC_MINIMUM = 0.02
@@ -139,7 +132,7 @@ RL1_CANDIDATE_PAYLOAD_KEYS = frozenset(
         "dataset_manifest_sha256",
         "mapping_manifest_sha256",
         "c010_formal_evidence",
-        "database_identity",
+        "input_bundle_identity",
         "development_start",
         "development_end",
         "development_trading_day_count",
@@ -2652,12 +2645,12 @@ def build_c012_rl1_replay_request(
         raise _fail(REASON_RL1_FOLD, "rotation L1 development calendar is incomplete", stage="request_preparation")
     dataset_manifest = inputs.get("dataset_manifest")
     mapping_manifest = inputs.get("mapping_manifest")
-    database_identity = inputs.get("database")
+    input_bundle_identity = inputs.get("input_bundle_identity")
     if (
         not isinstance(dataset_manifest, Mapping)
         or not isinstance(mapping_manifest, (Mapping, list))
-        or not isinstance(database_identity, Mapping)
-        or not database_identity
+        or not isinstance(input_bundle_identity, Mapping)
+        or not input_bundle_identity
     ):
         raise _fail(REASON_RL1_INPUT, "rotation L1 source identity is incomplete", stage="request_preparation")
     normalized_source = dict(source)
@@ -2747,8 +2740,18 @@ def build_c012_rl1_replay_request(
         "input_identity": {
             "dataset_manifest_sha256": canonical_sha256(dataset_manifest),
             "mapping_manifest_sha256": canonical_sha256(mapping_manifest),
-            "database_identity": dict(database_identity),
-            "database_identity_sha256": canonical_sha256(database_identity),
+            "bundle_canonical_sha256": _require_sha256(
+                input_bundle_identity.get("bundle_canonical_sha256"),
+                "input_bundle_identity.bundle_canonical_sha256",
+            ),
+            "bundle_manifest_body_sha256": _require_sha256(
+                input_bundle_identity.get("manifest_body_sha256"),
+                "input_bundle_identity.manifest_body_sha256",
+            ),
+            "bundle_h5_sha256": _require_sha256(
+                input_bundle_identity.get("h5_sha256"),
+                "input_bundle_identity.h5_sha256",
+            ),
         },
         "c010_formal_evidence": _c012_rl1_c010_identity(inputs),
         "artifact_root": str(Path(str(outputs["acceptance_path"])).parent.resolve()),
@@ -2903,11 +2906,6 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         "circ_mv_history_start",
         "universe_key",
         "universe_rule_version",
-        "security_identity_manifest_path",
-        "security_identity_manifest_sha256",
-        "provider_absence_manifest_path",
-        "provider_absence_manifest_sha256",
-        "industry_pit",
     }
     if (
         not isinstance(source, Mapping)
@@ -2920,74 +2918,6 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         )
     ):
         raise _fail(REASON_RL1_HOLDOUT, "rotation L1 source must stop at development end", stage="input")
-    for field in ("security_identity_manifest_sha256", "provider_absence_manifest_sha256"):
-        _require_sha256(source.get(field), f"source.{field}")
-    industry_pit = source.get("industry_pit")
-    identity_keys = {
-        "schema_version",
-        "bundle_hash",
-        "classification_candidate_hash",
-        "index_membership_candidate_hash",
-        "classification_receipt_hash",
-        "index_membership_receipt_hash",
-        "preflight_canonical_hash",
-    }
-    if (
-        not isinstance(industry_pit, Mapping)
-        or set(industry_pit) != {"artifact_root", "identity", "l1_projection", "research_basis"}
-        or not Path(str(industry_pit.get("artifact_root") or "")).is_absolute()
-        or not isinstance(industry_pit.get("identity"), Mapping)
-        or set(industry_pit["identity"]) != identity_keys
-        or industry_pit["identity"].get("schema_version") != HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA
-    ):
-        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT authority is invalid", stage="input")
-    for field in identity_keys - {"schema_version"}:
-        _require_sha256(industry_pit["identity"].get(field), f"source.industry_pit.identity.{field}")
-    l1_projection = industry_pit.get("l1_projection")
-    if (
-        not isinstance(l1_projection, Mapping)
-        or set(l1_projection)
-        != {
-            "schema_version",
-            "projection_version",
-            "taxonomy_contract_id",
-            "taxonomy_version",
-            "source_ids",
-            "source_hashes",
-            "rows",
-            "canonical_hash",
-        }
-        or l1_projection.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
-        or l1_projection.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
-        or not isinstance(l1_projection.get("rows"), list)
-        or len(l1_projection["rows"]) != 31
-    ):
-        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT L1 projection is invalid", stage="input")
-    _require_sha256(l1_projection.get("canonical_hash"), "source.industry_pit.l1_projection.canonical_hash")
-    research_basis = industry_pit.get("research_basis")
-    research_basis_keys = {
-        "schema_version",
-        "contract_version",
-        "active_mode",
-        "historical_classification_basis",
-        "historical_non_as_known_taxonomy",
-        "forward_classification_basis",
-        "forward_non_as_known_taxonomy",
-        "canonical_hash",
-    }
-    if (
-        not isinstance(research_basis, Mapping)
-        or set(research_basis) != research_basis_keys
-        or research_basis.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
-        or research_basis.get("contract_version") != HMM_G2A_DATA_A_CONTRACT_VERSION
-        or research_basis.get("active_mode") != "historical_replay"
-        or research_basis.get("historical_classification_basis") != "stable_taxonomy_backcast"
-        or research_basis.get("historical_non_as_known_taxonomy") is not True
-        or research_basis.get("forward_classification_basis") != "as_published_pit"
-        or research_basis.get("forward_non_as_known_taxonomy") is not False
-    ):
-        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT research basis is invalid", stage="input")
-    _require_sha256(research_basis.get("canonical_hash"), "source.industry_pit.research_basis.canonical_hash")
     try:
         source_start = date.fromisoformat(str(source.get("source_start") or ""))
     except ValueError as exc:
@@ -2998,27 +2928,27 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
     if not isinstance(input_identity, Mapping) or set(input_identity) != {
         "dataset_manifest_sha256",
         "mapping_manifest_sha256",
-        "database_identity",
-        "database_identity_sha256",
+        "bundle_canonical_sha256",
+        "bundle_manifest_body_sha256",
+        "bundle_h5_sha256",
     }:
         raise _fail(REASON_RL1_INPUT, "rotation L1 input identity is invalid", stage="input")
-    _require_sha256(input_identity.get("dataset_manifest_sha256"), "input_identity.dataset_manifest_sha256")
-    _require_sha256(input_identity.get("mapping_manifest_sha256"), "input_identity.mapping_manifest_sha256")
-    database_identity = input_identity.get("database_identity")
-    if (
-        not isinstance(database_identity, Mapping)
-        or not database_identity
-        or canonical_sha256(database_identity) != input_identity.get("database_identity_sha256")
+    for field in (
+        "dataset_manifest_sha256",
+        "mapping_manifest_sha256",
+        "bundle_canonical_sha256",
+        "bundle_manifest_body_sha256",
+        "bundle_h5_sha256",
     ):
-        raise _fail(REASON_RL1_INPUT, "rotation L1 database identity is invalid", stage="input")
+        _require_sha256(input_identity.get(field), f"input_identity.{field}")
     c010_identity = request.get("c010_formal_evidence")
     if (
         not isinstance(c010_identity, Mapping)
         or set(c010_identity)
         != {
             "eligibility_receipt_sha256",
-            "aggregate_receipt_sha256",
-            "l1_cross_section_receipt_sha256",
+            "aggregate_evidence_receipt_sha256",
+            "l1_cross_section_evidence_receipt_sha256",
             "l1_feature_definition_sha256",
             "provider_absence_manifest_sha256",
             "security_identity_manifest_sha256",
@@ -3092,34 +3022,25 @@ def _c012_rl1_request_identity(request: Mapping[str, Any], producer_commit: str)
 
 
 def _c012_rl1_c010_identity(inputs: Mapping[str, Any]) -> dict[str, Any]:
-    c010 = inputs.get("c010_diagnostic")
-    if not isinstance(c010, Mapping):
-        raise _fail(REASON_RL1_INPUT, "C-010 formal evidence is missing", stage="source_preflight")
-    keys = ("eligibility", "aggregate_evidence", "l1_cross_section_evidence", "l1_feature_definition")
-    values = {key: c010.get(key) for key in keys}
-    if any(not isinstance(value, Mapping) or not value for value in values.values()):
-        raise _fail(REASON_RL1_INPUT, "C-010 formal evidence is incomplete", stage="source_preflight")
-    for field in ("provider_absence_manifest", "security_identity_manifest"):
-        value = inputs.get(field)
-        if not isinstance(value, Mapping) or not value:
-            raise _fail(REASON_RL1_INPUT, f"{field} is missing", stage="source_preflight")
-    for key in keys[:3]:
-        receipt = values[key]
-        receipt_hash = _require_sha256(receipt.get("receipt_sha256"), f"c010.{key}.receipt_sha256")
-        if (
-            canonical_sha256({name: value for name, value in receipt.items() if name != "receipt_sha256"})
-            != receipt_hash
-        ):
-            raise _fail(REASON_RL1_INPUT, f"C-010 {key} receipt hash is invalid", stage="source_preflight")
-    body = {
-        "eligibility_receipt_sha256": values["eligibility"]["receipt_sha256"],
-        "aggregate_receipt_sha256": values["aggregate_evidence"]["receipt_sha256"],
-        "l1_cross_section_receipt_sha256": values["l1_cross_section_evidence"]["receipt_sha256"],
-        "l1_feature_definition_sha256": canonical_sha256(values["l1_feature_definition"]),
-        "provider_absence_manifest_sha256": canonical_sha256(inputs.get("provider_absence_manifest")),
-        "security_identity_manifest_sha256": canonical_sha256(inputs.get("security_identity_manifest")),
+    bundled = inputs.get("c010_bundle_identity")
+    expected_keys = {
+        "eligibility_receipt_sha256",
+        "aggregate_evidence_receipt_sha256",
+        "l1_cross_section_evidence_receipt_sha256",
+        "l1_feature_definition_sha256",
+        "provider_absence_manifest_sha256",
+        "security_identity_manifest_sha256",
+        "receipt_sha256",
     }
-    return {**body, "receipt_sha256": canonical_sha256(body)}
+    if not isinstance(bundled, Mapping) or set(bundled) != expected_keys:
+        raise _fail(REASON_RL1_INPUT, "C-010 bundle identity fields differ", stage="source_preflight")
+    for field in expected_keys:
+        _require_sha256(bundled.get(field), f"c010_bundle_identity.{field}")
+    if canonical_sha256({key: value for key, value in bundled.items() if key != "receipt_sha256"}) != bundled.get(
+        "receipt_sha256"
+    ):
+        raise _fail(REASON_RL1_INPUT, "C-010 bundle identity hash is invalid", stage="source_preflight")
+    return dict(bundled)
 
 
 def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -3717,10 +3638,14 @@ def run_c012_rl1_candidate_process(
     benchmark = _benchmark_rows(dataset_manifest)
     c010_identity = _c012_rl1_c010_identity(inputs)
     expected_input_identity = request["input_identity"]
+    input_bundle_identity = inputs.get("input_bundle_identity")
     if (
         canonical_sha256(dataset_manifest) != expected_input_identity["dataset_manifest_sha256"]
         or canonical_sha256(mapping_manifest) != expected_input_identity["mapping_manifest_sha256"]
-        or inputs.get("database") != expected_input_identity["database_identity"]
+        or not isinstance(input_bundle_identity, Mapping)
+        or input_bundle_identity.get("bundle_canonical_sha256") != expected_input_identity["bundle_canonical_sha256"]
+        or input_bundle_identity.get("manifest_body_sha256") != expected_input_identity["bundle_manifest_body_sha256"]
+        or input_bundle_identity.get("h5_sha256") != expected_input_identity["bundle_h5_sha256"]
         or c010_identity != request["c010_formal_evidence"]
     ):
         raise _fail(REASON_RL1_INPUT, "rotation L1 replay input identity drifted", stage="source_preflight")
@@ -3902,7 +3827,7 @@ def run_c012_rl1_candidate_process(
         "dataset_manifest_sha256": canonical_sha256(dataset_manifest),
         "mapping_manifest_sha256": canonical_sha256(mapping_manifest),
         "c010_formal_evidence": c010_identity,
-        "database_identity": inputs.get("database"),
+        "input_bundle_identity": dict(input_bundle_identity),
         "development_start": RL1_DEVELOPMENT_START.isoformat(),
         "development_end": RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": development_days,
@@ -3984,7 +3909,12 @@ def close_c012_rl1_candidate_children(
             or payload.get("producer_commit") != producer_commit
             or payload.get("dataset_manifest_sha256") != request_identity["input_identity"]["dataset_manifest_sha256"]
             or payload.get("mapping_manifest_sha256") != request_identity["input_identity"]["mapping_manifest_sha256"]
-            or payload.get("database_identity") != request_identity["input_identity"]["database_identity"]
+            or payload.get("input_bundle_identity")
+            != {
+                "bundle_canonical_sha256": request_identity["input_identity"]["bundle_canonical_sha256"],
+                "manifest_body_sha256": request_identity["input_identity"]["bundle_manifest_body_sha256"],
+                "h5_sha256": request_identity["input_identity"]["bundle_h5_sha256"],
+            }
             or payload.get("c010_formal_evidence") != request_identity["c010_formal_evidence"]
             or payload.get("ridge_training_contract") != request_identity["ridge_training_contract"]
             or payload.get("process_fit_count") != RL1_PROCESS_FIT_COUNT
