@@ -21,7 +21,6 @@ from .profile import ResourcePolicy, validate_resource_policy
 from .resource_budget import ResourceTelemetryUnavailable
 from .resource_gate import (
     RESOURCE_CHECKPOINT_ENV,
-    RESOURCE_CHECKPOINT_SIGNAL_SCHEMA,
     OwnedRuntimeSnapshot,
     ResourceGate,
     ResourceGateError,
@@ -461,13 +460,13 @@ class ResourceSupervisor:
             "--telemetry",
             telemetry_path_wsl,
             "--memory-high-bytes",
-            str(self.policy.wsl_memory_high_bytes),
+            "0",
             "--memory-max-bytes",
-            str(self.policy.wsl_memory_max_bytes),
+            "0",
             "--memory-swap-max-bytes",
-            str(self.policy.wsl_swap_max_bytes),
+            "0",
             "--wsl-start-available-bytes",
-            str(self.policy.wsl_start_available_bytes),
+            "0",
             "--resource-checkpoint",
             resource_checkpoint_path_wsl,
             "--",
@@ -587,7 +586,7 @@ class ResourceSupervisor:
         wsl: WslSupervisedOptions | None = None,
         service_factory: Callable[..., WslCgroupService] = WslCgroupService,
     ) -> SupervisedExecutionReceipt:
-        """Run one bounded-log helper only after Job/cgroup admission."""
+        """Run one bounded-log helper with ownership and telemetry receipts."""
 
         if not _EXECUTION_ID.fullmatch(str(execution_id)):
             raise ResourceSupervisorError("supervised execution_id is invalid")
@@ -686,7 +685,6 @@ class ResourceSupervisor:
             )
         started = self._monotonic()
         next_resource_sample = started
-        resource_checkpoint_written = False
         cancel_written = False
         cancellation_at: float | None = None
         peak_current = 0
@@ -703,27 +701,12 @@ class ResourceSupervisor:
                 break
             sample_now = self._monotonic()
             if sample_now >= next_resource_sample:
-                resource_sample = self.resource_gate.sample(
+                self.resource_gate.sample(
                     str(execution_id),
                     wsl_required=runtime == "wsl",
                     pressure_rung=pressure_rung,
                 )
                 next_resource_sample = sample_now + self.policy.enforcement_sample_seconds
-                if resource_sample.decision.status != "READY" and not resource_checkpoint_written:
-                    _atomic_json(
-                        resource_checkpoint_path,
-                        {
-                            "schema_version": RESOURCE_CHECKPOINT_SIGNAL_SCHEMA,
-                            "attempt_id": self.attempt_id,
-                            "fence": self.fence,
-                            "execution_id": execution_id,
-                            "reason_code": resource_sample.decision.reason_code,
-                            "pressure_rung": resource_sample.decision.pressure_rung,
-                            "data_scope_changed": False,
-                            "observed_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                    resource_checkpoint_written = True
             if cancel_requested() and not cancel_written:
                 _atomic_json(
                     cancel_path,
@@ -1167,11 +1150,11 @@ def _read_wsl_runtime_telemetry(
         or (expected_control_group is not None and control_group != expected_control_group)
         or not -5 <= age <= max(5.0, policy.enforcement_sample_seconds * 5)
         or snapshot.counter <= 0
-        or snapshot.memory_high_bytes != policy.wsl_memory_high_bytes
-        or snapshot.memory_max_bytes != policy.wsl_memory_max_bytes
-        or snapshot.swap_max_bytes != policy.wsl_swap_max_bytes
+        or snapshot.memory_high_bytes != 0
+        or snapshot.memory_max_bytes != 0
+        or snapshot.swap_max_bytes != 0
     ):
-        raise ResourceTelemetryUnavailable("WSL resource telemetry identity/limit/freshness mismatch")
+        raise ResourceTelemetryUnavailable("WSL resource telemetry identity/unlimited/freshness mismatch")
     return snapshot
 
 

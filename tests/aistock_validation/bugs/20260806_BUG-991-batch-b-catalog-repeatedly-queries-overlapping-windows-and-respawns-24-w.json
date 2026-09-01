@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-991",
-  "closed_at": null,
+  "closed_at": "2026-08-06T16:09:33.991665Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -55,8 +55,8 @@
   },
   "first_seen_at": "2026-08-06T05:38:31.146155Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e284fd4d7de41d04ee97bbf14f148e46785a5f79",
+  "fixed_at": "2026-08-06T07:50:11Z",
   "github_issue_number": 3178,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3178",
   "last_seen_at": "2026-08-06T05:38:31.146155Z",
@@ -64,6 +64,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3185",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -84,9 +85,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-991/post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -96,7 +97,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -105,6 +106,10 @@
     "fingerprint": "97708ce7ce7cacd7e4b44ee3",
     "source_event_id": "FE-20260806-97708ce7ce7c"
   },
+  "validation_evidence": [
+    "nox -s advisory_historical_range_backend -> passed: 351 passed, 5 skipped",
+    "nox -s validation_module_registry_l0 -> passed: 8 passed; ownership 14/14"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

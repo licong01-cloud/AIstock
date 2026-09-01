@@ -23,13 +23,13 @@ from backend.services.dataset_release.windows_job import JobAccounting, JobChild
 from backend.services.dataset_release.wsl_cgroup import WslCgroupReadback, WslCgroupError
 
 
-def _gate(dataset_profile) -> ResourceGate:
+def _gate(dataset_profile, *, low_memory: bool = False) -> ResourceGate:
     return ResourceGate(
         dataset_profile,
         host_probe=lambda: HostMemorySnapshot(
             observed_monotonic=1.0,
-            available_bytes=32 * GIB,
-            commit_total_bytes=40 * GIB,
+            available_bytes=(2 * GIB if low_memory else 32 * GIB),
+            commit_total_bytes=(78 * GIB if low_memory else 40 * GIB),
             commit_limit_bytes=80 * GIB,
             pagefile_used_bytes=2 * GIB,
             pagefile_limit_bytes=32 * GIB,
@@ -115,7 +115,7 @@ class FakeJob:
 
     def __init__(self, name: str, *, policy: ResourcePolicy, hybrid_wsl: bool) -> None:
         self.name = name
-        self.memory_limit_bytes = policy.hybrid_job_commit_bytes if hybrid_wsl else policy.windows_job_commit_bytes
+        self.memory_limit_bytes = None
         self.commands: list[tuple[str, ...]] = []
         self.close_requirements: list[bool] = []
         self.active = 0
@@ -152,7 +152,7 @@ def test_supervisor_writes_identity_bound_heartbeat_and_exposes_no_launch_bypass
         assert payload["attempt_id"] == "attempt-1"
         assert payload["fence"] == 4
         assert payload["counter"] >= 1
-        assert FakeJob.instances[0].memory_limit_bytes == 8 * 1024**3
+        assert FakeJob.instances[0].memory_limit_bytes is None
         assert not hasattr(supervisor, "launch_windows")
         assert not hasattr(supervisor, "launch_wsl")
     finally:
@@ -218,8 +218,8 @@ class FakeWslService:
         return WslCgroupReadback(
             main_pid=99,
             control_group="/unit",
-            memory_high_bytes=6 * 1024**3,
-            memory_max_bytes=8 * 1024**3,
+            memory_high_bytes=0,
+            memory_max_bytes=0,
             memory_swap_max_bytes=0,
             active_state="active",
         )
@@ -255,7 +255,7 @@ def test_wsl_supervision_rejects_non_absolute_helper_before_launch(tmp_path: Pat
                     execution_root_wsl="/mnt/x/control/attempt",
                 ),
             )
-        assert FakeJob.instances[0].memory_limit_bytes == 4 * 1024**3
+        assert FakeJob.instances[0].memory_limit_bytes is None
     finally:
         supervisor.close()
 
@@ -416,6 +416,35 @@ def test_supervised_runner_streams_logs_waits_and_returns_typed_receipt(tmp_path
     assert failed.returncode == 7
     assert failed.active_processes == 0
     assert ActualFixtureJob.instances[0].close_requirements == [True]
+
+
+def test_low_resource_telemetry_never_writes_a_checkpoint_or_stops_child(tmp_path: Path, dataset_profile) -> None:
+    ActualFixtureJob.instances.clear()
+    ControlStore.initialize(tmp_path)
+    supervisor = ResourceSupervisor(
+        attempt_id="attempt-low-telemetry",
+        fence=10,
+        control_root=tmp_path,
+        policy=dataset_profile.resource_policy,
+        hybrid_wsl=False,
+        resource_gate=_gate(dataset_profile, low_memory=True),
+        job_factory=ActualFixtureJob,
+    )
+    try:
+        receipt = supervisor.run_supervised(
+            [sys.executable, "-c", "print('completed-under-low-telemetry')"],
+            execution_id="low-telemetry-success",
+            cwd=tmp_path,
+            timeout_seconds=10,
+            cooperative_grace_seconds=2,
+        )
+    finally:
+        supervisor.close()
+
+    execution_root = tmp_path / "attempt_runs" / "attempt-low-telemetry-10" / "low-telemetry-success"
+    assert receipt.returncode == 0
+    assert receipt.resource_gate_receipt["checkpoint_requested"] is False
+    assert not (execution_root / "resource_checkpoint.requested.json").exists()
 
 
 def test_build_child_cannot_see_parent_secrets_and_source_gets_only_declared_key(

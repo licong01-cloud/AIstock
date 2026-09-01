@@ -1,0 +1,333 @@
+{
+  "actual": "Catalog id 1235 is_available=true; pkg_b668f8a633c44b72a5d557a2cb8970e3 is SELECTION_ENABLED; single-anchor replay changes 4520 common factor values and API DML references a missing updated_at column.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "backend/routers/factor_library.py",
+    "backend/services/quantevolver/factor_cleanup_service.py",
+    "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+    "tests/aistock_validation/bugs/20260901_BUG-1302-pit-invalid-factor-remains-selectable-because-factor-lifecycle-writes-ta.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1302",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-01T03:06:45.869317Z",
+  "description": "Catalog id 1235 is_available=true; pkg_b668f8a633c44b72a5d557a2cb8970e3 is SELECTION_ENABLED; single-anchor replay changes 4520 common factor values and API DML references a missing updated_at column.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260901-d866a92146d8",
+      "timestamp": "2026-09-01T03:06:45.869300Z"
+    },
+    {
+      "action": "dev_factor_quarantine_and_package_retirement",
+      "actor": "codex",
+      "note": "Existing DEV factor catalog id 1235 was disabled with PIT_CAUSALITY_VIOLATION metadata; 583 correlation rows were removed; pkg_b668f8a633c44b72a5d557a2cb8970e3 transitioned SELECTION_ENABLED to RETIRED with an audit event; pkg_99142cb1440c40a7824e83902f4e7da9 was already RETIRED.",
+      "timestamp": "2026-09-01T03:11:12.285620Z"
+    },
+    {
+      "action": "dev_replacement_factor_published",
+      "actor": "codex",
+      "note": "Published catalog id 1533 as neg_vol_adjusted_momentum_pit_v2 with a new code identity. Real-future and poisoned-future append checks at 2024-07-04 were exactly invariant; quick screen passed. Official qe_eval_v2 wrote five metric windows and official rating v2.0.0 graded the factor D, so the replacement remains catalogued but disabled pending DROP versus PIT_V2 confirmation.",
+      "timestamp": "2026-09-01T03:42:45.085813Z"
+    },
+    {
+      "action": "dev_lifecycle_contract_smoke",
+      "actor": "codex",
+      "note": "Fresh-process branch code against the existing DEV schema returned 409 for both availability and register attempts on the quarantined identity, returned 404/failed without writes for missing-factor disable and batch paths, blocked quarantine rollback 1/1, and read back factor disabled plus package retired.",
+      "timestamp": "2026-09-01T03:48:00.000000Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_n2b_independent_package_alpha_audit_unbounded_20260901",
+    "F:/Dev/AIstock/rdagent_assets/factor_values/checkpoints/BUG-1302-neg-vol-adjusted-momentum-pit-v2.json"
+  ],
+  "expected": "Soft-disable the old factor with causal-quarantine metadata, retire every non-retired direct or indirect StrategyPackage dependency, publish a new PIT-v2 factor identity after append-invariance validation, and make all supported factor lifecycle writes match the live catalog schema.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/factor_library.py",
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/factor_cleanup_service.py",
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1302-pit-invalid-factor-remains-selectable-because-factor-lifecycle-writes-ta.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/factor_library.py",
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/factor_cleanup_service.py",
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1302-pit-invalid-factor-remains-selectable-because-factor-lifecycle-writes-ta.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/routers/quantevolver.py",
+        "backend/routers/factor_library.py",
+        "backend/services/quantevolver/factor_cleanup_service.py",
+        "backend/tests/strategy_package/test_factor_library_protection_batch4.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "platform.api",
+        "platform.db",
+        "strategy_package",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/routers/quantevolver.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/routers/factor_library.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/quantevolver/factor_cleanup_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/routers/quantevolver.py",
+        "backend/routers/factor_library.py",
+        "backend/services/quantevolver/factor_cleanup_service.py",
+        "backend/tests/strategy_package/test_factor_library_protection_batch4.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/quantevolver.py",
+      "backend/routers/factor_library.py",
+      "backend/services/quantevolver/factor_cleanup_service.py",
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/quantevolver.py",
+      "backend/routers/factor_library.py",
+      "backend/services/quantevolver/factor_cleanup_service.py",
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py"
+    ]
+  },
+  "first_seen_at": "2026-09-01T03:06:45.869317Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4112,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4112",
+  "last_seen_at": "2026-09-01T03:48:00.000000Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Run the N2-B first-anchor future-append parity check for pkg_b668f8a633c44b72a5d557a2cb8970e3 on 2024-07-04; then execute PATCH /api/v1/quantevolver/factors/neg_vol_adjusted_momentum/availability with is_available=false.",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "platform_api_backend",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum?source=manual",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum_pit_v2?source=manual",
+    "fresh_process_evidence": [
+      "Fresh Python process imported branch router/service code and exercised existing DEV schema: quarantine availability and register returned 409; missing disable paths executed current SQL and returned 404/failed with zero writes; quarantine rollback reported rehab_count=0 and blocked_quarantine_count=1; DB readback retained catalog id 1235 disabled and pkg_b668f8a633c44b72a5d557a2cb8970e3 RETIRED.",
+      "Fresh branch process against existing DEV: quarantined old identity returned 409 for enable/register; missing factor paths made zero writes; cleanup rollback blocked quarantine; readback old factor disabled and direct package RETIRED."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "PIT-invalid factor remains selectable because factor lifecycle writes target missing updated_at",
+  "trigger_condition": {
+    "fingerprint": "d866a92146d8dc723cf18101",
+    "source_event_id": "FE-20260901-d866a92146d8"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_read",
+        "platform_api",
+        "paper_v2"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "platform_api_backend",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_read",
+          "platform_api",
+          "paper_v2"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "platform_api_backend",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

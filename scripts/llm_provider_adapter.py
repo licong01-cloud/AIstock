@@ -26,7 +26,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.infra.deepseek_config import (  # noqa: E402
-    DEFAULT_DEEPSEEK_MODEL,
     DeepSeekConfigError,
     redact_secret_text,
     resolve_deepseek_config,
@@ -39,6 +38,7 @@ from backend.services.validation.plan_catalog import (  # noqa: E402
 
 GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY = "deepseek-r1"
 GITHUB_MODELS_DEEPSEEK_MODEL_ID = "deepseek/deepseek-r1"
+VALIDATION_DEEPSEEK_MODEL = "deepseek-v4-flash"
 TRIAGE_ADVICE_SCHEMA_VERSION = "aistock_deepseek_triage_advice_v1"
 TEST_PLAN_ADVICE_SCHEMA_VERSION = "aistock_deepseek_test_plan_advice_v1"
 NIGHTLY_SCHEDULER_ADVICE_SCHEMA_VERSION = "aistock_deepseek_nightly_scheduler_advice_v1"
@@ -252,12 +252,19 @@ def validate_config(config: dict[str, Any]) -> None:
     providers = config.get("providers")
     if not isinstance(providers, dict):
         raise ProviderAdapterError("providers must be configured")
+    if config.get("default_provider") != "deepseek_api":
+        raise ProviderAdapterError("default_provider must be deepseek_api")
     deepseek_api = providers.get("deepseek_api") or {}
-    if deepseek_api.get("model") != DEFAULT_DEEPSEEK_MODEL:
-        raise ProviderAdapterError("deepseek_api.model must be deepseek-v4-pro")
-    if not isinstance(deepseek_api.get("enabled"), bool):
-        raise ProviderAdapterError("deepseek_api.enabled must be a boolean")
+    if deepseek_api.get("model") != VALIDATION_DEEPSEEK_MODEL:
+        raise ProviderAdapterError("deepseek_api.model must be deepseek-v4-flash")
+    if deepseek_api.get("enabled") is not True:
+        raise ProviderAdapterError("deepseek_api.enabled must be true")
+    deepseek_model_id = str(((deepseek_api.get("auth") or {}).get("model_id") or ""))
+    if deepseek_model_id != f"deepseek/{VALIDATION_DEEPSEEK_MODEL}":
+        raise ProviderAdapterError("deepseek_api.auth.model_id must be deepseek/deepseek-v4-flash")
     github_models = providers.get("github_models") or {}
+    if github_models.get("enabled") is not False:
+        raise ProviderAdapterError("retired github_models fallback must remain disabled")
     selector = (github_models.get("model_selector") or {})
     if selector.get("required_model_family") != GITHUB_MODELS_DEEPSEEK_MODEL_FAMILY:
         raise ProviderAdapterError("github_models required_model_family must be deepseek-r1")
@@ -560,11 +567,13 @@ def _provider_chat_endpoint(config: dict[str, Any], provider: str) -> tuple[str,
         return f"{base_url}/inference/chat/completions", model, auth_token, credential_source
     if provider == "deepseek_api":
         _bootstrap_deepseek_env()
+        deepseek_api = config["providers"]["deepseek_api"]
+        configured_model = str(deepseek_api.get("model") or VALIDATION_DEEPSEEK_MODEL)
         try:
             # Some DB fallback paths print connection diagnostics to stdout;
             # keep JSON-mode CLI output parseable and report sanitized errors.
             with contextlib.redirect_stdout(io.StringIO()):
-                resolved = resolve_deepseek_config(model=DEFAULT_DEEPSEEK_MODEL, require_api_key=True)
+                resolved = resolve_deepseek_config(model=configured_model, require_api_key=True)
         except DeepSeekConfigError as exc:
             raise ProviderAdapterError(str(exc)) from exc
         return (
@@ -651,7 +660,7 @@ def validate_deepseek_provider(config: dict[str, Any], *, require_api_key: bool)
     _bootstrap_deepseek_env()
     with contextlib.redirect_stdout(io.StringIO()):
         resolved = resolve_deepseek_config(
-            model=str(provider.get("model") or DEFAULT_DEEPSEEK_MODEL),
+            model=str(provider.get("model") or VALIDATION_DEEPSEEK_MODEL),
             require_api_key=require_api_key,
         )
     summary = resolved.as_safe_dict()

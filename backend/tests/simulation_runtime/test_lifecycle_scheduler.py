@@ -12693,6 +12693,61 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert background.status()["last_result"]["has_blocking_result"] is False
 
 
+def test_background_scheduler_with_miniqmt_disabled_only_processes_localsim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    lifecycle = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_disabled_qmt_local"),
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_disabled_qmt_broker"),
+            }
+        ),
+    )
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        miniqmt_enabled=False,
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 1, 22, tzinfo=UTC))
+
+    assert result["summary"]["planned_count"] == 1
+    assert [item["broker_backend"] for item in result["processed"]] == [SimulationBrokerBackend.LOCAL_SIM.value]
+    assert background.status()["miniqmt_enabled"] is False
+    assert background.status()["scheduled_broker_backends"] == [SimulationBrokerBackend.LOCAL_SIM.value]
+
+
+def test_localsim_scoped_ticks_do_not_advance_miniqmt_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+
+    def _unexpected_miniqmt_call(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("LocalSIM-scoped scheduling must not touch MiniQMT lifecycle")
+
+    monkeypatch.setattr(lifecycle, "_refresh_miniqmt_quote_context_lifecycle", _unexpected_miniqmt_call)
+    monkeypatch.setattr(lifecycle, "_advance_miniqmt_quote_ingress_lifecycle", _unexpected_miniqmt_call)
+
+    intraday = lifecycle.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    post_close = lifecycle.post_close_reconcile_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+
+    assert intraday.total_bindings == 0
+    assert post_close.total_bindings == 0
+
+
 def test_background_scheduler_noop_window_does_not_erase_last_blocking_result() -> None:
     lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
     background = SimulationLifecycleBackgroundScheduler(
@@ -17869,6 +17924,31 @@ def test_env_builder_shares_runtime_repository_with_production_context_provider(
     assert scheduler.repository is repository
     assert isinstance(scheduler.context_provider, scheduler_module.ProductionSimulationRunContextProvider)
     assert scheduler.context_provider._runtime_repository is repository
+
+
+def test_env_builder_does_not_construct_miniqmt_activation_when_global_flag_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.simulation_runtime.scheduler as scheduler_module
+
+    monkeypatch.setenv("MINIQMT_ENABLED", "false")
+    monkeypatch.setenv("MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED", "true")
+
+    def _unexpected_activation() -> None:
+        raise AssertionError("global MiniQMT disable must dominate subordinate activation flags")
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_miniqmt_quote_ingress_activation_from_env",
+        _unexpected_activation,
+    )
+
+    scheduler = scheduler_module.build_simulation_lifecycle_scheduler_from_env(
+        repository=InMemorySimulationRuntimeRepository()
+    )
+
+    assert scheduler._miniqmt_quote_ingress_activation is None
+    assert scheduler._miniqmt_quote_context_adapter is None
 
 
 def test_production_context_provider_rejects_wrong_authoritative_manifest_for_valid_localsim_successor():
