@@ -17,10 +17,12 @@ from backend.services.canonical_equity_pit import (
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import (
+    PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
     DailySuspendStatus,
     MinuteExecutionMarketInput,
     MinuteDataSource,
-    PaperV2MinuteMarketDataProvider,
 )
 from backend.services.paper_trading_v2.models import PaperRun, PaperSessionDay, PaperSessionPhase, PaperSessionStatus
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
@@ -31,7 +33,10 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.selection_center.canonical_pit_runtime import CanonicalPitGenerationDriftError
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
@@ -44,11 +49,27 @@ from backend.services.strategy_package.selection_artifact import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
+from backend.services.trading_core.models import (
+    AccountSnapshot,
+    Fill,
+    MinuteBar,
+    Order,
+    OrderEvent,
+    OrderEventType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionLot,
+    RunStatus,
+)
 from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
 
 
@@ -357,7 +378,7 @@ def test_minqmt_reconcile_accepts_broker_partial_odd_lot_trade_row() -> None:
             {
                 "traded_id": "1010000037440494",
                 "stock_code": "301135.SZ",
-                "stock_name": "瑞德智能",
+                "stock_name": "閻熺偛鐥夐弲楦垮厴",
                 "order_type": 24,
                 "traded_time": "144315",
                 "traded_price": 18.11,
@@ -393,7 +414,6 @@ class FakeDbMinuteProvider:
         source: MinuteDataSource,
         min_bars: int,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
             {
@@ -402,7 +422,6 @@ class FakeDbMinuteProvider:
                 "source": source,
                 "min_bars": min_bars,
                 "require_suspend_status": require_suspend_status,
-                "require_day_features": require_day_features,
             }
         )
         start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
@@ -435,56 +454,6 @@ class FakeDbMinuteProvider:
                 "limit_down": 9.0,
                 "suspend_status": {"is_suspended": False},
             },
-        )
-
-
-class FakeDayFeatureExcludingMinuteProvider(FakeDbMinuteProvider):
-    def __init__(self, excluded_symbol: str) -> None:
-        super().__init__()
-        self.excluded_symbol = excluded_symbol
-
-    def load_symbol_input(
-        self,
-        *,
-        symbol: str,
-        trade_date: date,
-        source: MinuteDataSource,
-        min_bars: int,
-        require_suspend_status: bool = False,
-        require_day_features: bool = False,
-    ) -> MinuteExecutionMarketInput:
-        if require_day_features and symbol == self.excluded_symbol:
-            self.calls.append(
-                {
-                    "symbol": symbol,
-                    "trade_date": trade_date,
-                    "source": source,
-                    "min_bars": min_bars,
-                    "require_suspend_status": require_suspend_status,
-                    "require_day_features": require_day_features,
-                    "excluded": True,
-                }
-            )
-            raise DataUnavailableError(
-                "V25 day_features turnover_rate_f is missing",
-                context={
-                    "call": "DbV25DayFeatureProvider._free_float_turnover_rate",
-                    "dataset": "market.daily_basic",
-                    "field": "turnover_rate_f",
-                    "symbol": symbol,
-                    "trade_date": trade_date.isoformat(),
-                    "reason_code": "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING",
-                    "fail_closed_policy": "exclude_symbol_for_trade_date",
-                    "forbidden_fallback": "turnover_rate",
-                },
-            )
-        return super().load_symbol_input(
-            symbol=symbol,
-            trade_date=trade_date,
-            source=source,
-            min_bars=min_bars,
-            require_suspend_status=require_suspend_status,
-            require_day_features=require_day_features,
         )
 
 
@@ -684,7 +653,9 @@ def test_create_portfolio_uses_manifest_minute_policy_as_platform_default() -> N
     assert portfolio.execution_policy["validated_execution_policy_id"].startswith("platform_manifest_")
     assert portfolio.execution_policy["source_backtest_id"] == f"strategy_package_manifest:{manifest.manifest_sha256}"
     assert portfolio.execution_policy["policy_json"]["algo_code"] == manifest.minute_execution_policy.algo_code
-    assert portfolio.execution_policy["policy_json"]["data_requirements"] == manifest.minute_execution_policy.data_requirements.model_dump(mode="json")
+    assert portfolio.execution_policy["policy_json"][
+        "data_requirements"
+    ] == manifest.minute_execution_policy.data_requirements.model_dump(mode="json")
     assert not package_repo.list_execution_policies(manifest.package_id)
 
 
@@ -962,10 +933,16 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert portfolio.execution_policy["validated_execution_policy_id"]
     execution_context = result.run.runtime_config["validated_execution_policy"]
     assert execution_context["validated_execution_policy_id"] == "localsim_twap_only_v1"
-    assert execution_context["runtime_policy_selection"]["requested_policy_sha256"] == portfolio.execution_policy["policy_sha256"]
+    assert (
+        execution_context["runtime_policy_selection"]["requested_policy_sha256"]
+        == portfolio.execution_policy["policy_sha256"]
+    )
     assert execution_context["runtime_policy_selection"]["fallback_used"] is False
     assert sum(fill.quantity for fill in result.fills) == 9500
-    assert result.run.runtime_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["strategy_family"] == "score_weighted_topk_v2"
+    assert (
+        result.run.runtime_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["strategy_family"]
+        == "score_weighted_topk_v2"
+    )
     assert len(paper_repo.orders[result.run.run_id]) == 1
     assert len(paper_repo.fills[result.run.run_id]) > 0
     assert paper_repo.cash_entries[result.run.run_id]
@@ -1015,8 +992,7 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     assert running_page["summaries"][0]["counts"]["errors"] == 0
     assert paper_repo.list_runs(portfolio.portfolio_id)[0]["run_id"] == result.run.run_id
     event_types = [
-        item["event_type"]
-        for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+        item["event_type"] for item in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
     ]
     assert event_types == [
         "RUN_STARTED",
@@ -1253,7 +1229,10 @@ def test_session_tick_lock_rolls_back_cash_and_cursor_on_failure() -> None:
 def test_local_sim_economic_transaction_reuses_one_connection() -> None:
     conn = RecordingConnection()
     conn.fetchone_queue.append((True,))
-    repo = PaperTradingV2Repository(conn_factory=recording_conn_factory(conn), symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})())
+    repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
     run = PaperRun(
         run_id="run_economic_atomic",
         portfolio_id="paper_economic_atomic",
@@ -1264,7 +1243,20 @@ def test_local_sim_economic_transaction_reuses_one_connection() -> None:
     with repo.local_sim_economic_transaction("run_economic_atomic") as transaction:
         assert transaction is conn
         repo.create_run(run)
-        repo.save_cash_entry("run_economic_atomic", CashLedgerEntry(fill_id="fill_economic_atomic", portfolio_id="paper_economic_atomic", trade_date=date(2024, 1, 2), symbol="000001.SZ", side=OrderSide.BUY, notional=1000.0, fee=5.0, cash_delta=-1005.0, cash_after=98_995.0))
+        repo.save_cash_entry(
+            "run_economic_atomic",
+            CashLedgerEntry(
+                fill_id="fill_economic_atomic",
+                portfolio_id="paper_economic_atomic",
+                trade_date=date(2024, 1, 2),
+                symbol="000001.SZ",
+                side=OrderSide.BUY,
+                notional=1000.0,
+                fee=5.0,
+                cash_delta=-1005.0,
+                cash_after=98_995.0,
+            ),
+        )
         repo.save_positions(
             run_id=run.run_id,
             trade_date=run.trade_date,
@@ -1291,7 +1283,10 @@ def test_local_sim_economic_transaction_reuses_one_connection() -> None:
         repo.update_run_status(run, RunStatus.SUCCEEDED)
     assert conn.commits == 1
     assert conn.rollbacks == 0
-    assert conn.factory_calls == [{"autocommit": True, "manage_transaction": False}, {"autocommit": False, "manage_transaction": True}]
+    assert conn.factory_calls == [
+        {"autocommit": True, "manage_transaction": False},
+        {"autocommit": False, "manage_transaction": True},
+    ]
     assert "SELECT pg_try_advisory_lock(2403, hashtext(%s))" in [sql for sql, _ in conn.executed]
     assert "SELECT pg_advisory_unlock(2403, hashtext(%s))" in [sql for sql, _ in conn.executed]
     assert all(connection_id == id(conn) for connection_id in conn.connection_ids)
@@ -1303,10 +1298,26 @@ def test_local_sim_economic_transaction_reuses_one_connection() -> None:
 def test_local_sim_economic_transaction_rolls_back_all_writes() -> None:
     conn = RecordingConnection()
     conn.fetchone_queue.append((True,))
-    repo = PaperTradingV2Repository(conn_factory=recording_conn_factory(conn), symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})())
+    repo = PaperTradingV2Repository(
+        conn_factory=recording_conn_factory(conn),
+        symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
+    )
     with pytest.raises(RuntimeError, match="forced economic failure"):
         with repo.local_sim_economic_transaction("run_economic_rollback"):
-            repo.save_cash_entry("run_economic_rollback", CashLedgerEntry(fill_id="fill_economic_rollback", portfolio_id="paper_economic_rollback", trade_date=date(2024, 1, 2), symbol="000001.SZ", side=OrderSide.BUY, notional=1000.0, fee=5.0, cash_delta=-1005.0, cash_after=98_995.0))
+            repo.save_cash_entry(
+                "run_economic_rollback",
+                CashLedgerEntry(
+                    fill_id="fill_economic_rollback",
+                    portfolio_id="paper_economic_rollback",
+                    trade_date=date(2024, 1, 2),
+                    symbol="000001.SZ",
+                    side=OrderSide.BUY,
+                    notional=1000.0,
+                    fee=5.0,
+                    cash_delta=-1005.0,
+                    cash_after=98_995.0,
+                ),
+            )
             raise RuntimeError("forced economic failure")
     assert conn.commits == 0
     assert conn.rollbacks == 1
@@ -1315,31 +1326,44 @@ def test_local_sim_economic_transaction_rolls_back_all_writes() -> None:
 
 def test_local_sim_postgres_readbacks_validate_fact_ids_and_projection_generation() -> None:
     facts_conn = RecordingConnection()
-    facts_conn.fetchall_queue.extend([
-        [("order_1",)], [("fill_1",)], [("event_1",)], [("fill_1",)],
-    ])
+    facts_conn.fetchall_queue.extend(
+        [
+            [("order_1",)],
+            [("fill_1",)],
+            [("event_1",)],
+            [("fill_1",)],
+        ]
+    )
     facts_repo = PaperTradingV2Repository(
         conn_factory=recording_conn_factory(facts_conn),
         symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
     )
     counts = facts_repo.readback_local_sim_economic_facts(
-        run_id="run_readback", order_ids={"order_1"}, fill_ids={"fill_1"},
-        order_event_ids={"event_1"}, cash_fill_ids={"fill_1"},
+        run_id="run_readback",
+        order_ids={"order_1"},
+        fill_ids={"fill_1"},
+        order_event_ids={"event_1"},
+        cash_fill_ids={"fill_1"},
     )
     assert counts == {"order_ids": 1, "fill_ids": 1, "order_event_ids": 1, "cash_fill_ids": 1}
 
     projection_conn = RecordingConnection()
-    projection_conn.fetchone_queue.extend([
-        {"count": 1},
-        {"run_id": "run_readback", "metadata": {"local_sim_outbox_id": "outbox_1", "local_sim_generation": 3}},
-    ])
+    projection_conn.fetchone_queue.extend(
+        [
+            {"count": 1},
+            {"run_id": "run_readback", "metadata": {"local_sim_outbox_id": "outbox_1", "local_sim_generation": 3}},
+        ]
+    )
     projection_repo = PaperTradingV2Repository(
         conn_factory=recording_conn_factory(projection_conn),
         symbol_name_resolver=type("NoopResolver", (), {"resolve": lambda self, symbols: {}})(),
     )
     result = projection_repo.readback_local_sim_projection(
-        run_id="run_readback", portfolio_id="portfolio_readback",
-        trade_date=date(2024, 1, 2), outbox_id="outbox_1", generation=3,
+        run_id="run_readback",
+        portfolio_id="portfolio_readback",
+        trade_date=date(2024, 1, 2),
+        outbox_id="outbox_1",
+        generation=3,
         expected_position_count=1,
     )
     assert result["position_count"] == 1
@@ -1384,7 +1408,6 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
         prices={"000001.SZ": 10.0},
     )
 
-
     provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
@@ -1414,7 +1437,7 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
     )
 
 
-def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() -> None:
+def test_day_runner_historical_v25_request_uses_effective_twap_without_auxiliary_loader() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP", topk=2, n_drop=0)
@@ -1429,7 +1452,7 @@ def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() ->
         start_date=date(2024, 1, 2),
         data_source=MinuteDataSource.DB_HISTORICAL,
     )
-    provider = FakeDayFeatureExcludingMinuteProvider(excluded_symbol="000001.SZ")
+    provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
         repository=paper_repo,
@@ -1455,7 +1478,7 @@ def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() ->
     assert [order.symbol for order in result.orders] == ["000001.SZ", "000002.SZ"]
     assert [fill.symbol for fill in result.fills] == ["000001.SZ", "000002.SZ"]
     assert provider.calls
-    assert all(call["require_day_features"] is False for call in provider.calls)
+    assert all(call["source"] == MinuteDataSource.DB_HISTORICAL for call in provider.calls)
     context = result.run.runtime_config["validated_execution_policy"]
     assert context["algo_code"] == "TWAP"
     assert context["runtime_policy_selection"]["requested_algo_code"] == "V25_1_SMALL_CAP"
@@ -1663,10 +1686,7 @@ def test_day_runner_loads_snapshot_price_for_held_position_without_order_market_
     assert prices["000002.SZ"] == pytest.approx(10.3)
     assert provider.calls[0]["min_bars"] == 1
     assert provider.calls[0]["symbol"] == "000002.SZ"
-    assert any(
-        item["event_type"] == "HELD_POSITION_SNAPSHOT_PRICES_LOADED"
-        for item in paper_repo.run_events
-    )
+    assert any(item["event_type"] == "HELD_POSITION_SNAPSHOT_PRICES_LOADED" for item in paper_repo.run_events)
 
 
 def test_paper_trading_day_runner_rejects_raw_execution_policy_override() -> None:
@@ -1912,7 +1932,10 @@ def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trad
     assert context["algo_code"] == "TWAP"
     assert context["runtime_policy_selection"]["requested_policy_id"] == policy_id
     assert context["runtime_policy_selection"]["fallback_used"] is False
-    assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id)[0].activation_id == activation.activation_id
+    assert (
+        paper_repo.list_execution_policy_activations(portfolio.portfolio_id)[0].activation_id
+        == activation.activation_id
+    )
 
 
 def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
@@ -1991,10 +2014,14 @@ def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
     assert stored_config["runtime_variant"]["variant_id"] == variant.variant_id
     assert stored_config["runtime_variant"]["paper_candidate"] is False
     assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
-    assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["max_single_order_value"] == 10_000.0
+    assert (
+        stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["max_single_order_value"]
+        == 10_000.0
+    )
     assert stored_config["validated_execution_policy"]["activation_source"] == "localsim_runtime_mode_policy"
-    assert stored_config["validated_execution_policy"]["runtime_policy_selection"]["requested_policy_id"] == (
-        portfolio.execution_policy["validated_execution_policy_id"]
+    assert (
+        stored_config["validated_execution_policy"]["runtime_policy_selection"]["requested_policy_id"]
+        == (portfolio.execution_policy["validated_execution_policy_id"])
     )
     assert len(result.orders) == 1
     assert result.orders[0].quantity == 1000
@@ -2263,8 +2290,7 @@ def test_paper_trading_readiness_auto_generate_uses_previous_trading_day_cutoff(
     assert "paper_v2_session" in result.runtime_config_keys
     assert "selection_artifact_config" in result.runtime_config_keys
     assert any(
-        check.check_name == "selection_runtime" and check.context["raw_candidate_count"] == 1
-        for check in result.checks
+        check.check_name == "selection_runtime" and check.context["raw_candidate_count"] == 1 for check in result.checks
     )
 
 

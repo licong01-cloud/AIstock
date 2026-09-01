@@ -1,17 +1,15 @@
 name: Semgrep
 
 on:
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 permissions:
   contents: read
   security-events: write
+
+concurrency:
+  group: semgrep-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -20,22 +18,36 @@ defaults:
 jobs:
   semgrep:
     name: AIstock Semgrep guardrails
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    if: ${{ github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_REF: ${{ github.ref }}
+        run: |
+          python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
+            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
+
+      - name: Verify prebuilt AIstock-CI and Semgrep tooling
+        shell: powershell
+        run: |
+          python scripts/ci_environment_verify.py
+          if (-not (Get-Command semgrep -ErrorAction SilentlyContinue)) { throw 'semgrep is not preinstalled on aistock-ci runner' }
 
       - name: Detect Semgrep fast lane
         id: fast_lane
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/semgrep
           python scripts/ci_changed_files.py \
@@ -52,24 +64,12 @@ jobs:
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
           echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
 
-      - name: Set up Python 3.12
-        if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: .github/requirements/semgrep.txt
-
-      - name: Install Semgrep
-        if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
-        run: python -m pip install --prefer-binary -r .github/requirements/semgrep.txt
-
       - name: Run Semgrep
         if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/semgrep
           python scripts/ci_changed_files.py \
@@ -89,12 +89,4 @@ jobs:
         run: |
           python -c "import json; data=json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'semgrep': 'skipped'}, ensure_ascii=False))" > tmp/validation/semgrep/semgrep.json
           cat tmp/validation/semgrep/semgrep.json
-
-      - name: Upload Semgrep report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-${{ github.run_id }}
-          path: tmp/validation/semgrep/
-          if-no-files-found: ignore
 

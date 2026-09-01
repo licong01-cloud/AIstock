@@ -6,8 +6,9 @@ import psycopg2
 import pytest
 
 from backend.services.data_refresh_audit import DatasetRefreshStatus
-from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider, PaperV2MinuteMarketDataProvider
-from backend.services.simulation_runtime.models import DailyTradingContextV1
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.daily_context_provider import DailyTradingContextProvider
+from backend.services.simulation_data.daily_context import DailyTradingContextV1
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.paper_trading_v2.fixtures_dev_db import DevDbTargetMisconfigured, _dev_dsn
 
@@ -145,8 +146,12 @@ def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None
     def fetch_quotes(symbols: list[str]) -> dict[str, dict]:
         quote_calls.append(list(symbols))
         return {
-            "000001.SZ": {"pre_close": 10.0, "time": "20260821091000"},
-            "600000.SH": {"pre_close": 8.0, "time": "20260821091000"},
+            "000001.SZ": {
+                "K": {"Last": 10_000},
+                "time": "20260821091000",
+                "price_basis": "yuan",
+            },
+            "600000.SH": {"K": {"Last": 8_000}, "time": "20260821091000"},
         }
 
     context = _provider(conn, audit).load(
@@ -172,12 +177,45 @@ def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None
     }
     DailyTradingContextV1.model_validate(context.carrier_payload())
     reference = DailyTradingContextProvider.to_pre_trade_statuses(context)["000001.SZ"]["daily_trading_context"]
-    _, _, _, frozen_pre_close_source = PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs(
-        symbol="000001.SZ",
-        trade_date=TRADE_DATE,
-        frozen_daily_fact=reference,
+    _, _, _, frozen_pre_close_source, frozen_limit_price_source = (
+        PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs(
+            symbol="000001.SZ",
+            trade_date=TRADE_DATE,
+            frozen_daily_fact=reference,
+        )
     )
     assert frozen_pre_close_source == "TDX_REALTIME.batch_quote.pre_close:frozen_daily_trading_context_v1"
+    assert frozen_limit_price_source == "market.stk_limit:frozen_daily_trading_context_v1"
+
+
+def test_missing_raw_pre_close_keeps_miniqmt_yuan_price_basis() -> None:
+    conn = FakeConn()
+    audit = FakeAuditRepository()
+
+    class NullPreCloseCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple) -> None:
+            super().execute(sql, params)
+            if "FROM market.stk_limit" in sql:
+                self.rows = [(row[0], row[1], None, row[3], row[4]) for row in self.rows]
+
+    conn.cursor = lambda: NullPreCloseCursor(conn)  # type: ignore[method-assign]
+    context = _provider(conn, audit).load(
+        symbols=SYMBOLS,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime(2026, 8, 21, 9, 10),
+        calendar_service_snapshot={"is_trading_day": True},
+        binding_identity="binding:hash",
+        package_identity="package:manifest",
+        release_identity="release:hash",
+        pre_close_quote_fetcher=lambda symbols: {
+            "000001.SZ": {"pre_close": 10.0, "time": "20260821091000"},
+            "600000.SH": {"pre_close": 8.0, "time": "20260821091000"},
+        },
+        pre_close_quote_source="MINIQMT_REALTIME.broker_quote.pre_close",
+    )
+
+    assert context.symbols["000001.SZ"].pre_close == 10.0
+    assert context.symbols["600000.SH"].pre_close == 8.0
 
 
 def test_missing_raw_pre_close_fails_closed_without_quote_authority() -> None:
@@ -239,8 +277,8 @@ def test_missing_raw_pre_close_rejects_unapproved_quote_source_before_fetch() ->
 @pytest.mark.parametrize(
     ("quote", "reason_code"),
     [
-        ({"pre_close": 10.0, "time": "20260821090000"}, "REALTIME_QUOTE_STALE"),
-        ({"pre_close": 99.0, "time": "20260821091000"}, "DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_INVALID"),
+        ({"pre_close": 10_000, "time": "20260821090000"}, "REALTIME_QUOTE_STALE"),
+        ({"pre_close": 99_000, "time": "20260821091000"}, "DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_INVALID"),
     ],
 )
 def test_missing_raw_pre_close_rejects_stale_or_out_of_bounds_quote(

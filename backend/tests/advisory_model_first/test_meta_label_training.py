@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -51,10 +53,13 @@ def _matrix() -> tuple[pd.DataFrame, pd.DataFrame, pd.DatetimeIndex]:
     return pd.DataFrame(rows), pd.DataFrame(labels), dates
 
 
-def test_core_family_excludes_hmm_values_and_missing_indicators_and_fails_loudly_without_lightgbm() -> None:
+def test_core_family_excludes_hmm_values_and_missing_indicators_and_fails_loudly_without_lightgbm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     features, labels, dates = _matrix()
     family = approved_meta_label_families()[0]
     assert not (set(meta_label_feature_names(family)) & HMM_FEATURES)
+    monkeypatch.setitem(sys.modules, "lightgbm", None)
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         train_meta_label_trial(
             features=features,

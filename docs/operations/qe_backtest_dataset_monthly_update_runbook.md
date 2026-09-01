@@ -5,6 +5,214 @@
 详细设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`。
 低层数据公式与历史 exporter 兼容说明：`docs/analysis/qlib_backtest_dataset_export_guide_20260712.md`。
 
+## 0. 2026-09-01 最短交付路径（唯一有效）
+
+目标是生成 cutoff=`2026-08-31` 的独立 `qe_hmm_full_v2` candidate。禁止覆盖现有 2026-07-31 candidate、
+禁止 production activation、禁止重复真实 sample，禁止在本任务中新增门禁或平台能力。
+
+执行顺序：
+
+1. 只读确认 production canonical PIT v2 是否覆盖到 `2026-08-31`。当前若仍为 `2026-07-31`，使用 Appendix A
+   “8月31日收盘后：准备目标cutoff authority”中的 canonical PIT operator 命令执行 DEV apply/readback；取得
+   production target DML 明确授权后再执行 production apply/readback。Appendix A 的 sample/7月v2 full 步骤仍禁止执行。
+2. 直接构建 `2026-08-31` industry full 和 P3A full。不得先构建五股/六股 sample。
+3. 只提交一次：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+```
+
+4. 只读取同一 submission/run 的 bounded status/events/log/receipt，直至 terminal。
+5. terminal candidate 只执行一次完整结构验收、分层数值抽样和 QE/HMM producer smoke；通过后停止。
+
+planner 必须优先复用现有 2026-07-31 v1 candidate 中 identity 一致的 daily/minute/H5/static/index 分区；
+只追加 8 月尾部、补充 v2 新增历史退市证券，并选择性重建 PIT/复权/行业实际失效的证券或月份。
+不得为了流程证明重新导出八年全市场。
+
+### 0.1 资源规则
+
+- host available、commit headroom、pagefile/paging、WSL available、预测磁盘余量、aggregate commit、pressure rung、
+  性能退化和其他模块训练/回测负载全部只记录 telemetry，不参与 admission、checkpoint、等待或终态判断。
+- 月更不再产生 AIstock `WAITING_RESOURCE`。只有 OS/Docker/WSL、数据库或文件系统实际返回 OOM、进程终止、
+  连接失败、超时或 ENOSPC 才结束当前 attempt；不自动重试。
+- 分批查询、流式处理、按股票/月切片和有界日志继续使用，但它们不是门禁，不能缩减数据或验证范围。
+- 禁止新增任何资源或流程门禁。发现性能问题只记录并在本次 candidate 完成后另行优化。
+
+### 0.2 完成条件
+
+- canonical PIT v2、industry/P3A 均覆盖 `2026-08-31`；
+- daily/minute/PIT/ST/stk_limit/QFQ/static/H5/12-index/sector required validation 全部 PASS；
+- QE/HMM producer smoke PASS；
+- candidate marker、catalog、receipt 与 artifact identity 一致；
+- production writes、pointer changes、node1、backend restart 和 cleanup 均为 0/not_requested。
+
+满足后立即停止，不继续消费者迁移、模型训练、生产激活或平台产品化。
+
+## Appendix A. 已废弃的旧 P0 执行窗
+
+以下步骤只保留历史解释，不得执行；特别是六股 sample、2026-07-31 v2 full 前置和重复 source-freeze 已被 §0 取代。
+
+本执行窗的目标是在2026-09-01凌晨开始，把独立candidate-only数据集更新到2026-08-31并形成terminal receipt。
+它不授权production activation、DB DDL/DML、node1、后端重启或cleanup。QE/HMM训练、Selection/Paper/Advisory
+消费者迁移不属于本执行窗前置。
+
+### 0.1 8月29日至30日：只闭合首次v2基线
+
+1. 冻结直接参与数据发布的source/profile/toolchain；无交集消费者提交不阻断本任务。
+2. 对BUG-1238修复后的最终runtime只提交一次六股sample。原五只PIT/价格边界股票保持不变；
+   `300741.SZ`是P3A双authority控制股票，用于同时覆盖2021-07-30 aligned行业事实与
+   2021-08-02 classification/index authority unaligned边界。提交前先从已验证的2026-07-31
+   industry full authority构建新的六股P3A sample；新的scope digest形成独立目录，旧五股candidate完整保留：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryJul = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-07-31\full'
+$SectorSampleJul = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-07-31\sample-554c8193b6f6de4c859b0f16881b1f34e6eb11c41a68f416b829801b941301d2'
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryJul `
+  --artifact-root $SectorSampleJul `
+  --start-date 2018-08-01 `
+  --end-date 2026-07-31 `
+  --symbol 000001.SZ `
+  --symbol 300379.SZ `
+  --symbol 300741.SZ `
+  --symbol 600462.SH `
+  --symbol 600930.SH `
+  --symbol 688981.SH
+```
+
+六股P3A readback必须满足完整分母闭合、`sector_fact_rows>0`，并在2021-07-30包含
+`300741.SZ`的aligned resolved行；不得通过允许空`sector_data`、默认行业或复用旧五股scope绕过。
+随后提交唯一sample：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
+```
+
+历史`BLOCKED_CONTRACT` submission已经终态，不得resume。新sample失败时读取同一submission的bounded events/result，
+按typed blocker处理；禁止重复提交第二个sample。只有同合同源码BUG修复合入后，才执行一次final rerun。
+
+3. sample PASS后，复用已经存在的2026-07-31 industry full authority，生成缺失的P3A full：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryJul = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-07-31\full'
+$SectorJul = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-07-31\full'
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryJul `
+  --artifact-root $SectorJul `
+  --start-date 2018-08-01 `
+  --end-date 2026-07-31
+```
+
+`$SectorJul`必须是不存在的新目录；命令拒绝覆盖时不得删除或改写旧目录来重跑。
+
+4. P3A full四文件readback和完整分母闭合后，只提交一次2026-07-31 full initial migration：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope full --candidate-only
+```
+
+planner必须优先复用已验证2026-07-31 v1组件。不能为了流程验收强制全量重导，也不能覆盖任何既有7月数据集。
+
+### 0.2 8月31日收盘后：准备目标cutoff authority
+
+在权威交易日历和当日源数据可用后，先只读检查`market.stock_universe_pit_state`与
+`market.stock_universe_pit_spans`中`aistock_equity_pit_canonical_v2`是否ready/clean并覆盖至2026-08-31。
+industry/P3A builder会拒绝超出该覆盖的请求，不能用参数、复制7月receipt或缩短窗口绕过。
+
+如果coverage不足，必须先使用`scripts/prepare_canonical_pit_monthly.py`受控operator：默认plan-only，复用
+`StockUniversePitService.ensure_canonical_pit_universe()`，固定canonical key/rule/start/cutoff；DEV执行
+apply/readback后，可用同cutoff再次apply取得`NO_OP_VERIFIED`证明幂等；该复核是推荐证据而非新增阻断门禁。
+再由用户对production目标和2026-08-31 refresh明确授权，最后绑定同cutoff DEV成功receipt执行production apply/readback。DEV是项目规定的验证库，
+不再增加强制rollback这一非规范门禁；该调整不放宽production授权、readback或不可变receipt要求。
+该CLI由BUG-1243实现；源码合入和用户完成`backend-main`重启前，仍禁止使用临时Python one-liner、直接SQL、
+普通ST endpoint或monthly隐式写库替代。所有receipt路径必须是profile control root下`operator_receipts`的
+直接子文件，文件名不可复用。
+
+```powershell
+$ReceiptRoot = 'X:\AIstock_dataset_release_control\operator_receipts'
+
+# 1. DEV只读计划
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode plan `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-plan.json')
+
+# 2. DEV apply/readback；不足时只重建canonical rolling state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json')
+
+# 3. 可选幂等复核：同cutoff再次apply应得到NO_OP_VERIFIED
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-noop.json')
+
+# 4. 用户对production目标明确授权后执行；禁止从DEV复制state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database production --mode apply `
+  --cutoff 2026-08-31 --authorization-ref '<production-authorization-ref>' `
+  --dev-receipt (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json') `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-production-apply.json')
+```
+
+任一步出现`schema_contract_missing`、readback仍需重建、target/contract/cutoff不匹配或receipt已存在时均立即停止；
+operator不会建表、切换authority pointer、导出数据集、调用provider或控制进程。
+
+canonical PIT coverage PASS后，生成截至2026-08-31的双authority与P3A full：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryAug = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-08-31\full'
+$SectorAug = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-08-31\full'
+
+rtk python scripts/build_industry_pit_candidates.py `
+  --artifact-root $IndustryAug `
+  --window-start 2018-08-01 `
+  --window-end 2026-08-31
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryAug `
+  --artifact-root $SectorAug `
+  --start-date 2018-08-01 `
+  --end-date 2026-08-31
+```
+
+两条writer都使用只读数据库事务和repo-external新目录；任何typed unavailable保留在完整分母中，不以内连接、
+默认行业或删除股票缩小范围。目标目录已存在时先readback其identity；禁止覆盖或用删除目录制造重跑条件。
+
+### 0.3 9月1日00:05以后：只提交一次August monthly
+
+`monthly`使用`previous_month_last_completed_trading_day`。8月31日当天执行仍会解析到7月31日，因此必须在
+2026-09-01 00:05（Asia/Shanghai）以后提交：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
+```
+
+第一条命令只执行一次。后续仅使用同一submission/run的`status/events/receipt/log`有界读取。provider尚未发布或网络
+限流属于同一durable intent的retryable waiting；不得新建submission追赶时间。目标是在9月1日开盘前得到
+`SUCCEEDED/CANDIDATE_VALIDATED`及完整terminal receipt；时间目标不放宽数据、PIT、行业、指数或验证合同。
+
+### 0.4 P0完成与停止条件
+
+只有以下全部成立才报告8月31日candidate更新完成：
+
+- effective cutoff=`2026-08-31`；
+- P1/P2A与P3A full readback、denominator和hash闭合；
+- daily/minute/PIT/ST/stk_limit/QFQ/static/H5/12-index/sector及QE/HMM producer smoke全部required PASS；
+- terminal receipt、candidate marker、catalog、release和attestation identity一致；
+- dataset-release run的production writes、pointer changes、DB writes和service controls均为0；若此前执行了获授权的
+  canonical PIT coverage DML，其DEV/production apply/readback receipt必须独立存在，不能记入monthly零写入证明或被其掩盖。
+
+如果出现新的确定性合同错误、authority冲突、内部required gap或源码BUG，保留attempt/checkpoint并停止P0执行；只登记
+一个精确owner的P1 BUG，不增加新的设计阶段、不连续提交更多sample/full/monthly。production activation继续等待独立授权。
+
 ## 1. 最短路径
 
 在当前 AIstock repo root 执行：
@@ -198,8 +406,8 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 | `submission_state=QUEUED_RESOLUTION` + `worker_health.state=unavailable|stale|blocked` | durable request 已保存，兼容 Worker 不可用 | 不重提、不代跑；通知 runtime owner |
 | `submission_state=RESOLVING_SOURCE` | 冻结 source/PIT/provider content | 等待；不启动 exporter |
 | `run_state=QUEUED|EXECUTING|VALIDATING|PREPARING_PUBLISH|PUBLISHING` | run 受 attempt/lease/fence/resource supervisor 管理 | 用 status/events 观察 |
-| `WAITING_RESOURCE` | OS 明确 LowMemory 信号、任务自身 hard cap 或按预测所需的 X 空间不足 | 不提高 cap；保留 durable task，条件恢复后继续；等待 deadline 只告警、不终止 |
-| 性能 warning | 可比 workload 吞吐退化 | 记录 telemetry；不暂停、不阻断、不改变 pressure rung |
+| `WAITING_RESOURCE` | 历史状态；当前月更不得产生 | 按 BUG-1297 处理，不自动重试或重复 source freeze |
+| 性能 warning | 可比 workload 吞吐退化 | 只记录 telemetry；不暂停、不阻断、不改变执行范围 |
 | `WAITING_SOURCE` | required source 尚未完成，或 resolution source freeze 期间检测到 writer/snapshot drift | 保留同一 submission 等待自动重试；禁止重提、补零、减范围或放宽一致性检查 |
 | `WAITING_ORPHAN_QUIESCENCE` | 旧 owned process tree 仍 alive/unknown | 只观察；不得 kill/delete lock |
 | `BLOCKED_PROVIDER_TERMINAL` | 40203、overlap conflict、无完整 240 bars等 | 报告 code/date/pending scope，不循环重试 |
@@ -272,25 +480,18 @@ terminal-failed 临时候选可被标记为 cleanup candidate；流程永不自�
 
 backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authority。Worker owner 丢失时，只有 lease expiry 且 Windows/WSL 全部 descendants 已证明 quiescent 才能 reclaim。不要删除 lock、改 SQLite、重置 fence 或杀 orphan。
 
-## 8. 资源边界
+## Appendix B. 已废弃的资源边界历史
 
-关键 hard contract：
+本节只用于解释旧 profile/receipt 字段。当前执行严格使用 §0.1：所有 AIstock 资源数值只作 telemetry，
+不得执行 admission、checkpoint、`WAITING_RESOURCE`、pressure ladder 或性能阻断。
 
-- 同 host heavy full concurrency=1；
-- aggregate owned private commit≤12 GiB；
-- Windows-only Job≤8 GiB，hybrid Windows side≤4 GiB；
-- WSL memory high/max/swap=6/8/0 GiB；
-- host available、system commit headroom、paging/pagefile 与 WSL host available 继续采集并写 receipt，但所有数值阈值仅为 warning telemetry，不参与 admission、checkpoint 或 terminal 判定；OS 明确 `LowMemoryResourceNotification` 仍可安全暂停；
-- DB pool=4、row-producing query=1、provider request=1；
-- minute batch/date chunk=20 stocks/3 months；factor H5/static 由单日切片与 Parquet row-group 控制；profile 中 `h5_batch=100` 仅为 v1 兼容遥测，不是生效的降压旋钮；
-- Parquet row group/validation chunk≤100,000 rows；
-- start free space=1.25×predicted remaining new bytes；没有预测值时不应用固定 32 GiB 保留，实际写盘失败仍 typed fail/wait。
+当前资源合同：
 
-允许的降压只有 profile pressure ladder：batch/chunk/row-group/workers逐级降低。不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能。
-workload 分级仍由已校验的 durable scope 决定并写入 receipt，但历史 start reserve 字段只作兼容遥测。12 GiB
-aggregate、Job/cgroup、WSL zero-swap、DB/provider 并发和 bounded batch 仍是任务自身 hard contract。全局持续换页、
-available/commit/WSL host available、固定磁盘 floor 和性能退化不得阻断；receipt 必须披露 warning 与
-`system_admission_thresholds_blocking=false`。
+- Windows Job 和 WSL transient cgroup 只承担 task-owned 进程归属、取消、owner-death fail-stop 与 quiescence readback；不得安装 AIstock memory/commit/swap 上限；
+- host available、commit headroom、paging/pagefile、WSL available、OS low-memory signal、aggregate commit 与预测磁盘余量只写 telemetry；
+- 上述资源观测不得触发 admission、checkpoint、暂停、`WAITING_RESOURCE`、pressure rung、自动重试或 terminal 判定；
+- batch/chunk/row-group/workers 是固定的流式实现参数，不是门禁；不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能；
+- 只有子进程实际 OOM/termination、Docker/WSL/DB 实际失败、超时或文件系统实际 ENOSPC 才结束当前 attempt，且不自动重试。
 
 性能边界必须如实区分：
 

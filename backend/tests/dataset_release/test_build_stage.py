@@ -18,6 +18,7 @@ from backend.services.dataset_release import component_manifest_producer as comp
 import backend.tests.dataset_release.test_candidate_validator as candidate_fixtures
 from backend.services.dataset_release.build_stage import (
     BuildStageInvocation,
+    StageResourceReceipt,
     run_build_stage,
 )
 from backend.services.dataset_release.canonical_stock_transformer import (
@@ -68,6 +69,23 @@ from backend.tests.dataset_release.test_candidate_validator import (
     _pit,
     _spec,
 )
+
+
+def test_stage_resource_receipt_records_large_memory_without_blocking(monkeypatch, dataset_profile) -> None:
+    monkeypatch.setattr(build_stage.psutil, "virtual_memory", lambda: SimpleNamespace(available=1024))
+    monkeypatch.setattr(
+        build_stage.psutil,
+        "Process",
+        lambda: SimpleNamespace(
+            memory_full_info=lambda: SimpleNamespace(uss=64 * 1024**3, rss=64 * 1024**3)
+        ),
+    )
+    invocation = SimpleNamespace(profile=dataset_profile, pressure_rung=0, stage="fixture-stage")
+
+    receipt = StageResourceReceipt(invocation).finish()
+
+    assert receipt["peak_owned_private_commit_bytes"] == 64 * 1024**3
+    assert all(checkpoint["decision"] == "READY" for checkpoint in receipt["checkpoints"])
 
 
 def _source_partition(component: Component) -> list[dict]:

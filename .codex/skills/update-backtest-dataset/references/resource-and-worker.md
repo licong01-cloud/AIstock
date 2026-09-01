@@ -3,8 +3,7 @@
 ## Contents
 
 - [Architecture boundary](#architecture-boundary)
-- [Hard resource contract](#hard-resource-contract)
-- [Pressure ladder](#pressure-ladder)
+- [OS-managed execution and telemetry](#os-managed-execution-and-telemetry)
 - [Worker modes](#worker-modes)
 - [Lease, fence and orphan recovery](#lease-fence-and-orphan-recovery)
 - [Waiting and hard failures](#waiting-and-hard-failures)
@@ -18,54 +17,23 @@ Do not start or register a Worker as a side effect of `monthly`, API submission,
 
 The scheduler is optional and disabled by default. It runs as Worker reconcile mode or an external scheduler, never as FastAPI background work. It only creates candidate intents and never activates production.
 
-## Hard resource contract
+## OS-managed execution and telemetry
 
-Read live values from the selected allowlisted profile. `qe_hmm_full_v1` reproduction and `qe_hmm_full_v2` canonical candidate share these defaults/hard boundaries:
+AIstock does not perform resource admission or resource-driven state transitions for monthly dataset work. Profile resource
+fields remain readable only for historical receipt compatibility and telemetry; they do not impose host, Job, cgroup, swap,
+memory, disk-reserve, paging, concurrency or performance gates.
 
-| Resource | Boundary |
-|---|---:|
-| same-host heavy full concurrency | 1 |
-| aggregate owned private commit | 12 GiB |
-| Windows-only child Job commit | 8 GiB |
-| hybrid/WSL Windows-side Job commit | 4 GiB |
-| WSL `memory.high` / `memory.max` / `swap.max` | 6 GiB / 8 GiB / 0 |
-| host available / system commit headroom | telemetry + warning only |
-| host paging / pagefile | telemetry + warning only |
-| WSL host available | telemetry + warning only |
-| explicit OS low-memory notification | safe pause; never retry exhaustion |
-| DB pool / simultaneous row-producing query | 4 / 1 |
-| DB statement timeout | 300 s |
-| provider request concurrency | 1 |
-| Qlib dump workers | 8 |
-| minute code batch / date chunk | 20 / 3 months |
-| H5 compatibility setting / date chunk | 100 (telemetry only) / 3 months |
-| Parquet row group / validation read chunk | 100,000 / 100,000 rows |
-| enforcement sample / receipt rollup / wait deadline | 1 s / 5 s / 3,600 s telemetry; deadline is non-terminal |
-| candidate required free space | 1.25 x predicted remaining new bytes; no fixed floor |
+The operating system, Docker/WSL, PostgreSQL and the filesystem remain the only resource authorities. An actual OOM/process
+termination, database error/timeout or ENOSPC ends the current attempt with its original external error. AIstock does not
+pre-emptively checkpoint, enter `WAITING_RESOURCE`, automatically lower a pressure rung, or automatically retry a full source
+freeze.
 
-Profiles may reduce task-owned concurrency/chunk size. They may not increase a task-owned maximum, enable WSL swap or bypass a limit through CLI/env. Historical system reserve fields remain receipt-compatible telemetry and cannot block admission. Resource contract changes require a versioned policy and comparable benchmark; they do not change data-byte identity.
+Every SQL/provider response is still bounded before transform. One-date H5 slices, code/date batches, Parquet row groups and
+bounded validation reads remain algorithmic implementation details that prevent unbounded Python materialization; they are not
+admission gates and cannot reduce stocks, dates, fields, PIT spans, 12-index scope or validation.
 
-Every SQL/provider response is bounded before transform. “Load a large response and split it afterward” violates the contract.
-
-## Pressure ladder
-
-Use only the frozen rungs, in order:
-
-```text
-H5 configured value:100 -> 50 -> 20 (compatibility telemetry; not an active memory control)
-minute batch:       20 -> 10 -> 5
-date chunk months:   3 -> 1
-row group rows: 100000 -> 50000
-dump workers:         8 -> 4 -> 2
-```
-
-At a safe checkpoint, a new attempt may select the next rung only after sustained release-owned aggregate commit reaches 85% of its cap. Host-wide pressure from unrelated databases, WSL jobs, experiments or model training cannot select a rung. Never reduce stocks, dates, fields, PIT spans, 12-index scope or validation to fit memory. If the lowest rung breaches a task-owned cap, enter typed `WAITING_RESOURCE` or task failure; do not keep allocating.
-
-Factor H5/static memory is actively bounded by one-date-slice processing plus
-`row_group_rows`; the historical `h5_batch` profile field is retained only for
-v1 receipt/profile compatibility and MUST NOT be reported as an effective
-throttling mechanism. Minute manifests are bound again by the parent processor
-to the selected `minute_batch` rung.
+Historical pressure-rung fields may be emitted as compatibility telemetry, but runtime selection is fixed by the data component
+implementation and never changes because of host resource observations.
 
 ## Worker modes
 
@@ -93,9 +61,10 @@ rtk python scripts/dataset_release_worker.py --serve --profile $Profile --contro
 - SIGINT/SIGTERM requests cooperative shutdown at checkpoints; it does not authorize killing unrelated or orphan processes.
 - Exit never deletes candidates, events, lease history, receipt, attestation, checkpoint or failure evidence.
 
-Before any data-bearing Windows child runs, the supervisor creates it suspended, assigns it to the non-breakaway task Job, applies/readbacks limits, then resumes it. WSL heavy work must run in the attempt/fence-bound transient user-systemd cgroup with guardian heartbeat, `KillMode=control-group`, memory high/max, swap zero and membership readback.
-
-If Job/cgroup enforcement or guardian ownership cannot be proved before a source query, return `BLOCKED_RESOURCE_ENFORCEMENT_UNAVAILABLE`. Do not run “with telemetry only.”
+Before any data-bearing Windows child runs, the supervisor may assign it to the non-breakaway task Job for identity, cancellation
+and descendant ownership only; it does not apply an AIstock memory/commit limit. WSL transient units/cgroups provide exact
+attempt/fence ownership and cleanup identity without AIstock memory.high/max/swap enforcement. Missing ownership identity still
+fails closed because it is process-safety evidence, not a resource admission policy.
 
 ## Lease, fence and orphan recovery
 
@@ -106,7 +75,8 @@ host:heavy-dataset
 release:<release_id>
 ```
 
-Each attempt stores separate host and release fencing tokens. Heartbeat/resource admission checks the host token; candidate checkpoint/publish checks attempt plus release token. Every checkpoint, append, CAS ref and publish revalidates the applicable tokens.
+Each attempt stores separate host and release fencing tokens. Ownership heartbeat checks the host token; candidate checkpoint,
+append, CAS ref and publish revalidate the applicable tokens.
 
 Lease reclaim requires expiry and complete parent/Windows-child/WSL-child quiescence. PID plus create time prevents PID-reuse mistakes. Any child `alive` or `unknown` produces `WAITING_ORPHAN_QUIESCENCE`; the orphan deadline is an alert, not permission to free a lease.
 
@@ -118,20 +88,19 @@ existing guardian state for the same attempt/fence.
 
 After publish-owner loss, attempt/pointer and both leases enter `ORPHAN_HOLD` atomically. Once the entire tree is proven quiescent, one `FINALIZER_RECOVERY` owner adopts with new fences; there is no intermediate FREE window.
 
-Never recover by killing another process, deleting a lock, clearing a lease row or editing a fence. Task-owned Job/cgroup fail-stop applies only to children assigned at creation and only for hard resource/supervisor-loss enforcement.
+Never recover by killing another process, deleting a lock, clearing a lease row or editing a fence. Job/cgroup ownership applies
+only to children assigned at creation and is not a resource gate.
 
 ## Waiting and hard failures
 
 | State/category | Meaning | Operator action |
 |---|---|---|
-| `WAITING_RESOURCE` | explicit OS low-memory signal, task-owned pressure, or predicted-capacity shortage | leave durable task; recheck later; deadline does not terminalize it |
-| performance warning | comparable workload outside threshold | inspect receipt; no automatic pause/block/rung change |
 | `WAITING_SOURCE` | required source not yet ready | wait for source; do not fill silently |
 | `WAITING_ORPHAN_QUIESCENCE` | old owned tree alive/unknown | observe only; do not kill/delete |
-| resource hard failure | Job/cgroup/OOM/guardian loss | task-only fail-stop, retain staging/checkpoint |
+| actual OS/DB/filesystem failure | preserve the external error and terminalize the attempt | fix the external condition, then explicitly submit again |
 | provider terminal | 40203/conflict/incomplete canonical session | report pending scope; no retries disguised as success |
 
-Wait time, provider wait and compute time must be recorded separately. Resource waiting may increase wall time without being a compute regression.
+Provider wait and compute time remain separate telemetry. Resource observations never change task state.
 
 ## Logging and performance
 
@@ -141,8 +110,8 @@ with principal, endpoint, run, stream, filter and order; the next page resumes f
 `next_log_id/next_generation/next_byte_offset`, not from a recomputed tail. Never use unbounded `capture_output` or load a multi-hour log into memory.
 
 Each CAS log segment is at most 16 MiB by default; one supervised child has one shared stdout/stderr budget of at most
-128 segments (2 GiB at the maximum segment size). One API read returns at most 1 MiB and 1,000 lines. A control-root
-capacity watermark blocks new heavy work with `CONTROL_ROOT_CAPACITY_EXCEEDED`; it never authorizes automatic evidence or candidate deletion.
+128 segments (2 GiB at the maximum segment size). One API read returns at most 1 MiB and 1,000 lines. Control-root capacity is
+telemetry; only an actual filesystem write failure/ENOSPC ends the attempt and never authorizes deletion.
 
 Record per stage/chunk:
 
@@ -152,14 +121,16 @@ Record per stage/chunk:
 - DB query count/rows/time, provider requests/wait, X-disk read/write;
 - rows, bytes, compute seconds, wait seconds and reuse savings.
 
-For a comparable synthetic workload, three-run median compute must be within 110% of baseline and throughput at least 90%, with query/memory thresholds satisfied. `benchmark_not_comparable` is not a PASS for source merge evidence.
+Synthetic and real performance comparisons are telemetry only and never block delivery.
 
 Candidate materialization can reuse/COW unchanged component partitions, but full source correctness is a different layer.
 Without a trusted DB revision ledger, initial source freeze and prepublish DB-only recheck may each scan all required values
 through cutoff. MVCC/watermark reuse is disabled for content equivalence. A future ledger is a separate F2 plus DEV and
 target-specific production DDL/DML authorization; it is not silently created by this workflow.
 
-For an authorized production-sized monthly run, normalized compute regression is telemetry and warning only. It never enters `WAITING_PERFORMANCE_REGRESSION`, blocks the monthly release, or changes a pressure rung. One SQL exceeding the 300-second query timeout or a task-owned hard resource breach still ends the current attempt with its typed error. Waiting/source-not-ready states do not consume retry-exhaustion budget. Real full-data telemetry remains separately authorized.
+For an authorized production-sized monthly run, normalized compute regression never blocks the release. An actual SQL timeout,
+OOM, process termination or filesystem error ends only the current attempt and is not automatically retried. Source-not-ready
+states retain their existing provider retry semantics. Real full-data telemetry remains separately authorized.
 
 Current implementation acceptance is candidate-only and fixture-scoped:
 

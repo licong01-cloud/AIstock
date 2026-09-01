@@ -41,6 +41,13 @@ VALIDATION_RECEIPT_KINDS = {
     "ruff",
     "workflow_smoke",
 }
+PRODUCTION_DDL_ROOTS = (
+    "migrations/",
+    "backend/migrations/",
+    "backend/db/migrations/",
+    "scripts/migrations/",
+    "scripts/db/",
+)
 VALIDATION_RECEIPT_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_RECEIPT_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 TIER_COMPLEXITY_THRESHOLDS = {
@@ -136,6 +143,13 @@ def _has_validation_receipt(value: Any) -> bool:
             and not VALIDATION_RECEIPT_FAIL_RE.search(result)
         )
     return bool(VALIDATION_RECEIPT_RE.search(str(value or "")))
+
+
+def _requires_production_ddl(path: str) -> bool:
+    """Return true only for executable SQL or an actual database migration root."""
+
+    normalized = str(path).replace("\\", "/").removeprefix("./").lower()
+    return normalized.endswith(".sql") or normalized.startswith(PRODUCTION_DDL_ROOTS)
 
 
 def _utc_now() -> str:
@@ -434,7 +448,7 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         if plan_key not in set(required + recommended)
     }
     gates = {
-        "ddl": "required" if any(path.endswith(".sql") or "/migrations/" in path for path in changed_files) else "noop",
+        "ddl": "required" if any(_requires_production_ddl(path) for path in changed_files) else "noop",
         "frontend_dependency": "required"
         if any(path in {"frontend/package.json", "frontend/package-lock.json", "frontend/pnpm-lock.yaml"} for path in changed_files)
         else "noop",

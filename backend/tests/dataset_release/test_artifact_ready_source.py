@@ -207,6 +207,23 @@ def _minute_rows(*, count: int = 240, open_li: int = 10_000):
     ]
 
 
+def _minute_rows_with_auction(*, open_li: int = 10_000):
+    return [
+        {
+            "ts_code": CODE,
+            "trade_time": f"{DAY.isoformat()} 09:30:00",
+            "freq": "1m",
+            "open_li": open_li,
+            "high_li": 11_000,
+            "low_li": 9_000,
+            "close_li": 10_500,
+            "volume_hand": 100,
+            "amount_li": 100_000,
+        },
+        *_minute_rows(open_li=open_li),
+    ]
+
+
 def _tdx_rows(*, count: int = 240):
     return [
         {
@@ -602,6 +619,7 @@ def test_canonical_historical_delisted_daily_gap_uses_tushare_candidate_overlay(
 
 
 def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(dataset_profile, tmp_path) -> None:
+    prior_day = date(2024, 7, 19)
     day1 = date(2024, 7, 22)
     day2 = date(2024, 7, 23)
     partition_key = f"{day1.isoformat()}_{day2.isoformat()}"
@@ -628,7 +646,7 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
         ],
         universe_key=profile.universe_key,
         rule_version=profile.universe_rule_version,
-        scope_start=day1,
+        scope_start=prior_day,
         cutoff=day2,
         state_identity=_digest("limit-state"),
         source_fingerprint_sha256=_digest("limit-source"),
@@ -662,9 +680,9 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
             {
                 "ts_code": CODE,
                 "trade_date": day1.isoformat(),
-                "pre_close": 9.0,
-                "up_limit": 9.9,
-                "down_limit": 8.1,
+                "pre_close": 0.0,
+                "up_limit": 11.0,
+                "down_limit": 9.0,
             }
         ],
         f"kline_daily_raw:{partition_key}": [
@@ -683,9 +701,24 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
     adj_ref = cas.put_json(
         {"schema_version": ARTIFACT_READY_ADJ_COVERAGE_SCHEMA, "overlay_rows": []}
     )
-    builder = ArtifactReadySourceBuilder(profile, cas)
+    reference_calls: list[tuple[str, date, date]] = []
 
-    entries, refs, summary = builder._limit_entries(
+    def fetch_reference(code: str, query_start: date, required_day: date) -> Mapping[str, Any]:
+        reference_calls.append((code, query_start, required_day))
+        return {
+            "ts_code": code,
+            "close_date": prior_day.isoformat(),
+            "close_li": 10_000,
+            "close_adj_factor": "1",
+        }
+
+    builder = ArtifactReadySourceBuilder(
+        profile,
+        cas,
+        fetch_tushare_limit_reference=fetch_reference,
+    )
+
+    entries, provider_refs, refs, summary = builder._limit_entries(
         view,
         snapshot=snapshot,
         trading_dates=(day1, day2),
@@ -706,6 +739,17 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
         checkpoint=lambda: None,
     )
 
+    assert reference_calls == [(CODE, prior_day, day1)]
+    assert len(provider_refs) == 1
+    provider_receipt = cas.get_json(provider_refs[0])
+    assert provider_receipt["schema_version"] == artifact_ready_module.STK_LIMIT_REFERENCE_PROVIDER_SCHEMA
+    assert provider_receipt["required_date"] == day1.isoformat()
+    assert provider_receipt["safety"]["database_writes"] == 0
+    replay = artifact_ready_module._FrozenProviderReplay(
+        cas,
+        [provider_refs[0].as_dict()],
+    )
+    assert replay.fetch_tushare_limit_reference(CODE, prior_day, day1) == provider_receipt["seed"]
     assert len(entries) == len(refs) == 1
     assert entries[0]["dataset"] == "stk_limit_rule_coverage"
     assert entries[0]["affected_instruments"] == ["000001.SZ"]
@@ -714,7 +758,16 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
     assert receipt["pit_snapshot_digest"] == pit.spans_sha256
     assert receipt["database_override_rows"] == 0
     assert receipt["unresolved_keys"] == 0
+    assert receipt["reference_seed_rows"] == 1
+    assert receipt["database_completion_rows"] == 1
     assert receipt["overlay_rows"] == [
+        {
+            "ts_code": CODE,
+            "trade_date": day1.isoformat(),
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
         {
             "ts_code": CODE,
             "trade_date": day2.isoformat(),
@@ -723,7 +776,8 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
             "down_limit": "9.00",
         }
     ]
-    assert summary["rule_derived_rows"] == 1
+    assert summary["rule_derived_rows"] == 2
+    assert summary["reference_seed_rows"] == 1
     raw_entry = {
         "identity": f"stk_limit:{partition_key}",
         "dataset": "stk_limit",
@@ -924,6 +978,75 @@ def test_tushare_daily_column_bound_is_terminal_not_retryable(
 
     assert caught.value.retryable is False
     assert frame.to_dict_called is False
+
+
+def test_tushare_limit_reference_selects_latest_strictly_prior_close_and_exact_adj_factor(
+    dataset_profile,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tushare as ts
+
+    store = ControlStore.initialize(tmp_path / "limit-reference-provider-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    query_start = date(2024, 7, 18)
+    prior_day = date(2024, 7, 19)
+    required_day = date(2024, 7, 22)
+    daily_frame = pd.DataFrame(
+        [
+            {
+                "ts_code": CODE,
+                "trade_date": query_start.strftime("%Y%m%d"),
+                "open": 9.0,
+                "high": 9.0,
+                "low": 9.0,
+                "close": 9.0,
+                "vol": 100.0,
+                "amount": 100.0,
+            },
+            {
+                "ts_code": CODE,
+                "trade_date": prior_day.strftime("%Y%m%d"),
+                "open": 10.0,
+                "high": 10.0,
+                "low": 10.0,
+                "close": 10.0,
+                "vol": 100.0,
+                "amount": 100.0,
+            },
+        ]
+    )
+    monkeypatch.setattr(ts, "pro_bar", lambda **_kwargs: daily_frame)
+    adj_calls: list[Mapping[str, Any]] = []
+
+    def adj_factor(**kwargs):
+        adj_calls.append(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": CODE,
+                    "trade_date": prior_day.strftime("%Y%m%d"),
+                    "adj_factor": 1.5,
+                }
+            ]
+        )
+
+    builder._tushare._provider = SimpleNamespace(adj_factor=adj_factor)
+
+    result = builder._fetch_tushare_limit_reference(
+        CODE,
+        query_start,
+        required_day,
+    )
+
+    assert result == {
+        "ts_code": CODE,
+        "close_date": prior_day.isoformat(),
+        "close_li": 10_000,
+        "close_adj_factor": "1.5",
+    }
+    assert adj_calls[0]["start_date"] == prior_day.strftime("%Y%m%d")
+    assert adj_calls[0]["end_date"] == prior_day.strftime("%Y%m%d")
 
 
 def test_tushare_adj_factor_row_bound_precedes_record_materialization(
@@ -1279,6 +1402,129 @@ def test_missing_minute_is_filled_by_tdx_without_tushare(
     assert day["provider"] == "tdx" and day["final_rows"] == 240
 
 
+def test_artifact_ready_minute_241_and_240_have_same_effective_day_identity(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    cas_240, view_240, snapshot_240 = _fixture(
+        dataset_profile,
+        tmp_path / "core",
+        minute_rows=_minute_rows(),
+    )
+    cas_241, view_241, snapshot_241 = _fixture(
+        dataset_profile,
+        tmp_path / "auction",
+        minute_rows=_minute_rows_with_auction(),
+    )
+    builder_240 = ArtifactReadySourceBuilder(dataset_profile, cas_240)
+    builder_241 = ArtifactReadySourceBuilder(dataset_profile, cas_241)
+
+    day_240 = _minute_coverage(
+        cas_240,
+        builder_240.build(snapshot_240, source_view=view_240),
+    )["days"][0]
+    day_241 = _minute_coverage(
+        cas_241,
+        builder_241.build(snapshot_241, source_view=view_241),
+    )["days"][0]
+
+    assert day_240["database_rows"] == day_241["database_rows"] == 240
+    assert day_240["effective_content_sha256"] == day_241["effective_content_sha256"]
+
+
+def test_artifact_ready_minute_excludes_only_frozen_pit_outside_stock_days(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    prior = DAY - timedelta(days=1)
+    prior_rows = [
+        {**row, "trade_time": str(row["trade_time"]).replace(DAY.isoformat(), prior.isoformat())}
+        for row in _minute_rows()
+    ]
+    cas, view, snapshot = _fixture(
+        dataset_profile,
+        tmp_path,
+        minute_rows=[*prior_rows, *_minute_rows()],
+    )
+    descriptor = view.values["kline_minute_raw"][0]
+    old_identity = f"kline_minute_raw:{descriptor['partition_key']}"
+    bucket = int(str(descriptor["partition_key"]).rsplit("-", 1)[1])
+    descriptor["partition_key"] = f"{prior.isoformat()}_{DAY.isoformat()}_bucket-{bucket:04d}"
+    descriptor["row_count"] = 480
+    view.rows[f"kline_minute_raw:{descriptor['partition_key']}"] = view.rows.pop(old_identity)
+    builder = ArtifactReadySourceBuilder(
+        dataset_profile,
+        cas,
+        fetch_tdx_rows=lambda *_args: (_ for _ in ()).throw(AssertionError("provider must not run")),
+        fetch_tushare_minute_rows=lambda *_args: (_ for _ in ()).throw(AssertionError("provider must not run")),
+    )
+
+    entries, _provider, _derived, summary = builder._minute_entries(
+        view,
+        snapshot=snapshot,
+        trading_dates=(prior, DAY),
+        suspended=frozenset(),
+        checkpoint=lambda: None,
+    )
+
+    receipt = cas.get_json(entries[0]["rows_ref"])
+    assert receipt["summary"]["pit_excluded_stock_days"] == 1
+    assert receipt["summary"]["pit_excluded_rows"] == 240
+    assert summary["expected_days"] == 1
+    assert summary["pit_excluded_stock_days"] == 1
+    assert summary["pit_excluded_rows"] == 240
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "raw_day", "pattern"),
+    [
+        ("600000.SH", DAY, "bucket"),
+        (CODE, DAY - timedelta(days=1), "trading calendar"),
+    ],
+)
+def test_minute_scope_exclusion_rejects_wrong_bucket_and_nontrading_rows(
+    dataset_profile,
+    tmp_path,
+    raw_code,
+    raw_day,
+    pattern,
+) -> None:
+    cas, view, _snapshot = _fixture(dataset_profile, tmp_path, minute_rows=_minute_rows())
+    descriptor = view.values["kline_minute_raw"][0]
+    identity = f"kline_minute_raw:{descriptor['partition_key']}"
+    view.rows[identity] = [
+        {
+            **row,
+            "ts_code": raw_code,
+            "trade_time": str(row["trade_time"]).replace(DAY.isoformat(), raw_day.isoformat()),
+        }
+        for row in _minute_rows()
+    ]
+    builder = ArtifactReadySourceBuilder(dataset_profile, cas)
+    total = {
+        "expected_days": 0,
+        "database_complete": 0,
+        "provider_filled": 0,
+        "suspended_full_day": 0,
+        "pit_excluded_stock_days": 0,
+        "pit_excluded_rows": 0,
+    }
+
+    with pytest.raises(ArtifactReadyCoverageIncomplete, match=pattern):
+        builder._scan_minute_database_partition(
+            view,
+            descriptor,
+            expected=(),
+            suspended=frozenset(),
+            total=total,
+            derived_refs=[],
+            allowed_codes=frozenset({CODE}),
+            trading_dates=frozenset({DAY}),
+            partition_start=DAY - timedelta(days=1),
+            partition_end=DAY,
+        )
+
+
 def test_failed_tdx_falls_back_to_tushare_without_leaking_error_text(
     dataset_profile,
     tmp_path,
@@ -1444,10 +1690,16 @@ def test_recheck_allows_db_to_absorb_identical_overlay_but_blocks_conflict(
     assert calls == ["tdx"]
 
 
+@pytest.mark.parametrize(
+    ("observation_offset", "expected_limit"),
+    [(30, 31 * 240), (200, artifact_ready_module.MAX_TDX_WINDOW_BARS)],
+)
 def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     dataset_profile,
     tmp_path,
     monkeypatch,
+    observation_offset,
+    expected_limit,
 ) -> None:
     cas, _view, _snapshot = _fixture(
         dataset_profile,
@@ -1463,6 +1715,15 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
             "list": [
                 {
                     "Time": "2026-07-31T09:31:00+08:00",
+                    "Open": 10_000,
+                    "High": 11_000,
+                    "Low": 9_000,
+                    "Close": 10_500,
+                    "Volume": 100,
+                    "Amount": 100_000,
+                },
+                {
+                    "Time": "2026-08-01T09:31:00+08:00",
                     "Open": 10_000,
                     "High": 11_000,
                     "Low": 9_000,
@@ -1501,6 +1762,11 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     import requests
 
     monkeypatch.setattr(requests, "Session", _Session)
+    monkeypatch.setattr(
+        artifact_ready_module,
+        "_tdx_observation_date",
+        lambda: DAY + timedelta(days=observation_offset),
+    )
     builder = ArtifactReadySourceBuilder(dataset_profile, cas)
 
     rows = builder._fetch_tdx_rows(CODE, DAY, DAY)
@@ -1510,7 +1776,7 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     assert captured["kwargs"]["params"] == {
         "code": "000001",
         "type": "minute1",
-        "limit": 240,
+        "limit": expected_limit,
     }
     assert captured["trust_env"] is False and captured["closed"] is True
 
@@ -1963,6 +2229,10 @@ def test_index_provider_runs_only_for_missing_code_and_overlay_is_immutable(
     receipt = cas.get_json(merged["rows_ref"])
     assert len(receipt["rows"]) == len(DOMESTIC_INDEX_DEFINITIONS)
     assert receipt["details"][missing]["provider_fill_rows"] == 1
+    assert (
+        receipt["details"][missing]["overlap_comparison_contract"]
+        == "index_source_unit_equivalence_v1"
+    )
 
 
 def test_index_provider_transport_failure_is_retryable_waiting(

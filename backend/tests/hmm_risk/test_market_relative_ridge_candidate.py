@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import subprocess
+from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -11,8 +12,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.hmm_risk import market_relative_jump_spike as jump_subject
 from backend.services.hmm_risk import market_relative_ridge_candidate as subject
+from backend.services.hmm_risk.industry_pit_adapter import build_l1_code_projection_authority
 from scripts.hmm_risk import run_market_relative_ridge_candidate as cli
 
 
@@ -108,6 +111,67 @@ def _rl1_calendar() -> list[date]:
     ]
 
 
+def _l1_projection() -> Mapping[str, object]:
+    return build_l1_code_projection_authority(
+        taxonomy_contract_id="sw2021_classification_catalog_v1",
+        taxonomy_version="SW2021",
+        projection_version="sw2021_taxonomy_to_published_l1_v1",
+        taxonomy_rows=[
+            {"industry_code": f"{index:02d}0000", "industry_name": f"L1-{index:02d}"} for index in range(1, 32)
+        ],
+        published_index_rows=[
+            {
+                "industry_code": f"{index:02d}0000",
+                "industry_name": f"L1-{index:02d}",
+                "index_code": f"801{index:03d}.SI",
+            }
+            for index in range(1, 32)
+        ],
+        source_ids=("test:taxonomy", "test:index"),
+        source_hashes=("c" * 64, "d" * 64),
+    )
+
+
+def _research_basis() -> Mapping[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "hmm_risk_industry_pit_research_basis_v1",
+        "contract_version": "c013_g2a_data_a_v1",
+        "active_mode": "historical_replay",
+        "historical_classification_basis": "stable_taxonomy_backcast",
+        "historical_non_as_known_taxonomy": True,
+        "forward_classification_basis": "as_published_pit",
+        "forward_non_as_known_taxonomy": False,
+    }
+    return {
+        **body,
+        "canonical_hash": digest_named_fields("hmm_risk_industry_pit_research_basis_v1", body),
+    }
+
+
+def _write_industry_pit_authority(tmp_path: Path) -> Path:
+    path = tmp_path / "industry-pit-authority.json"
+    path.write_text(
+        json.dumps(
+            {
+                "artifact_root": str((tmp_path.parent / "industry-pit-candidate").resolve()),
+                "identity": {
+                    "schema_version": "hmm_risk_industry_pit_authority_v1",
+                    "bundle_hash": "6" * 64,
+                    "classification_candidate_hash": "7" * 64,
+                    "index_membership_candidate_hash": "8" * 64,
+                    "classification_receipt_hash": "9" * 64,
+                    "index_membership_receipt_hash": "a" * 64,
+                    "preflight_canonical_hash": "b" * 64,
+                },
+                "l1_projection": _l1_projection(),
+                "research_basis": _research_basis(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> dict[str, object]:
     calendar = _rl1_calendar()
     root = (artifact_root or Path("F:/AIstock_artifacts/c012_rl1_unit")).resolve()
@@ -119,6 +183,9 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
     for name, train_start, train_end, validation_start, validation_end in subject.RL1_FOLD_BOUNDARIES:
         train = [day for day in calendar if train_start <= day <= train_end]
         validation = [day for day in calendar if validation_start <= day <= validation_end]
+        rolling = train[-subject.RL1_ROLLING_WINDOW_OPEN_DAYS :]
+        rolling_start_index = len(train) - subject.RL1_ROLLING_WINDOW_OPEN_DAYS
+        warmup = train[max(0, rolling_start_index - subject.RL1_FEATURE_WARMUP_OPEN_DAYS) : rolling_start_index]
         fold_rows.append(
             {
                 "fold": name,
@@ -126,21 +193,30 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
                 "train_end": train_end.isoformat(),
                 "validation_start": validation_start.isoformat(),
                 "validation_end": validation_end.isoformat(),
+                "validation_first_trading_date": validation[0].isoformat(),
+                "eligibility_feature_cutoff_date": train[-1].isoformat(),
                 "train_trading_day_count": len(train),
                 "train_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in train]),
+                "ridge_train_start": rolling[0].isoformat(),
+                "ridge_train_end": rolling[-1].isoformat(),
+                "ridge_train_trading_day_count": len(rolling),
+                "ridge_train_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in rolling]),
+                "feature_warmup_start": warmup[0].isoformat() if warmup else None,
+                "feature_warmup_end": warmup[-1].isoformat() if warmup else None,
+                "feature_warmup_trading_day_count": len(warmup),
+                "feature_warmup_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in warmup]),
                 "validation_trading_day_count": len(validation),
                 "validation_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in validation]),
             }
         )
     c010_body = {
         "eligibility_receipt_sha256": "d" * 64,
-        "aggregate_receipt_sha256": "e" * 64,
-        "l1_cross_section_receipt_sha256": "f" * 64,
+        "aggregate_evidence_receipt_sha256": "e" * 64,
+        "l1_cross_section_evidence_receipt_sha256": "f" * 64,
         "l1_feature_definition_sha256": "1" * 64,
         "provider_absence_manifest_sha256": "2" * 64,
         "security_identity_manifest_sha256": "3" * 64,
     }
-    database_identity = {"dbname": "dev"}
     body: dict[str, object] = {
         "schema_version": subject.RL1_REQUEST_SCHEMA_VERSION,
         "contract_version": subject.RL1_CONTRACT_VERSION,
@@ -173,6 +249,14 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
             "trading_day_count": len(calendar),
             "date_set_sha256": subject.canonical_sha256([day.isoformat() for day in calendar]),
         },
+        "ridge_training_contract": {
+            "ridge_train_scope": "fixed_rolling_canonical_open_days",
+            "rolling_window_open_days": 252,
+            "feature_warmup_max_open_days": 120,
+            "market_train_scope": "anchored_expanding",
+            "window_search_performed": False,
+            "validation_outcome_accessed_for_window": False,
+        },
         "folds": fold_rows,
         "new_holdout": {
             "state_start": subject.RL1_HOLDOUT_START.isoformat(),
@@ -183,20 +267,17 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
         "source": {
             "source_start": "2020-07-30",
             "source_end": subject.RL1_DEVELOPMENT_END.isoformat(),
-            "source_revision": "unit-c012-rl1-development-v1",
+            "source_revision": subject.RL1_SOURCE_REVISION,
             "circ_mv_history_start": "2020-07-30",
             "universe_key": "unit-universe",
             "universe_rule_version": "unit-rule",
-            "security_identity_manifest_path": "security.json",
-            "security_identity_manifest_sha256": "4" * 64,
-            "provider_absence_manifest_path": "absence.json",
-            "provider_absence_manifest_sha256": "5" * 64,
         },
         "input_identity": {
             "dataset_manifest_sha256": "b" * 64,
             "mapping_manifest_sha256": "c" * 64,
-            "database_identity": database_identity,
-            "database_identity_sha256": subject.canonical_sha256(database_identity),
+            "bundle_canonical_sha256": "6" * 64,
+            "bundle_manifest_body_sha256": "7" * 64,
+            "bundle_h5_sha256": "8" * 64,
         },
         "c010_formal_evidence": {
             **c010_body,
@@ -224,6 +305,19 @@ def _top_level_inputs() -> dict[str, object]:
         "feature_definition": {"level": "L1"},
         "l2_feature_definition": {"level": "L2"},
         "database": {"host": "redacted", "port": 5432, "dbname": "dev"},
+        "input_bundle_identity": {
+            "bundle_canonical_sha256": "6" * 64,
+            "manifest_body_sha256": "7" * 64,
+            "h5_sha256": "8" * 64,
+        },
+    }
+
+
+def _unit_bundle_identity() -> dict[str, str]:
+    return {
+        "bundle_canonical_sha256": "6" * 64,
+        "manifest_body_sha256": "7" * 64,
+        "h5_sha256": "8" * 64,
     }
 
 
@@ -236,7 +330,61 @@ def _stage_receipt(component: str, *, selected_alpha: float | None = None) -> di
 
 def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, object]:
     request_identity = subject._c012_rl1_request_identity(request, producer)
-    folds = [_stage_receipt(f"fold-{index}") for index in range(1, 6)]
+    eligibility_authority_sha256 = subject.canonical_sha256(
+        {
+            "source_sha256": request_identity["source_sha256"],
+            "input_identity": request_identity["input_identity"],
+            "c010_formal_evidence": request_identity["c010_formal_evidence"],
+        }
+    )
+    canonical_codes = [f"801{index:03d}.SI" for index in range(1, 32)]
+    folds: list[dict[str, object]] = []
+    for authority in request["folds"]:
+        eligibility_body = {
+            "schema_version": "hmm_risk_rotation_l1_historical_eligibility_v1",
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "fold": authority["fold"],
+            "authority_date": authority["validation_first_trading_date"],
+            "feature_cutoff_date": authority["eligibility_feature_cutoff_date"],
+            "authority_basis": "validation_first_canonical_trading_date_t_minus_1_pit_features",
+            "authority_sha256": eligibility_authority_sha256,
+            "validation_outcome_accessed": False,
+            "metric_accessed": False,
+            "validation_feature_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "validation_target_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "canonical_sector_count": 31,
+            "canonical_sector_codes": canonical_codes,
+            "canonical_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "eligible_sector_count": 31,
+            "eligible_sector_codes": canonical_codes,
+            "eligible_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "historical_structural_eligibility_ratio": 1.0,
+            "ineligible_sector_count": 0,
+            "ineligible_sectors": [],
+            "ineligible_sector_sha256": subject.canonical_sha256([]),
+            "daily_minimum_available_count": 28,
+        }
+        eligibility = {**eligibility_body, "receipt_sha256": subject.canonical_sha256(eligibility_body)}
+        coverage_body = {
+            "coverage_accepted": True,
+            "eligibility_receipt_sha256": eligibility["receipt_sha256"],
+            "canonical_sector_count": 31,
+            "eligible_sector_count": 31,
+        }
+        coverage = {**coverage_body, "receipt_sha256": subject.canonical_sha256(coverage_body)}
+        fold_body = {
+            "fold": authority["fold"],
+            "ridge_train_start": authority["ridge_train_start"],
+            "ridge_train_end": authority["ridge_train_end"],
+            "ridge_train_trading_day_count": authority["ridge_train_trading_day_count"],
+            "ridge_train_date_set_sha256": authority["ridge_train_date_set_sha256"],
+            "eligibility_feature_cutoff_date": authority["eligibility_feature_cutoff_date"],
+            "feature_warmup_trading_day_count": authority["feature_warmup_trading_day_count"],
+            "feature_warmup_date_set_sha256": authority["feature_warmup_date_set_sha256"],
+            "historical_eligibility": eligibility,
+            "replay_coverage": coverage,
+        }
+        folds.append({**fold_body, "receipt_sha256": subject.canonical_sha256(fold_body)})
     attempts = [{"fit": index} for index in range(12)]
     acceptance_body = {"component": "development", "accepted": True}
     coverage_body = {
@@ -255,10 +403,15 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
         "dataset_manifest_sha256": "b" * 64,
         "mapping_manifest_sha256": "c" * 64,
         "c010_formal_evidence": request["c010_formal_evidence"],
-        "database_identity": request["input_identity"]["database_identity"],
+        "input_bundle_identity": {
+            "bundle_canonical_sha256": request["input_identity"]["bundle_canonical_sha256"],
+            "manifest_body_sha256": request["input_identity"]["bundle_manifest_body_sha256"],
+            "h5_sha256": request["input_identity"]["bundle_h5_sha256"],
+        },
         "development_start": subject.RL1_DEVELOPMENT_START.isoformat(),
         "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": len(_rl1_calendar()),
+        "ridge_training_contract": request["ridge_training_contract"],
         "folds": folds,
         "fold_receipt_sha256s": [item["receipt_sha256"] for item in folds],
         "development_acceptance": {
@@ -293,17 +446,32 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
 
 
 def _bind_rl1_request_inputs(request: dict[str, object], inputs: dict[str, object]) -> None:
-    database_identity = inputs["database"]
+    bundle_identity = inputs.setdefault("input_bundle_identity", _unit_bundle_identity())
+    inputs.setdefault("c010_bundle_identity", _unit_c010_bundle_identity(inputs))
     request["input_identity"] = {
         "dataset_manifest_sha256": subject.canonical_sha256(inputs["dataset_manifest"]),
         "mapping_manifest_sha256": subject.canonical_sha256(inputs["mapping_manifest"]),
-        "database_identity": database_identity,
-        "database_identity_sha256": subject.canonical_sha256(database_identity),
+        "bundle_canonical_sha256": bundle_identity["bundle_canonical_sha256"],
+        "bundle_manifest_body_sha256": bundle_identity["manifest_body_sha256"],
+        "bundle_h5_sha256": bundle_identity["h5_sha256"],
     }
     request["c010_formal_evidence"] = subject._c012_rl1_c010_identity(inputs)
     request["request_sha256"] = subject.canonical_sha256(
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
+
+
+def _unit_c010_bundle_identity(inputs: dict[str, object]) -> dict[str, str]:
+    c010 = inputs["c010_diagnostic"]
+    body = {
+        "eligibility_receipt_sha256": c010["eligibility"]["receipt_sha256"],
+        "aggregate_evidence_receipt_sha256": c010["aggregate_evidence"]["receipt_sha256"],
+        "l1_cross_section_evidence_receipt_sha256": c010["l1_cross_section_evidence"]["receipt_sha256"],
+        "l1_feature_definition_sha256": subject.canonical_sha256(c010["l1_feature_definition"]),
+        "provider_absence_manifest_sha256": subject.canonical_sha256(inputs["provider_absence_manifest"]),
+        "security_identity_manifest_sha256": subject.canonical_sha256(inputs["security_identity_manifest"]),
+    }
+    return {**body, "receipt_sha256": subject.canonical_sha256(body)}
 
 
 def _prepared_relative_component(values: np.ndarray) -> jump_subject.PreparedComponent:
@@ -501,6 +669,9 @@ def test_market_conditioning_builds_exact_ten_dimensions_and_slope_identity() ->
     assert np.array_equal(values[1], np.concatenate([base[1], -base[1]]))
     assert "market_sign" not in conditioned.component.feature_names
     assert conditioned.receipt["dtype"] == "float64_le"
+    assert "market_state_gap_policy" not in conditioned.receipt
+    assert conditioned.component.valid_row_count == component.valid_row_count
+    assert conditioned.component.valid_identity_sha256 == component.valid_identity_sha256
     assert conditioned.receipt["unused_market_date_count"] == 0
     assert conditioned.receipt["unused_market_date_first"] is None
     assert conditioned.receipt["unused_market_date_last"] is None
@@ -542,6 +713,77 @@ def test_market_conditioning_accepts_market_date_superset_and_records_unused_ide
     assert receipt["unused_market_date_last"] == unused_day.isoformat()
     assert receipt["unused_market_date_set_sha256"] == subject.canonical_sha256([unused_day.isoformat()])
     assert receipt["market_state_coverage_complete"] is True
+
+
+def test_market_conditioning_missing_date_becomes_typed_unavailable_without_state_fill() -> None:
+    base = np.asarray(
+        [
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0, 9.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    component = _prepared_relative_component(base)
+    dates = component.sequences[0].dates
+
+    conditioned = subject._condition_component(
+        component,
+        {dates[0]: "risk_on"},
+        fold="unit",
+        phase="validation",
+        allow_market_state_abstention=True,
+    )
+
+    sequence = conditioned.component.sequences[0]
+    assert sequence.dates == (dates[0],)
+    assert np.array_equal(sequence.values[0], np.concatenate([base[0], base[0]]))
+    assert conditioned.component.valid_row_count == 1
+    assert conditioned.component.valid_identity_sha256 == subject.canonical_sha256(
+        [[sequence.key, dates[0].isoformat()]]
+    )
+    unavailable = [
+        item
+        for item in conditioned.component.unavailable_items
+        if item.get("reason_code") == subject.REASON_MARKET_STATE_UNAVAILABLE
+    ]
+    assert unavailable == [
+        {
+            "fold": "unit",
+            "level": "L1",
+            "phase": "validation",
+            "reason_code": subject.REASON_MARKET_STATE_UNAVAILABLE,
+            "sector_code": sequence.key,
+            "trade_date": dates[1].isoformat(),
+        }
+    ]
+    receipt = conditioned.receipt
+    assert receipt["market_state_coverage_complete"] is False
+    assert receipt["missing_market_date_count"] == 1
+    assert receipt["missing_market_dates"] == [dates[1].isoformat()]
+    assert receipt["missing_market_reason_code"] == subject.REASON_MARKET_STATE_UNAVAILABLE
+    assert receipt["missing_market_identity_count"] == 1
+    assert receipt["conditioned_interaction_row_count"] == 1
+    assert receipt["expected_interaction_row_count"] == 2
+    assert receipt["market_state_date_coverage_ratio"] == 0.5
+    assert receipt["market_state_gap_policy"] == "typed_unavailable_no_default_no_forward_fill"
+
+
+def test_market_conditioning_all_dates_unavailable_fails_without_empty_success() -> None:
+    component = _prepared_relative_component(np.ones((2, 5), dtype=np.float64))
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._condition_component(
+            component,
+            {},
+            fold="unit",
+            phase="train",
+            allow_market_state_abstention=True,
+        )
+
+    assert captured.value.reason_code == subject.REASON_MARKET_REGIME
+    assert captured.value.stage == "interaction"
+    assert captured.value.evidence["expected_interaction_row_count"] == 2
+    assert captured.value.evidence["missing_market_identity_count"] == 2
 
 
 def test_market_conditioning_identity_and_non_finite_fail_typed() -> None:
@@ -1263,9 +1505,14 @@ def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> No
     request = _rl1_request()
     identity = subject.validate_c012_rl1_static_request(request)
 
-    assert identity["contract_version"] == "C-012-RL1-HR1-D1-D6"
+    assert identity["contract_version"] == "C-012-RL1-RW1-D1-D6"
+    assert identity["ridge_training_contract"]["rolling_window_open_days"] == 252
+    assert identity["ridge_training_contract"]["window_search_performed"] is False
     assert identity["fixed_ridge_parameters"]["alpha"] == 100.0
     assert len(identity["folds"]) == 5
+    assert all(item["ridge_train_trading_day_count"] == 252 for item in identity["folds"])
+    assert all(item["feature_warmup_trading_day_count"] <= 120 for item in identity["folds"])
+    assert all(item["ridge_train_end"] == item["train_end"] for item in identity["folds"])
     assert identity["new_holdout"] == {
         "state_start": "2026-04-01",
         "state_end": "2026-09-30",
@@ -1281,6 +1528,18 @@ def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> No
     with pytest.raises(subject.RidgeCandidateError) as captured:
         subject.validate_c012_rl1_static_request(drift)
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+    window_drift = dict(request)
+    window_drift["ridge_training_contract"] = {
+        **request["ridge_training_contract"],
+        "rolling_window_open_days": 126,
+    }
+    window_drift["request_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in window_drift.items() if key != "request_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.validate_c012_rl1_static_request(window_drift)
+    assert captured.value.reason_code == subject.REASON_RL1_ROLLING_WINDOW
 
 
 def _rl1_metric_fold(index: int, *, rank_ic: float = 0.03, spread: float = 0.004) -> dict[str, object]:
@@ -1380,6 +1639,152 @@ def test_c012_rl1_replay_coverage_uses_full_state_date_and_sector_denominators()
     assert insufficient["minimum_sector_coverage_ratio"] == 0.0
 
 
+def test_c012_rw1_eligibility_is_frozen_before_validation_outcomes_and_caps_full_coverage() -> None:
+    feature_cutoff = date(2024, 3, 14)
+    dates = (date(2024, 3, 15), date(2024, 3, 18))
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    panel = _panel(list(codes), [feature_cutoff, *dates])
+    panel.loc[(pd.Timestamp(feature_cutoff), codes[0]), subject.RELATIVE_FEATURES[0]] = np.nan
+    fold = {
+        "fold": "fold-2",
+        "validation_first_trading_date": dates[0],
+        "eligibility_feature_cutoff_date": feature_cutoff,
+    }
+
+    eligibility = subject._c012_rw1_fold_eligibility(panel, fold=fold, authority_sha256="a" * 64)
+
+    assert eligibility["validation_outcome_accessed"] is False
+    assert eligibility["authority_date"] == dates[0].isoformat()
+    assert eligibility["feature_cutoff_date"] == feature_cutoff.isoformat()
+    assert eligibility["eligible_sector_count"] == 30
+    assert eligibility["ineligible_sector_count"] == 1
+    assert eligibility["ineligible_sectors"][0]["sector_code"] == codes[0]
+    assert eligibility["ineligible_sectors"][0]["reason_code"] == subject.REASON_RL1_HISTORICAL_INELIGIBLE
+    assert codes[0] not in eligibility["eligible_sector_codes"]
+    assert math.isfinite(float(panel.loc[(pd.Timestamp(dates[0]), codes[0]), subject.RELATIVE_FEATURES[0]]))
+
+    eligible = tuple(eligibility["eligible_sector_codes"])
+    states = {(code, day): "neutral" for code in eligible for day in dates}
+    targets = subject.TargetRows(
+        "L1",
+        dates[0],
+        dates[-1],
+        dates,
+        {(code, day): 0.0 for code in eligible for day in dates},
+        {},
+    )
+    coverage = subject._c012_rl1_fold_replay_coverage(
+        fold="fold-2",
+        validation_dates=dates,
+        canonical_codes=codes,
+        eligibility=eligibility,
+        states=states,
+        targets=targets,
+    )
+
+    assert coverage["coverage_status"] == "COVERAGE_AVAILABLE"
+    assert coverage["coverage_accepted"] is True
+    assert coverage["canonical_sector_count"] == 31
+    assert coverage["eligible_sector_count"] == 30
+    assert coverage["structurally_ineligible_sector_count"] == 1
+    assert coverage["historical_structural_eligibility_ratio"] == 30 / 31
+    assert coverage["eligibility_receipt_sha256"] == eligibility["receipt_sha256"]
+
+
+def test_c012_rw1_eligibility_below_fixed_28_sector_minimum_fails_closed() -> None:
+    day = date(2024, 3, 15)
+    feature_cutoff = date(2024, 3, 14)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    panel = _panel(list(codes), [feature_cutoff, day])
+    for code in codes[:4]:
+        panel.loc[(pd.Timestamp(feature_cutoff), code), subject.RELATIVE_FEATURES[0]] = np.nan
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._c012_rw1_fold_eligibility(
+            panel,
+            fold={
+                "fold": "fold-2",
+                "validation_first_trading_date": day,
+                "eligibility_feature_cutoff_date": feature_cutoff,
+            },
+            authority_sha256="a" * 64,
+        )
+
+    assert captured.value.reason_code == subject.REASON_RL1_COVERAGE
+    assert captured.value.stage == "coverage"
+    assert captured.value.evidence["eligibility"]["eligible_sector_count"] == 27
+
+
+def test_c012_rw1_target_projection_preserves_canonical_centered_values() -> None:
+    day = date(2024, 3, 15)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    values = {(code, day): float(index - 15) for index, code in enumerate(codes)}
+    parent_body = {"schema_version": "hmm_risk_rotation_target_rows_v1", "target_rows_sha256": "a" * 64}
+    parent = subject.TargetRows(
+        "L1",
+        day,
+        day,
+        (day,),
+        values,
+        {**parent_body, "receipt_sha256": subject.canonical_sha256(parent_body)},
+    )
+
+    projected = subject._project_target_rows_to_eligible_codes(parent, codes[1:])
+
+    assert projected.values == {key: value for key, value in values.items() if key[0] != codes[0]}
+    assert projected.receipt["target_formula_recomputed"] is False
+    assert projected.receipt["parent_target_receipt_sha256"] == parent.receipt["receipt_sha256"]
+    assert projected.values[(codes[1], day)] == -14.0
+
+
+def test_c012_rw1_feature_projection_preserves_canonical_relative_values() -> None:
+    day = date(2024, 3, 15)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    feature_count = len(subject.RELATIVE_FEATURES)
+    preprocessor = jump_subject.Preprocessor(
+        feature_names=subject.RELATIVE_FEATURES,
+        lower=(-100.0,) * feature_count,
+        upper=(100.0,) * feature_count,
+        mean=(0.0,) * feature_count,
+        std=(1.0,) * feature_count,
+        valid_row_count=31,
+        valid_identity_sha256="a" * 64,
+    )
+    sequences = tuple(
+        jump_subject.SequenceData(
+            key=code,
+            dates=(day,),
+            ordinals=(0,),
+            values=np.full((1, feature_count), float(index - 15), dtype=np.float64),
+        )
+        for index, code in enumerate(codes)
+    )
+    component = jump_subject.PreparedComponent(
+        component="L1_ridge",
+        level="L1",
+        feature_names=subject.RELATIVE_FEATURES,
+        expected_sector_count=31,
+        minimum_daily_count=28,
+        canonical_codes=codes,
+        sequences=sequences,
+        preprocessor=preprocessor,
+        unavailable_items=(),
+        valid_row_count=31,
+        valid_identity_sha256="b" * 64,
+    )
+
+    projected = subject._project_prepared_component_to_eligible_codes(
+        component,
+        codes[1:],
+        minimum_daily_count=28,
+    )
+
+    assert projected.canonical_codes == codes[1:]
+    assert projected.valid_row_count == 30
+    assert np.array_equal(projected.sequences[0].values, sequences[1].values)
+    assert float(np.median([item.values[0, 0] for item in projected.sequences])) == 0.5
+
+
 def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path) -> None:
     calendar = _rl1_calendar()
 
@@ -1392,6 +1797,7 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
         "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
         "mapping_manifest": {"rows": []},
         "database": {"dbname": "dev"},
+        "input_bundle_identity": _unit_bundle_identity(),
         "provider_absence_manifest": {"manifest": "v1"},
         "security_identity_manifest": {"manifest": "v1"},
         "c010_diagnostic": {
@@ -1401,6 +1807,7 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
             "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
         },
     }
+    inputs["c010_bundle_identity"] = _unit_c010_bundle_identity(inputs)
     template = _rl1_request(artifact_root=tmp_path)
     request = subject.build_c012_rl1_replay_request(
         inputs,
@@ -1422,6 +1829,17 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
         subject.validate_c012_rl1_static_request(escaped)
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
 
+    legacy_only = dict(inputs)
+    legacy_only.pop("c010_bundle_identity")
+    with pytest.raises(subject.RidgeCandidateError) as legacy_captured:
+        subject.build_c012_rl1_replay_request(
+            legacy_only,
+            source=template["source"],
+            outputs=template["outputs"],
+            producer_commit="a" * 40,
+        )
+    assert legacy_captured.value.reason_code == subject.REASON_RL1_INPUT
+
 
 def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary_is_closed() -> None:
     request = _rl1_request()
@@ -1431,6 +1849,32 @@ def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary
     assert folds[-1]["validation_start"] == date(2025, 10, 1)
     assert folds[-1]["validation_end"] == date(2026, 3, 31)
     assert folds[-1]["validation_days"] == 116
+
+
+def test_c012_rw1_fold_preparation_uses_only_last_252_train_days() -> None:
+    calendar = _rl1_calendar()
+    request = _rl1_request()
+    fold = subject._c012_rl1_folds(tuple(calendar), request)[0]
+    codes = [f"L1-{index:02d}" for index in range(31)]
+    panel = _panel(codes, calendar)
+
+    train, train_target, validation, validation_target, eligibility = subject._prepare_c012_rw1_fold(
+        panel,
+        _benchmark(calendar),
+        tuple(calendar),
+        fold=fold,
+        authority_sha256="a" * 64,
+    )
+
+    assert train_target.start == fold["ridge_train_start"]
+    assert train_target.end == fold["ridge_train_end"]
+    assert len({day for sequence in train.sequences for day in sequence.dates}) == 252
+    assert min(day for sequence in train.sequences for day in sequence.dates) == fold["ridge_train_start"]
+    assert eligibility["eligible_sector_count"] == 31
+    assert eligibility["authority_date"] == fold["validation_first_trading_date"].isoformat()
+    assert eligibility["feature_cutoff_date"] == fold["eligibility_feature_cutoff_date"].isoformat()
+    assert validation.canonical_codes == tuple(codes)
+    assert validation_target.start == fold["validation_start"]
 
 
 def test_ridge_calendar_slice_accepts_non_trading_boundary_and_rejects_count_drift() -> None:
@@ -1621,6 +2065,14 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
         },
     }
     _bind_rl1_request_inputs(request, inputs)
+    request_identity = subject._c012_rl1_request_identity(request, "a" * 40)
+    eligibility_authority_sha256 = subject.canonical_sha256(
+        {
+            "source_sha256": request_identity["source_sha256"],
+            "input_identity": request_identity["input_identity"],
+            "c010_formal_evidence": request_identity["c010_formal_evidence"],
+        }
+    )
     attempts_by_market: list[dict[str, object]] = []
 
     def fake_market(*args: object, **kwargs: object) -> subject.MarketConditioningFold:
@@ -1652,12 +2104,48 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
     dummy_target = subject.TargetRows("L1", date(2024, 1, 2), date(2024, 1, 2), (), {}, {})
     dummy_component = _prepared_relative_component(np.ones((2, len(subject.RELATIVE_FEATURES))))
     monkeypatch.setattr(subject, "_component_panel", lambda *args, **kwargs: pd.DataFrame())
+
+    def fake_prepare(*args: object, **kwargs: object) -> tuple[object, ...]:
+        fold = kwargs["fold"]
+        canonical_codes = [f"L1-{index:02d}" for index in range(31)]
+        body = {
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "fold": fold["fold"],
+            "authority_date": fold["validation_first_trading_date"].isoformat(),
+            "feature_cutoff_date": fold["eligibility_feature_cutoff_date"].isoformat(),
+            "authority_basis": "validation_first_canonical_trading_date_t_minus_1_pit_features",
+            "authority_sha256": eligibility_authority_sha256,
+            "validation_outcome_accessed": False,
+            "metric_accessed": False,
+            "validation_feature_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "validation_target_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "canonical_sector_count": 31,
+            "canonical_sector_codes": canonical_codes,
+            "canonical_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "eligible_sector_count": 31,
+            "eligible_sector_codes": canonical_codes,
+            "eligible_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "historical_structural_eligibility_ratio": 1.0,
+            "ineligible_sector_count": 0,
+            "ineligible_sectors": [],
+            "ineligible_sector_sha256": subject.canonical_sha256([]),
+            "daily_minimum_available_count": 28,
+        }
+        eligibility = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+        return dummy_component, dummy_target, dummy_component, dummy_target, eligibility
+
     monkeypatch.setattr(
         subject,
-        "_prepare_fold",
-        lambda *args, **kwargs: (dummy_component, dummy_target, dummy_component, dummy_target),
+        "_prepare_c012_rw1_fold",
+        fake_prepare,
     )
-    monkeypatch.setattr(subject, "_condition_component", lambda *args, **kwargs: conditioned)
+    conditioning_abstention_flags: list[bool] = []
+
+    def fake_condition(*args: object, **kwargs: object) -> subject.ConditionedComponent:
+        conditioning_abstention_flags.append(bool(kwargs.get("allow_market_state_abstention")))
+        return conditioned
+
+    monkeypatch.setattr(subject, "_condition_component", fake_condition)
 
     def fake_fit(*args: object, **kwargs: object) -> subject.RidgeFit:
         kwargs["attempt_log"].append({"component": "L1", "status": "fit_completed"})
@@ -1678,15 +2166,18 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
         "coverage_status": "FULL_COVERAGE",
         "coverage_accepted": True,
     }
-    monkeypatch.setattr(
-        subject,
-        "_c012_rl1_fold_replay_coverage",
-        lambda **kwargs: {
+
+    def fake_fold_coverage(**kwargs: object) -> dict[str, object]:
+        body = {
             **fold_coverage_body,
             "fold": kwargs["fold"],
-            "receipt_sha256": subject.canonical_sha256({**fold_coverage_body, "fold": kwargs["fold"]}),
-        },
-    )
+            "eligibility_receipt_sha256": kwargs["eligibility"]["receipt_sha256"],
+            "canonical_sector_count": 31,
+            "eligible_sector_count": 31,
+        }
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    monkeypatch.setattr(subject, "_c012_rl1_fold_replay_coverage", fake_fold_coverage)
     replay_coverage_body = {
         "validation_basis": "HISTORICAL_CAUSAL_WALK_FORWARD",
         "coverage_status": "FULL_COVERAGE",
@@ -1729,6 +2220,7 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
 
     payload = child["reproducibility_payload"]
     assert payload["process_fit_count"] == 12
+    assert conditioning_abstention_flags == [True] * 10
     assert payload["selection_performed"] is False
     assert payload["parameter_search_performed"] is False
     assert payload["holdout_accessed"] is False
@@ -1808,8 +2300,8 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
             str(request_value["outputs"]["component_model_path"]),
             "--bundle-output",
             str(request_value["outputs"]["capability_bundle_path"]),
-            "--db-env-prefix",
-            "UNIT",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
     assert result == 0
@@ -1820,7 +2312,99 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
     assert report["holdout_accessed"] is False
 
 
-def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
+def test_c012_rl1_cli_child_reads_only_immutable_input_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _rl1_request(artifact_root=tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    observed_loader_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+
+    def fake_loader(*args: object, **kwargs: object) -> dict[str, object]:
+        del args
+        observed_loader_kwargs.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(cli, "_load_c012_input_bundle", fake_loader)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for C-012 input-bundle execution"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_c012_rl1_candidate_process",
+        lambda *args, **kwargs: {"status": "child_complete", "process_index": kwargs["process_index"]},
+    )
+
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--child-index",
+            "1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(request["outputs"]["acceptance_path"]),
+            "--child-dir",
+            str(request["outputs"]["child_dir"]),
+            "--acceptance-core-output",
+            str(request["outputs"]["acceptance_core_path"]),
+            "--model-output",
+            str(request["outputs"]["component_model_path"]),
+            "--bundle-output",
+            str(request["outputs"]["capability_bundle_path"]),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
+        ]
+    )
+
+    assert result == 0
+    assert observed_loader_kwargs == {}
+
+
+def test_c012_rl1_cli_rejects_database_prefix_before_any_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_c012_input_bundle",
+        lambda *args, **kwargs: pytest.fail("input bundle loader must not run after CLI contract rejection"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for C-012 input-bundle execution"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            [
+                "--candidate-mode",
+                "c012-rl1",
+                "--request",
+                str(tmp_path / "request.json"),
+                "--output",
+                str(tmp_path / "acceptance.json"),
+                "--child-dir",
+                str(tmp_path / "children"),
+                "--acceptance-core-output",
+                str(tmp_path / "acceptance.core.json"),
+                "--model-output",
+                str(tmp_path / "rotation_l1.component.json"),
+                "--bundle-output",
+                str(tmp_path / "capability_bundle.json"),
+                "--input-bundle-root",
+                str(tmp_path / "input-bundle"),
+                "--db-env-prefix",
+                "AISTOCK_HMM_RISK",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+
+
+def test_c012_rl1_cli_prepares_request_from_verified_input_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calendar = _rl1_calendar()
@@ -1833,7 +2417,6 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
         "trading_dates": tuple(calendar),
         "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
         "mapping_manifest": {"rows": []},
-        "database": {"dbname": "dev"},
         "provider_absence_manifest": {"manifest": "v1"},
         "security_identity_manifest": {"manifest": "v1"},
         "c010_diagnostic": {
@@ -1843,35 +2426,25 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
             "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
         },
     }
-    source_authority = tmp_path / "source.json"
-    source_authority.write_text(
-        json.dumps(
-            {
-                "source": {
-                    "source_start": "2020-07-30",
-                    "circ_mv_history_start": "2020-07-30",
-                    "source_end": "2025-04-30",
-                    "universe_key": "unit-universe",
-                    "universe_rule_version": "unit-rule",
-                    "security_identity_manifest_path": "security.json",
-                    "security_identity_manifest_sha256": "1" * 64,
-                    "provider_absence_manifest_path": "absence.json",
-                    "provider_absence_manifest_sha256": "2" * 64,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    inputs["c010_bundle_identity"] = _unit_c010_bundle_identity(inputs)
+    template = _rl1_request(artifact_root=tmp_path)
+    inputs["source"] = template["source"]
+    inputs["input_bundle_identity"] = _unit_bundle_identity()
     monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
-    monkeypatch.setattr(cli, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+    monkeypatch.setattr(cli, "_load_c012_input_bundle", lambda path: inputs)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for request preparation"),
+    )
     request_path = tmp_path / "request.json"
     result = cli.main(
         [
             "--candidate-mode",
             "c012-rl1",
             "--prepare-request",
-            "--source-authority",
-            str(source_authority),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
             "--request",
             str(request_path),
             "--output",
@@ -1884,13 +2457,12 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
             str(tmp_path / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNIT",
         ]
     )
     assert result == 0
     request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["schema_version"] == subject.RL1_REQUEST_SCHEMA_VERSION
+    assert "database_identity" not in request["input_identity"]
     assert request["source"]["source_end"] == "2026-03-31"
     assert request["expected_producer_commit"] == "a" * 40
     assert request["outputs"]["acceptance_core_path"].endswith("acceptance.core.json")
@@ -1950,9 +2522,12 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
     monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
     monkeypatch.setattr(
         cli,
-        "_load_l1_source_inputs",
+        "read_rotation_l1_input_bundle",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            cli.StateModelSetError("requested PIT universe state is missing")
+            cli.RotationL1InputBundleError(
+                "hmm_risk_rotation_l1_input_bundle_source_range_incomplete",
+                "requested frozen bundle input is missing",
+            )
         ),
     )
     result = cli.main(
@@ -1960,8 +2535,8 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
             "--candidate-mode",
             "c012-rl1",
             "--prepare-request",
-            "--source-authority",
-            str(source_path),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
             "--request",
             str(tmp_path / "request.json"),
             "--output",
@@ -1974,17 +2549,14 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
             str(tmp_path / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNIT",
         ]
     )
     assert result == 1
     failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
     assert failure["failure_stage"] == "source_preflight"
-    assert failure["failure_evidence"] == {
-        "exception_type": "StateModelSetError",
-        "error_message": "requested PIT universe state is missing",
-    }
+    assert failure["failure_evidence"]["input_bundle_reason_code"] == (
+        "hmm_risk_rotation_l1_input_bundle_source_range_incomplete"
+    )
     assert failure["completed_fit_count"] == 0
     assert failure["database_write"] is False
     assert failure["runtime_action"] is False
@@ -2046,8 +2618,8 @@ def test_c012_rl1_cli_finalization_failure_records_partial_artifact_writes(
             str(request_value["outputs"]["component_model_path"]),
             "--bundle-output",
             str(bundle_path),
-            "--db-env-prefix",
-            "UNIT",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
     assert result == 1
@@ -2097,6 +2669,41 @@ def test_c012_rl1_closure_rejects_self_hashed_extra_child_or_payload_authority()
             child(1, extra_payload), child(2, extra_payload), request=request, producer_commit=producer
         )
     assert payload_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+    rolling_drift = json.loads(json.dumps(payload))
+    first_fold = rolling_drift["folds"][0]
+    first_fold["ridge_train_start"] = "2020-01-01"
+    first_fold["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in first_fold.items() if key != "receipt_sha256"}
+    )
+    rolling_drift["fold_receipt_sha256s"][0] = first_fold["receipt_sha256"]
+    with pytest.raises(subject.RidgeCandidateError) as rolling_error:
+        subject.close_c012_rl1_candidate_children(
+            child(1, rolling_drift), child(2, rolling_drift), request=request, producer_commit=producer
+        )
+    assert rolling_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+    authority_drift = json.loads(json.dumps(payload))
+    authority_fold = authority_drift["folds"][0]
+    eligibility = authority_fold["historical_eligibility"]
+    eligibility["authority_sha256"] = "0" * 64
+    eligibility["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in eligibility.items() if key != "receipt_sha256"}
+    )
+    coverage = authority_fold["replay_coverage"]
+    coverage["eligibility_receipt_sha256"] = eligibility["receipt_sha256"]
+    coverage["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in coverage.items() if key != "receipt_sha256"}
+    )
+    authority_fold["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in authority_fold.items() if key != "receipt_sha256"}
+    )
+    authority_drift["fold_receipt_sha256s"][0] = authority_fold["receipt_sha256"]
+    with pytest.raises(subject.RidgeCandidateError) as authority_error:
+        subject.close_c012_rl1_candidate_children(
+            child(1, authority_drift), child(2, authority_drift), request=request, producer_commit=producer
+        )
+    assert authority_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
 
 
 def test_c012_rl1_replay_artifacts_close_core_component_bundle_and_final_acceptance() -> None:
@@ -2211,8 +2818,8 @@ def test_c012_rl1_cli_output_drift_writes_only_request_authorized_failure(
             str(tmp_path / "other" / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "other" / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNUSED",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
 

@@ -58,6 +58,81 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     assert rules_by_id["DOC-LOCATION-001"].effect == "warn"
 
 
+def test_ci_workflow_policy_is_enforced_by_guardrail_scanner(tmp_path: Path) -> None:
+    scanner = _load_module()
+    workflow = tmp_path / ".github" / "workflows" / "bad.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(
+        """
+        jobs:
+          test:
+            services:
+              postgres:
+                image: postgres:16
+            steps:
+              - uses: actions/setup-python@v5
+              - run: python -m pip install pytest
+        """,
+        encoding="utf-8",
+    )
+
+    findings = scanner.scan_ci_workflow_policy([workflow], tmp_path)
+
+    assert {finding.rule_id for finding in findings} == {
+        "CI-DATABASE-SAFETY-001",
+        "CI-ENVIRONMENT-PARITY-001",
+    }
+    assert all(finding.severity == "P0" for finding in findings)
+
+
+def test_changed_standard_digest_drift_is_a_blocking_finding(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n\nchanged\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+    catalog = {
+        "source_standard": "standard.md",
+        "source_sha256": "stale",
+        "rule_sync_policy": {"source_digest_required": True},
+    }
+
+    findings = scanner.scan_standard_digest_consistency(
+        [standard, catalog_path],
+        root=tmp_path,
+        catalog=catalog,
+        catalog_path=catalog_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "STANDARD-SOURCE-DIGEST"
+    assert findings[0].severity == "P1"
+    assert "expected=" in findings[0].message
+    assert "set source_sha256" in findings[0].remediation
+    assert scanner.blocking_findings(findings, "P1", fail_new_only=True) == findings
+
+
+def test_unchanged_standard_digest_contract_is_not_scanned(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+
+    findings = scanner.scan_standard_digest_consistency(
+        [tmp_path / "unrelated.py"],
+        root=tmp_path,
+        catalog={
+            "source_standard": "standard.md",
+            "source_sha256": "stale",
+            "rule_sync_policy": {"source_digest_required": True},
+        },
+        catalog_path=catalog_path,
+    )
+
+    assert findings == []
+
+
 def test_catalog_references_current_human_readable_standard() -> None:
     scanner = _load_module()
 
@@ -91,7 +166,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         assert control.get("failure_policy")
 
     controls = _unified_controls(catalog)
-    assert len(controls) == 30
+    assert len(controls) == 32
     assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
         "DESIGN-COMPLIANCE-001",
         "ISSUE-GITHUB-SYNC-001",
@@ -99,7 +174,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         "STD-SYNC-001",
     }
     effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
-    assert effect_counts == {"block": 20, "warn": 8, "advisory": 2}
+    assert effect_counts == {"block": 22, "warn": 8, "advisory": 2}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:
@@ -164,6 +239,10 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["targets"]["backend-main"]["production_port"] == 8001
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
     assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
+    assert {
+        "scripts/aistock_runner_health.py",
+        "scripts/configure_aistock_github_runner.ps1",
+    } <= set(runtime_catalog["non_runtime_source_paths"])
 
 
 def test_windows_backend_launcher_uses_the_aistock_interpreter_in_both_branches() -> None:

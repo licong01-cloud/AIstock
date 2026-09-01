@@ -3,7 +3,10 @@
 The probe deliberately has no terminate/kill capability.  It returns ``dead``
 only when the durable Worker identity is exact, a complete local process
 snapshot contains neither that PID/create-time nor descendants, and any
-required WSL guardian reports quiescence.  Missing evidence is ``unknown``.
+required WSL guardian reports quiescence.  ``quiescent`` is narrower: the
+exact Worker still exists, but its durable heartbeat proves that it has left
+the exact attempt and is reconciling the orphan while the complete task child
+tree is empty.  Missing evidence is ``unknown``.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import psutil
 from .worker import LeaseOwnerSnapshot
 
 
-LivenessState = Literal["alive", "dead", "unknown"]
+LivenessState = Literal["alive", "dead", "quiescent", "unknown"]
 WslQuiescenceState = Literal["active", "quiescent", "unknown"]
 _WORKER_INSTANCE = re.compile(r"dsw_[0-9a-f]{32}")
 _CODE_SHA = re.compile(r"[0-9a-f]{40,64}")
@@ -43,6 +46,15 @@ SnapshotReader = Callable[[], Sequence[ProcessSnapshot]]
 WslQuiescenceReader = Callable[[LeaseOwnerSnapshot], WslQuiescenceState]
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedHeartbeat:
+    process_created_at: datetime
+    status: str
+    claim_kind: str | None
+    claim_id: str | None
+    stop_requested: bool
+
+
 class LocalProcessTreeLivenessProbe:
     """Conservative psutil probe bound to one durable Worker heartbeat."""
 
@@ -60,8 +72,8 @@ class LocalProcessTreeLivenessProbe:
         self._local_host = str(local_host or socket.gethostname()).strip().casefold()
 
     def __call__(self, owner: LeaseOwnerSnapshot) -> LivenessState:
-        expected_created = self._validated_identity(owner)
-        if expected_created is None:
+        heartbeat = self._validated_identity(owner)
+        if heartbeat is None:
             return "unknown"
         try:
             snapshots = tuple(self._snapshot_reader())
@@ -72,12 +84,26 @@ class LocalProcessTreeLivenessProbe:
 
         by_pid = {entry.pid: entry for entry in snapshots}
         root = by_pid.get(int(owner.owner_pid or 0))
-        expected_timestamp = expected_created.timestamp()
+        expected_timestamp = heartbeat.process_created_at.timestamp()
         if root is not None:
             if root.create_time is None:
                 return "unknown"
             if _same_create_time(root.create_time, expected_timestamp):
-                return "alive"
+                orphan_claim = _matches_current_orphan_claim(owner, heartbeat)
+                if orphan_claim and heartbeat.stop_requested:
+                    return "unknown"
+                if not orphan_claim:
+                    return "alive"
+                descendant_state = _owned_descendant_state(
+                    snapshots,
+                    root_pid=int(owner.owner_pid or 0),
+                    not_before=expected_timestamp,
+                )
+                if descendant_state == "active":
+                    return "alive"
+                if descendant_state == "unknown":
+                    return "unknown"
+                return self._wsl_checked_quiescence(owner, result="quiescent")
             # The PID was reused.  It is unsafe to associate the replacement
             # process (or its children) with the durable Worker identity.
             return "unknown"
@@ -91,20 +117,27 @@ class LocalProcessTreeLivenessProbe:
             return "alive"
         if descendant_state == "unknown":
             return "unknown"
-        if owner.hybrid_wsl:
-            if self._wsl_quiescence_reader is None:
-                return "unknown"
-            try:
-                wsl_state = self._wsl_quiescence_reader(owner)
-            except (OSError, RuntimeError, psutil.Error):
-                return "unknown"
-            if wsl_state == "active":
-                return "alive"
-            if wsl_state != "quiescent":
-                return "unknown"
-        return "dead"
+        return self._wsl_checked_quiescence(owner, result="dead")
 
-    def _validated_identity(self, owner: LeaseOwnerSnapshot) -> datetime | None:
+    def _wsl_checked_quiescence(
+        self,
+        owner: LeaseOwnerSnapshot,
+        *,
+        result: Literal["dead", "quiescent"],
+    ) -> LivenessState:
+        if not owner.hybrid_wsl:
+            return result
+        if self._wsl_quiescence_reader is None:
+            return "unknown"
+        try:
+            wsl_state = self._wsl_quiescence_reader(owner)
+        except (OSError, RuntimeError, psutil.Error):
+            return "unknown"
+        if wsl_state == "active":
+            return "alive"
+        return result if wsl_state == "quiescent" else "unknown"
+
+    def _validated_identity(self, owner: LeaseOwnerSnapshot) -> _ValidatedHeartbeat | None:
         if (
             not self._local_host
             or not str(owner.host or "").strip()
@@ -120,6 +153,8 @@ class LocalProcessTreeLivenessProbe:
         try:
             expected_created = _parse_aware(str(owner.owner_create_time or ""))
             heartbeat = self._identity_reader(str(owner.worker_instance_id))
+            if not isinstance(heartbeat, Mapping):
+                return None
             identity = heartbeat.get("identity")
             if not isinstance(identity, Mapping):
                 return None
@@ -137,7 +172,41 @@ class LocalProcessTreeLivenessProbe:
             return None
         if heartbeat_created != expected_created:
             return None
-        return expected_created
+        status = heartbeat.get("status")
+        claim_kind = heartbeat.get("claim_kind")
+        claim_id = heartbeat.get("claim_id")
+        stop_requested = heartbeat.get("stop_requested")
+        if (
+            not isinstance(status, str)
+            or not status.strip()
+            or (claim_kind is None) != (claim_id is None)
+            or (claim_kind is not None and (not isinstance(claim_kind, str) or not claim_kind.strip()))
+            or (claim_id is not None and (not isinstance(claim_id, str) or not claim_id.strip()))
+            or type(stop_requested) is not bool
+        ):
+            return None
+        return _ValidatedHeartbeat(
+            process_created_at=expected_created,
+            status=status.strip().upper(),
+            claim_kind=claim_kind.strip() if isinstance(claim_kind, str) else None,
+            claim_id=claim_id.strip() if isinstance(claim_id, str) else None,
+            stop_requested=stop_requested,
+        )
+
+
+def _matches_current_orphan_claim(
+    owner: LeaseOwnerSnapshot,
+    heartbeat: _ValidatedHeartbeat,
+) -> bool:
+    if owner.lease_state != "ORPHAN_HOLD" or heartbeat.claim_id != owner.attempt_id:
+        return False
+    attempt_kind = str(owner.attempt_kind).strip().upper()
+    expected = {
+        ("WAITING_ORPHAN_QUIESCENCE", "RESOLUTION"): "orphan_resolution",
+        ("WAITING_ORPHAN_QUIESCENCE", "BUILD"): "orphan_build",
+        ("WAITING_PUBLISH_RECOVERY", "BUILD"): "orphan_publish",
+    }.get((heartbeat.status, attempt_kind))
+    return expected is not None and heartbeat.claim_kind == expected
 
 
 def read_complete_process_snapshot() -> tuple[ProcessSnapshot, ...]:
@@ -149,17 +218,31 @@ def read_complete_process_snapshot() -> tuple[ProcessSnapshot, ...]:
         for process in iterator:
             try:
                 info = process.info
+                pid = int(info["pid"])
+                # psutil exposes Windows' System Idle Process as PID 0.  It
+                # cannot own or descend from a dataset-release attempt and is
+                # not a valid lease PID, so retaining it would make every
+                # otherwise complete Windows snapshot fail validation.
+                if pid == 0:
+                    continue
+                raw_create_time = info.get("create_time")
+                create_time = float(raw_create_time) if raw_create_time is not None else None
+                if create_time is not None and create_time <= 0:
+                    create_time = None
                 rows.append(
                     ProcessSnapshot(
-                        pid=int(info["pid"]),
+                        pid=pid,
                         ppid=(int(info["ppid"]) if info.get("ppid") is not None else None),
-                        create_time=(float(info["create_time"]) if info.get("create_time") is not None else None),
+                        create_time=create_time,
                     )
                 )
             except psutil.NoSuchProcess:
                 continue
             except psutil.AccessDenied:
-                rows.append(ProcessSnapshot(pid=int(process.pid), ppid=None, create_time=None))
+                pid = int(process.pid)
+                if pid == 0:
+                    continue
+                rows.append(ProcessSnapshot(pid=pid, ppid=None, create_time=None))
             except (KeyError, TypeError, ValueError) as exc:
                 raise ProcessSnapshotIncomplete("process identity snapshot is incomplete") from exc
     except psutil.Error as exc:

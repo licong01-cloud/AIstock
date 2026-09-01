@@ -124,7 +124,7 @@ def test_monthly_control_request_is_accepted_by_resolution_processor(tmp_path) -
     assert request.logical_request_key == submitted["logical_request_key"]
 
 
-def test_resolution_resource_spec_restores_waiting_pressure_rung(
+def test_resolution_resource_spec_ignores_legacy_waiting_pressure_rung(
     dataset_profile,
     tmp_path,
 ) -> None:
@@ -165,7 +165,7 @@ def test_resolution_resource_spec_restores_waiting_pressure_rung(
     )
     processor._predicted_new_bytes = lambda _submission: 0
     processor._read_request = lambda _submission: SimpleNamespace(scope=Scope.FULL)
-    assert processor.resource_spec(submission).pressure_rung == 1
+    assert processor.resource_spec(submission).pressure_rung == 0
 
 
 def test_supervised_source_stage_uses_versioned_timeout_and_rung(
@@ -362,6 +362,73 @@ def test_resolution_processor_turns_typed_drift_into_waiting_without_scope_chang
     assert result.context["data_scope_changed"] is False
 
 
+@pytest.mark.parametrize("resolution_path", ("reattest", "build"))
+def test_processor_passes_artifact_ready_authority_to_every_action_plan_path(
+    dataset_profile,
+    tmp_path,
+    monkeypatch,
+    resolution_path: str,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    artifact_ready_ref = cas.put_json({"fixture": "artifact-ready-authority"})
+    frozen = SimpleNamespace(artifact_ready_contract_ref=artifact_ready_ref)
+    processor = MonthlyResolutionProcessor(
+        dataset_profile,
+        store,
+        cas,
+        source_stage=_FrozenFixtureStage(frozen),
+    )
+    request = SimpleNamespace(
+        cutoff=date(2026, 7, 31),
+        sample_instruments=("000001.SZ",),
+        scope=Scope.SAMPLE,
+    )
+    candidate = object() if resolution_path == "reattest" else None
+    probe = object()
+    action_plan = object()
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(processor, "_read_request", lambda _record: request)
+    monkeypatch.setattr(processor, "_bounded_catalog", lambda _request: [])
+    monkeypatch.setattr(processor, "_select_candidate", lambda _request, _rows: candidate)
+    monkeypatch.setattr(processor, "_candidate_source_evidence", lambda _candidate: None)
+    monkeypatch.setattr(processor, "_source_reuse_baseline", lambda _request: None)
+    monkeypatch.setattr(processor, "_predicted_new_bytes", lambda _record: 0)
+    monkeypatch.setattr(processor, "_record_probe", lambda *_args: probe)
+    monkeypatch.setattr(processor, "_source_snapshot_catalog_spec", lambda *_args: object())
+    monkeypatch.setattr(processor, "_fresh_attestation", lambda *_args: None)
+    if resolution_path == "reattest":
+        monkeypatch.setattr(processor, "_should_reattest", lambda *_args: True)
+        monkeypatch.setattr(
+            processor,
+            "_reattest_plan",
+            lambda *_args: (action_plan, SimpleNamespace(key="validation", target_key="target")),
+        )
+    else:
+        monkeypatch.setattr(processor, "_build_plan", lambda *_args: action_plan)
+        monkeypatch.setattr(processor, "_build_inputs", lambda **_kwargs: {"fixture": "inputs"})
+
+    def capture_action_plan(_service, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(ResolutionService, "resolve_action_plan", capture_action_plan)
+    context = SimpleNamespace(
+        kind="resolution",
+        store=store,
+        record={},
+        target_id="submission",
+        claim=object(),
+        pressure_rung=0,
+        checkpoint=lambda: None,
+    )
+
+    result = processor.process(context)
+
+    assert result.disposition is ProcessorDisposition.DURABLE_SUCCESS
+    assert captured["artifact_ready_contract_ref"] == artifact_ready_ref
+
+
 def test_resolution_reader_revalidates_fixed_initial_plan_and_sample_scope(tmp_path) -> None:
     profile = load_dataset_profile(V2_PROFILE_PATH)
     plan = load_initial_migration_plan(INITIAL_PLAN_PATH)
@@ -513,8 +580,10 @@ def test_processor_cross_submission_fresh_probe_renews_attestation_and_noops(
     cas = CASStore(store.root)
     service = ResolutionService(store, cas)
     clock = [datetime(2026, 8, 3, 1, 0, tzinfo=UTC)]
-    source_root = _digest("stable-source")
-    provenance_root = _digest("observation-provenance")
+    raw_source_root = _digest("raw-source")
+    source_root = _digest("artifact-ready-source")
+    raw_provenance_root = _digest("raw-observation-provenance")
+    provenance_root = _digest("artifact-ready-provenance")
     stable_provenance_root = _digest("stable-provenance")
     pit_root = _digest("stable-pit")
     artifact_root = _digest("immutable-candidate")
@@ -528,28 +597,56 @@ def test_processor_cross_submission_fresh_probe_renews_attestation_and_noops(
         "provider_database_writes": 0,
         "candidate_writes": 0,
     }
-    source_manifest_ref = cas.put_json({"fixture": "source-manifest"})
+    source_manifest_ref = cas.put_json(
+        {
+            "fixture": "source-manifest",
+            "source_content_root": raw_source_root,
+        }
+    )
     source_reuse_manifest_ref = cas.put_json(
         {
             "schema_version": SOURCE_REUSE_MANIFEST_SCHEMA,
             "profile": dataset_profile.profile,
             "cutoff": "2026-07-31",
-            "source_content_root": source_root,
+            "source_content_root": raw_source_root,
             "partitions": [],
             "safety": safety,
         }
     )
     source_audit_ref = cas.put_json({"fixture": "source-audit"})
+    pit_ref = cas.put_json({"fixture": "pit"})
     source_provenance_ref = cas.put_json(
         {
-            "fixture": "source-provenance",
-            "source_provenance_root": provenance_root,
+            "schema_version": "dataset_release_source_provenance_receipt_v1",
+            "profile": dataset_profile.profile,
+            "cutoff": "2026-07-31",
+            "source_content_root": raw_source_root,
+            "source_provenance_root": raw_provenance_root,
+            "stable_source_provenance_root": stable_provenance_root,
+            "pit_snapshot_digest": pit_root,
+            "source_content_manifest_ref": source_manifest_ref.as_dict(),
+            "source_reuse_manifest_ref": source_reuse_manifest_ref.as_dict(),
+            "source_refresh_audit_ref": source_audit_ref.as_dict(),
+            "pit_snapshot_ref": pit_ref.as_dict(),
+            "safety": safety,
         }
     )
-    pit_ref = cas.put_json({"fixture": "pit"})
+    artifact_ready_contract_ref = cas.put_json(
+        {
+            "schema_version": "dataset_release_artifact_ready_contract_v1",
+            "profile": dataset_profile.profile,
+            "cutoff": "2026-07-31",
+            "source_content_root": raw_source_root,
+            "artifact_ready_content_root": source_root,
+            "artifact_ready_effective_content_root": source_root,
+            "artifact_ready_provenance_root": provenance_root,
+            "pit_snapshot_digest": pit_root,
+            "safety": safety,
+        }
+    )
     frozen = SimpleNamespace(
-        source_content_root=source_root,
-        source_provenance_root=provenance_root,
+        source_content_root=raw_source_root,
+        source_provenance_root=raw_provenance_root,
         stable_source_provenance_root=stable_provenance_root,
         pit_snapshot_digest=pit_root,
         source_manifest_ref=source_manifest_ref,
@@ -559,7 +656,7 @@ def test_processor_cross_submission_fresh_probe_renews_attestation_and_noops(
         pit_snapshot_ref=pit_ref,
         snapshot_tokens=("fixture:stable",),
         partitions=(),
-        artifact_ready_contract_ref=source_manifest_ref,
+        artifact_ready_contract_ref=artifact_ready_contract_ref,
         artifact_ready_content_root=source_root,
         artifact_ready_provenance_root=provenance_root,
         provider_receipt_refs=(),
@@ -708,6 +805,7 @@ def test_processor_cross_submission_fresh_probe_renews_attestation_and_noops(
             frozen,
             first_probe,
         ),
+        artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
         now=clock[0] + timedelta(seconds=1),
     )
     assert first_result.run["outcome"] == "NO_OP_VERIFIED"
@@ -740,6 +838,14 @@ def test_processor_cross_submission_fresh_probe_renews_attestation_and_noops(
     assert second_run["outcome"] == "NO_OP_VERIFIED"
     assert stage.calls == 1
     assert context.checkpoints >= 4
+    catalog_snapshot = store.latest_source_snapshot(
+        profile=dataset_profile.profile,
+        scope=Scope.FULL.value,
+        cutoff_on_or_before=date(2026, 7, 31),
+    )
+    assert catalog_snapshot["source_content_root"] == raw_source_root
+    assert catalog_snapshot["source_provenance_root"] == raw_provenance_root
+    assert catalog_snapshot["source_content_root"] != source_root
     assert (
         store.latest_candidate_registration(
             profile=dataset_profile.profile,

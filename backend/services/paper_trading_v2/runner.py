@@ -13,8 +13,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
+    MinuteDataSource,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.validators import StrategyPackageValidator
@@ -102,9 +104,7 @@ class PaperTradingV2Runner:
             algo_code=manifest.minute_execution_policy.algo_code,
             algo_config=manifest.minute_execution_policy.algo_config,
             market_context=market_context,
-            allow_partial_fill=bool(
-                manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)
-            ),
+            allow_partial_fill=bool(manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)),
         )
 
         ledger = InMemoryLedger(
@@ -163,7 +163,6 @@ class PaperTradingV2Runner:
             trade_date=order_intent.target_trade_date,
             source=data_source,
             min_bars=required_bars,
-            require_day_features=False,
         )
         if not market_input.minute_bars:
             raise DataUnavailableError(
@@ -253,9 +252,7 @@ class PaperTradingV2Runner:
                 algo_code=manifest.minute_execution_policy.algo_code,
                 algo_config=manifest.minute_execution_policy.algo_config,
                 market_context=market_context_by_symbol[intent.symbol],
-                allow_partial_fill=bool(
-                    manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)
-                ),
+                allow_partial_fill=bool(manifest.minute_execution_policy.algo_config.get("allow_partial_fill", True)),
             )
             for fill in order_fills:
                 ledger.apply_fill(fill)

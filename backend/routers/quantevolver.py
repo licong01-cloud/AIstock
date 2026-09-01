@@ -69,6 +69,7 @@ from ..services.quantevolver.seed_contract import normalize_single_experiment_se
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PIT_CAUSALITY_QUARANTINE_PREFIX = "PIT_CAUSALITY_VIOLATION"
 
 
 def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None = None) -> str:
@@ -1266,6 +1267,8 @@ def delete_factor(
 class FactorAvailabilityRequest(BaseModel):
     source: str = Field(..., description="因子来源")
     is_available: bool = Field(..., description="是否可用")
+    reason: Optional[str] = Field(None, description="禁用原因；未提供时记录为手工可用性变更")
+    batch_id: Optional[str] = Field(None, description="禁用批次；未提供时自动生成")
 
 
 @router.patch("/factors/{factor_name}/availability", summary="设置因子可用状态")
@@ -1276,16 +1279,51 @@ def set_factor_availability(factor_name: str, req: FactorAvailabilityRequest):
     设为不可用时清理 qe_factor_correlations 中的旧相关性记录。
     """
     from ..db.pg_pool import get_conn
+    disable_reason: Optional[str] = None
+    disable_batch_id: Optional[str] = None
     with get_conn() as conn:
         with conn.cursor() as cur:
             if req.is_available:
                 cur.execute(
+                    "SELECT disable_reason FROM aistock_factor_catalog "
+                    "WHERE factor_name = %s AND source = %s FOR UPDATE",
+                    (factor_name, req.source),
+                )
+                existing = cur.fetchone()
+                if not existing:
+                    raise HTTPException(404, f"因子 {factor_name} (source={req.source}) 不存在")
+                existing_reason = (
+                    existing.get("disable_reason")
+                    if isinstance(existing, dict)
+                    else existing[0]
+                )
+                if str(existing_reason or "").startswith(PIT_CAUSALITY_QUARANTINE_PREFIX):
+                    raise HTTPException(
+                        409,
+                        detail={
+                            "error": "pit_causality_quarantine_requires_new_factor_identity",
+                            "factor_name": factor_name,
+                            "source": req.source,
+                            "disable_reason": existing_reason,
+                        },
+                    )
+                cur.execute(
                     "UPDATE aistock_factor_catalog "
-                    "SET is_available = TRUE, correlation_computed_at = NULL, updated_at = NOW() "
+                    "SET is_available = TRUE, correlation_computed_at = NULL, "
+                    "disable_reason = NULL, disable_batch_id = NULL, disable_at = NULL, "
+                    "rehab_candidate = FALSE, last_rehab_at = NOW() "
                     "WHERE factor_name = %s AND source = %s",
                     (factor_name, req.source),
                 )
             else:
+                disable_reason = (
+                    (req.reason or "").strip()
+                    or "manual_factor_availability_update"
+                )
+                disable_batch_id = (
+                    (req.batch_id or "").strip()
+                    or f"factor_availability_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+                )
                 # 获取因子 ID，清理相关性记录
                 cur.execute(
                     "SELECT id FROM aistock_factor_catalog "
@@ -1303,14 +1341,22 @@ def set_factor_availability(factor_name: str, req: FactorAvailabilityRequest):
                 cur.execute(
                     "UPDATE aistock_factor_catalog "
                     "SET is_available = FALSE, correlation_computed_at = NULL, "
-                    "correlation_pair_count = 0, updated_at = NOW() "
+                    "correlation_pair_count = 0, disable_reason = %s, "
+                    "disable_batch_id = %s, disable_at = NOW(), rehab_candidate = FALSE "
                     "WHERE factor_name = %s AND source = %s",
-                    (factor_name, req.source),
+                    (disable_reason, disable_batch_id, factor_name, req.source),
                 )
             if cur.rowcount == 0:
                 raise HTTPException(404, f"因子 {factor_name} (source={req.source}) 不存在")
         conn.commit()
-    return {"ok": True, "factor_name": factor_name, "source": req.source, "is_available": req.is_available}
+    return {
+        "ok": True,
+        "factor_name": factor_name,
+        "source": req.source,
+        "is_available": req.is_available,
+        "disable_reason": None if req.is_available else disable_reason,
+        "disable_batch_id": None if req.is_available else disable_batch_id,
+    }
 
 
 class BatchFactorActionRequest(BaseModel):
@@ -1479,11 +1525,15 @@ def batch_factor_action(req: BatchFactorActionRequest):
     failed = []
 
     if req.action == "set_unavailable":
+        disable_batch_id = f"factor_batch_action_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         with get_conn() as conn:
             with conn.cursor() as cur:
                 for item in req.factors:
                     fn = item.get("factor_name", "")
                     src = item.get("source", "")
+                    disable_reason = str(
+                        item.get("reason") or "factor_batch_action_set_unavailable"
+                    )
                     if not fn or not src:
                         failed.append({"factor_name": fn, "error": "缺少 factor_name 或 source"})
                         continue
@@ -1503,12 +1553,25 @@ def batch_factor_action(req: BatchFactorActionRequest):
                     cur.execute(
                         "UPDATE aistock_factor_catalog "
                         "SET is_available = FALSE, correlation_computed_at = NULL, "
-                        "correlation_pair_count = 0, updated_at = NOW() "
+                        "correlation_pair_count = 0, disable_reason = %s, "
+                        "disable_batch_id = %s, disable_at = NOW(), rehab_candidate = FALSE "
                         "WHERE factor_name = %s AND source = %s",
-                        (fn, src),
+                        (
+                            disable_reason,
+                            disable_batch_id,
+                            fn,
+                            src,
+                        ),
                     )
                     if cur.rowcount > 0:
-                        succeeded.append({"factor_name": fn, "source": src})
+                        succeeded.append(
+                            {
+                                "factor_name": fn,
+                                "source": src,
+                                "disable_reason": disable_reason,
+                                "disable_batch_id": disable_batch_id,
+                            }
+                        )
                     else:
                         failed.append({"factor_name": fn, "error": f"因子不存在 (source={src})"})
 

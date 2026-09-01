@@ -1,0 +1,199 @@
+{
+  "actual": "用户级启动提示没有AIstock条件路由，必须依赖手工显式调用命令。",
+  "allowed_write_scope": [
+    ".claude/commands/aistock-global-router.md",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260718_BUG-763-claude-code-aistock.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-763",
+  "closed_at": "2026-08-31T15:07:05Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-18T12:55:38.333362Z",
+  "description": "用户级启动提示没有AIstock条件路由，必须依赖手工显式调用命令。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260718-6828bbd9ab0c",
+      "timestamp": "2026-07-18T12:55:38.333358Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "从C:\\Users\\lc999启动的新Claude Code会话在处理F:\\Dev\\AIstock任务时使用aistock-task-router和唯一权威开发规范，非AIstock任务不受影响。",
+  "first_seen_at": "2026-07-18T12:55:38.333362Z",
+  "fix_branch": null,
+  "fix_commit": "3d92eee8f7aa61905d3e2f9a049ef7d8e6d3e7e9",
+  "fixed_at": "2026-08-31T15:07:05Z",
+  "github_issue_number": 2445,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2445",
+  "last_seen_at": "2026-07-18T12:55:38.333362Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not modify Claude settings, credentials, MCP configuration, or permissions.",
+    "Do not overwrite user-owned Claude startup memory outside the exact AIstock managed-router block."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4089",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Get-Content C:\\Users\\lc999\\.claude\\CLAUDE.md",
+  "required_verification": [
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-763",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b51fdb5a5dde6086",
+    "recorded_at": "2026-08-31T15:09:20.853239Z",
+    "runtime_contract_digest": "35343b440d535d28f7adbce288e2e1d37ea1e1f424e81752b78268fe3eac22d5",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0531641ab6915df638b085916c99af1fb8aa5287",
+    "source_merge_commit": "3d92eee8f7aa61905d3e2f9a049ef7d8e6d3e7e9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4089",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed: 471 passed, 2 skipped",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k client -q -> passed: 23 passed",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed: blocking=0, ownership=5/5",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 passed, ownership=14/14"
+    ],
+    "validation_evidence_digest": "d2d5a3a29eaa6ee9e93992aa48a8dea54eb4e6dc204059d929f5050cfca28a8b"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Claude Code从用户目录启动时未自动路由AIstock工作流",
+  "trigger_condition": {
+    "fingerprint": "6828bbd9ab0c9b3fee0d0853",
+    "source_event_id": "FE-20260718-6828bbd9ab0c"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed: 471 passed, 2 skipped",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k client -q -> passed: 23 passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed: blocking=0, ownership=5/5",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 passed, ownership=14/14"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "User-level Claude startup routing has no Validation Center backend, UI, API, or business-flow dependency."
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "User-level Claude startup routing has no Validation Center backend, UI, API, or business-flow dependency."
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

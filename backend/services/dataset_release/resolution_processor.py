@@ -64,7 +64,6 @@ from .source_authority import (
 )
 from .state_machine import AttestationObservationSpec, AttestationRenewalSpec
 from .worker import (
-    WORKER_ERROR_RECEIPT_SCHEMA,
     ProcessorResult,
     WorkResourceSpec,
     WorkerAttemptContext,
@@ -550,7 +549,7 @@ class MonthlyResolutionProcessor:
             acquire_host=True,
             db_connections=1,
             io_class="dataset-release-resolution-readonly",
-            pressure_rung=self._resume_pressure_rung(str(submission.get("submission_id", ""))),
+            pressure_rung=0,
             predicted_new_bytes=self._predicted_new_bytes(submission),
             credential_env_allowlist=(
                 "TDX_DB_HOST",
@@ -590,63 +589,6 @@ class MonthlyResolutionProcessor:
             reference_value = _complete_cas_ref(self.cas, raw.get("rows_ref"), field="capacity.rows_ref")
             total += reference_value.size
         return total + CANDIDATE_OUTPUT_PREDICTED_BYTES
-
-    def _resume_pressure_rung(self, submission_id: str) -> int:
-        if not submission_id:
-            raise ResolutionResourceEvidenceInvalid("resolution submission id is missing for pressure recovery")
-        attempts = self.store._many(
-            """
-            SELECT ordinal,error_ref FROM resolution_attempts
-            WHERE submission_id=? AND state='RELEASED_WAITING'
-              AND error_ref IS NOT NULL
-            ORDER BY ordinal
-            """,
-            (submission_id,),
-        )
-        admissions = self.store._many(
-            """
-            SELECT event_id,payload_ref FROM events
-            WHERE submission_id=? AND type='RESOURCE_WAITING_SOURCE'
-              AND payload_ref IS NOT NULL
-            ORDER BY event_id
-            """,
-            (submission_id,),
-        )
-        sequences: list[list[int]] = [[], []]
-        for sequence, rows in zip(sequences, (admissions, attempts)):
-            for row in rows:
-                sequence.append(self._pressure_rung_from_receipt(submission_id, row))
-        if any(later < earlier for sequence in sequences for earlier, later in zip(sequence, sequence[1:])):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure rung moved backwards")
-        latest = [sequence[-1] for sequence in sequences if sequence]
-        return max(latest) if latest else 0
-
-    def _pressure_rung_from_receipt(
-        self,
-        submission_id: str,
-        row: Mapping[str, Any],
-    ) -> int:
-        reference = str(row.get("payload_ref") or row.get("error_ref") or "")
-        receipt = self.cas.get_json_bounded(reference, max_bytes=1024 * 1024)
-        if (
-            not isinstance(receipt, Mapping)
-            or receipt.get("schema_version") != WORKER_ERROR_RECEIPT_SCHEMA
-            or receipt.get("target_id") != submission_id
-            or receipt.get("disposition") != "WAITING"
-            or receipt.get("kind") not in {"resolution", "resolution_resource_admission"}
-        ):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure-rung receipt identity is invalid")
-        context = receipt.get("context")
-        if (
-            not isinstance(context, Mapping)
-            or context.get("data_scope_changed") is not False
-            or type(context.get("pressure_rung")) is not int
-        ):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure-rung receipt context is invalid")
-        rung = int(context["pressure_rung"])
-        if not 0 <= rung < len(self.profile.pressure_ladder["h5_batch"]):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure rung exceeds the profile ladder")
-        return rung
 
     def process(self, context: WorkerAttemptContext) -> ProcessorResult:
         if context.kind != "resolution" or context.store.root != self.store.root:
@@ -703,6 +645,7 @@ class MonthlyResolutionProcessor:
                 artifact_fingerprint=self.artifact_fingerprint,
                 sample_policy=SAMPLE_POLICY,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 attestation_renewal=fresh_attestation.renewal,
                 now=self._aware_now(),
             )
@@ -726,6 +669,7 @@ class MonthlyResolutionProcessor:
                 sample_policy=SAMPLE_POLICY,
                 attestation_target_key=target.target_key,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 now=self._aware_now(),
             )
             return ProcessorResult.durable_success()
@@ -750,6 +694,7 @@ class MonthlyResolutionProcessor:
             sample_policy=SAMPLE_POLICY,
             build_inputs=build_inputs,
             source_snapshot_catalog=catalog_spec,
+            artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
             now=self._aware_now(),
         )
         return ProcessorResult.durable_success()

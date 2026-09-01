@@ -2,11 +2,85 @@
 
 > Feature tier：`F2`
 > Feature ID：`qe_monthly_dataset_release_v2`
-> 文档状态：`implementation_fixture_platform_reviewed_source_merge_eligible_real_data_pending`
+> 文档状态：`sep1_delivery_first_final_contract`
 > 设计日期：2026-08-11
 > 设计范围：一键候选月更、幂等复验、组件复用与增量、资源治理、独立 Worker、后端控制面、Skill/Runbook
 > 硬边界：本文及后续实现不授权数据导出、既有候选改写、生产指针切换、DB DDL/DML、服务启停或清理
 > 最终实现验收回执：`docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md`
+
+## 0. 2026-09-01 最终数据交付合同（最高优先级）
+
+本节是当前唯一有效的 P0 执行合同；与本节冲突的历史 sample、资源准入、pressure ladder、分批产品化阶段和
+旧验收记录只保留为设计历史，不再进入 2026-08-31 数据交付关键路径。
+
+P0 只交付一个结果：在独立 X 盘目录生成并签收 cutoff=`2026-08-31` 的
+`qe_hmm_full_v2` candidate，供 QE/HMM 后续只读使用。现有 2026-07-31 v1 candidate、production 数据、指针和
+历史 receipt 全部保持不变。
+
+执行顺序固定为四步：
+
+1. 使用现有 canonical PIT monthly operator，把 `aistock_equity_pit_canonical_v2` 更新并 readback 到
+   `2026-08-31`；DEV 验证和 production DML 仍是独立授权，但不再增加额外 rollback、NO_OP 或重复验证阶段。
+2. 直接构建并 readback `2026-08-31` 的 industry/P3A **full** authority；不再构建或要求五股、六股 sample。
+3. 只提交一次 `monthly --candidate-only`。planner 必须复用 2026-07-31 已有有效组件，并仅追加 8 月尾部、
+   新增 v2 历史退市证券及 PIT/复权/行业变化实际失效的分区；禁止为了流程证明重新导出八年全市场。
+4. 对最终 candidate 执行一次全量结构/identity/分母闭合和分层数值抽样，再运行 QE/HMM producer smoke。
+
+### 0.1 禁止过度工程化
+
+- 不再把首次 v2 sample、2026-07-31 v2 full、消费者迁移、训练、产品 UI、生产激活、node1、cleanup 或新平台能力
+  作为 2026-08-31 candidate 的前置。
+- P0 执行期间不新增 feature、设计阶段、资源门禁、人工审批点、测试矩阵或低层替代框架；只有直接阻止上述四步的
+  确定性代码缺陷才允许在同一 BUG 内修复。
+- 已有数据正确性合同保持不变：canonical PIT、日期/identity、重复键、复权、ST、涨跌停、分钟物理覆盖、
+  moneyflow 单位、12 指数、行业 authority 和生产防覆盖。它们是 candidate 正确性的组成部分，不得扩张为新的流程门禁。
+- 小样本只允许用于十分钟以内的源码 smoke，不能成为真实数据发布前置，也不得重复提交真实 sample intent。
+
+### 0.2 资源执行合同
+
+- AIstock 不再基于 host available、commit headroom、pagefile/paging、WSL available、预测磁盘余量、aggregate commit、
+  Windows Job/WSL cgroup 自定义内存值、pressure rung 或性能退化执行 admission、checkpoint、等待、自动取消或终态阻断。
+- 上述指标可以写入 telemetry/receipt，但不能改变任务状态。`WAITING_RESOURCE` 不再是月更正常状态。
+- 仅操作系统、Docker/WSL、数据库或文件系统实际返回的 OOM、进程终止、连接失败、超时或 ENOSPC 可以结束当前 attempt；
+  该 attempt 不自动重试，不重复全值 source freeze，由 operator 在外部条件恢复后显式重新提交。
+- 分批 SQL、流式 row processing、按股票/月切片、Parquet row group 和单次有界日志继续保留；它们是算法实现方式，
+  不是资源准入或阻断门禁，且不得减少股票、日期、字段、指数或验证范围。
+
+### 0.3 P0 完成与停止
+
+仅当 cutoff、PIT、industry/P3A、daily/minute、QFQ、ST/stk_limit、H5/static、12-index、sector、QE/HMM smoke
+全部签收，且 candidate marker/catalog/receipt identity 一致，才报告完成。production activation、pointer、node1、DB repair、
+backend restart 和 cleanup 继续分别报告为 `not_requested`。完成后自动停止，不进入消费者迁移或下一轮产品化。
+
+## Appendix A. 已废弃的 2026-09-01 P0 重排历史
+
+以下内容保留用于解释既有实现和 receipt，不得作为当前 operator 步骤。
+
+用户批准把“2026-09-01凌晨启动、完成截至2026-08-31的candidate-only数据集更新”设为本设计唯一P0。
+本节只重排真实数据交付顺序，不改变PIT、价格、复权、涨跌停、分钟、资金流、指数、行业authority、资源上限、
+不可变候选或生产授权合同。
+
+P0只包含三个宏观结果：
+
+1. **Capability proof**：BUG-1238最终运行时上只执行一次五股final sample，必须形成terminal receipt；重复小样本
+   不属于验收，普通cutoff推进不运行sample。
+2. **Baseline**：在sample PASS后构建2026-07-31 v2 full基线，planner优先复用已验证v1组件，不以设计验证为由
+   强制全量重导。
+3. **August release**：2026-08-31收盘后构建同cutoff的P1/P2A industry authority与P3A full；
+   2026-09-01 00:05（Asia/Shanghai）以后只提交一次`monthly --candidate-only`，以terminal
+   `CANDIDATE_VALIDATED` receipt作为完成证据。
+
+现有`previous_month_last_completed_trading_day`在2026-08-31当天仍解析到2026-07-31，因此正式August monthly
+不得提前到8月31日晚伪造cutoff，也不新增临时`--cutoff`、系统时钟覆盖或低层exporter绕行。provider当日数据尚未
+发布时，同一durable intent进入retryable waiting；不得重复提交、补默认值或缩小范围。
+
+P0的直接前置仅限：R0最终source commit、Worker/toolchain readiness、2026-07-31基线、目标cutoff的PIT/industry/P3A
+authority和真实源可用性。QE/HMM训练、Selection/Paper/Advisory迁移、产品UI、production activation、DDL、
+后端重启与cleanup均不在P0关键路径。canonical PIT state/spans若只覆盖到旧cutoff，则扩展它们的DEV验证与
+production DML是必要数据前置，但必须由受控operator、独立授权和readback完成，monthly与authority builder保持零写库。
+
+Batch A～E描述已经完成或既有的源码产品化结构，不再作为2026-09-01逐批重新执行的阶段。P0若遇到同合同代码BUG，
+在同一数据发布任务内登记、修复、定向审核并做一次final rerun；只有合同变化、生产动作或真实所有权冲突才拆出新阶段。
 
 ## 1. Background / 背景
 
@@ -27,20 +101,21 @@
 9. Skill 是操作护栏，不是 durable scheduler；FastAPI 进程内 daemon thread/BackgroundTasks 又不适合数小时任务；
 10. 最新签收、资源证据和 durable signoff 尚未形成一个可由后端、CLI、Skill 共同读取的权威目录。
 
-因此，本设计不是给现有脚本再包一层命令，而是把月度数据更新重构为一套幂等、可恢复、
-资源受控、默认 candidate-only 的发布产品。
+因此，长期产品仍保留幂等、可恢复和 candidate-only 能力；当前 P0 不再继续产品化，资源由 OS 管理，
+只完成目标 cutoff candidate。
 
 ## 2. Scope / 范围
 
 ### 2.1 Goals / 目标
 
-1. 提供一个普通月份只需一次提交的稳定入口：`monthly --candidate-only`。
+1. 在目标cutoff的PIT/industry/P3A authority准备完成后，普通月份只需一次稳定提交：`monthly --candidate-only`；
+   2026-09-01 deadline bridge使用现有确定性builder准备这些authority，不把手工低层exporter加入流程。
 2. 自动完成 cutoff、已有候选发现、no-op、re-attest、resume、reuse、incremental 或 selective rebuild 决策。
 3. 用组件级 semantic/artifact/validation/resource fingerprint 代替整个配置 hash 的粗粒度失效。
 4. 建立 source partition manifest，能够发现历史修订，而不只比较 max date/row count。
 5. 普通月更只处理新增或失效分区；QFQ/PIT/历史修订只使受影响股票、日期块和滚动依赖失效。
 6. 对同 cutoff 的旧完整候选执行只读 re-attestation；验证通过时不复制、不改写、不重导。
-7. 建立跨 release 的 host resource lease、heartbeat、fencing token 和子进程树 telemetry。
+7. 现有 lease、heartbeat 和 fencing 只防止重复 writer/错误 owner；不得承担资源 admission 或负载限制。
 8. 将重型执行放在独立 Worker；FastAPI 只作为 durable control plane，不持有导出 DataFrame 或子进程。
 9. 让 Skill 保持轻量，只调用单一入口、解释 typed result、展示 receipt 并维护安全边界。
 10. 保持现有 PIT、资金流、指数/HMM、TDX->Tushare、X 盘候选和 production candidate-only 合同。
@@ -71,15 +146,15 @@
 | F-007 | QFQ denominator 变化使受影响股票的必要历史范围失效；PIT 与滚动窗口传播边界可重放。 |
 | F-008 | 硬链接复用必须 copy-on-write；任何修改不得反向改变 source candidate。 |
 | F-009 | SQLite 事务控制库、immutable filesystem CAS、同 release lock 与 host resource lease 分层；lease 具有 heartbeat、expiry、owner identity 和 fencing。 |
-| F-010 | Task-owned Windows Job 与 WSL cgroup 强制 private-commit/swap hard limit；Worker 同时监控 host commit/pagefile、RSS、DB、X 盘 I/O 和吞吐。 |
-| F-011 | 低资源进入 `WAITING_RESOURCE`/安全 checkpoint；OS hard limit 只能 fail-stop identity-bound task child，绝不控制其他进程、降级子集或伪成功。 |
+| F-010 | 资源、DB 与 I/O 只记录 telemetry；AIstock 不根据资源数值执行 admission、checkpoint、等待或自动取消。 |
+| F-011 | 只有 OS/Docker/WSL/数据库/文件系统实际失败可以结束 attempt；不自动重试，不控制其他进程、不降级子集或伪成功。 |
 | F-012 | FastAPI 只提交 durable intent 和读取事件/receipt；重型任务不在请求进程执行。 |
 | F-013 | Worker 独立支持 `--once/--drain/--serve`，默认 fail closed，backend restart 不丢任务。 |
 | F-014 | 状态转换采用枚举、CAS/fencing 和 append-only event journal；snapshot JSON 不能任意跳状态。 |
 | F-015 | cancel 是 durable request，并在 stage/chunk/checkpoint 边界协作式退出；强制终止不属于普通 API。 |
 | F-016 | API 使用 allowlisted profile、operator authorization 和 idempotency key；禁止任意命令、路径和 env 注入。 |
-| F-017 | 普通月份 sample policy 为 `on_contract_change`；单纯 cutoff 推进不重复 strict sample。 |
-| F-018 | 40203、数据冲突、PIT/schema/parity、RSS emergency 等不可恢复错误继续 fail fast，不被通用 retry 掩盖。 |
+| F-017 | 真实月更不再要求 sample；小样本仅用于十分钟以内源码 smoke，不创建真实发布前置。 |
+| F-018 | 40203、数据冲突、PIT/schema/parity 和实际 OS/DB/filesystem 错误继续显式失败，不被通用 retry 掩盖。 |
 | F-019 | 可恢复 I/O/DB/网络异常只进行有界 retry，保存 attempt、backoff、last error 和 pending scope。 |
 | F-020 | receipt 同时报告 reused/recomputed/reattested 分区、资源 telemetry、数据与生产零写入计数。 |
 | F-021 | durable signoff 自动生成，不依赖人工复制路径；旧 candidate receipt 与新 attestation 分开。 |
@@ -90,9 +165,11 @@
 | F-026 | 所有实现测试使用 temp/fixture，不访问或改写既有 X/E/WSL candidate，不调用真实导出。 |
 | F-027 | 新版 Skill 符合 progressive disclosure，核心文件精简，详细合同进入单层 references。 |
 | F-028 | 现有 PIT、资金流、指数/HMM、分钟 provider 和生产不可变性合同全部保持。 |
-| F-029 | 性能签收比较有效工作量、DB query、rows/s、I/O 和资源等待；不把等待时间误报为计算退化。 |
+| F-029 | 性能只记录有效工作量、DB query、rows/s 和 I/O telemetry，不进入 candidate 完成判定。 |
 | F-030 | 设计、实现和最终审查逐项执行 DESIGN-COMPLIANCE-001，不允许 simplified/partial/silent fallback。 |
 | F-031 | component manifest 与 daily/minute canonical lineage 必须支持多年按月增长：分片、增量写入、旧版只读迁移和单对象有界读取均 fail closed。 |
+| F-032 | 2026-09-01 P0直接以2026-08-31 monthly terminal receipt闭环；复用7月有效组件，不要求7月v2 full或消费者迁移。 |
+| F-033 | authority构建前只读验证canonical PIT state/spans覆盖目标cutoff；不足时由单一受控operator执行DEV apply/readback（可选同cutoff幂等NO_OP复核），再凭独立授权执行production apply/readback；禁止monthly隐式写库或临时Python/SQL绕行。 |
 
 ## 4. Architecture / 架构
 
@@ -677,6 +754,9 @@ target；任务自动流程只标记 quarantine reference，不递归删除。co
 
 ### 9.3 Entity States 与 Transition Table
 
+> BUG-1297 后的现行约束：下表中所有由资源观测触发的 `WAITING_RESOURCE`、safe checkpoint、hysteresis 和自动
+> requeue 行均为历史状态兼容说明，不得由新月更产生。非资源的 source/provider retry 与 publish recovery 不受影响。
+
 decision/action plan 是 immutable artifact，不是 state。submission resolution、run 与 attempt 分开。
 
 Submission：
@@ -834,6 +914,10 @@ publish commit point 先提交时，cancel 只能走上述 too-late 分支。
 
 ### 10.1 Resource Budget
 
+> 本小节原有 hard cap、resource admission、pressure ladder 和性能阈值是历史设计，现已被 §0.3 与 BUG-1297 取代，
+> 不再具有执行效力。当前只保留 Job/cgroup 进程归属、心跳、取消、超时、quiescence、流式日志和固定分块实现；
+> 不安装 AIstock memory/commit/swap limit，不因任何资源遥测暂停、阻断、变更 rung 或自动重试。
+
 每个 stage 冻结：Windows Job private commit、WSL cgroup memory/swap、process-tree RSS telemetry、DB
 pool/statement timeout、batch/chunk 大小及基于 predicted remaining new bytes 的 X 盘容量。host available/system
 commit headroom、paging/pagefile、WSL host available 和等待 deadline 仅为 telemetry/warning。
@@ -854,6 +938,7 @@ available-memory reserve；超过 hard max 或降低 reserve 必须拒绝加载�
 | WSL host `MemAvailable`（WSL stage） | 兼容遥测阈值 | warning only；task cgroup hard caps 仍生效 |
 | OS `LowMemoryResourceNotification` | 明确信号 | safe pause；等待不耗尽重试 |
 | DB pool / simultaneous row-producing query | 4 / 1 | 4 / 1 |
+| dataset-release source session `work_mem` / `max_parallel_workers_per_gather` | 8 MiB / 1 | transaction-local 固定上限并 readback；不得继承更宽松的全局数据库值 |
 | DB statement timeout | 300 s | 300 s；超时 typed retry，不扩大 |
 | provider request concurrency | 1 | 1 |
 | Qlib dump workers | 8 | 8，仍受 owned-footprint cap |
@@ -1078,7 +1163,7 @@ references/release-receipt.md
 references/index-hmm-contract.md
 ```
 
-Skill forward-test 至少覆盖：普通月更、同 cutoff no-op、旧候选 re-attest、资源不足、40203、
+Skill forward-test 至少覆盖：普通月更、同 cutoff no-op、旧候选 re-attest、低资源遥测不改状态、40203、
 source conflict、生产激活未授权。forward-test 只使用 fixture/mock control root，不运行真实数据任务。
 
 Runbook 面向人类 operator，默认只展示一键命令和状态解释；完整 JSON 只落 artifact，不输出到终端。
@@ -1089,8 +1174,8 @@ signoff 由 CLI 自动生成并校验，不要求人工复制。
 | 类别 | 示例 | 策略 |
 |---|---|---|
 | retryable | 短暂 DB 断线、临时文件占用、provider 5xx | 有界 retry/backoff |
-| waiting | host memory、WSL memory、X 空间暂不足 | `WAITING_RESOURCE` 到超时 |
-| resource_hard | Job/cgroup commit/OOM、system commit/pagefile emergency、guardian loss | task-only fail-stop；保留 staging/checkpoint，按 pressure ladder 新 attempt |
+| resource_telemetry | host/WSL memory、commit headroom、paging、预测磁盘余量 | receipt/warning only；不等待、不暂停、不重试、不 terminalize |
+| operating_system_failure | 子进程实际 OOM/termination、实际 ENOSPC、Docker/WSL failure | 当前 attempt 按真实错误失败；不自动重试 |
 | orphan_hold | expired owner 的 Windows/WSL tree仍 alive/unknown | 非终态持有 leases；只在完整 quiescence 后释放 |
 | source_blocked | required source watermark/partition 缺失 | `WAITING_SOURCE/BLOCKED` |
 | terminal_contract | schema/PIT/moneyflow/index/bin-H5 冲突 | fail fast |
@@ -1101,6 +1186,26 @@ signoff 由 CLI 自动生成并校验，不要求人工复制。
 禁止将 terminal error 转成 retry success，禁止通过换 provider、补零、前填、减组件或减股票掩盖错误。
 
 ## 15. Implementation Plan / 实施方案
+
+### 历史 P0 交付桥（已由 §0 最短路径取代，不得执行）
+
+除F-033所列最小canonical PIT monthly coverage operator外，本桥不重启A～E源码batch，直接消费已经合入的能力：
+
+1. 冻结R0 changed-file dependency inventory；无关消费者commit不使数据receipt失效。
+2. 新建一次final sample submission并等待terminal；历史terminal submission不得resume，也不并行提交第二个sample。
+3. sample PASS后生成缺失的2026-07-31 P3A full并提交一次2026-07-31 full initial migration。
+4. 2026-08-31收盘后先只读验证canonical PIT state/spans覆盖同cutoff；不足时通过P0最小operator完成DEV
+   apply/readback（可再以同cutoff幂等NO_OP复核），取得目标明确的production DML授权后apply/readback。该operator复用
+   `StockUniversePitService.ensure_canonical_pit_universe()`，默认plan-only，固定canonical key/rule/start/cutoff，
+   不接受任意SQL、任意key或activation；当前源码没有该正式CLI，这是9月1日前唯一必须补齐的P0代码缺口。
+5. PIT coverage PASS后生成同cutoff的industry/P3A full authority；writer/readback使用新repo-external目录，禁止覆盖。
+6. 2026-09-01 00:05以后提交一次monthly；只通过status/events/receipt观察同一lineage。
+7. full validator执行全量结构/分母/identity/coverage闭环和分层数值抽样；不重复五股sample，不做新旧全量逐行比较。
+8. terminal PASS后单独报告candidate signoff；production activation继续等待独立授权。
+
+时间目标不是新的数据质量门禁：目标为2026-09-01开盘前得到terminal receipt；provider未发布、权威冲突、内部缺键
+或确定性输入缺失仍按既有typed waiting/blocking合同处理。不得为了时间目标降低股票、日期、字段、PIT、指数、行业
+或验证范围。
 
 ### Batch A：Deterministic Core
 
@@ -1366,13 +1471,13 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
 | F-008 | `copy_on_write.py::{prepare_copy_on_write_tree,adopt_isolated_writer_patch,adopt_deferred_writer_outputs,verify_source_unchanged}`；`cas_store.py::CASStore` | `test_copy_on_write.py::{test_untrusted_writer_only_sees_isolated_patch_and_cannot_change_baseline,test_deferred_replacement_copies_baseline_once_then_atomically_adopts}`；F-006 baseline Merkle assertions | implemented_fixture_verified | fixture 已覆盖 standalone 与 mixed direct E2E；真实 candidate 未运行 |
 | F-009 | `control_store.py::ControlStore`；`lease.py::LeaseManager`；`cas_store.py::CASStore` | `test_control_store.py` atomic/idempotency/schema drift；`test_resource_lease.py` dual-lease/fence/orphan-hold | implemented_fixture_verified | 真实 X 盘 control root 未初始化 |
 | F-010 | `resource_supervisor.py::ResourceSupervisor`；`windows_job.py::WindowsJob`；`wsl_cgroup.py::WslCgroupService`；`wsl_resource_guardian.py::WslResourceGuardian`；`runtime_adapters.py::DurableWslQuiescenceReader` | fixture gates；2026-08-12 rebase 后隔离 smoke Windows+WSL PASS，Windows job peak 23,699,456 bytes，WSL cgroup peak 28,565,504 bytes、swap peak 0、安全计数全 0 | implemented_platform_fixture_verified | 真实 full 资源证据未运行 |
-| F-011 | `resource_budget.py` hard-gate/pressure ladder；`worker.py::DatasetReleaseWorker` typed resource admission | hard-failure/wait fixture；Windows+WSL isolated platform smoke PASS；parent 对 child manifest `minute_batch` rung 二次绑定 | implemented_platform_fixture_verified | 真实 full allocation/resource telemetry 未运行 |
+| F-011 | BUG-1297：移除 resource admission/checkpoint/WAITING_RESOURCE/自动重试；只保留 OS 实际错误与 telemetry | `test_worker.py` 资源观察不改状态、OS 实际错误不自动重试；validation module plans | implementation_in_progress | 真实 2026-08-31 monthly receipt 待运行 |
 | F-012 | `control_service.py::DatasetReleaseControlService`；`backend/routers/dataset_releases.py` protected control routes | `test_control_service.py::test_submit_is_durable_idempotent_and_never_creates_a_run_in_api`；`test_dataset_releases.py::{test_every_dataset_release_route_requires_operator_dependency,test_preview_submit_status_cancel_and_validation_contract}` | implemented_fixture_verified | backend runtime activation 未请求 |
 | F-013 | `worker.py::{DatasetReleaseWorker,ProcessorRegistry}`；`scripts/dataset_release_worker.py` real registry/preflight/once/drain/serve | `test_worker_cli.py::{test_default_production_registry_wires_every_real_contract,test_preflight_validates_real_registry_without_claim_heartbeat_or_worker}`；`test_worker.py::test_once_blocks_only_one_missing_processor_item_and_serve_is_bounded` | implemented_fixture_verified | Worker 注册/启动未授权、未运行 |
 | F-014 | `state_machine.py::DatasetReleaseStateMachine`；`lease.py::LeaseManager`；`publisher.py` fenced publish | `test_state_machine.py` no-op/resume/atomic terminal matrix；`test_worker.py::{test_dead_publish_owner_is_fence_handed_off_and_parent_finalizes_without_free_window,test_expired_unknown_owner_is_held_and_never_reclaimed}` | implemented_fixture_verified | 真实 crash injection/platform recovery 未运行 |
 | F-015 | `worker_commands.py::WorkerCommandCoordinator`；`worker.py` cooperative checkpoint handling | `test_worker.py::{test_cancel_and_resume_commands_are_atomic_and_fenced,test_new_resume_invocation_is_not_suppressed_by_prior_rejected_command}`；CLI cancel test | implemented_fixture_verified | 无进程终止授权；只验证 durable command |
 | F-016 | `backend/deps.py::require_dataset_release_operator`；`control_service.py::{ProfileNotAllowed,CandidateOnlyRequired}`；`api_models.py` extra-forbid contracts | `test_deps_dataset_release.py` token file/rotation/fail-closed matrix；`test_dataset_releases.py::{test_all_routes_are_operator_protected_and_token_rotates,test_preview_token_mismatch_is_visible_and_idempotency_conflict_has_exact_code}` | implemented_fixture_verified | token/runtime 配置未执行 |
-| F-017 | `resolution_processor.py::SAMPLE_POLICY`=`on_contract_change`；`profile.py::DatasetProfile` | `test_profile.py::{test_safe_physical_tuning_does_not_change_semantic_identity,test_cli_and_env_cannot_weaken_hard_limits}`；mixed planner cutoff-tail fixture | implemented_fixture_verified | 真实 monthly receipt 未产生 |
+| F-017 | §0 delivery-first：真实 sample 不再是月更前置；fixture smoke 不创建 submission | `test_worker.py`/CLI fixture smoke；runbook 静态合同 | approved_by_user_implementation_pending | 直接进入 2026-08-31 monthly |
 | F-018 | `minute_overlay.py::MinuteOverlayBuilder`；`source_authority.py` pressure-rung code/date batching；`artifact_ready_source.py` TDX-first/Tushare-fallback adapters | `test_minute_overlay.py` TDX-first/240-bars/overlap/40203/bounded code-window matrix；`test_artifact_ready_source.py` provider-row bounds | implemented_fixture_verified | 真实 TDX/Tushare 调用未授权、未运行；minute 每批上限 20 仅有 fixture/profile 证据 |
 | F-019 | `worker.py::{ProcessorDisposition,DatasetReleaseWorker}` typed retry/wait/terminal policy | `test_worker.py::{test_resolution_retryable_releases_fences_and_records_durable_retry,test_resolution_retry_exhaustion_binds_latest_error_receipt,test_build_terminal_failure_is_blocked_and_never_fake_success}` | implemented_fixture_verified | 无真实 provider/DB failure replay |
 | F-020 | `contracts.py::{RunOutcome,ComponentAction,ReleaseIdentity}`；`build_processor.py::ProductionBuildProcessor` portable receipt；`signoff.py::SignoffReceipt` | `test_build_processor.py` durable result/resource/log/artifact-snapshot refs；`test_reattest_existing.py` external CAS receipt；`test_worker.py` terminal readback oracles；F-006 mixed E2E | implemented_fixture_verified | 真实 terminal receipt 未产生 |
@@ -1384,9 +1489,11 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
 | F-026 | pytest temp-root source/build/control adapters；`tests/aistock_validation/dataset_release_platform_smoke.py` | 统一隔离回归 `743 passed, 5 skipped`；Windows+WSL platform smoke PASS，`database/provider/export/production/service_controls=0` | fixture_and_platform_verified_real_data_pending | 真实 DB/TDX/Tushare、真实 candidate 均未运行 |
 | F-027 | `.codex/skills/update-backtest-dataset/SKILL.md` + 五个一层 reference；`.claude/skills/update-backtest-dataset/SKILL.md` pointer；本 runbook | CLI fixture tests与文档 link/diff checks | implemented_fixture_verified | 首次真实月更 forward test/terminal receipt pending；client install 未授权 |
 | F-028 | `index_contract.py` exact 12-index authority；`index_context_candidate_manifest.py::{produce_index_context_candidate_manifest,validate_index_context_candidate_manifest}`；`candidate_validator.py` index + moneyflow parity | `test_index_context.py` exact list/benchmark/provider parity；`test_candidate_validator.py` index every-field、manifest hash、moneyflow static/derived rolling parity fixtures | implemented_fixture_verified | 真实指数/资金流数据未读取；HMM consumer 仍 `not_activated` |
-| F-029 | `performance.py::evaluate_performance_gate`；`synthetic_benchmark.py`；resource/query/log metrics receipts | `test_performance.py` comparable 3-run median/non-comparable/query-memory-control gates；synthetic fixture evidence | pending_real_performance | 真实 full/new-cutoff 3-run workload、RSS、query、throughput 与 <=10% regression 证据未授权、未运行 |
+| F-029 | 性能模块仅输出 telemetry；结果不改变 submission/run state | 定向静态合同与现有 telemetry 测试 | approved_telemetry_only | 不要求 3-run benchmark 才允许数据交付 |
 | F-030 | 本矩阵、§21 item-by-item review、§22 多轮审查；实现 PR #3310 validation receipt | 已完成多轮定向审查、统一隔离回归、Windows+WSL platform smoke、ruff/compile/diff/feature-workflow、最新 main 热合并与独立 code review；合入时必须再次确认 PR `headRefOid`、check `head_sha` 与最终分支 HEAD 一致且 required checks 全绿 | source_review_verified_merge_head_gate_external | F-026/F-029 的真实数据/真实性能状态与源码 gate 分开；设计文档不冻结易过期的 PR head SHA，最终绑定以 GitHub merge readback 为准 |
 | F-031 | `component_artifact_manifest.py` storage v2 section shards；`canonical_lineage.py` lineage v3 bucket/head/event refs；daily/minute outer v2 capability binding | `test_component_artifact_manifest.py::{test_component_manifest_v2_shards_and_compacts_production_scale_index,test_v2_adj_section_shards_6000_codes_by_36_months_under_hard_bound}`；`test_canonical_lineage.py::test_lineage_6000_by_36_metadata_growth_is_bounded`；legacy dual-reader/migration/tamper tests | implemented_fixture_verified | 真实 36 个月运行未执行；合成门禁只证明元数据容量与 fail-closed 迁移合同 |
+| F-032 | §0 delivery-first；现有 industry/P3A full builder 与 monthly durable入口 | 2026-08-31 authority readback 与 monthly terminal receipt | approved_by_user_real_execution_pending | 不要求 initial-migration/sample/7月v2 full |
+| F-033 | §0与§15 canonical PIT coverage preflight及`scripts/prepare_canonical_pit_monthly.py` | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV apply/readback、同cutoff NO_OP测试与production DML readback receipts | implemented_tests_passed | approved_by_user: BUG-1243 operator源码和零写plan/verify合同已实现；production DML执行前仍需精确目标授权，不把可选NO_OP复核升级为新门禁，monthly/industry/P3A builder保持零写库 |
 
 ## 21. DESIGN-COMPLIANCE-001
 
@@ -1396,13 +1503,17 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
    provider、PIT、schema、parity、lease、resource 错误均显式保留。
 3. **禁止未经确认的业务逻辑迁移**：PIT、资金流、指数清单、HMM benchmark、分钟 provider 和 candidate-only
    语义保持；控制面不重新实现 exporter 或 validator。
-4. **禁止未经确认的门禁、审批或人工确认**：只保留技术身份、资源、数据合同与既有生产授权边界；
+4. **禁止未经确认的门禁、审批或人工确认**：只保留 writer identity、数据合同与既有生产授权边界；资源只作 telemetry；
    普通 candidate 月更不新增人工审批，production activation 仍是独立授权动作。
 
 ## 22. Review History / 审核记录
 
 | Round | Reviewer focus | Findings | Resolution | Status |
 |---|---|---|---|---|
+| 18A | deadline critical-path review | 首次PIT v2迁移、消费者迁移和生产激活被串成月更前置；重复sample不能增加全量正确性证据 | 增加§0/§15 P0桥，解耦R0/R1/R2，只保留一次final sample和一次monthly submission | resolved_in_sep1_rebaseline |
+| 18B | cutoff/runtime review | `previous_month_last_completed_trading_day`在8月31日晚仍返回7月31日，无法完成August candidate | 固定2026-09-01 00:05后提交，不增加临时cutoff注入或低层exporter绕行 | resolved_in_sep1_rebaseline |
+| 18C | authority dependency review | industry/P3A要求canonical PIT state/spans覆盖目标cutoff；正式月度coverage operator不存在 | 新增F-033及最小operator，DEV apply/readback与production DML授权/readback独立；同cutoff二次DEV apply可用于幂等证明但不构成新门禁；monthly/builder保持零写库 | implemented_in_BUG-1243_pending_merge |
+| 18D | F2 final design review | 检查不覆盖历史、typed waiting/blocking、资源合同、单次提交和production边界 | canonical acceptance artifact 33/33；不新增未批准数据质量门禁，不把deadline变成范围降级 | pass_design_ready_for_pr |
 | 0 | initial draft | 形成 30 项设计索引与 A-E 实施批次 | 进入三方独立审核 | superseded |
 | 1A | data semantics | source snapshot、PIT、QFQ、re-attest、hardlink 合同不闭合 | 增加 canonical source readback、frozen PIT、dependency graph、COW 与 attestation 分层 | resolved_in_revision_1 |
 | 1B | worker/API | repository atomicity、state、fencing、auth、pagination 不闭合 | 选择 SQLite+CAS；补原子协议、完整 transition、stale child、auth/cursor/resource 算法 | resolved_in_revision_1 |

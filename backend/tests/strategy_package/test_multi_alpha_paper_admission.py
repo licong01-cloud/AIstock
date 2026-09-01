@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from backend.routers import strategy_packages as router_module
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
@@ -30,18 +31,21 @@ from backend.services.strategy_package.asset_eligibility import (
     StrategyPackageAssetEligibilityService,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.models import AlphaMode, PackageStatus
 from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.multi_alpha_paper_admission import (
-    InMemoryMultiAlphaPaperAdmissionRepository,
+from backend.services.strategy_package.multi_alpha_simulation_admission import (
+    InMemoryMultiAlphaSimulationAdmissionRepository,
 )
-from backend.services.strategy_package.multi_alpha_paper_dry_run import (
-    MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION,
+from backend.services.strategy_package.multi_alpha_simulation_dry_run import (
+    MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION,
     REASON_MULTI_ALPHA_DRY_RUN_NOT_APPLICABLE,
     REASON_MULTI_ALPHA_DRY_RUN_UNSUPPORTED_BROKER,
-    MultiAlphaPaperDryRunResult,
-    MultiAlphaPaperDryRunValidator,
+    MultiAlphaSimulationDryRunResult,
+    MultiAlphaSimulationDryRunValidator,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
@@ -52,7 +56,11 @@ from backend.services.strategy_package.selection_artifact import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    RuntimeConfigInvalidError,
+    StrategyPackageValidationError,
+)
 from backend.tests.paper_trading_v2.test_day_runner import (
     FakeCalendar,
     FakeLimitProvider,
@@ -106,7 +114,9 @@ def _runtime_with_admitted_artifact(
             "rank": 1,
             "target_weight": 0.03,
             "reference_price": 10.0,
-            "component_scores": ({"alpha_a1": 0.9, "alpha_fund": 0.8} if manifest.alpha_mode == AlphaMode.MULTI_ALPHA else {}),
+            "component_scores": (
+                {"alpha_a1": 0.9, "alpha_fund": 0.8} if manifest.alpha_mode == AlphaMode.MULTI_ALPHA else {}
+            ),
         }
     ]
     artifact_repository = InMemorySelectionScoreArtifactRepository()
@@ -148,13 +158,13 @@ def _runtime_config_with_history(*, top_k: int = 50, history: list[dict] | None 
 def _admission_validator(
     *,
     package_repo: InMemoryStrategyPackageRepository | None = None,
-    admission_repo: InMemoryMultiAlphaPaperAdmissionRepository | None = None,
+    admission_repo: InMemoryMultiAlphaSimulationAdmissionRepository | None = None,
 ):
     package_repo = package_repo or _make_parent(live_weight_policy=True)[0]
     service, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
     service._load_reference_prices = lambda symbols, _trade_date: {symbol: 10.0 for symbol in symbols}  # type: ignore[method-assign]
-    admission_repo = admission_repo or InMemoryMultiAlphaPaperAdmissionRepository()
-    validator = MultiAlphaPaperDryRunValidator(
+    admission_repo = admission_repo or InMemoryMultiAlphaSimulationAdmissionRepository()
+    validator = MultiAlphaSimulationDryRunValidator(
         package_repository=package_repo,
         selection_artifact_service=service,
         admission_repository=admission_repo,
@@ -164,18 +174,18 @@ def _admission_validator(
 
 
 def _run_dry_run(
-    validator: MultiAlphaPaperDryRunValidator,
+    validator: MultiAlphaSimulationDryRunValidator,
     package_id: str,
     *,
     runtime_variant: str = "top_k=50",
     runtime_config: dict[str, Any] | None = None,
-) -> MultiAlphaPaperDryRunResult:
+) -> MultiAlphaSimulationDryRunResult:
     return validator.run(
         package_id=package_id,
         broker_backend="local_sim",
         trade_date=TRADE_DATE,
         runtime_variant=runtime_variant,
-        confirmation=MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION,
+        confirmation=MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION,
         validated_by="pytest",
         runtime_config=runtime_config or _runtime_config_with_history(),
         initial_cash=1_000_000_000.0,
@@ -335,7 +345,7 @@ def test_multi_alpha_parent_enable_lifecycle_uses_shared_status_machine_after_dr
 
 def test_multi_alpha_parent_enable_paper_without_dry_run_is_allowed_for_localsim_default() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
-    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    admission_repo = InMemoryMultiAlphaSimulationAdmissionRepository()
     service = StrategyPackageService(
         repository=package_repo,
         asset_eligibility=_asset_service(),
@@ -366,7 +376,7 @@ def test_multi_alpha_parent_enable_paper_without_dry_run_is_allowed_for_localsim
 
 def test_selection_full_path_lists_multi_alpha_without_localsim_dry_run_admission() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
-    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    admission_repo = InMemoryMultiAlphaSimulationAdmissionRepository()
     _artifact_service_instance, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
 
     selectable = SelectionCenterService(
@@ -423,7 +433,7 @@ def test_local_sim_and_minqmt_manual_portfolio_create_succeed_after_optional_dry
 
 def test_local_sim_and_minqmt_manual_portfolio_create_succeed_without_dry_run_admission() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
-    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    admission_repo = InMemoryMultiAlphaSimulationAdmissionRepository()
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=InMemoryPaperTradingV2Repository(),
@@ -528,8 +538,7 @@ def test_localsim_full_day_runs_admitted_single_and_multi_without_package_revali
     assert paper_repo.cash_entries[result.run.run_id]
     assert paper_repo.snapshots[result.run.run_id].nav > 0
     assert [
-        event["event_type"]
-        for event in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+        event["event_type"] for event in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
     ] == [
         "RUN_STARTED",
         "DATA_READY",
@@ -607,7 +616,9 @@ def _remove_first_leg_model_asset(parent) -> None:  # noqa: ANN001
     manifest = parent.manifest
     first_model_id = manifest.alpha_components[0].model_id
     models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
-    parent.manifest = manifest.model_copy(update={"model_asset": [model for model in models if model.model_id != first_model_id]})
+    parent.manifest = manifest.model_copy(
+        update={"model_asset": [model for model in models if model.model_id != first_model_id]}
+    )
 
 
 def test_dry_run_rejects_single_alpha_and_minqmt_without_admission_write() -> None:
@@ -624,7 +635,7 @@ def test_dry_run_rejects_single_alpha_and_minqmt_without_admission_write() -> No
             broker_backend="minqmt_sim",
             trade_date=TRADE_DATE,
             runtime_variant="top_k=50",
-            confirmation=MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION,
+            confirmation=MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION,
         )
 
     assert _reason(single_exc.value) == REASON_MULTI_ALPHA_DRY_RUN_NOT_APPLICABLE
@@ -655,7 +666,7 @@ def test_single_alpha_paper_create_still_passes_without_admission_reader() -> No
     assert portfolio.broker_backend == "local_sim"
 
 
-def test_unknown_multi_alpha_paper_admission_blocker_still_blocks_localsim() -> None:
+def test_unknown_multi_alpha_simulation_admission_blocker_still_blocks_localsim() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
     manifest = parent.manifest
     source_evidence = deepcopy(manifest.source_evidence)
@@ -699,9 +710,15 @@ def test_signal_eligibility_hot_path_reads_persisted_evidence_without_artifact_o
 
     monkeypatch.setattr("backend.services.strategy_package.runtime.TargetPositionEngine", explode)
     monkeypatch.setattr("backend.services.strategy_package.runtime.RebalanceEngine", explode)
-    monkeypatch.setattr("backend.services.strategy_package.runtime.StrategyPackageRuntime.build_signal_snapshot", explode)
-    monkeypatch.setattr("backend.services.strategy_package.multi_alpha_paper_dry_run.MultiAlphaPaperDryRunValidator", explode)
-    monkeypatch.setattr("backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.prepare_workspace", explode)
+    monkeypatch.setattr(
+        "backend.services.strategy_package.runtime.StrategyPackageRuntime.build_signal_snapshot", explode
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.multi_alpha_simulation_dry_run.MultiAlphaSimulationDryRunValidator", explode
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.prepare_workspace", explode
+    )
     monkeypatch.setattr(
         "backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.load_source_for_strategy_package",
         explode,
@@ -710,7 +727,9 @@ def test_signal_eligibility_hot_path_reads_persisted_evidence_without_artifact_o
         "backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.load_source_for_strategy_package_leg",
         explode,
     )
-    monkeypatch.setattr("backend.services.strategy_package.live_inference.WslStrategyPackageInferenceProvider.run", explode)
+    monkeypatch.setattr(
+        "backend.services.strategy_package.live_inference.WslStrategyPackageInferenceProvider.run", explode
+    )
     monkeypatch.setattr("backend.services.strategy_package.live_inference.win_to_wsl_path", explode)
     monkeypatch.setattr("backend.services.strategy_package.multi_alpha_live.win_to_wsl_path", explode)
     monkeypatch.setattr("backend.services.strategy_package.selection_artifact.win_to_wsl_path", explode)
@@ -815,7 +834,9 @@ def test_selection_artifact_evidence_is_used_when_manifest_signal_evidence_is_mi
 
     assert summary.eligible is True
     assert summary.blockers == []
-    assert MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE in {check.name for check in summary.checks if check.status == "PASS"}
+    assert MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE in {
+        check.name for check in summary.checks if check.status == "PASS"
+    }
     assert MULTI_ALPHA_SIGNAL_ADMISSION_PASSED in {check.name for check in summary.checks if check.status == "PASS"}
 
 
@@ -958,7 +979,7 @@ def test_router_paper_runtime_dry_run_success_and_loud_error(monkeypatch: pytest
             assert kwargs["runtime_variant"] == "top_k=50"
             return FakeResult()
 
-    monkeypatch.setattr(router_module, "MultiAlphaPaperDryRunValidator", lambda: FakeValidator())
+    monkeypatch.setattr(router_module, "MultiAlphaSimulationDryRunValidator", lambda: FakeValidator())
     app = FastAPI()
     app.include_router(router_module.router)
     client = TestClient(app)
@@ -969,7 +990,7 @@ def test_router_paper_runtime_dry_run_success_and_loud_error(monkeypatch: pytest
             "broker_backend": "local_sim",
             "trade_date": "2024-07-02",
             "runtime_variant": "top_k=50",
-            "confirmation": MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION,
+            "confirmation": MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION,
         },
     )
 
@@ -983,14 +1004,14 @@ def test_router_paper_runtime_dry_run_success_and_loud_error(monkeypatch: pytest
                 context={"reason_code": REASON_MULTI_ALPHA_DRY_RUN_NOT_APPLICABLE, "package_id": "pkg_single"},
             )
 
-    monkeypatch.setattr(router_module, "MultiAlphaPaperDryRunValidator", lambda: FailingValidator())
+    monkeypatch.setattr(router_module, "MultiAlphaSimulationDryRunValidator", lambda: FailingValidator())
     failure = client.post(
         "/strategy-packages/pkg_single/paper-runtime-dry-run",
         json={
             "broker_backend": "local_sim",
             "trade_date": "2024-07-02",
             "runtime_variant": "top_k=50",
-            "confirmation": MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION,
+            "confirmation": MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION,
         },
     )
 

@@ -1,22 +1,9 @@
-from . import health
-from . import analysis
-from . import watchlist
-from . import cloud_screening
-from . import monitor
-from . import portfolio
-from . import sector_strategy
-from . import ingestion
-from . import settings
-from . import config_env
-from . import dataset_releases
-from . import qmt
-from . import qe_archive
-from . import research_pipeline
-from . import smart_monitor
-from . import rdagent
-from . import rdagent_templates
-from . import stock_universe
-from . import tdx_blocks
+"""Router package exports without import-time loading of every route module.
+
+Python's package ``from backend.routers import <module>`` behavior loads the
+requested submodule on demand.  Keeping this initializer declarative prevents
+unrelated route side effects while tooling resolves a single module spec.
+"""
 
 __all__ = [
     "health",

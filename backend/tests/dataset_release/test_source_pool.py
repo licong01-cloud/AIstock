@@ -10,6 +10,7 @@ from backend.services.dataset_release.profile import ResourcePolicy, apply_resou
 from backend.services.dataset_release.source_pool import (
     ReadOnlySourcePool,
     SourcePoolClosed,
+    SourceQueryResourceContractViolation,
     SourceReadOnlyViolation,
     SourceRowChunkTooLarge,
 )
@@ -26,7 +27,9 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.connection.executed.append((sql, params))
-        if "current_setting('transaction_read_only')" in sql:
+        if "pg_size_bytes(current_setting('work_mem'))" in sql:
+            self.rows = [self.connection.resource_readback]
+        elif "current_setting('transaction_read_only')" in sql:
             self.rows = [("on",)]
         elif "set_config" in sql:
             self.rows = [("300000",)]
@@ -52,8 +55,14 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, rows=((1,), (2,), (3,))):
+    def __init__(
+        self,
+        rows=((1,), (2,), (3,)),
+        *,
+        resource_readback=("on", 8 * 1024 * 1024, 1),
+    ):
         self.query_rows = list(rows)
+        self.resource_readback = resource_readback
         self.executed = []
         self.sessions = []
         self.rollbacks = 0
@@ -101,8 +110,16 @@ def test_independent_pool_enforces_readonly_session_and_reuses_own_connection() 
     }
     assert created[0].rollbacks == 2
     assert (
-        "SELECT set_config('statement_timeout', %s, true)",
-        ("300000",),
+        "SELECT set_config('statement_timeout', %s, true),"
+        "set_config('work_mem', %s, true),"
+        "set_config('max_parallel_workers_per_gather', %s, true)",
+        ("300000", "8192kB", "1"),
+    ) in created[0].executed
+    assert (
+        "SELECT current_setting('transaction_read_only'),"
+        "pg_size_bytes(current_setting('work_mem'))::bigint,"
+        "current_setting('max_parallel_workers_per_gather')::integer",
+        None,
     ) in created[0].executed
     assert pool.stats().peak_active_row_queries == 1
     pool.close()
@@ -114,6 +131,10 @@ def test_independent_pool_enforces_readonly_session_and_reuses_own_connection() 
 
 def test_source_pool_hard_bounds_and_readonly_sql_guard() -> None:
     assert not hasattr(source_pool_module, "SourcePoolConfig")
+    assert (
+        source_pool_module.SOURCE_QUERY_RESOURCE_CONTRACT_SCHEMA
+        == "dataset_release_source_query_resource_v1"
+    )
 
     pool = ReadOnlySourcePool(FakeConnection, ResourcePolicy())
     with pytest.raises(SourceReadOnlyViolation):
@@ -125,6 +146,41 @@ def test_source_pool_hard_bounds_and_readonly_sql_guard() -> None:
     with pytest.raises(ValueError, match="fetch_rows"):
         with pool.row_stream("SELECT 1", fetch_rows=0):
             pass
+    pool.close()
+
+
+@pytest.mark.parametrize(
+    "readback",
+    [
+        ("on", 32 * 1024 * 1024, 1),
+        ("on", 8 * 1024 * 1024, 12),
+        ("on", "invalid", 1),
+        ("on",),
+    ],
+)
+def test_source_pool_fails_closed_when_query_resource_readback_differs(readback) -> None:
+    pool = ReadOnlySourcePool(
+        lambda: FakeConnection(resource_readback=readback),
+        ResourcePolicy(),
+    )
+
+    with pytest.raises(SourceQueryResourceContractViolation):
+        with pool.connection():
+            pass
+
+    pool.close()
+
+
+def test_source_pool_keeps_readonly_failure_distinct_from_resource_readback() -> None:
+    pool = ReadOnlySourcePool(
+        lambda: FakeConnection(resource_readback=("off", 8 * 1024 * 1024, 1)),
+        ResourcePolicy(),
+    )
+
+    with pytest.raises(SourceReadOnlyViolation):
+        with pool.connection():
+            pass
+
     pool.close()
 
 

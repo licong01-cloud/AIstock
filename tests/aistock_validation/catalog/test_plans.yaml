@@ -80,7 +80,8 @@ plans:
     nox_session: advisory_dev_input_onboarding_backend
     ci_lane: backend
     enabled: true
-    execution_mode: ci
+    execution_mode: delegated
+    requires_dev_db: true
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -91,16 +92,7 @@ plans:
     runner_enabled: false
     max_duration_seconds: 300
     evidence_kinds: [pytest]
-    resource_policy:
-      resource_mode: isolated_write
-      creates_validation_resources: true
-      resource_types: [temporary_postgresql_database]
-      allowed_db_targets: [dev_db]
-      forbidden_db_targets: [prod_db]
-      cleanup_required: true
-      cleanup_policy:
-        strategy: pytest_finalizer_drop_database
-        cleanup_failure_severity: P0
+    resource_policy: existing_dev_db
   - plan_key: l0
     title: L0 static guardrail gate
     module: validation_center
@@ -1126,6 +1118,39 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
+  - plan_key: localsim_successor_core_dev_db
+    title: LocalSIM successor account lineage replay DEV PostgreSQL validation
+    module: simulation.localsim_successor_core
+    level: L4
+    command_key: nox_localsim_successor_core_dev_db
+    nox_session: localsim_successor_core_dev_db
+    ci_lane: backend
+    enabled: true
+    execution_mode: delegated
+    requires_dev_db: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: true
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: false
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, ddl_idempotency, catalog_integrity]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 300
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
+      required_fields: [validation_run_id, final_head_commit, ddl_idempotency, transaction_readback, cleanup_readback, production_gates]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 6000
+    resource_policy: existing_dev_db
   - plan_key: miniqmt_execution_runtime_l2
     title: Canonical MiniQMT event-loop runtime and durable tick-driver validation
     module: miniqmt_execution_runtime

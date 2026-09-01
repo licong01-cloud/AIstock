@@ -8,10 +8,13 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from backend.services.industry_pit.candidate_builder import FrozenDenominator, UniverseSpan
+from backend.services.industry_pit.contracts import IndustryPitContractError
 
 from .state_model_set import StateModelSetError, canonical_json_bytes
 from .security_identity import SecuritySourceIdentityManifest
@@ -23,6 +26,9 @@ from .stock_fact_observation import (
     aggregate_l1_day,
     build_classification_lookup,
 )
+
+if TYPE_CHECKING:
+    from .industry_pit_adapter import HMMIndustryPitAdapter, HMMIndustryProjection
 
 
 CIRC_MV_LOOKBACK_CONTRACT_VERSION = "hmm_risk_causal_circ_mv_source_window_v1"
@@ -293,12 +299,15 @@ class PostgresStockFactReader:
         *,
         security_identity_manifest: SecuritySourceIdentityManifest,
         provider_absence_manifest: ProviderAbsenceManifest,
+        industry_pit_adapter: HMMIndustryPitAdapter | None = None,
     ) -> None:
         spec.validate()
         self._conn = conn
         self.spec = spec
         self.security_identity_manifest = security_identity_manifest
         self.provider_absence_manifest = provider_absence_manifest
+        self.industry_pit_adapter = industry_pit_adapter
+        self.industry_pit_preflight: Mapping[str, Any] | None = None
         self._classification_lookup: dict[tuple[str, str], dict[str, str]] | None = None
 
     def _identity_alias_json(self, source_dataset: str) -> str:
@@ -316,6 +325,65 @@ class PostgresStockFactReader:
             next_month = (window_start.replace(day=28) + timedelta(days=4)).replace(day=1)
             yield window_start, min(next_month - timedelta(days=1), end)
             window_start = next_month
+
+    def load_industry_pit_denominator(self, *, window_start: date, window_end: date) -> FrozenDenominator:
+        if window_start > window_end:
+            raise StateModelSetError("HMM industry PIT denominator window is invalid")
+        if window_start < self.spec.source_start or window_end > self.spec.source_end:
+            raise StateModelSetError("HMM industry PIT denominator escapes the frozen stock-fact source window")
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cal_date::date
+                FROM market.trading_calendar
+                WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+                ORDER BY cal_date
+                """,
+                (window_start, window_end),
+            )
+            trading_dates = tuple(row[0] for row in cursor.fetchall())
+            cursor.execute(
+                """
+                SELECT ts_code,eligible_start,eligible_end
+                FROM market.stock_universe_pit_spans
+                WHERE universe_key=%s AND eligible_start<=%s
+                  AND (eligible_end IS NULL OR eligible_end>=%s)
+                ORDER BY ts_code,eligible_start,eligible_end NULLS LAST
+                """,
+                (self.spec.universe_key, window_end, window_start),
+            )
+            raw_spans = cursor.fetchall()
+        try:
+            spans = tuple(UniverseSpan(row[0], row[1], row[2]) for row in raw_spans)
+            return FrozenDenominator.build(
+                window_start=window_start,
+                window_end=window_end,
+                trading_dates=trading_dates,
+                universe_spans=spans,
+            )
+        except (IndustryPitContractError, TypeError, ValueError) as exc:
+            raise StateModelSetError(f"HMM industry PIT denominator is invalid: {exc}") from exc
+
+    def run_industry_pit_preflight(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        expected_trading_days: int,
+    ) -> Mapping[str, Any]:
+        if self.industry_pit_adapter is None:
+            raise StateModelSetError("HMM shared industry PIT adapter is missing")
+        denominator = self.load_industry_pit_denominator(window_start=window_start, window_end=window_end)
+        self.industry_pit_preflight = self.industry_pit_adapter.preflight(
+            denominator,
+            expected_trading_days=expected_trading_days,
+        )
+        return self.industry_pit_preflight
+
+    def _industry_projection(self, symbol: str, trade_date: date) -> HMMIndustryProjection | None:
+        if self.industry_pit_adapter is None:
+            return None
+        return self.industry_pit_adapter.resolve(symbol, trade_date)
 
     def _load_trading_date_ordinals(self, eligible_start: date) -> dict[date, int]:
         with self._conn.cursor() as cursor:
@@ -466,6 +534,12 @@ class PostgresStockFactReader:
         fetch_size: int,
         sector_level: str,
     ) -> list[tuple[Any, ...]]:
+        if self.industry_pit_adapter is not None:
+            return self._load_unclassified_missing_price_base_rows(
+                window_start=window_start,
+                window_end=window_end,
+                fetch_size=fetch_size,
+            )
         cursor_prefix = "hmm_risk_missing_price_base" if sector_level == "L1" else "hmm_risk_missing_price_base_l2"
         cursor = self._conn.cursor(name=f"{cursor_prefix}_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
         cursor.itersize = fetch_size
@@ -537,6 +611,54 @@ class PostgresStockFactReader:
         finally:
             cursor.close()
 
+    def _load_unclassified_missing_price_base_rows(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        fetch_size: int,
+    ) -> list[tuple[Any, ...]]:
+        cursor = self._conn.cursor(name=f"hmm_risk_pit_missing_price_base_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
+        cursor.itersize = fetch_size
+        cursor.execute(
+            f"""
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
+              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), calendar_base AS (
+              SELECT trade_date,previous_trade_date FROM calendar_history
+              WHERE trade_date BETWEEN %s AND %s
+            )
+            SELECT calendar_base.trade_date,spans.ts_code,
+                   NULL::text,NULL::text,NULL::text,NULL::text,
+                   1 canonical_identity_count,spans.eligible_start,
+                   calendar_base.previous_trade_date
+            FROM calendar_base
+            JOIN market.stock_universe_pit_spans spans
+              ON spans.universe_key=%s AND spans.eligible_start<=calendar_base.trade_date
+             AND (spans.eligible_end IS NULL OR spans.eligible_end>=calendar_base.trade_date)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM market.kline_daily_raw price
+              WHERE price.trade_date=calendar_base.trade_date AND price.ts_code=spans.ts_code
+            )
+              AND NOT ({_full_day_suspension_exists_sql(trade_date="calendar_base.trade_date", ts_code="spans.ts_code")})
+            ORDER BY calendar_base.trade_date,spans.ts_code
+            """,
+            (
+                window_start - timedelta(days=60),
+                window_end,
+                window_start,
+                window_end,
+                self.spec.universe_key,
+            ),
+        )
+        try:
+            return list(cursor)
+        finally:
+            cursor.close()
+
     def _iter_missing_price_rows_separated(
         self,
         *,
@@ -583,6 +705,13 @@ class PostgresStockFactReader:
                         f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
                     )
                 code = str(row[1])
+                industry_projection = self._industry_projection(code, trade_date_value)
+                if industry_projection is not None and industry_projection.status == "unavailable":
+                    continue
+                l1_code = row[2] if industry_projection is None else industry_projection.l1_code
+                l1_name = row[3] if industry_projection is None else industry_projection.l1_name
+                l2_code = row[4] if industry_projection is None else industry_projection.l2_code
+                l2_name = row[5] if industry_projection is None else industry_projection.l2_name
                 eligible_start = row[7]
                 previous_market_date = row[8]
                 circ_state = circ_mv_state.get(code)
@@ -613,10 +742,11 @@ class PostgresStockFactReader:
                 yield {
                     "trade_date": trade_date_value,
                     "symbol": code,
-                    "l1_code": row[2],
-                    "l1_name": row[3],
-                    "l2_code": row[4],
-                    "l2_name": row[5],
+                    "l1_code": l1_code,
+                    "l1_name": l1_name,
+                    "l2_code": l2_code,
+                    "l2_name": l2_name,
+                    "industry_pit_resolution": (None if industry_projection is None else industry_projection.as_dict()),
                     "is_suspended": False,
                     "open_yuan": None,
                     "high_yuan": None,
@@ -656,6 +786,12 @@ class PostgresStockFactReader:
         fetch_size: int,
         sector_level: str,
     ) -> list[tuple[Any, ...]]:
+        if self.industry_pit_adapter is not None:
+            return self._load_unclassified_stock_base_rows(
+                window_start=window_start,
+                window_end=window_end,
+                fetch_size=fetch_size,
+            )
         price_history_start = window_start - timedelta(days=60)
         cursor_prefix = "hmm_risk_stock_fact_base" if sector_level == "L1" else "hmm_risk_stock_fact_base_l2"
         cursor = self._conn.cursor(name=f"{cursor_prefix}_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
@@ -745,6 +881,69 @@ class PostgresStockFactReader:
         finally:
             cursor.close()
 
+    def _load_unclassified_stock_base_rows(
+        self,
+        *,
+        window_start: date,
+        window_end: date,
+        fetch_size: int,
+    ) -> list[tuple[Any, ...]]:
+        price_history_start = window_start - timedelta(days=60)
+        cursor = self._conn.cursor(name=f"hmm_risk_pit_stock_fact_base_{window_start:%Y%m%d}_{window_end:%Y%m%d}")
+        cursor.itersize = fetch_size
+        cursor.execute(
+            f"""
+            WITH calendar_history AS (
+              SELECT cal_date::date trade_date,
+                     lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
+              FROM market.trading_calendar
+              WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+            ), price_base AS (
+              SELECT DISTINCT price.trade_date,price.ts_code,price.open_li,price.high_li,price.low_li,
+                              price.close_li,price.volume_hand,price.amount_li
+              FROM market.kline_daily_raw price
+              WHERE price.trade_date BETWEEN %s AND %s
+                AND NOT ({_full_day_suspension_exists_sql(trade_date="price.trade_date", ts_code="price.ts_code")})
+            ), price_history AS (
+              SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
+                     lag(trade_date,1) OVER w previous_price_date,
+                     lag(close_li,1) OVER w previous_close_li,
+                     lag(trade_date,5) OVER w previous_price_5_date,
+                     lag(close_li,5) OVER w previous_close_5_li,
+                     lag(trade_date,10) OVER w previous_price_10_date,
+                     lag(close_li,10) OVER w previous_close_10_li
+              FROM price_base
+              WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date)
+            )
+            SELECT p.trade_date,spans.ts_code,
+                   NULL::text,NULL::text,NULL::text,NULL::text,
+                   spans.eligible_start,1 canonical_identity_count,
+                   p.open_li,p.high_li,p.low_li,p.close_li,p.volume_hand,p.amount_li,
+                   p.previous_price_date,p.previous_close_li,p.previous_price_5_date,p.previous_close_5_li,
+                   p.previous_price_10_date,p.previous_close_10_li,calendar_history.previous_trade_date
+            FROM price_history p
+            JOIN market.stock_universe_pit_spans spans
+              ON spans.ts_code=p.ts_code AND spans.universe_key=%s AND spans.eligible_start<=p.trade_date
+             AND (spans.eligible_end IS NULL OR spans.eligible_end>=p.trade_date)
+            LEFT JOIN calendar_history ON calendar_history.trade_date=p.trade_date
+            WHERE p.trade_date BETWEEN %s AND %s
+            ORDER BY p.trade_date,spans.ts_code
+            """,
+            (
+                price_history_start,
+                window_end,
+                price_history_start,
+                window_end,
+                self.spec.universe_key,
+                window_start,
+                window_end,
+            ),
+        )
+        try:
+            return list(cursor)
+        finally:
+            cursor.close()
+
     def _iter_stock_fact_rows_separated(
         self,
         *,
@@ -802,6 +1001,13 @@ class PostgresStockFactReader:
                         f"symbol/date resolves to multiple canonical identities: {row[1]}/{row[0]}"
                     )
                 code = str(row[1])
+                industry_projection = self._industry_projection(code, trade_date_value)
+                if industry_projection is not None and industry_projection.status == "unavailable":
+                    continue
+                l1_code = row[2] if industry_projection is None else industry_projection.l1_code
+                l1_name = row[3] if industry_projection is None else industry_projection.l1_name
+                l2_code = row[4] if industry_projection is None else industry_projection.l2_code
+                l2_name = row[5] if industry_projection is None else industry_projection.l2_name
                 eligible_start = row[6]
                 previous_close = row[15] if row[14] is not None and row[14] >= eligible_start else None
                 previous_close_5 = row[17] if row[16] is not None and row[16] >= eligible_start else None
@@ -859,10 +1065,11 @@ class PostgresStockFactReader:
                 yield {
                     "trade_date": trade_date_value,
                     "symbol": code,
-                    "l1_code": row[2],
-                    "l1_name": row[3],
-                    "l2_code": row[4],
-                    "l2_name": row[5],
+                    "l1_code": l1_code,
+                    "l1_name": l1_name,
+                    "l2_code": l2_code,
+                    "l2_name": l2_name,
+                    "industry_pit_resolution": (None if industry_projection is None else industry_projection.as_dict()),
                     "is_suspended": False,
                     "open_yuan": _scaled(row[8], 1000.0),
                     "high_yuan": _scaled(row[9], 1000.0),
@@ -1032,6 +1239,9 @@ class PostgresStockFactReader:
     def load_classification_lookup(self) -> dict[tuple[str, str], dict[str, str]]:
         if self._classification_lookup is not None:
             return self._classification_lookup
+        if self.industry_pit_adapter is not None:
+            self._classification_lookup = dict(self.industry_pit_adapter.classification_lookup)
+            return self._classification_lookup
         with self._conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -1145,9 +1355,15 @@ class PostgresStockFactReader:
         _window_start: date | None = None,
         _window_end: date | None = None,
     ) -> Iterator[dict[str, Any]]:
-        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("stock fact read level must be L1 or L2")
+        if self.industry_pit_adapter is not None and sector_level != "L1":
+            raise StateModelSetError("HMM shared industry PIT adapter supports only direct L1 stock facts")
+        self.load_classification_lookup()
+        if self.industry_pit_adapter is not None and self.security_identity_manifest.alias_rows("market.daily_basic"):
+            raise StateModelSetError(
+                "HMM shared industry PIT adapter cannot use the legacy combined daily-basic alias query path"
+            )
         if (_window_start is None) != (_window_end is None):
             raise StateModelSetError("stock fact query window must provide both boundaries")
         if (
@@ -1434,9 +1650,15 @@ class PostgresStockFactReader:
     ) -> Iterator[dict[str, Any]]:
         """Yield eligible, non-suspended symbol-days missing canonical price facts."""
 
-        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("missing-price read level must be L1 or L2")
+        if self.industry_pit_adapter is not None and sector_level != "L1":
+            raise StateModelSetError("HMM shared industry PIT adapter supports only direct L1 missing-price facts")
+        self.load_classification_lookup()
+        if self.industry_pit_adapter is not None and self.security_identity_manifest.alias_rows("market.daily_basic"):
+            raise StateModelSetError(
+                "HMM shared industry PIT adapter cannot use the legacy combined daily-basic alias query path"
+            )
 
         if not self.security_identity_manifest.alias_rows("market.daily_basic"):
             yield from self._iter_missing_price_rows_separated(
@@ -1623,6 +1845,18 @@ def _scaled(value: Any, divisor: float) -> float | None:
 
 
 def load_mapping_manifest(reader: PostgresStockFactReader) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    industry_pit_adapter = getattr(reader, "industry_pit_adapter", None)
+    if industry_pit_adapter is not None:
+        return (
+            dict(
+                industry_pit_adapter.mapping_manifest(
+                    universe_key=reader.spec.universe_key,
+                    source_start=reader.spec.source_start,
+                    source_end=reader.spec.source_end,
+                )
+            ),
+            dict(industry_pit_adapter.constituents),
+        )
     digest = hashlib.sha256()
     count = 0
     l1_l2: dict[str, set[str]] = {}
@@ -1859,6 +2093,23 @@ def _stock_fact_manifest(
         "min_count_coverage": min_coverage,
         "min_weight_coverage": min_coverage,
     }
+    industry_pit_adapter = getattr(reader, "industry_pit_adapter", None)
+    if industry_pit_adapter is not None:
+        industry_pit_preflight = getattr(reader, "industry_pit_preflight", None)
+        if industry_pit_preflight is None:
+            raise StateModelSetError("HMM industry PIT stock-fact read requires a completed zero-fit preflight")
+        manifest["industry_pit_authority"] = {
+            "candidate_bundle_hash": industry_pit_adapter.authority_bundle.manifest["bundle_hash"],
+            "classification_authority_receipt_hash": (
+                industry_pit_adapter.classification_resolver.receipt.receipt_hash
+            ),
+            "index_membership_authority_receipt_hash": (
+                industry_pit_adapter.index_membership_resolver.receipt.receipt_hash
+            ),
+            "preflight_canonical_hash": industry_pit_preflight["canonical_hash"],
+            "preflight_resolved": industry_pit_preflight["resolved"],
+            "preflight_unavailable": industry_pit_preflight["unavailable"],
+        }
     if sector_level == "L2":
         manifest["schema_version"] = "hmm_risk_direct_l2_stock_fact_dataset_manifest_v1"
         manifest["direct_sector_level"] = "L2"
@@ -1893,6 +2144,41 @@ def _append_aggregate(
         )
 
 
+def _iter_monotonic_trade_date_groups(
+    rows: Iterator[dict[str, Any]],
+    *,
+    source_name: str,
+) -> Iterator[tuple[date, list[dict[str, Any]]]]:
+    current_date: date | None = None
+    current_rows: list[dict[str, Any]] = []
+    for row in rows:
+        trade_date = row.get("trade_date")
+        if not isinstance(trade_date, date):
+            raise StateModelSetError(f"hmm_risk_stock_fact_stream_identity_invalid: {source_name} trade_date")
+        if current_date is not None and trade_date < current_date:
+            raise StateModelSetError(
+                f"hmm_risk_stock_fact_stream_order_invalid: {source_name} {trade_date} after {current_date}"
+            )
+        if current_date is not None and trade_date != current_date:
+            yield current_date, current_rows
+            current_rows = []
+        current_date = trade_date
+        current_rows.append(row)
+    if current_date is not None:
+        yield current_date, current_rows
+
+
+def _aggregate_row_sort_key(row: Mapping[str, Any], *, sort_code: str) -> tuple[str, str, str, str]:
+    fields = (sort_code, "symbol", "l1_code", "l2_code")
+    values = tuple(str(row.get(field) or "").strip() for field in fields)
+    missing = [field for field, value in zip(fields, values, strict=True) if not value]
+    if missing:
+        raise StateModelSetError(
+            "hmm_risk_stock_fact_stream_identity_invalid: aggregate sort identity lacks " + ",".join(missing)
+        )
+    return values
+
+
 def load_daily_aggregates(
     reader: PostgresStockFactReader,
     *,
@@ -1916,17 +2202,35 @@ def load_daily_aggregates(
         else reader.iter_missing_price_rows(sector_level=sector_level)
     )
     sort_code = "l1_code" if sector_level == "L1" else "l2_code"
-    merged_rows = heapq.merge(
-        reader.iter_stock_fact_rows()
-        if sector_level == "L1"
-        else reader.iter_stock_fact_rows(sector_level=sector_level),
-        iter(missing_rows),
-        key=lambda row: (row["trade_date"], row[sort_code], row["symbol"], row["l1_code"], row["l2_code"]),
+    stock_days = iter(
+        _iter_monotonic_trade_date_groups(
+            reader.iter_stock_fact_rows()
+            if sector_level == "L1"
+            else reader.iter_stock_fact_rows(sector_level=sector_level),
+            source_name="stock_fact",
+        )
     )
-
-    def rows_with_hash() -> Iterator[dict[str, Any]]:
-        nonlocal raw_count
-        for row in merged_rows:
+    missing_days = iter(
+        _iter_monotonic_trade_date_groups(
+            iter(missing_rows),
+            source_name="missing_price",
+        )
+    )
+    stock_day = next(stock_days, None)
+    missing_day = next(missing_days, None)
+    aggregate_identities: set[tuple[date, str]] = set()
+    while stock_day is not None or missing_day is not None:
+        trade_date = min(item[0] for item in (stock_day, missing_day) if item is not None)
+        day_rows: list[dict[str, Any]] = []
+        if stock_day is not None and stock_day[0] == trade_date:
+            day_rows.extend(stock_day[1])
+            stock_day = next(stock_days, None)
+        if missing_day is not None and missing_day[0] == trade_date:
+            day_rows.extend(missing_day[1])
+            missing_day = next(missing_days, None)
+        day_rows.sort(key=lambda row: _aggregate_row_sort_key(row, sort_code=sort_code))
+        projected_day_rows: list[dict[str, Any]] = []
+        for row in day_rows:
             _record_source_evidence(
                 row,
                 expected_circ_mv_history_start=reader.spec.effective_circ_mv_history_start,
@@ -1943,21 +2247,25 @@ def load_daily_aggregates(
                 projected = dict(row)
                 projected["l1_code"] = row["l2_code"]
                 projected["l1_name"] = row["l2_name"]
-                yield projected
+                projected_day_rows.append(projected)
             else:
-                yield row
-
-    for _, group in itertools.groupby(
-        rows_with_hash(),
-        key=lambda row: (row["trade_date"], row["l1_code"]),
-    ):
-        _append_aggregate(
-            list(group),
-            min_coverage=min_coverage,
-            sector_level=sector_level,
-            aggregates=aggregates,
-            invalid_sector_dates=invalid_sector_dates,
-        )
+                projected_day_rows.append(row)
+        for identity, group in itertools.groupby(
+            projected_day_rows,
+            key=lambda row: (row["trade_date"], str(row["l1_code"])),
+        ):
+            if identity in aggregate_identities:
+                raise StateModelSetError(
+                    f"hmm_risk_stock_fact_aggregate_identity_duplicated: {identity[1]}/{identity[0]}"
+                )
+            aggregate_identities.add(identity)
+            _append_aggregate(
+                list(group),
+                min_coverage=min_coverage,
+                sector_level=sector_level,
+                aggregates=aggregates,
+                invalid_sector_dates=invalid_sector_dates,
+            )
     if not aggregates:
         raise StateModelSetError("PostgreSQL stock-fact source produced no aggregates")
     manifest = _stock_fact_manifest(

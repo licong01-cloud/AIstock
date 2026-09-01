@@ -7,7 +7,7 @@ import pytest
 
 from backend.services.dataset_release.attestation import AttestationResult
 from backend.services.dataset_release.canonical import digest_named_fields
-from backend.services.dataset_release.cas_store import CASStore
+from backend.services.dataset_release.cas_store import CASRef, CASStore
 from backend.services.dataset_release.contracts import (
     Component,
     EquivalenceMode,
@@ -233,6 +233,86 @@ def _source_catalog(
         **fields,
         observed_at=probe.observed_at,
     )
+
+
+def _artifact_ready_source_catalog(
+    cas: CASStore,
+    probe,
+    *,
+    tamper: str | None = None,
+) -> tuple[SourceSnapshotCatalogSpec, CASRef]:
+    raw_content_root = _digest("0")
+    raw_provenance_root = _digest("1")
+    stable_provenance_root = _digest("2")
+    content_ref = cas.put_json({"fixture": "raw-content"})
+    reuse_ref = cas.put_json({"fixture": "raw-reuse"})
+    audit_ref = cas.put_json({"fixture": "raw-audit"})
+    pit_ref = cas.put_json({"fixture": "pit"})
+    safety = {
+        "database_writes": 0,
+        "production_writes": 0,
+        "production_deletes": 0,
+        "production_pointer_changes": 0,
+        "service_process_controls": 0,
+        "provider_database_writes": 0,
+        "candidate_writes": 0,
+    }
+    provenance_ref = cas.put_json(
+        {
+            "schema_version": "dataset_release_source_provenance_receipt_v1",
+            "profile": "qe_hmm_full_v1",
+            "cutoff": "2026-07-31",
+            "source_content_root": raw_content_root,
+            "source_provenance_root": (
+                _digest("3") if tamper == "raw_provenance" else raw_provenance_root
+            ),
+            "stable_source_provenance_root": stable_provenance_root,
+            "pit_snapshot_digest": probe.snapshot.pit_snapshot_digest,
+            "source_content_manifest_ref": content_ref.as_dict(),
+            "source_reuse_manifest_ref": reuse_ref.as_dict(),
+            "source_refresh_audit_ref": audit_ref.as_dict(),
+            "pit_snapshot_ref": pit_ref.as_dict(),
+            "safety": safety,
+        }
+    )
+    fields = {
+        "profile": "qe_hmm_full_v1",
+        "scope": "full",
+        "cutoff": date(2026, 7, 31),
+        "source_content_root": raw_content_root,
+        "source_provenance_root": raw_provenance_root,
+        "stable_source_provenance_root": stable_provenance_root,
+        "source_content_manifest_ref": content_ref.sha256,
+        "source_reuse_manifest_ref": reuse_ref.sha256,
+        "source_refresh_audit_ref": audit_ref.sha256,
+        "source_provenance_ref": provenance_ref.sha256,
+        "pit_snapshot_digest": probe.snapshot.pit_snapshot_digest,
+        "pit_snapshot_ref": pit_ref.sha256,
+    }
+    catalog = SourceSnapshotCatalogSpec(
+        observation_id=digest_named_fields(
+            "dataset_release_source_snapshot_observation_v1",
+            fields,
+        ),
+        **fields,
+        observed_at=probe.observed_at,
+    )
+    contract_ref = cas.put_json(
+        {
+            "schema_version": "dataset_release_artifact_ready_contract_v1",
+            "profile": "qe_hmm_full_v1",
+            "cutoff": "2026-07-31",
+            "source_content_root": raw_content_root,
+            "artifact_ready_content_root": (
+                _digest("4") if tamper == "effective_content" else probe.snapshot.source_content_root
+            ),
+            "artifact_ready_effective_content_root": probe.snapshot.source_content_root,
+            "artifact_ready_provenance_root": probe.snapshot.source_provenance_root,
+            "pit_snapshot_digest": probe.snapshot.pit_snapshot_digest,
+            "safety": safety,
+        }
+    )
+    return catalog, contract_ref
 
 
 def test_resolution_lease_enforces_single_active_logical_request(tmp_path) -> None:
@@ -558,6 +638,46 @@ def test_pure_reattest_resolution_binds_fresh_observation_generation(tmp_path) -
     assert plan["attestation_target_key"] == target_key
     assert plan["attestation_observation_key"] == observation_key
     assert plan["source_probe_key"] == probe.source_probe_key
+
+
+@pytest.mark.parametrize("tamper", ("effective_content", "raw_provenance"))
+def test_artifact_ready_source_catalog_authority_fails_closed_on_identity_drift(
+    tmp_path,
+    tamper: str,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    service = ResolutionService(store, cas)
+    submission = _submit(service, f"artifact-ready-catalog-{tamper}")
+    now = datetime.now(UTC)
+    claim = service.claim(
+        submission_id=submission["submission_id"],
+        owner_identity="worker",
+        ttl_seconds=60,
+        now=now,
+    )
+    probe = _probe(service, submission, claim, now)
+    catalog, contract_ref = _artifact_ready_source_catalog(cas, probe, tamper=tamper)
+    target_key = _digest("5")
+
+    with pytest.raises(IdentityConflictError):
+        service.resolve_action_plan(
+            submission_id=submission["submission_id"],
+            claim=claim,
+            probe=probe,
+            action_plan=_reattest_plan(),
+            producer_fingerprint=_digest("1"),
+            artifact_fingerprint=_digest("2"),
+            validation_identity=attestation_observation_key(target_key, probe.source_probe_key),
+            sample_policy="on_contract_change",
+            attestation_target_key=target_key,
+            source_snapshot_catalog=catalog,
+            artifact_ready_contract_ref=contract_ref,
+            now=now + timedelta(seconds=1),
+        )
+    with store.transaction(immediate=False) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_catalog").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("missing_target", (True, False))

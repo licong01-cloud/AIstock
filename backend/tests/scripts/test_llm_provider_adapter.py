@@ -51,9 +51,10 @@ def test_llm_triage_config_defaults_are_safe():
 
     adapter.validate_config(config)
 
-    assert config["default_provider"] == "github_models"
+    assert config["default_provider"] == "deepseek_api"
     assert config["providers"]["deepseek_api"]["enabled"] is True
-    assert config["providers"]["deepseek_api"]["model"] == "deepseek-v4-pro"
+    assert config["providers"]["deepseek_api"]["model"] == "deepseek-v4-flash"
+    assert config["providers"]["github_models"]["enabled"] is False
     selector = config["providers"]["github_models"]["model_selector"]
     assert selector["required_model_family"] == "deepseek-r1"
     assert selector["preferred_models"] == ["deepseek/deepseek-r1"]
@@ -67,13 +68,23 @@ def test_parse_json_response_extracts_fenced_or_prose_wrapped_object():
     assert payload["suggested_plan_keys"] == ["l0"]
 
 
-def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
+def test_validate_config_requires_deepseek_v4_flash_primary():
     config = adapter.load_config()
     config["providers"]["deepseek_api"]["enabled"] = True
 
     adapter.validate_config(config)
 
-    config["providers"]["deepseek_api"]["model"] = "deepseek-v3"
+    config["providers"]["deepseek_api"]["model"] = "deepseek-v4-pro"
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_config(config)
+
+    config = adapter.load_config()
+    config["providers"]["deepseek_api"]["enabled"] = False
+    with pytest.raises(adapter.ProviderAdapterError):
+        adapter.validate_config(config)
+
+    config = adapter.load_config()
+    config["providers"]["deepseek_api"]["auth"]["model_id"] = "deepseek/deepseek-v4-pro"
     with pytest.raises(adapter.ProviderAdapterError):
         adapter.validate_config(config)
 
@@ -93,6 +104,34 @@ def test_validate_deepseek_provider_bootstraps_from_canonical_env_file(monkeypat
     assert payload["has_api_key"] is True
     assert payload["credential_source"] == "env:DEEPSEEK_API_KEY"
     assert payload["base_url"] == "https://api.deepseek.com/v1"
+    assert payload["model"] == "deepseek-v4-flash"
+
+
+def test_deepseek_chat_endpoint_uses_validation_model_and_existing_env_contract(monkeypatch):
+    captured = {}
+
+    class Resolved:
+        base_url = "https://api.deepseek.com/v1"
+        model = "deepseek-v4-flash"
+        api_key = "x"
+        credential_source = "env:DEEPSEEK_API_KEY"
+
+    def fake_resolve(*, model, require_api_key):
+        captured["model"] = model
+        captured["require_api_key"] = require_api_key
+        return Resolved()
+
+    monkeypatch.setattr(adapter, "resolve_deepseek_config", fake_resolve)
+
+    endpoint, model, _api_key, credential_source = adapter._provider_chat_endpoint(
+        adapter.load_config(),
+        "deepseek_api",
+    )
+
+    assert captured == {"model": "deepseek-v4-flash", "require_api_key": True}
+    assert endpoint == "https://api.deepseek.com/v1/chat/completions"
+    assert model == "deepseek-v4-flash"
+    assert credential_source == "env:DEEPSEEK_API_KEY"
 
 
 def test_github_model_catalog_selects_deepseek_r1():

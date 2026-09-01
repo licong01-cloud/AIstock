@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any
+from datetime import date
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
@@ -17,10 +17,42 @@ from backend.services.miniqmt_execution_runtime import (
 from backend.services.miniqmt_execution_runtime.kernel_diagnostics import KernelDiagnosticsReadServiceV1
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
+from backend.services.simulation_runtime.localsim_cutover_readiness import LocalSimCutoverReadiness
+from backend.services.simulation_runtime.localsim_dependencies import (
+    build_localsim_product_service,
+    build_localsim_profile_service,
+    build_localsim_query_service,
+    build_localsim_economic_query_service,
+)
+from backend.services.simulation_runtime.localsim_economic_query import LocalSimEconomicQueryService
+from backend.services.simulation_runtime.localsim_product_control import (
+    LocalSimAccountCreateRequestV1,
+    LocalSimBulkLifecycleRequestV1,
+    LocalSimBulkLifecycleResponseV1,
+    LocalSimControlResponseV1,
+    LocalSimLifecycleRequestV1,
+    LocalSimProductControlPlaneService,
+    LocalSimReplayCancelRequestV1,
+    LocalSimReplayCreateRequestV1,
+    LocalSimRuntimeProfileCreateRequestV1,
+    LocalSimRuntimeProfileResponseV1,
+    LocalSimRuntimeProfileRetireRequestV1,
+    LocalSimRuntimeProfileVersionCreateRequestV1,
+    LocalSimSuccessorReleaseRequestV1,
+)
+from backend.services.simulation_runtime.localsim_query import LocalSimListResponseV1, LocalSimQueryService
+from backend.services.simulation_runtime.localsim_runtime_profile_service import LocalSimRuntimeProfileService
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
+from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus, SimulationAccountStatus
 from backend.services.simulation_runtime.tca_read_api import ExecutionTcaReadService
 from backend.services.qmt_strategy_ledger.tca_read_service import TcaReadError
-from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+    TradingCoreError,
+    UnsupportedFeatureError,
+)
 
 router = APIRouter(prefix="/simulation-runtime", tags=["simulation-runtime"])
 
@@ -58,12 +90,47 @@ def get_execution_tca_read_service() -> ExecutionTcaReadService:
     return ExecutionTcaReadService()
 
 
+def get_localsim_product_service() -> LocalSimProductControlPlaneService:
+    return build_localsim_product_service()
+
+
+def get_localsim_profile_service() -> LocalSimRuntimeProfileService:
+    return build_localsim_profile_service()
+
+
+def get_localsim_query_service() -> LocalSimQueryService:
+    return build_localsim_query_service()
+
+
+def get_localsim_economic_query_service() -> LocalSimEconomicQueryService:
+    return build_localsim_economic_query_service()
+
+
+def get_localsim_readiness() -> LocalSimCutoverReadiness:
+    return LocalSimCutoverReadiness()
+
+
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
         status_code = 404
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
+    raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _raise_localsim_http(exc: TradingCoreError) -> None:
+    reason_code = str((exc.context or {}).get("reason_code") or "")
+    if reason_code == "LOCALSIM_CUTOVER_NOT_READY":
+        status_code = 503
+    elif isinstance(exc, DataUnavailableError):
+        status_code = 404
+    elif isinstance(exc, InvalidStateTransitionError):
+        status_code = 409
+    elif isinstance(exc, RuntimeConfigInvalidError):
+        status_code = 422
+    else:
+        status_code = 400
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
 
@@ -150,6 +217,337 @@ def _operator_payload(command: OperatorCommand, raw_payload: dict[str, Any]) -> 
     return payload
 
 
+def _parse_localsim_enum(raw: str | None, enum_type: Any, *, field_name: str) -> Any | None:
+    if raw is None:
+        return None
+    try:
+        return enum_type(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LOCALSIM_QUERY_ENUM_INVALID",
+                "message": f"{field_name} is invalid",
+                "context": {"field": field_name, "value": raw},
+                "retryable": False,
+            },
+        ) from exc
+
+
+@router.get("/localsim/cutover-readiness")
+def get_localsim_cutover_readiness(
+    readiness: LocalSimCutoverReadiness = Depends(get_localsim_readiness),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "readiness": readiness.read().model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/accounts", response_model=LocalSimControlResponseV1)
+def create_localsim_account(
+    request: LocalSimAccountCreateRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.create_account(request, created_by="aistock_api")
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts", response_model=LocalSimListResponseV1)
+def list_localsim_accounts(
+    package_id: str | None = Query(None),
+    status: str | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return service.accounts(
+            package_id=str(package_id).strip() if package_id else None,
+            status=_parse_localsim_enum(status, SimulationAccountStatus, field_name="status"),
+            cursor=cursor,
+            limit=limit,
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}", response_model=LocalSimControlResponseV1)
+def get_localsim_account(
+    account_id: str,
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimControlResponseV1:
+    try:
+        account = service.repository.get_account(account_id)
+        return LocalSimControlResponseV1(account=account, ledger_scope=service.repository.get_ledger_scope(account_id))
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/releases", response_model=LocalSimListResponseV1)
+def list_localsim_account_releases(
+    account_id: str,
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return LocalSimListResponseV1(
+            items=service.repository.list_releases_for_account(account_id, limit=limit),
+            limit=limit,
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/bindings", response_model=LocalSimListResponseV1)
+def list_localsim_account_bindings(
+    account_id: str,
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return LocalSimListResponseV1(
+            items=service.repository.list_bindings_for_account(account_id, limit=limit),
+            limit=limit,
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/runs")
+def list_localsim_account_runs(
+    account_id: str,
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimEconomicQueryService = Depends(get_localsim_economic_query_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "schema_version": "localsim_run_list_response_v1",
+            "account_id": account_id,
+            "runs": service.list_runs(account_id, limit=limit),
+        }
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/ledger")
+def get_localsim_account_ledger(
+    account_id: str,
+    limit: int = Query(200, ge=1, le=500),
+    service: LocalSimEconomicQueryService = Depends(get_localsim_economic_query_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "ledger": service.ledger(account_id, limit=limit)}
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/performance")
+def get_localsim_account_performance(
+    account_id: str,
+    limit: int = Query(500, ge=1, le=500),
+    service: LocalSimEconomicQueryService = Depends(get_localsim_economic_query_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "performance": service.performance(account_id, limit=limit)}
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/accounts/{account_id}/successor-releases", response_model=LocalSimControlResponseV1)
+def create_localsim_successor_release(
+    account_id: str,
+    request: LocalSimSuccessorReleaseRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.create_successor_release(account_id=account_id, request=request, created_by="aistock_api")
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/accounts/bulk-lifecycle", response_model=LocalSimBulkLifecycleResponseV1)
+def transition_localsim_accounts_bulk(
+    request: LocalSimBulkLifecycleRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimBulkLifecycleResponseV1:
+    try:
+        return service.transition_accounts_bulk(request)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/accounts/{account_id}/{action}", response_model=LocalSimControlResponseV1)
+def transition_localsim_account(
+    account_id: str,
+    action: Literal["pause", "resume", "retire"],
+    request: LocalSimLifecycleRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.transition_account(
+            account_id=account_id,
+            action=action,
+            expected_version=request.expected_version,
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/replays", response_model=LocalSimControlResponseV1)
+def create_localsim_replay(
+    request: LocalSimReplayCreateRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.create_replay(request, created_by="aistock_api")
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/replays", response_model=LocalSimListResponseV1)
+def list_localsim_replays(
+    simulation_account_id: str | None = Query(None),
+    status: str | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return service.replays(
+            simulation_account_id=str(simulation_account_id).strip() if simulation_account_id else None,
+            status=_parse_localsim_enum(status, LocalSimReplayStatus, field_name="status"),
+            cursor=cursor,
+            limit=limit,
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/replays/{replay_job_id}", response_model=LocalSimControlResponseV1)
+def get_localsim_replay(
+    replay_job_id: str,
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return LocalSimControlResponseV1(replay=service.repository.get_replay_job(replay_job_id))
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/replays/{replay_job_id}/cancel", response_model=LocalSimControlResponseV1)
+def cancel_localsim_replay(
+    replay_job_id: str,
+    request: LocalSimReplayCancelRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.cancel_replay(replay_job_id=replay_job_id, expected_version=request.expected_version)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/runtime-profiles", response_model=LocalSimRuntimeProfileResponseV1)
+def create_localsim_runtime_profile(
+    request: LocalSimRuntimeProfileCreateRequestV1,
+    service: LocalSimRuntimeProfileService = Depends(get_localsim_profile_service),
+    readiness: LocalSimCutoverReadiness = Depends(get_localsim_readiness),
+) -> LocalSimRuntimeProfileResponseV1:
+    try:
+        readiness.require_ready()
+        return LocalSimRuntimeProfileResponseV1(
+            profile=service.create_profile_for_package(
+                package_id=request.package_id,
+                profile_name=request.profile_name,
+                created_by="aistock_api",
+            )
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post(
+    "/localsim/runtime-profiles/{profile_id}/versions",
+    response_model=LocalSimRuntimeProfileResponseV1,
+)
+def create_localsim_runtime_profile_version(
+    profile_id: str,
+    request: LocalSimRuntimeProfileVersionCreateRequestV1,
+    service: LocalSimRuntimeProfileService = Depends(get_localsim_profile_service),
+    readiness: LocalSimCutoverReadiness = Depends(get_localsim_readiness),
+) -> LocalSimRuntimeProfileResponseV1:
+    try:
+        readiness.require_ready()
+        profile, version = service.create_version(
+            profile_id=profile_id,
+            expected_profile_version=request.expected_profile_version,
+            config_json=request.config.model_dump(mode="json"),
+            created_by="aistock_api",
+        )
+        return LocalSimRuntimeProfileResponseV1(profile=profile, version=version)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post(
+    "/localsim/runtime-profiles/{profile_id}/retire",
+    response_model=LocalSimRuntimeProfileResponseV1,
+)
+def retire_localsim_runtime_profile(
+    profile_id: str,
+    request: LocalSimRuntimeProfileRetireRequestV1,
+    service: LocalSimRuntimeProfileService = Depends(get_localsim_profile_service),
+    readiness: LocalSimCutoverReadiness = Depends(get_localsim_readiness),
+) -> LocalSimRuntimeProfileResponseV1:
+    try:
+        readiness.require_ready()
+        return LocalSimRuntimeProfileResponseV1(
+            profile=service.retire_profile(profile_id=profile_id, expected_version=request.expected_version)
+        )
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/runtime-profiles", response_model=LocalSimListResponseV1)
+def list_localsim_runtime_profiles(
+    package_id: str | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return service.profiles(package_id=package_id, cursor=cursor, limit=limit)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/runtime-profiles/{profile_id}", response_model=LocalSimRuntimeProfileResponseV1)
+def get_localsim_runtime_profile(
+    profile_id: str,
+    service: LocalSimRuntimeProfileService = Depends(get_localsim_profile_service),
+) -> LocalSimRuntimeProfileResponseV1:
+    try:
+        return LocalSimRuntimeProfileResponseV1(profile=service.get_profile(profile_id))
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/runtime-profiles/{profile_id}/versions", response_model=LocalSimListResponseV1)
+def list_localsim_runtime_profile_versions(
+    profile_id: str,
+    cursor: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    service: LocalSimQueryService = Depends(get_localsim_query_service),
+) -> LocalSimListResponseV1:
+    try:
+        return service.profile_versions(profile_id=profile_id, cursor=cursor, limit=limit)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
 @router.get("/execution-parents")
 def list_execution_parents(
     binding_id: str = Query(""),
@@ -221,6 +619,26 @@ def get_scheduler_status(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, "scheduler": service.scheduler_status()}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/scheduler/verification-status")
+def get_scheduler_verification_status(
+    broker_backend: str | None = Query(None),
+    run_id: str | None = Query(None),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    """Return a bounded read-only scheduler smoke scoped to one broker or run subject."""
+
+    try:
+        return {
+            "ok": True,
+            "scheduler": service.scheduler_verification_status(
+                broker_backend=_parse_backend(broker_backend),
+                run_id=run_id,
+            ),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -534,36 +952,3 @@ def execute_miniqmt_operator_command(
         "run_recovery": run_recovery,
         "production_runtime_restart_required": False,
     }
-
-
-@router.post("/scheduler/start")
-def start_scheduler(
-    interval_seconds: int | None = Body(None, ge=1, le=3600),
-    default_submit: bool | None = Body(None),
-    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
-) -> dict[str, Any]:
-    try:
-        return service.start_scheduler(interval_seconds=interval_seconds, default_submit=default_submit)
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
-@router.post("/scheduler/stop")
-def stop_scheduler(
-    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
-) -> dict[str, Any]:
-    try:
-        return service.stop_scheduler()
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
-@router.post("/scheduler/tick")
-def scheduler_tick(
-    as_of_time: datetime | None = Body(None),
-    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
-) -> dict[str, Any]:
-    try:
-        return service.scheduler_tick(as_of_time=as_of_time)
-    except TradingCoreError as exc:
-        _raise_http(exc)

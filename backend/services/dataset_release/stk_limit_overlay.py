@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import groupby
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .a_share_limit_rule import PRICE_LIMIT_RULE_VERSION, AShareLimitRuleError, derive_limit_prices
 from .errors import DatasetReleaseError
@@ -42,6 +42,7 @@ class StkLimitRuleOverlayResult:
     rule_derived_rows: int
     database_completion_rows: int
     database_override_rows: int
+    reference_seed_rows: int
     unresolved_keys: int
     peak_code_partition_rows: int
     rule_version: str = PRICE_LIMIT_RULE_VERSION
@@ -58,6 +59,7 @@ def build_stk_limit_rule_overlay(
     daily_rows: Iterable[Mapping[str, Any]],
     adj_factor_rows: Iterable[Mapping[str, Any]],
     reference_state: Mapping[str, LimitReferencePoint] | None = None,
+    reference_resolver: Callable[[str, date], LimitReferencePoint | None] | None = None,
     max_overlay_rows: int = MAX_STK_LIMIT_RULE_OVERLAY_ROWS,
 ) -> StkLimitRuleOverlayResult:
     """Derive exact missing/incomplete PIT keys one code partition at a time.
@@ -89,6 +91,7 @@ def build_stk_limit_rule_overlay(
         raise StkLimitRuleOverlayError("reference state contains a non-PIT instrument")
     database_count = 0
     completion_count = 0
+    reference_seed_count = 0
     expected_count = 0
     limit_groups = _code_groups(
         database_limit_rows,
@@ -156,6 +159,31 @@ def build_stk_limit_rule_overlay(
                 latest_adj = _positive_decimal(adj_row.get("adj_factor"), field="adj_factor")
                 latest_adj_date = day
             if day in derivation_dates:
+                if point is None and reference_resolver is not None:
+                    resolved_point = reference_resolver(code, day)
+                    if resolved_point is not None:
+                        _validate_reference_point(resolved_point, code=code, required_day=day)
+                        source_adj_row = adj_by_date.get(resolved_point.close_date)
+                        if source_adj_row is not None:
+                            source_adj = _positive_decimal(
+                                source_adj_row.get("adj_factor"),
+                                field="adj_factor",
+                            )
+                            if source_adj != resolved_point.close_adj_factor:
+                                raise StkLimitRuleOverlayError(
+                                    "stk_limit reference provider/database adj_factor differs",
+                                    context={
+                                        "ts_code": code,
+                                        "close_date": resolved_point.close_date.isoformat(),
+                                        "database_value": format(source_adj, "f"),
+                                        "provider_value": format(
+                                            resolved_point.close_adj_factor,
+                                            "f",
+                                        ),
+                                    },
+                                )
+                        point = resolved_point
+                        reference_seed_count += 1
                 if point is None or latest_adj is None or latest_adj_date is None:
                     unresolved.append((code, day, "missing_reference_price_or_adj_factor"))
                 else:
@@ -220,6 +248,7 @@ def build_stk_limit_rule_overlay(
         rule_derived_rows=len(overlay_rows),
         database_completion_rows=completion_count,
         database_override_rows=0,
+        reference_seed_rows=reference_seed_count,
         unresolved_keys=0,
         peak_code_partition_rows=peak_code_rows,
     )
@@ -283,11 +312,43 @@ def _positive_decimal(value: Any, *, field: str) -> Decimal:
 def _optional_price(value: Any, *, field: str) -> Decimal | None:
     if value is None or str(value).strip() == "":
         return None
-    number = _positive_decimal(value, field=field)
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise StkLimitRuleOverlayError(f"{field} is invalid") from exc
+    if not number.is_finite() or number < 0:
+        raise StkLimitRuleOverlayError(f"{field} must be non-negative and finite")
+    if number == 0:
+        return None
     quantized = number.quantize(Decimal("0.01"))
     if number != quantized:
         raise StkLimitRuleOverlayError(f"{field} is not aligned to the price tick")
     return quantized
+
+
+def _validate_reference_point(
+    point: LimitReferencePoint,
+    *,
+    code: str,
+    required_day: date,
+) -> None:
+    if not isinstance(point, LimitReferencePoint):
+        raise StkLimitRuleOverlayError("stk_limit reference resolver returned an invalid point")
+    for field, value in (
+        ("reference close", point.close),
+        ("reference close adj_factor", point.close_adj_factor),
+        ("reference latest adj_factor", point.latest_adj_factor),
+    ):
+        _positive_decimal(value, field=field)
+    if (
+        point.close_date >= required_day
+        or point.latest_adj_date < point.close_date
+        or point.latest_adj_date > required_day
+    ):
+        raise StkLimitRuleOverlayError(
+            "stk_limit reference resolver returned a future point",
+            context={"ts_code": code, "required_date": required_day.isoformat()},
+        )
 
 
 def _complete_limit_row(row: Mapping[str, Any]) -> bool:

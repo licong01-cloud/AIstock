@@ -11,7 +11,15 @@ rules:
       - scripts/advisory_model_quality_train_wsl.py
       - scripts/advisory_policy_dataset_prepare_request.py
       - scripts/advisory_policy_utility_prepare_request.py
+      - scripts/advisory_dual_head_output_constraint_prepare_request.py
+      - scripts/advisory_grouped_rank_output_constraint_prepare_request.py
+      - scripts/advisory_selection_prior_residual_prepare_request.py
+      - scripts/advisory_turnover_constrained_utility_prepare_request.py
       - scripts/advisory_meta_label_prepare_request.py
+      - scripts/advisory_n0_research_control.py
+      - scripts/advisory_n1_tier1_oracle_learnability.py
+      - scripts/advisory_strategy_package_alpha_audit.py
+      - scripts/advisory_independent_package_alpha_audit.py
       - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py
       - scripts/advisory_outcome_calibration_train_wsl.py
@@ -25,6 +33,10 @@ rules:
       - scripts/wsl/advisory_model_quality_train.py
       - scripts/wsl/advisory_policy_dataset_build.py
       - scripts/wsl/advisory_policy_utility_train.py
+      - scripts/wsl/advisory_dual_head_output_constraint_train.py
+      - scripts/wsl/advisory_grouped_rank_output_constraint_train.py
+      - scripts/wsl/advisory_selection_prior_residual_train.py
+      - scripts/wsl/advisory_turnover_constrained_utility_train.py
       - scripts/wsl/advisory_meta_label_train.py
       - scripts/wsl/advisory_outcome_calibration_train.py
       - scripts/wsl/advisory_outcome_train.py
@@ -33,6 +45,11 @@ rules:
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
       - docs/architecture/advisory_p0c_policy_episode_cpcv_f2_design_*.md
       - docs/architecture/advisory_p0d_short_rebound_meta_label_f2_design_*.md
+      - docs/architecture/advisory_p0i_grouped_rank_return_head_f2_design_*.md
+      - docs/architecture/advisory_n0_research_control_f2_detailed_design_*.md
+      - docs/architecture/advisory_n1_tier1_oracle_learnability_f2_detailed_design_*.md
+      - docs/architecture/advisory_strategy_package_three_arm_alpha_audit_f2_detailed_design_*.md
+      - docs/architecture/advisory_independent_strategy_package_alpha_audit_f2_detailed_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
     layer: data_pipeline
@@ -138,6 +155,20 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The QE model package and frozen-dataset artifact builders form the offline computation data plane whose inputs must come from versioned frozen files and never from PostgreSQL market tables.
+  - rule_id: qe_alpha_candidate_research
+    priority: 123
+    include:
+      - scripts/qe_alpha_candidates/**
+      - backend/tests/quantevolver/test_sector_participation_gap_v2.py
+      - backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py
+      - backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py
+      - backend/tests/quantevolver/test_p0_d2_sector_oracle.py
+      - backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py
+    primary_module: qe.core
+    impact_modules: [qe.auto_evolution, factor_library]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: File-only QE Alpha and relation-prior candidates plus their exact direct tests form an offline research boundary; they do not enter runtime, catalog, or formal experiments merely by being source-reviewable.
   - rule_id: qe_long_trend_evaluation_phase2
     priority: 125
     include:
@@ -353,6 +384,15 @@ rules:
     layer: validation_catalog
     risk_level: high
     ownership_reason: Code-intelligence refresh and context budgets are validation pipeline policy.
+  - rule_id: validation_llm_triage_config
+    priority: 110
+    include:
+      - configs/validation/llm_triage.yaml
+    primary_module: validation.runner
+    impact_modules: [validation.guardrails, validation.module_quality]
+    layer: validation_config
+    risk_level: high
+    ownership_reason: Validation LLM provider, model, credential-source, budget, and rollout settings are Nightly and CI runner contracts.
   - rule_id: noxfile_validation_runner
     priority: 100
     include:
@@ -371,6 +411,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: Research Pipeline tests prove workflow, HMM ingestion, artifact, and promotion contracts.
+  - rule_id: research_pipeline_frontend
+    priority: 100
+    include:
+      - frontend/src/app/research-pipeline/**
+    primary_module: research_pipeline
+    impact_modules: [frontend_common]
+    layer: frontend_ui
+    risk_level: high
+    ownership_reason: Research Pipeline pages expose experiment execution, artifacts, HMM evidence, and promotion state.
   - rule_id: dev_quality_tooling
     priority: 100
     include:
@@ -397,6 +446,7 @@ rules:
     priority: 90
     include:
       - backend/mcp/**
+      - backend/tests/mcp/**
       - tests/mcp/**
       - scripts/aistock_mcp_gateway.py
       - scripts/aistock_mcp_gateway_doctor.py
@@ -588,6 +638,16 @@ rules:
     layer: script
     risk_level: critical
     ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
+  - rule_id: localsim_history_physical_prune_cli
+    priority: 98
+    include:
+      - scripts/localsim_history_prune_core.py
+      - scripts/prune_localsim_history.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed LocalSIM-only physical pruning deletes failed historical run/economic subgraphs while protecting successful anchors, MiniQMT, StrategyPackage, and Selection evidence.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:
@@ -646,6 +706,59 @@ rules:
     layer: trading_runtime
     risk_level: critical
     ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
+  - rule_id: simulation_localsim_successor_core
+    priority: 120
+    include:
+      - backend/migrations/localsim_successor_core_*.sql
+      - backend/migrations/localsim_product_cutover_bridge_*.sql
+      - backend/services/simulation_runtime/localsim_control.py
+      - backend/services/simulation_runtime/localsim_cutover_inventory.py
+      - backend/services/simulation_runtime/localsim_replay.py
+      - backend/services/simulation_runtime/successor_models.py
+      - backend/services/simulation_runtime/successor_repository.py
+      - backend/tests/simulation_runtime/test_localsim_control_plane.py
+      - backend/tests/simulation_runtime/test_localsim_replay_live_transition.py
+      - backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py
+      - backend/tests/simulation_runtime/test_localsim_successor_schema.py
+      - scripts/localsim_product_validation.py
+      - scripts/prepare_localsim_successor_cutover.py
+      - backend/tests/scripts/test_localsim_product_validation.py
+      - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
+      - frontend/src/app/simulation/localsim/**
+    primary_module: simulation.localsim_successor_core
+    impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: SIM-LR-B successor account, lineage, replay, safe-boundary, and schema files require one direct L2 plan plus guarded existing-DEV-database validation.
+  - rule_id: simulation_layer_foundation_tests
+    priority: 110
+    include:
+      - backend/tests/advisory_phase1/test_stage_trace.py
+      - backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py
+      - backend/tests/qmt_strategy_ledger/test_router_summary.py
+      - backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py
+      - backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py
+      - backend/tests/scripts/test_strategy_package_binding_refreeze.py
+      - backend/tests/simulation_architecture/**
+      - backend/tests/simulation_data/**
+      - backend/tests/simulation_execution/**
+      - backend/tests/simulation_signal/**
+      - backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py
+    primary_module: simulation.layer_foundation
+    impact_modules: [simulation_runtime, paper_v2, miniqmt_execution_runtime, selection_center, strategy_package]
+    layer: backend_test
+    risk_level: critical
+    ownership_reason: SIM-LR-A cross-module tests must select and execute the direct simulation core L2 plan instead of remaining unmapped.
+  - rule_id: simulation_daily_limit_authority
+    priority: 97
+    include:
+      - backend/services/trading_core/a_share_live_limit_rule.py
+      - backend/tests/trading_core/test_a_share_live_limit_rule.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: Broker-specific daily limit authority and its direct contract test govern the immutable shared simulation planning context.
   - rule_id: qmt_infra
     priority: 85
     include:
@@ -655,6 +768,15 @@ rules:
     layer: trading_infra
     risk_level: critical
     ownership_reason: MiniQMT client and realtime quote subscription infrastructure are trading-infra boundaries consumed by Paper v2.
+  - rule_id: qmt_frontend
+    priority: 85
+    include:
+      - frontend/src/app/qmt/**
+    primary_module: qmt
+    impact_modules: [miniqmt_execution_runtime, frontend_common]
+    layer: frontend_ui
+    risk_level: critical
+    ownership_reason: QMT pages expose broker connectivity, managed strategy, order, position, and virtual-strategy state.
   - rule_id: selection_center_services
     priority: 80
     include:
@@ -860,6 +982,7 @@ rules:
     include:
       - backend/qlib_exporter/**
       - backend/tests/qlib_exporter/**
+      - backend/tests/test_qlib_export_stock_universe_filters.py
       - scripts/qlib_*.py
       - qlib_minute_validation/**
     primary_module: qlib_data
@@ -924,14 +1047,28 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The audited daily-basic ingestion and repair operators plus their direct tests form one local_data data-quality boundary and must select the focused data sync plan instead of remaining unmapped generic scripts.
+  - rule_id: local_data_industry_pit_authority
+    priority: 98
+    include:
+      - backend/services/industry_pit/**
+      - scripts/build_industry_pit_candidates.py
+      - backend/tests/industry_pit/**
+      - backend/tests/scripts/test_build_industry_pit_candidates.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: C-013 classification and SW index-membership PIT candidates, their shared fail-closed resolver, and repo-external artifact writer form one consumer-neutral local_data authority boundary; HMM, QE, and business consumer adapters remain separately owned.
   - rule_id: local_data_stock_universe_pit
     priority: 96
     include:
       - scripts/build_stock_universe_pit_spans.py
+      - scripts/prepare_canonical_pit_monthly.py
       - backend/services/stock_universe_pit_service.py
       - backend/routers/stock_universe.py
       - backend/tests/test_stock_universe_pit_spans.py
       - backend/tests/test_stock_universe_pit_service.py
+      - backend/tests/scripts/test_prepare_canonical_pit_monthly.py
       - backend/tests/announcements/test_title_classifier.py
       - backend/tests/test_announcement_event_schema.py
       - backend/tests/event_signal/test_st_announcement_adapter.py
@@ -948,10 +1085,12 @@ rules:
     include:
       - backend/services/sector_data_builder.py
       - backend/services/sector_data_repair.py
+      - scripts/build_sector_data_candidate.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py
       - backend/tests/services/test_sector_data_repair.py
+      - backend/tests/scripts/test_build_sector_data_candidate.py
     primary_module: local_data
     impact_modules: []
     layer: data_pipeline
@@ -1328,6 +1467,7 @@ rules:
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/aistock-task-router.md
+      - .claude/commands/aistock-global-router.md
       - .claude/commands/aistock-docs-handoff.md
       - .claude/commands/aistock-merge-aftercare.md
       - .claude/commands/aistock-readonly-triage.md

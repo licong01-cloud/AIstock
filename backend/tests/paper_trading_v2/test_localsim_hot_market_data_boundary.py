@@ -5,8 +5,10 @@ from datetime import date, datetime
 import pytest
 
 from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
+    MinuteDataSource,
 )
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.simulation_runtime.models import canonical_json_sha256
@@ -76,9 +78,7 @@ def test_live_observed_intraday_uses_frozen_stk_limit_and_tdx_only() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=PoisonProvider(),  # type: ignore[arg-type]
         suspend_status_provider=PoisonProvider(),  # type: ignore[arg-type]
-        previous_close_provider=PoisonProvider(),  # type: ignore[arg-type]
         st_status_provider=PoisonProvider(),  # type: ignore[arg-type]
-        day_feature_provider=PoisonProvider(),  # type: ignore[arg-type]
         tdx_fetcher=lambda _symbol, _trade_date: raw_bars,
         conn_factory=lambda: (_ for _ in ()).throw(AssertionError("live path queried database")),
     )

@@ -9,6 +9,17 @@ import { useHistoricalRangeResearch } from "./useHistoricalRangeResearch";
 type Props = { prefillProgramId?: string };
 type ResearchRow = { id: string; name: string; packageId: string; targetCount: number };
 
+function researchRuntimeConfig(targetCount: number): Record<string, unknown> {
+  const topK = Math.max(1, Math.min(50, Number(targetCount || 20)));
+  return {
+    top_k: topK,
+    display_top_n: topK,
+    runtime_profile: {
+      selection: { top_k: topK },
+    },
+  };
+}
+
 function value(row: HistoricalRangeRecord | null, key: string, fallback = "-"): string {
   const result = row?.[key];
   return result === null || result === undefined || result === "" ? fallback : String(result);
@@ -103,7 +114,7 @@ export function HistoricalRangeResearchView({ prefillProgramId }: Props) {
         package_id: row.packageId,
         target_count: row.targetCount,
         review_policy: {},
-        runtime_config: {},
+        runtime_config: researchRuntimeConfig(row.targetCount),
         entry_price_basis: "next_open_executable",
         exit_price_basis: "next_open_executable",
         style_profile_ref: null,

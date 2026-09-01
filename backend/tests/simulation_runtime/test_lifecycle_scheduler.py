@@ -40,15 +40,14 @@ from backend.execution_algos.adaptive_is.reasons import (
 )
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngressRuntimeConfig
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     DailyStStatus,
     MinuteDataSource,
     MinuteExecutionMarketInput,
-    PreviousClose,
 )
 from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
-from backend.services.paper_trading_v2.broker.base import OrderHandle
+from backend.services.simulation_execution.broker import OrderHandle
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
@@ -72,10 +71,8 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
-    SimulationBrokerBackend,
     SimulationLifecycleBackgroundScheduler,
     SimulationDailyRunStatus,
     SimulationDailyRun,
@@ -85,9 +82,13 @@ from backend.services.simulation_runtime import (
     StaticSimulationRunContextProvider,
     SimulationSchedulerBindingResult,
     SimulationSchedulerRunOnceResult,
+    StrategyRuntimeReleaseService,
+)
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
     StrategyPackageSelectionResult,
     StrategyPackageSelectionService,
-    StrategyRuntimeReleaseService,
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_runtime import (
     K6DProductParentStartResultV1,
@@ -3942,15 +3943,6 @@ class FakePaperRepository:
 class FakeLocalSimMarketDataProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self.previous_close_provider = SimpleNamespace(
-            get_previous_close=lambda symbol, trade_date: PreviousClose(
-                symbol=symbol,
-                trade_date=trade_date,
-                previous_trade_date=trade_date - timedelta(days=1),
-                pre_close=10.0,
-                source="test.previous_close",
-            )
-        )
 
     def load_symbol_input(
         self,
@@ -3960,7 +3952,6 @@ class FakeLocalSimMarketDataProvider:
         source: MinuteDataSource,
         min_bars: int,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
             {
@@ -3969,7 +3960,6 @@ class FakeLocalSimMarketDataProvider:
                 "source": source,
                 "min_bars": min_bars,
                 "require_suspend_status": require_suspend_status,
-                "require_day_features": require_day_features,
             }
         )
         start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
@@ -4012,7 +4002,6 @@ class FakeLocalSimMarketDataProvider:
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         source_input = self.load_symbol_input(
             symbol=symbol,
@@ -4020,7 +4009,6 @@ class FakeLocalSimMarketDataProvider:
             source=source,
             min_bars=6,
             require_suspend_status=require_suspend_status,
-            require_day_features=require_day_features,
         )
         return replace(
             source_input,
@@ -4052,7 +4040,6 @@ class ToggleMissingLocalSimMarkProvider(FakeLocalSimMarketDataProvider):
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         observed = super().load_observed_intraday(
             symbol=symbol,
@@ -4060,7 +4047,6 @@ class ToggleMissingLocalSimMarkProvider(FakeLocalSimMarketDataProvider):
             source=source,
             until_time=until_time,
             require_suspend_status=require_suspend_status,
-            require_day_features=require_day_features,
         )
         if symbol == self.missing_symbol and not self.mark_available:
             return replace(observed, minute_bars=[])
@@ -5376,8 +5362,9 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
         "source_policy_consulted_for_execution": False,
         "fallback_used": False,
     }
-    assert new_release.validation_evidence["execution_policy_authority"] == (
-        new_release.release_config_json["metadata"]["execution_policy_authority"]
+    assert (
+        new_release.validation_evidence["execution_policy_authority"]
+        == (new_release.release_config_json["metadata"]["execution_policy_authority"])
     )
     assert result.results[0].execution_plan.execution_policy_version_id == new_release.execution_policy_version_id
     assert result.results[0].execution_plan.execution_policy_sha256 == new_release.execution_policy_sha256
@@ -12706,6 +12693,61 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert background.status()["last_result"]["has_blocking_result"] is False
 
 
+def test_background_scheduler_with_miniqmt_disabled_only_processes_localsim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    lifecycle = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_disabled_qmt_local"),
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_disabled_qmt_broker"),
+            }
+        ),
+    )
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        miniqmt_enabled=False,
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 1, 22, tzinfo=UTC))
+
+    assert result["summary"]["planned_count"] == 1
+    assert [item["broker_backend"] for item in result["processed"]] == [SimulationBrokerBackend.LOCAL_SIM.value]
+    assert background.status()["miniqmt_enabled"] is False
+    assert background.status()["scheduled_broker_backends"] == [SimulationBrokerBackend.LOCAL_SIM.value]
+
+
+def test_localsim_scoped_ticks_do_not_advance_miniqmt_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
+
+    def _unexpected_miniqmt_call(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("LocalSIM-scoped scheduling must not touch MiniQMT lifecycle")
+
+    monkeypatch.setattr(lifecycle, "_refresh_miniqmt_quote_context_lifecycle", _unexpected_miniqmt_call)
+    monkeypatch.setattr(lifecycle, "_advance_miniqmt_quote_ingress_lifecycle", _unexpected_miniqmt_call)
+
+    intraday = lifecycle.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    post_close = lifecycle.post_close_reconcile_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+
+    assert intraday.total_bindings == 0
+    assert post_close.total_bindings == 0
+
+
 def test_background_scheduler_noop_window_does_not_erase_last_blocking_result() -> None:
     lifecycle = SimulationLifecycleScheduler(repository=InMemorySimulationRuntimeRepository())
     background = SimulationLifecycleBackgroundScheduler(
@@ -14103,11 +14145,46 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
         symbols=(position.symbol,),
         trade_date=TRADE_DATE,
         as_of_time=as_of_time,
-        pre_trade_tradability={position.symbol: {"suspend_status": {"is_suspended": True}}},
+        pre_trade_tradability={
+            position.symbol: {
+                "suspend_status": {"is_suspended": True},
+                "daily_trading_context": {
+                    "schema_version": "daily_trading_context_reference_v1",
+                    "symbol_fact": {
+                        "symbol": position.symbol,
+                        "trade_date": TRADE_DATE.isoformat(),
+                        "pre_close": 10.0,
+                        "up_limit": 11.0,
+                        "down_limit": 9.0,
+                        "price_basis": "raw",
+                        "stk_limit_row_hash": canonical_json_sha256(
+                            {
+                                "source": "market.stk_limit",
+                                "symbol": position.symbol,
+                                "trade_date": TRADE_DATE.isoformat(),
+                                "pre_close": 10.0,
+                                "up_limit": 11.0,
+                                "down_limit": 9.0,
+                                "price_basis": "raw",
+                            }
+                        ),
+                        "is_st": False,
+                        "st_source": "market.stock_st",
+                        "st_evidence_hash": "1" * 64,
+                        "is_suspended": True,
+                        "suspend_type": "S",
+                        "suspend_timing": None,
+                        "suspend_source": "market.suspend_d",
+                        "board": "MAIN",
+                        "lot_rule": {"min_quantity": 100, "increment": 100},
+                    },
+                },
+            }
+        },
     )[position.symbol]
     assert suspended.price == 10.0
-    assert suspended.as_of_time == datetime(2026, 5, 20, 15, 0)
-    assert suspended.source == "test.previous_close"
+    assert suspended.as_of_time == as_of_time
+    assert suspended.source == "market.stk_limit.pre_close:frozen_daily_trading_context_v1"
     assert suspended.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
 
     with pytest.raises(DataUnavailableError) as exc_info:
@@ -17849,6 +17926,31 @@ def test_env_builder_shares_runtime_repository_with_production_context_provider(
     assert scheduler.context_provider._runtime_repository is repository
 
 
+def test_env_builder_does_not_construct_miniqmt_activation_when_global_flag_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.simulation_runtime.scheduler as scheduler_module
+
+    monkeypatch.setenv("MINIQMT_ENABLED", "false")
+    monkeypatch.setenv("MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED", "true")
+
+    def _unexpected_activation() -> None:
+        raise AssertionError("global MiniQMT disable must dominate subordinate activation flags")
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_miniqmt_quote_ingress_activation_from_env",
+        _unexpected_activation,
+    )
+
+    scheduler = scheduler_module.build_simulation_lifecycle_scheduler_from_env(
+        repository=InMemorySimulationRuntimeRepository()
+    )
+
+    assert scheduler._miniqmt_quote_ingress_activation is None
+    assert scheduler._miniqmt_quote_context_adapter is None
+
+
 def test_production_context_provider_rejects_wrong_authoritative_manifest_for_valid_localsim_successor():
     """A verified lineage still fails loud when the package repository returns another hash."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
@@ -18143,7 +18245,7 @@ def test_production_context_provider_selects_explicit_twap_only_policy_for_v25_r
     )
 
     assert ctx.local_broker.query_status(handle).state == "filled"
-    assert market_data.calls[-1]["require_day_features"] is False
+    assert market_data.calls[-1]["source"] == MinuteDataSource.DB_HISTORICAL
 
 
 def test_production_context_provider_policy_authority_never_uses_portfolio_policy_for_recovery():
@@ -18196,7 +18298,7 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
     )
 
     assert ctx.local_broker.query_status(handle).state == "filled"
-    assert market_data.calls[-1]["require_day_features"] is False
+    assert market_data.calls[-1]["source"] == MinuteDataSource.DB_HISTORICAL
 
 
 def test_existing_localsim_v25_plan_is_rejected_before_runtime_context_loading() -> None:
@@ -18398,13 +18500,13 @@ def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
     assert context["expected_cutoff_date"] == "2026-05-20"
 
 
-def test_scheduler_status_reports_provider_and_controlled_tick_capability():
+def test_scheduler_status_reports_provider_without_public_tick_capability():
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     scheduler = SimulationLifecycleScheduler(context_provider=ProductionSimulationRunContextProvider())
     status = scheduler.status()
 
-    assert status["manual_tick_endpoint_enabled"] is True
+    assert status["manual_tick_endpoint_enabled"] is False
     assert status["context_provider_mode"] == "production"
     assert status["context_provider"]["miniqmt_preview_enabled"] is True
     assert status["default_submit"] is False
@@ -18699,10 +18801,46 @@ def test_local_sim_snapshot_rejects_cross_plan_facts_instead_of_filtering_them()
 class _CapturingDailyTradingContextProvider:
     def __init__(self) -> None:
         self.kwargs: dict[str, Any] = {}
+        self.stk_limit_attempt_calls: list[tuple[list[str], date]] = []
 
     def load(self, **kwargs: Any) -> SimpleNamespace:
         self.kwargs = dict(kwargs)
         return SimpleNamespace(context_id="dtc_test")
+
+    def load_stk_limit_authority_attempt(self, *, symbols: list[str], trade_date: date) -> dict[str, Any]:
+        normalized = sorted(symbols)
+        self.stk_limit_attempt_calls.append((normalized, trade_date))
+        return {
+            "schema_version": "stk_limit_authority_attempt_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": normalized,
+            "availability": "ZERO_ROWS",
+            "unavailable_reason": None,
+            "refresh_identity": "refresh_test",
+            "rows": [],
+        }
+
+    @staticmethod
+    def load_supporting_facts(*, symbols: list[str], trade_date: date) -> dict[str, Any]:
+        normalized = sorted(symbols)
+        return {
+            "schema_version": "daily_trading_supporting_facts_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": normalized,
+            "stock_st": {"source": "market.stock_st", "batch_hash": "a" * 64},
+            "suspend_d": {"source": "market.suspend_d", "batch_hash": "b" * 64},
+            "stock_st_facts": {
+                symbol: {
+                    "is_st": False,
+                    "source": "market.stock_st.pit",
+                    "evidence_hash": canonical_json_sha256({"symbol": symbol, "is_st": False}),
+                }
+                for symbol in normalized
+            },
+            "suspend_facts": {
+                symbol: {"is_suspended": False, "suspend_type": None, "suspend_timing": None} for symbol in normalized
+            },
+        }
 
     @staticmethod
     def to_pre_trade_statuses(context: SimpleNamespace) -> dict[str, dict[str, Any]]:
@@ -18714,8 +18852,12 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
 
     daily_provider = _CapturingDailyTradingContextProvider()
 
+    quote_calls: list[list[str]] = []
+
     def quote_fetcher(symbols: list[str]) -> dict[str, dict[str, Any]]:
-        return {symbol: {} for symbol in symbols}
+        quote_calls.append(list(symbols))
+        timestamp = f"{TRADE_DATE:%Y%m%d}091000"
+        return {symbol: {"K": {"Last": 10_000}, "time": timestamp} for symbol in symbols}
 
     provider = ProductionSimulationRunContextProvider(
         daily_trading_context_provider=daily_provider,
@@ -18736,20 +18878,44 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
             release_id="release-local",
             release_hash="release-hash",
         ),
-        as_of_time=datetime(2026, 8, 21, 9, 10),
+        as_of_time=datetime(TRADE_DATE.year, TRADE_DATE.month, TRADE_DATE.day, 9, 10),
         calendar_service_snapshot={"is_trading_day": True},
     )
 
-    assert result == {"context": {"context_id": "dtc_test"}}
-    assert daily_provider.kwargs["pre_close_quote_fetcher"] is quote_fetcher
-    assert daily_provider.kwargs["pre_close_quote_source"] == "TDX_REALTIME.batch_quote.pre_close"
+    assert daily_provider.stk_limit_attempt_calls == [(["000001.SZ"], TRADE_DATE)]
+    assert quote_calls == [["000001.SZ"]]
+    assert result["000001.SZ"]["source"] == "daily_trading_context_v2"
+    reference = result["000001.SZ"]["daily_trading_context"]
+    assert reference["broker_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
+    assert reference["limit_authority"] == "TDX_REFERENCE_DERIVED_V1"
 
 
-def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
+def test_daily_context_wires_direct_instrument_authority_for_miniqmt() -> None:
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     daily_provider = _CapturingDailyTradingContextProvider()
-    qmt_client = SimpleNamespace(query_quote=lambda symbol: {"symbol": symbol})
+    instrument_calls: list[list[str]] = []
+
+    def get_instrument_details(symbols: list[str]) -> dict[str, dict[str, Any]]:
+        instrument_calls.append(list(symbols))
+        return {
+            symbol: {
+                "InstrumentID": symbol.split(".", 1)[0],
+                "ExchangeID": symbol.split(".", 1)[1],
+                "PreClose": 10.0,
+                "UpStopPrice": 11.0,
+                "DownStopPrice": 9.0,
+                "PriceTick": 0.01,
+                "InstrumentStatus": 0,
+                "IsTrading": True,
+                "TradingDay": TRADE_DATE.strftime("%Y%m%d"),
+                "OpenDate": "20100101",
+                "DayCountFromIPO": 1000,
+            }
+            for symbol in symbols
+        }
+
+    qmt_client = SimpleNamespace(get_instrument_details=get_instrument_details)
     qmt_factory_calls: list[bool] = []
 
     def qmt_client_factory() -> SimpleNamespace:
@@ -18766,9 +18932,15 @@ def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
         binding_hash="binding-hash",
         strategy_id="strategy-qmt",
         broker_account_id="account-qmt",
+        binding_config_json={
+            "miniqmt_quote_control": {
+                "schema_version": "miniqmt_quote_control_binding_v1",
+                "control_revision": "B0_QUOTE_V2",
+            }
+        },
     )
 
-    provider.load_daily_trading_context(
+    result = provider.load_daily_trading_context(
         symbols=["000001.SZ"],
         trade_date=TRADE_DATE,
         binding=binding,
@@ -18778,12 +18950,11 @@ def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
             release_id="release-qmt",
             release_hash="release-hash",
         ),
-        as_of_time=datetime(2026, 8, 21, 9, 10),
+        as_of_time=datetime(TRADE_DATE.year, TRADE_DATE.month, TRADE_DATE.day, 9, 10),
         calendar_service_snapshot={"is_trading_day": True},
     )
 
-    quote_fetcher = daily_provider.kwargs["pre_close_quote_fetcher"]
-    assert qmt_factory_calls == []
-    assert quote_fetcher(["000001.SZ"]) == {"000001.SZ": {"symbol": "000001.SZ"}}
     assert qmt_factory_calls == [True]
-    assert daily_provider.kwargs["pre_close_quote_source"] == "MINIQMT_REALTIME.broker_quote.pre_close"
+    assert instrument_calls == [["000001.SZ"]]
+    assert daily_provider.kwargs == {}
+    assert result["000001.SZ"]["daily_trading_context"]["limit_authority"] == ("MINIQMT_INSTRUMENT_DETAIL_V1")

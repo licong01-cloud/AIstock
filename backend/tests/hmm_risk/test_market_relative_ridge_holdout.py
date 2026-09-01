@@ -2159,6 +2159,13 @@ def test_rotation_l1_candidate_and_request_close_new_source_without_reusing_old_
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
 
 
+def test_rotation_l1_legacy_holdout_reader_identity_is_not_reinterpreted_by_rw1_candidate() -> None:
+    assert subject.RL1_CONTRACT_VERSION == "C-012-RL1-D1-D6"
+    assert subject.RL1_ALGORITHM_VERSION == "hmm_risk_rotation_l1_market_conditioned_ridge_v1"
+    assert "ridge_training_contract" not in subject.RL1_CANDIDATE_PAYLOAD_KEYS
+    assert "replay_coverage" not in subject.RL1_CANDIDATE_PAYLOAD_KEYS
+
+
 def test_rotation_l1_new_holdout_requires_distinct_source_revision(tmp_path: Path) -> None:
     inputs, candidate, request = _rotation_fixture(tmp_path)
     source = dict(request["holdout_source"]["source"])
