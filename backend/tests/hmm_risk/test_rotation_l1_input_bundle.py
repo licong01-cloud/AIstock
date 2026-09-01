@@ -643,6 +643,32 @@ def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     ]
 
 
+def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    day = date(2022, 1, 3)
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        if symbol == "000001.SZ":
+            return np.zeros(0, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220103]
+        rows["symbol"] = symbol.encode("ascii")
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=(day,),
+        spans={"000001.SZ": ((day, day),), "000002.SZ": ((day, day),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin"]
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows[["trade_date", "symbol"]].tolist() == [(20220103, b"000002.SZ")]
+
+
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -998,6 +998,8 @@ def _spool_qlib_months(
                 calendar=calendar,
                 active_spans=active_spans,
             )
+            if not len(rows):
+                continue
             month_codes = rows["trade_date"] // 100
             boundaries = np.flatnonzero(month_codes[1:] != month_codes[:-1]) + 1
             for month_rows in np.split(rows, boundaries):
