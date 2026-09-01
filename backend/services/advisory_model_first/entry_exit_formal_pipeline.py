@@ -6,7 +6,6 @@ import math
 import os
 import platform
 import shutil
-import subprocess
 import tempfile
 import time
 from datetime import datetime, time as datetime_time
@@ -23,6 +22,12 @@ except ModuleNotFoundError:  # Windows imports prepare/inspect and runs unit tes
 
 from backend.services.advisory_model_first.action_value_contracts import (
     AdvisoryIncrementalValueLabelV1,
+)
+from backend.services.advisory_model_first.alpha_signal_audit_pipeline import (
+    _git_commit as _cross_os_git_commit,
+)
+from backend.services.advisory_model_first.alpha_signal_audit_pipeline import (
+    _git_dirty_paths as _cross_os_git_dirty_paths,
 )
 from backend.services.advisory_model_first.entry_exit_formal_contracts import (
     ENTRY_ARM_IDS,
@@ -1444,24 +1449,11 @@ def _write_immutable_request(path: Path, request: FrozenAdvisoryN2ActionAuditReq
 
 
 def _repository_commit(root: Path) -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=False)
-    value = result.stdout.strip()
-    if result.returncode or len(value) != 40:
-        _raise("cannot resolve N2 action repository commit", "ADVISORY_N2_ACTION_REQUEST_INVALID")
-    return value
+    return _cross_os_git_commit(root)
 
 
 def _repository_dirty(root: Path) -> list[str]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=normal"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode:
-        _raise("cannot inspect N2 action repository state", "ADVISORY_N2_ACTION_REQUEST_INVALID")
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return _cross_os_git_dirty_paths(root)
 
 
 def _verify_environment(request: FrozenAdvisoryN2ActionAuditRequestV1) -> None:
