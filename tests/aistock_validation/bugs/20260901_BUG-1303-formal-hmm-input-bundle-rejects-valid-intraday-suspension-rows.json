@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1303",
-  "closed_at": null,
+  "closed_at": "2026-09-01T05:59:05Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -60,8 +60,8 @@
   },
   "first_seen_at": "2026-09-01T04:36:21.762181Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ad2bb3a2b19cba78e7ba7041e63d1a79c8efaea8",
+  "fixed_at": "2026-09-01T05:59:05Z",
   "github_issue_number": 4120,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4120",
   "last_seen_at": "2026-09-01T04:36:21.762181Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4122",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -86,6 +87,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -95,7 +97,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1303",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dd1d0a351e624c5c",
+    "recorded_at": "2026-09-01T06:01:08.154530Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "61fb640428e72d0afb33c13e1d7e5635437b7e16",
+    "source_merge_commit": "ad2bb3a2b19cba78e7ba7041e63d1a79c8efaea8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4122",
+    "validation_evidence": [
+      "validation-receipt: id=855eefa668600270 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q -p no:cacheprovider` result=`21 passed`",
+      "validation-receipt: id=63de32820167a5b9 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=hmm_risk_backend status=passed command=`rtk nox -s hmm_risk_backend` result=`665 passed; coverage line-rate 80.40%; branch-rate 65.07%`",
+      "validation-receipt: id=2de11ac69ba00fd3 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+      "validation-receipt: id=e2e4866b56a1979e commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=ed8d9c47e2e54680 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=ruff plan=direct status=passed command=`ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; ruff format --check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; git diff --check origin/main...HEAD` result=`passed`"
+    ],
+    "validation_evidence_digest": "1134b08936d783fc60f6930b535e0693a5e3ac8add72a5108a5fbbfe46679a35"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -104,6 +131,13 @@
     "fingerprint": "f08e8f502e00dd928fe4e872",
     "source_event_id": "FE-20260901-f08e8f502e00"
   },
+  "validation_evidence": [
+    "validation-receipt: id=855eefa668600270 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q -p no:cacheprovider` result=`21 passed`",
+    "validation-receipt: id=63de32820167a5b9 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=hmm_risk_backend status=passed command=`rtk nox -s hmm_risk_backend` result=`665 passed; coverage line-rate 80.40%; branch-rate 65.07%`",
+    "validation-receipt: id=2de11ac69ba00fd3 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+    "validation-receipt: id=e2e4866b56a1979e commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=ed8d9c47e2e54680 commit=61fb640428e72d0afb33c13e1d7e5635437b7e16 kind=ruff plan=direct status=passed command=`ruff check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; ruff format --check backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; python -m py_compile backend/services/hmm_risk/rotation_l1_input_bundle.py backend/tests/hmm_risk/test_rotation_l1_input_bundle.py; git diff --check origin/main...HEAD` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
