@@ -3,6 +3,8 @@
 The pool is intentionally process-local and never imports or mutates
 ``backend.db.pg_pool``.  At most four connections may exist, while a single
 semaphore serializes row-producing queries so batching cannot multiply memory.
+Every borrowed transaction also applies and reads back a fixed query-local
+PostgreSQL memory/parallelism contract; global database settings are untouched.
 """
 
 from __future__ import annotations
@@ -47,7 +49,16 @@ class SourceRowChunkTooLarge(SourcePoolError):
     code = "BLOCKED_SOURCE_ROW_CHUNK_TOO_LARGE"
 
 
+class SourceQueryResourceContractViolation(SourcePoolError):
+    """Raised when PostgreSQL does not confirm the source-query limits."""
+
+    code = "BLOCKED_SOURCE_QUERY_RESOURCE_CONTRACT"
+
+
 _DEFAULT_FETCH_ROWS = 10_000
+SOURCE_QUERY_RESOURCE_CONTRACT_SCHEMA = "dataset_release_source_query_resource_v1"
+SOURCE_QUERY_WORK_MEM_KIB = 8 * 1024
+SOURCE_QUERY_MAX_PARALLEL_WORKERS_PER_GATHER = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,13 +289,41 @@ class ReadOnlySourcePool:
         cursor = connection.cursor()
         try:
             cursor.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                (str(self._statement_timeout_ms),),
+                "SELECT set_config('statement_timeout', %s, true),"
+                "set_config('work_mem', %s, true),"
+                "set_config('max_parallel_workers_per_gather', %s, true)",
+                (
+                    str(self._statement_timeout_ms),
+                    f"{SOURCE_QUERY_WORK_MEM_KIB}kB",
+                    str(SOURCE_QUERY_MAX_PARALLEL_WORKERS_PER_GATHER),
+                ),
             )
-            cursor.execute("SELECT current_setting('transaction_read_only')")
-            row = cursor.fetchone() if hasattr(cursor, "fetchone") else ("on",)
-            if not row or str(row[0]).lower() not in {"on", "true", "1"}:
+            cursor.execute(
+                "SELECT current_setting('transaction_read_only'),"
+                "pg_size_bytes(current_setting('work_mem'))::bigint,"
+                "current_setting('max_parallel_workers_per_gather')::integer"
+            )
+            row = cursor.fetchone() if hasattr(cursor, "fetchone") else None
+            if not row or len(row) != 3:
+                raise SourceQueryResourceContractViolation(
+                    "database returned incomplete source-query resource settings"
+                )
+            if str(row[0]).lower() not in {"on", "true", "1"}:
                 raise SourceReadOnlyViolation("database did not acknowledge transaction_read_only=on")
+            try:
+                work_mem_bytes = int(row[1])
+                parallel_workers = int(row[2])
+            except (TypeError, ValueError) as exc:
+                raise SourceQueryResourceContractViolation(
+                    "database returned invalid source-query resource settings"
+                ) from exc
+            if (
+                work_mem_bytes != SOURCE_QUERY_WORK_MEM_KIB * 1024
+                or parallel_workers != SOURCE_QUERY_MAX_PARALLEL_WORKERS_PER_GATHER
+            ):
+                raise SourceQueryResourceContractViolation(
+                    "database did not acknowledge source-query resource settings"
+                )
         finally:
             cursor.close()
 

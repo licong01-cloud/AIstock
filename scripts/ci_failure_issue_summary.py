@@ -299,10 +299,11 @@ def _llm_guarded_rollout_gate(
         from scripts import llm_provider_adapter
 
         config = llm_provider_adapter.load_config()
+        provider = str(config.get("default_provider") or "deepseek_api")
         advice = summary.get("llm_triage_advice") if isinstance(summary.get("llm_triage_advice"), dict) else {}
         llm_workflow_gate = str(advice.get("workflow_gate") or "ready")
         return llm_provider_adapter.build_guarded_rollout_gate(
-            "github_models",
+            provider,
             config,
             mode=mode,
             opt_in=opt_in,
@@ -330,7 +331,7 @@ def _llm_guarded_rollout_gate(
             "fallback_reason": str(exc),
             "llm_invocation_evidence": {
                 "schema_version": "aistock_llm_invocation_evidence_v1",
-                "provider": "github_models",
+                "provider": "deepseek_api",
                 "model": "unknown",
                 "invoked": False,
                 "reason": "guarded_rollout_gate_unavailable_no_network",
@@ -1472,7 +1473,7 @@ def _nightly_job_from_statuses(
 def _build_nightly_llm_triage_advice(
     summary: dict[str, Any],
     *,
-    provider: str = "github_models",
+    provider: str | None = None,
     invoke_llm: bool = False,
 ) -> dict[str, Any]:
     """Attach schema-checked triage advice and optionally live LLM test-plan advice."""
@@ -1484,12 +1485,13 @@ def _build_nightly_llm_triage_advice(
         from scripts import llm_provider_adapter
 
         config = llm_provider_adapter.load_config()
+        effective_provider = provider or str(config.get("default_provider") or "deepseek_api")
         code_intelligence_refs = (
             summary.get("code_intelligence_refs") if isinstance(summary.get("code_intelligence_refs"), dict) else {}
         )
-        advice = llm_provider_adapter.build_triage_quality_smoke(provider, config)
+        advice = llm_provider_adapter.build_triage_quality_smoke(effective_provider, config)
         test_plan_advice = llm_provider_adapter.build_test_plan_advice(
-            provider,
+            effective_provider,
             config,
             changed_files=list(summary.get("suspected_files") or []),
             module=(summary.get("suspected_modules") or [None])[0],
@@ -1497,16 +1499,17 @@ def _build_nightly_llm_triage_advice(
             invoke_llm=invoke_llm,
         )
     except Exception as exc:
+        effective_provider = provider or "deepseek_api"
         return {
             "schema_version": "aistock_deepseek_triage_advice_v1",
-            "provider": provider,
+            "provider": effective_provider,
             "workflow_gate": "warning",
             "blocking_for_issue_creation": False,
             "fallback_used": True,
             "fallback_reason": str(exc),
             "llm_invocation_evidence": {
                 "schema_version": "aistock_llm_invocation_evidence_v1",
-                "provider": provider,
+                "provider": effective_provider,
                 "model": "unknown",
                 "invoked": False,
                 "reason": "triage_advice_unavailable",

@@ -143,9 +143,7 @@ class WslResourceGuardian:
                     start_available_bytes,
                 )
             )
-            or memory_high_bytes <= 0
-            or memory_max_bytes <= memory_high_bytes
-            or start_available_bytes <= 0
+            or (memory_high_bytes, memory_max_bytes, memory_swap_max_bytes, start_available_bytes) != (0, 0, 0, 0)
             or not str(resource_checkpoint_path).startswith("/")
             or "\x00" in str(resource_checkpoint_path)
         ):
@@ -190,9 +188,7 @@ class WslResourceGuardian:
         try:
             if not self._pipe() or not self._heartbeat_is_fresh():
                 return 72
-            available = self._sample_resources()
-            if available < self.start_available_bytes:
-                return 74
+            self._sample_resources()
         except (GuardianError, OSError, TypeError, ValueError):
             return 72
         child_env = {
@@ -231,10 +227,10 @@ class WslResourceGuardian:
         try:
             current = _finite_counter(raw["memory.current"], "memory.current")
             peak = _finite_counter(raw["memory.peak"], "memory.peak")
-            high = _finite_counter(raw["memory.high"], "memory.high")
-            maximum = _finite_counter(raw["memory.max"], "memory.max")
+            high = _unlimited_counter(raw["memory.high"], "memory.high")
+            maximum = _unlimited_counter(raw["memory.max"], "memory.max")
             swap_current = _finite_counter(raw["memory.swap.current"], "memory.swap.current")
-            swap_maximum = _finite_counter(raw["memory.swap.max"], "memory.swap.max")
+            swap_maximum = _unlimited_counter(raw["memory.swap.max"], "memory.swap.max")
             oom_group = _finite_counter(raw["memory.oom.group"], "memory.oom.group")
             available = _finite_counter(raw["wsl_mem_available_bytes"], "wsl_mem_available_bytes")
             raw_events = raw["memory.events"]
@@ -244,12 +240,10 @@ class WslResourceGuardian:
             raise GuardianError("guardian memory.events telemetry is invalid")
         events = {str(key): _finite_counter(value, f"memory.events.{key}") for key, value in raw_events.items()}
         if (
-            high != self.memory_high_bytes
-            or maximum != self.memory_max_bytes
-            or swap_maximum != self.memory_swap_max_bytes
-            or oom_group != 1
-            or current > maximum
-            or swap_current > swap_maximum
+            high != 0
+            or maximum != 0
+            or swap_maximum != 0
+            or oom_group not in {0, 1}
             or peak < current
         ):
             raise GuardianError("guardian cgroup limit/readback mismatch")
@@ -395,6 +389,12 @@ def _finite_counter(value: object, field: str) -> int:
     if result < 0:
         raise GuardianError(f"{field} is negative")
     return result
+
+
+def _unlimited_counter(value: object, field: str) -> int:
+    if isinstance(value, str) and value.strip().casefold() in {"max", "infinity"}:
+        return 0
+    return _finite_counter(value, field)
 
 
 def _assert_plain_telemetry_parent(path: Path) -> None:

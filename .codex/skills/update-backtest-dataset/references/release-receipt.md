@@ -90,8 +90,8 @@ Receipt/logs must contain credential locations only. Never include token, passwo
 | Category | Examples | Handling |
 |---|---|---|
 | retryable | transient DB disconnect, temporary file lock, provider 5xx | bounded retry/backoff in same policy |
-| waiting | host/WSL memory, commit headroom, X free space | durable waiting until deadline |
-| resource hard | Job/cgroup/OOM/guardian/system emergency | task-only fail-stop; keep evidence |
+| resource telemetry | host/WSL memory, commit headroom, paging, predicted free space | receipt/warning only; never wait, pause, retry or terminalize |
+| operating-system failure | child OOM/termination, actual ENOSPC, Docker/WSL failure | fail the current attempt with the real error; no automatic retry |
 | orphan hold | expired owner tree alive/unknown | retain both leases until quiescent |
 | source blocked | watermark/partition/PIT not ready | wait/block; no fill or scope reduction |
 | terminal contract | schema/PIT/moneyflow/index/bin-H5 conflict | fail fast |

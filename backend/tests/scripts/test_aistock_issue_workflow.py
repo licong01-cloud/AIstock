@@ -2054,6 +2054,7 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/artifact_ready_build_source.py",
         "backend/services/dataset_release/artifact_ready_source.py",
         "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/build_stage.py",
         "backend/services/dataset_release/canonical_stock_transformer.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
@@ -2063,9 +2064,13 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/resolution_processor.py",
         "backend/services/dataset_release/resource_budget.py",
         "backend/services/dataset_release/resource_gate.py",
+        "backend/services/dataset_release/resource_supervisor.py",
         "backend/services/dataset_release/source_authority.py",
         "backend/services/dataset_release/stk_limit_overlay.py",
         "backend/services/dataset_release/worker.py",
+        "backend/services/dataset_release/windows_job.py",
+        "backend/services/dataset_release/wsl_cgroup.py",
+        "backend/services/dataset_release/wsl_resource_guardian.py",
     ]
 
     inference = workflow._classify_runtime_impact(changed_files)
@@ -2073,7 +2078,7 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
     assert inference == {
         "runtime_impact": "worker_scheduler",
         "observed_impacts": ["worker_scheduler"],
-        "runtime_files": changed_files,
+        "runtime_files": sorted(changed_files),
         "target_ids": ["worker-scheduler"],
     }
 
@@ -2100,6 +2105,45 @@ def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None
     )
     nearby_unregistered = workflow._classify_runtime_impact(
         ["backend/services/hmm_risk/unregistered_ridge_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
+def test_hmm_rotation_input_bundle_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_input_bundle.py"]
     )
 
     assert inference == {
@@ -2948,8 +2992,17 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
+)
 _BUSINESS_SMOKE_SCOPED_SCHEDULER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
+)
+_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL = (
+    "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum"
+    "?source=manual&expected_is_available=false"
+    "&expected_disable_reason_code=PIT_CAUSALITY_VIOLATION"
+    "&expected_disable_batch_id=BUG-1302_pit_causality_quarantine_20260901"
 )
 _BUG992_RECORD_REF = (
     "tests/aistock_validation/bugs/"
@@ -3001,6 +3054,136 @@ def _semantic_runtime_issue(root: Path, *, smoke_url: str) -> Path:
 
 def _smoke_probe(payload: dict[str, Any]) -> dict[str, Any]:
     return next(probe for probe in payload["probes"] if probe["name"] == "business_smoke_ref")
+
+
+def _factor_quarantine_payload(**overrides: Any) -> dict[str, Any]:
+    factor: dict[str, Any] = {
+        "id": 1235,
+        "factor_name": "neg_vol_adjusted_momentum",
+        "source": "manual",
+        "is_available": False,
+        "disable_reason": (
+            "PIT_CAUSALITY_VIOLATION: future-append replay changed historical factor values"
+        ),
+        "disable_batch_id": "BUG-1302_pit_causality_quarantine_20260901",
+        "disable_at": "2026-09-01T11:11:12.285620+08:00",
+        "rehab_candidate": False,
+    }
+    factor.update(overrides)
+    return {"ok": True, "domain": "factor_library", "factor": factor}
+
+
+def test_post_restart_verify_accepts_bound_factor_quarantine_detail(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"] == {
+        "factor_id": 1235,
+        "factor_name": "neg_vol_adjusted_momentum",
+        "source": "manual",
+        "is_available": False,
+        "disable_reason_code": "PIT_CAUSALITY_VIOLATION",
+        "disable_batch_id": "BUG-1302_pit_causality_quarantine_20260901",
+        "disable_at": "2026-09-01T11:11:12.285620+08:00",
+        "rehab_candidate": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_fragment"),
+    [
+        ({"factor_name": "other_factor"}, "factor_name does not match"),
+        ({"source": "qe"}, "source does not match"),
+        ({"is_available": True}, "availability mismatch"),
+        ({"disable_reason": ""}, "missing disable_reason"),
+        ({"disable_reason": "OTHER_REASON: disabled"}, "reason code does not match"),
+        ({"disable_batch_id": "other_batch"}, "disable_batch_id does not match"),
+        ({"disable_at": "2026-09-01T11:11:12"}, "timezone-aware timestamp"),
+        ({"disable_at": "not-a-timestamp"}, "timezone-aware timestamp"),
+        ({"rehab_candidate": True}, "rehab_candidate=false"),
+    ],
+)
+def test_post_restart_verify_rejects_unbound_or_incomplete_factor_quarantine_detail(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    reason_fragment: str,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_FACTOR_QUARANTINE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload(**overrides)).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert reason_fragment in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_rejects_factor_detail_without_explicit_lifecycle_expectation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=(
+            "http://127.0.0.1:8001/api/v1/factor-library/factors/"
+            "neg_vol_adjusted_momentum?source=manual"
+        ),
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_factor_quarantine_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "factor_lifecycle_detail"
+    assert "expected_is_available" in smoke["semantic"]["reason"]
 
 
 def test_post_restart_verify_blocks_failed_retryable_run_payload_on_http_200(
@@ -3094,6 +3277,117 @@ def test_post_restart_verify_verifies_run_payload_reaching_terminal_success(
     assert receipt["business_smoke_semantic"]["verdict"] == "passed"
     assert receipt["business_smoke_semantic"]["contract_id"] == "run_terminal_success"
     assert receipt["business_smoke_semantic"]["response_sha256"] == smoke["response_sha256"]
+
+
+def _localsim_cutover_readiness_payload(**overrides: Any) -> dict[str, Any]:
+    readiness: dict[str, Any] = {
+        "schema_version": "localsim_cutover_readiness_v1",
+        "ready": True,
+        "checked_at": "2026-09-01T05:00:00Z",
+        "blockers": [],
+        "relation_presence": {
+            "paper_v2.simulation_account_v1": True,
+            "paper_v2.legacy_localsim_account_lineage_v1": True,
+            "paper_v2.localsim_replay_job_v1": True,
+            "paper_v2.localsim_runtime_profile_v1": True,
+            "paper_v2.localsim_runtime_profile_version_v1": True,
+            "paper_v2.simulation_ledger_scope_v1": True,
+            "strategy_pkg.strategy_runtime_release": True,
+            "paper_v2.simulation_release_binding": True,
+            "paper_v2.simulation_daily_run": True,
+            "paper_v2.run": True,
+            "paper_v2.intraday_snapshots": True,
+        },
+        "runtime_fk_count": 2,
+        "orphan_ledger_scope_count": 0,
+        "invalid_ledger_scope_count": 0,
+        "retained_legacy_account_ids": ["paper_retained"],
+        "missing_lineage_account_ids": [],
+        "legacy_active_session_count": 0,
+        "legacy_auto_run_count": 0,
+        "legacy_sentinel_count": 0,
+        "in_flight_economic_run_count": 0,
+    }
+    readiness.update(overrides)
+    return {"ok": True, "readiness": readiness}
+
+
+def test_post_restart_verify_accepts_ready_localsim_cutover_authority(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_localsim_cutover_readiness_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "localsim_cutover_readiness"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"]["runtime_fk_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_fragment"),
+    [
+        (
+            {
+                "ready": False,
+                "blockers": ["in_flight_economic_run_count:1"],
+                "in_flight_economic_run_count": 1,
+            },
+            "in_flight_economic_run_count=1",
+        ),
+        ({"ready": True, "blockers": ["retained_lineage_missing:1"]}, "inconsistent"),
+        ({"runtime_fk_count": True}, "runtime_fk_count must be a non-negative integer"),
+        ({"checked_at": "2026-09-01T05:00:00"}, "timezone-aware timestamp"),
+        (
+            {"relation_presence": {"paper_v2.simulation_account_v1": True}},
+            "relation_presence keys are invalid",
+        ),
+    ],
+)
+def test_post_restart_verify_blocks_invalid_or_unready_localsim_cutover_authority(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    reason_fragment: str,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_localsim_cutover_readiness_payload(**overrides)).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "localsim_cutover_readiness"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert reason_fragment in smoke["semantic"]["reason"]
 
 
 def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_http_200(

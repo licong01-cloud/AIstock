@@ -1946,6 +1946,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/market_relative_jump_spike.py",
         "backend/services/hmm_risk/market_relative_ridge_candidate.py",
         "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
         "backend/services/hmm_risk/state_model_set.py",
         "backend/services/hmm_risk/stock_fact_repository.py",
         "backend/services/announcements/title_classifier.py",
@@ -1973,6 +1974,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/hmm_risk/run_market_relative_jump_spike.py",
         "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
         "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
         "noxfile.py",
     }
     known_client_files = {
@@ -3329,6 +3331,237 @@ def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", f"correlation status payload reports unknown status: {normalized}", {}
 
 
+def _validate_factor_lifecycle_detail(
+    payload: Any,
+    *,
+    url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bind factor-library detail readback to an explicit lifecycle expectation."""
+
+    if not isinstance(payload, dict):
+        return "failed", "factor detail payload must be a JSON object", {}
+    if payload.get("ok") is not True or payload.get("domain") != "factor_library":
+        return "failed", "factor detail payload must report ok=true and domain=factor_library", {}
+    factor = payload.get("factor")
+    if not isinstance(factor, dict):
+        return "failed", "factor detail payload is missing factor", {}
+
+    parsed = urllib.parse.urlsplit(url)
+    path_match = re.fullmatch(r"/api/v1/factor-library/factors/([^/]+)", parsed.path)
+    if path_match is None:
+        return "failed", "factor detail probe path is invalid", {}
+    requested_name = urllib.parse.unquote(path_match.group(1)).strip()
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+    def required_query_value(name: str) -> tuple[str | None, str | None]:
+        values = query.get(name) or []
+        if len(values) != 1 or not str(values[0]).strip():
+            return None, f"factor detail probe requires exactly one non-empty {name} query value"
+        return str(values[0]).strip(), None
+
+    requested_source, query_error = required_query_value("source")
+    if query_error:
+        return "failed", query_error, {}
+    expected_available_text, query_error = required_query_value("expected_is_available")
+    if query_error:
+        return "failed", query_error, {}
+    expected_available_normalized = str(expected_available_text).lower()
+    if expected_available_normalized not in {"true", "false"}:
+        return "failed", "factor detail expected_is_available must be true or false", {}
+    expected_available = expected_available_normalized == "true"
+
+    factor_id = factor.get("id")
+    factor_name = factor.get("factor_name")
+    source = factor.get("source")
+    available = factor.get("is_available")
+    if type(factor_id) is not int or factor_id <= 0:
+        return "failed", "factor detail id must be a positive integer", {}
+    if not isinstance(factor_name, str) or factor_name.strip() != requested_name:
+        return "failed", "factor detail factor_name does not match the requested factor", {}
+    if not isinstance(source, str) or source.strip() != requested_source:
+        return "failed", "factor detail source does not match the requested source", {}
+    if type(available) is not bool:
+        return "failed", "factor detail is_available must be boolean", {}
+    if available is not expected_available:
+        return (
+            "failed",
+            f"factor detail availability mismatch: expected={expected_available} observed={available}",
+            {},
+        )
+
+    facts: dict[str, Any] = {
+        "factor_id": factor_id,
+        "factor_name": factor_name.strip(),
+        "source": source.strip(),
+        "is_available": available,
+    }
+    expected_reason_code_values = query.get("expected_disable_reason_code") or []
+    expected_batch_id_values = query.get("expected_disable_batch_id") or []
+    if expected_available:
+        if expected_reason_code_values or expected_batch_id_values:
+            return "failed", "available factor detail must not declare disable expectations", facts
+        return "passed", None, facts
+
+    expected_reason_code, query_error = required_query_value("expected_disable_reason_code")
+    if query_error:
+        return "failed", query_error, facts
+    expected_batch_id, query_error = required_query_value("expected_disable_batch_id")
+    if query_error:
+        return "failed", query_error, facts
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,127}", str(expected_reason_code)):
+        return "failed", "factor detail expected_disable_reason_code is invalid", facts
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{2,127}", str(expected_batch_id)):
+        return "failed", "factor detail expected_disable_batch_id is invalid", facts
+
+    disable_reason = factor.get("disable_reason")
+    disable_batch_id = factor.get("disable_batch_id")
+    disable_at = factor.get("disable_at")
+    rehab_candidate = factor.get("rehab_candidate")
+    if not isinstance(disable_reason, str) or not disable_reason.strip():
+        return "failed", "disabled factor detail is missing disable_reason", facts
+    reason_prefix = f"{expected_reason_code}:"
+    if not disable_reason.strip().startswith(reason_prefix):
+        return "failed", "factor detail disable reason code does not match the declared expectation", facts
+    observed_reason_code = expected_reason_code
+    if not isinstance(disable_batch_id, str) or disable_batch_id.strip() != expected_batch_id:
+        return "failed", "factor detail disable_batch_id does not match the declared expectation", facts
+    if not isinstance(disable_at, str) or not disable_at.strip():
+        return "failed", "disabled factor detail is missing disable_at", facts
+    try:
+        parsed_disable_at = datetime.fromisoformat(disable_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
+    if parsed_disable_at.tzinfo is None or parsed_disable_at.utcoffset() is None:
+        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
+    if rehab_candidate is not False:
+        return "failed", "quarantined factor detail must report rehab_candidate=false", facts
+
+    facts.update(
+        {
+            "disable_reason_code": observed_reason_code,
+            "disable_batch_id": disable_batch_id.strip(),
+            "disable_at": parsed_disable_at.isoformat(),
+            "rehab_candidate": rehab_candidate,
+        }
+    )
+    return "passed", None, facts
+
+
+_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
+    "paper_v2.simulation_account_v1",
+    "paper_v2.legacy_localsim_account_lineage_v1",
+    "paper_v2.localsim_replay_job_v1",
+    "paper_v2.localsim_runtime_profile_v1",
+    "paper_v2.localsim_runtime_profile_version_v1",
+    "paper_v2.simulation_ledger_scope_v1",
+    "strategy_pkg.strategy_runtime_release",
+    "paper_v2.simulation_release_binding",
+    "paper_v2.simulation_daily_run",
+    "paper_v2.run",
+    "paper_v2.intraday_snapshots",
+})
+
+
+def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Require the complete LocalSIM cutover authority to report a safe boundary."""
+    if not isinstance(payload, dict):
+        return "failed", "LocalSIM cutover-readiness payload must be a JSON object", {}
+    if payload.get("ok") is not True:
+        return "failed", "LocalSIM cutover-readiness payload must report ok=true", {}
+    readiness = payload.get("readiness")
+    if not isinstance(readiness, dict):
+        return "failed", "LocalSIM cutover-readiness payload is missing readiness", {}
+    if readiness.get("schema_version") != "localsim_cutover_readiness_v1":
+        return "failed", "LocalSIM cutover-readiness schema_version is invalid", {}
+    checked_at = readiness.get("checked_at")
+    if not isinstance(checked_at, str) or not checked_at.strip():
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+    try:
+        parsed_checked_at = datetime.fromisoformat(checked_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+    if parsed_checked_at.tzinfo is None:
+        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
+
+    ready = readiness.get("ready")
+    blockers = readiness.get("blockers")
+    if type(ready) is not bool:
+        return "failed", "LocalSIM cutover-readiness ready must be boolean", {}
+    if not isinstance(blockers, list) or any(not isinstance(item, str) or not item.strip() for item in blockers):
+        return "failed", "LocalSIM cutover-readiness blockers must be a list of non-empty strings", {}
+    if ready != (not blockers):
+        return "failed", "LocalSIM cutover-readiness ready and blockers are inconsistent", {}
+
+    relation_presence = readiness.get("relation_presence")
+    if (
+        not isinstance(relation_presence, dict)
+        or not relation_presence
+        or any(not isinstance(name, str) or type(present) is not bool for name, present in relation_presence.items())
+    ):
+        return "failed", "LocalSIM cutover-readiness relation_presence is invalid", {}
+    relation_names = set(relation_presence)
+    if relation_names != _LOCALSIM_CUTOVER_REQUIRED_RELATIONS:
+        missing = sorted(_LOCALSIM_CUTOVER_REQUIRED_RELATIONS - relation_names)
+        unexpected = sorted(relation_names - _LOCALSIM_CUTOVER_REQUIRED_RELATIONS)
+        return (
+            "failed",
+            f"LocalSIM cutover-readiness relation_presence keys are invalid: missing={missing}, unexpected={unexpected}",
+            {},
+        )
+    missing_relations = sorted(name for name, present in relation_presence.items() if not present)
+
+    count_fields = (
+        "runtime_fk_count",
+        "orphan_ledger_scope_count",
+        "invalid_ledger_scope_count",
+        "legacy_active_session_count",
+        "legacy_auto_run_count",
+        "legacy_sentinel_count",
+        "in_flight_economic_run_count",
+    )
+    counts: dict[str, int] = {}
+    for field in count_fields:
+        value = readiness.get(field)
+        if type(value) is not int or value < 0:
+            return "failed", f"LocalSIM cutover-readiness {field} must be a non-negative integer", {}
+        counts[field] = value
+
+    retained_accounts = readiness.get("retained_legacy_account_ids")
+    missing_lineages = readiness.get("missing_lineage_account_ids")
+    for field, value in (
+        ("retained_legacy_account_ids", retained_accounts),
+        ("missing_lineage_account_ids", missing_lineages),
+    ):
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+            return "failed", f"LocalSIM cutover-readiness {field} must be a list of non-empty strings", {}
+
+    facts = {
+        "ready": ready,
+        "checked_at": parsed_checked_at.isoformat(),
+        "blockers": list(blockers),
+        "relation_count": len(relation_presence),
+        "missing_relations": missing_relations,
+        **counts,
+        "retained_legacy_account_count": len(retained_accounts),
+        "missing_lineage_account_count": len(missing_lineages),
+    }
+    invariant_failures: list[str] = []
+    if missing_relations:
+        invariant_failures.append(f"missing_relations={missing_relations}")
+    if counts["runtime_fk_count"] != 2:
+        invariant_failures.append(f"runtime_fk_count={counts['runtime_fk_count']}")
+    for field in count_fields[1:]:
+        if counts[field]:
+            invariant_failures.append(f"{field}={counts[field]}")
+    if missing_lineages:
+        invariant_failures.append(f"missing_lineage_account_count={len(missing_lineages)}")
+    if blockers:
+        invariant_failures.append(f"blockers={blockers}")
+    if invariant_failures:
+        return "failed", "LocalSIM cutover is not ready: " + "; ".join(invariant_failures), facts
+    return "passed", None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
@@ -3339,8 +3572,18 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_scheduler_verification_status,
     ),
     (re.compile(r"^/api/v1/simulation-runtime/platform-diagnostics$"), "scheduler_status", _validate_scheduler_status),
+    (
+        re.compile(r"^/api/v1/simulation-runtime/localsim/cutover-readiness$"),
+        "localsim_cutover_readiness",
+        _validate_localsim_cutover_readiness,
+    ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (
+        re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
+        "factor_lifecycle_detail",
+        _validate_factor_lifecycle_detail,
+    ),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+/terminal-evidence$"), "run_terminal_evidence", _validate_run_terminal_evidence),
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
@@ -3459,7 +3702,7 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
-    elif contract_id == "scheduler_verification_status":
+    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail"}:
         verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)
