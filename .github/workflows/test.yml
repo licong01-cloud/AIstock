@@ -272,7 +272,7 @@ jobs:
             fi
           done < tmp/validation/ci_change_classifier/changed_files.txt
           python scripts/llm_provider_adapter.py --json prompt-evaluation \
-            --provider github_models \
+            --provider deepseek_api \
             "${changed_args[@]}" \
             --output tmp/validation/llm_prompt_evaluation/prompt-evaluation.json
 
