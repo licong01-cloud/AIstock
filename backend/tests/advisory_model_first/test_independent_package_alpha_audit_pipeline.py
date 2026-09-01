@@ -13,14 +13,13 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.independent_package_alpha_audit_contracts import (
     ARM_IDS,
     CURRENT_PARENT_ARM_ID,
+    FACTOR_CLOSURE_57,
     PACKAGE_ARM_IDS,
+    PACKAGE_B668_ID,
     PACKAGE_IDS,
     PACKAGE_STATUSES,
-    FACTOR_CLOSURE_50,
-    FACTOR_CLOSURE_57,
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
-    PKG_B668_ARM_ID,
     RESOURCE_MAX_WALL_SECONDS,
     build_independent_package_alpha_audit_request,
 )
@@ -31,6 +30,8 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_pipel
     _rank_one_arm,
     _read_bundle,
     _freeze_package_roster,
+    _validate_excluded_package_record,
+    _validate_roster_exclusion_receipt,
     build_independent_package_metrics,
     _valid_batch_execution_receipt,
 )
@@ -51,10 +52,8 @@ def _decision_dates() -> pd.DatetimeIndex:
 def test_progress_records_unbounded_wall_time_without_stopping(monkeypatch) -> None:
     from backend.services.advisory_model_first import independent_package_alpha_audit_pipeline as pipeline
 
-    request = build_independent_package_alpha_audit_request(**_values()).model_copy(
-        update={"resource_max_wall_seconds": RESOURCE_MAX_WALL_SECONDS}
-    )
-    assert request.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
+    request = build_independent_package_alpha_audit_request(**_values())
+    assert request.resource_max_wall_seconds is None
     clock = iter([0.0])
     monkeypatch.setattr(pipeline.time, "monotonic", lambda: next(clock, 10**9))
     monkeypatch.setattr(pipeline, "_peak_rss_bytes", lambda: 1)
@@ -68,6 +67,63 @@ def test_progress_records_unbounded_wall_time_without_stopping(monkeypatch) -> N
     assert report["wall_limit_seconds"] is None
 
 
+def test_roster_exclusion_requires_verified_pit_quarantine_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "BUG-1302.json"
+    valid = {
+        "bug_id": "BUG-1302",
+        "status": "verified",
+        "runtime_contract": {
+            "runtime_identity_match": True,
+            "post_restart_effective_gate": "passed",
+        },
+        "events": [
+            {
+                "action": "dev_factor_quarantine_and_package_retirement",
+                "note": (f"{PACKAGE_B668_ID} transitioned SELECTION_ENABLED to RETIRED with an audit event"),
+            }
+        ],
+        "reproduce_command": (f"Replay {PACKAGE_B668_ID}; disable neg_vol_adjusted_momentum"),
+    }
+    path.write_text(json.dumps(valid), encoding="utf-8")
+    _validate_roster_exclusion_receipt(path)
+
+    path.write_text(json.dumps({**valid, "status": "open"}), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError) as captured:
+        _validate_roster_exclusion_receipt(path)
+    assert captured.value.reason_code == "ADVISORY_PACKAGE_ALPHA_AUDIT_ROSTER_INVALID"
+
+    wrong_package = json.loads(json.dumps(valid))
+    wrong_package["events"][0]["note"] = "pkg_other transitioned to RETIRED"
+    path.write_text(json.dumps(wrong_package), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError, match="verified PIT quarantine"):
+        _validate_roster_exclusion_receipt(path)
+
+    wrong_factor = {**valid, "reproduce_command": f"Replay {PACKAGE_B668_ID}; disable other_factor"}
+    path.write_text(json.dumps(wrong_factor), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError, match="verified PIT quarantine"):
+        _validate_roster_exclusion_receipt(path)
+
+
+def test_excluded_package_must_remain_durably_retired() -> None:
+    record = SimpleNamespace(
+        package_id=PACKAGE_B668_ID,
+        package_status=PackageStatus.RETIRED,
+        manifest_sha256="a" * 64,
+    )
+    repository = SimpleNamespace(get=lambda package_id: record if package_id == PACKAGE_B668_ID else None)
+    assert _validate_excluded_package_record(repository) == "a" * 64
+
+    record.package_status = PackageStatus.PAPER_ENABLED
+    with pytest.raises(AdvisoryModelFirstError) as captured:
+        _validate_excluded_package_record(repository)
+    assert captured.value.reason_code == "ADVISORY_PACKAGE_ALPHA_AUDIT_ROSTER_INVALID"
+
+    record.package_status = PackageStatus.RETIRED
+    record.manifest_sha256 = "not-a-sha256"
+    with pytest.raises(AdvisoryModelFirstError, match="durably retired"):
+        _validate_excluded_package_record(repository)
+
+
 def _synthetic_inputs():
     decisions = _decision_dates()
     symbols = [f"{index:06d}.SZ" for index in range(1, 61)]
@@ -76,7 +132,7 @@ def _synthetic_inputs():
     package_rows = {arm_id: [] for arm_id in PACKAGE_ARM_IDS}
     coverage_rows: list[dict] = []
     ranking_rows: list[dict] = []
-    limits = {PKG_378_ARM_ID: 60, PKG_5A5_ARM_ID: 58, PKG_B668_ARM_ID: 54}
+    limits = {PKG_378_ARM_ID: 60, PKG_5A5_ARM_ID: 58}
     for day_index, decision in enumerate(decisions):
         day_outcomes: list[dict] = []
         for symbol_index, symbol in enumerate(symbols, start=1):
@@ -101,7 +157,6 @@ def _synthetic_inputs():
             package_scores = {
                 PKG_378_ARM_ID: float(symbol_index),
                 PKG_5A5_ARM_ID: float(np.sin(symbol_index * 0.3 + day_index * 0.01)),
-                PKG_B668_ARM_ID: float(-symbol_index),
             }
             for arm_id, limit in limits.items():
                 if symbol_index <= limit:
@@ -192,7 +247,7 @@ def _fast_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "_bucket_return_summary", lambda *_args, **_kwargs: [])
 
 
-def test_four_arm_metrics_preserve_own_universe_and_fixed_pairwise_common_keys(monkeypatch) -> None:
+def test_three_arm_metrics_preserve_own_universe_and_fixed_pairwise_common_keys(monkeypatch) -> None:
     _fast_bootstrap(monkeypatch)
     inputs = _synthetic_inputs()
     result = build_independent_package_metrics(**inputs)
@@ -202,26 +257,23 @@ def test_four_arm_metrics_preserve_own_universe_and_fixed_pairwise_common_keys(m
         CURRENT_PARENT_ARM_ID: 60,
         PKG_378_ARM_ID: 60,
         PKG_5A5_ARM_ID: 58,
-        PKG_B668_ARM_ID: 54,
     }
     assert set(result.arm_summary["arms"]) == set(ARM_IDS)
-    assert len(result.pairwise_summary["pairs"]) == 6
+    assert len(result.pairwise_summary["pairs"]) == 3
     parent_378 = result.pairwise_summary["pairs"][f"{CURRENT_PARENT_ARM_ID}_MINUS_{PKG_378_ARM_ID}"]
-    parent_b668 = result.pairwise_summary["pairs"][f"{CURRENT_PARENT_ARM_ID}_MINUS_{PKG_B668_ARM_ID}"]
     assert parent_378["pairwise_common_row_count"] == len(inputs["decision_dates"]) * 60
-    assert parent_b668["pairwise_common_row_count"] == len(inputs["decision_dates"]) * 54
     assert result.pairwise_summary["pairwise_universe_semantics"] == "PAIR_ONLY_COMMON_KEYS"
-    assert result.arm_summary["universe_semantics"] == "ARM_OWN_UNIVERSE_NO_FOUR_ARM_INTERSECTION"
+    assert result.arm_summary["universe_semantics"] == "ARM_OWN_UNIVERSE_NO_GLOBAL_INTERSECTION"
 
 
 def test_future_outcome_poison_does_not_change_package_rankings() -> None:
     inputs = _synthetic_inputs()
-    prediction = inputs["package_predictions"][PKG_378_ARM_ID].reset_index().rename(
-        columns={"datetime": "decision_as_of_trade_date"}
+    prediction = (
+        inputs["package_predictions"][PKG_378_ARM_ID]
+        .reset_index()
+        .rename(columns={"datetime": "decision_as_of_trade_date"})
     )
-    merged = prediction.merge(
-        inputs["outcomes"], on=["decision_as_of_trade_date", "instrument"], validate="one_to_one"
-    )
+    merged = prediction.merge(inputs["outcomes"], on=["decision_as_of_trade_date", "instrument"], validate="one_to_one")
     merged.insert(0, "arm_id", PKG_378_ARM_ID)
     targets = {
         pd.Timestamp(decision).normalize(): pd.Timestamp(frame["target_trade_date"].iloc[0]).normalize()
@@ -272,7 +324,6 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "window_buffer_trading_days": 5,
         "required_window_by_closure": {
             FACTOR_CLOSURE_57: 260,
-            FACTOR_CLOSURE_50: 260,
         },
         "factor_io_mode": "IN_MEMORY_EQUIVALENT",
         "factor_input_copy_mode": "PANDAS_COPY_ON_WRITE",
@@ -283,29 +334,23 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "static_h5_physical_file_count": 1,
         "static_h5_hardlink_alias_count": 6,
         "primary_decision_batch_count": 386,
-        "primary_factor_group_run_count_per_decision": 2,
-        "primary_factor_group_run_count": 772,
-        "diagnostic_factor_group_run_count": 6,
-        "factor_group_total_run_count": 778,
-        "file_backed_parity_factor_group_run_count": 2,
-        "all_factor_group_run_count": 780,
-        "factor_calculation_count": 30731,
-        "factor_reuse_count": 10892,
-        "result_write_count": 30731,
-        "projected_result_write_count": 30731,
+        "primary_factor_group_run_count_per_decision": 1,
+        "primary_factor_group_run_count": 386,
+        "diagnostic_factor_group_run_count": 3,
+        "factor_group_total_run_count": 389,
+        "file_backed_parity_factor_group_run_count": 1,
+        "all_factor_group_run_count": 390,
+        "factor_calculation_count": 22173,
+        "factor_reuse_count": 0,
+        "result_write_count": 22173,
+        "projected_result_write_count": 22173,
         "fallback_result_write_count": 0,
-        "reference_factor_calculation_count": 107,
+        "reference_factor_calculation_count": 57,
         "file_backed_parity_receipts": [
             {
                 "closure_sha256": FACTOR_CLOSURE_57,
                 "in_memory_feature_sha256": "8" * 64,
                 "file_backed_feature_sha256": "8" * 64,
-                "status": "PASS",
-            },
-            {
-                "closure_sha256": FACTOR_CLOSURE_50,
-                "in_memory_feature_sha256": "7" * 64,
-                "file_backed_feature_sha256": "7" * 64,
                 "status": "PASS",
             },
         ],
@@ -320,7 +365,7 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         request=request,
     )
     assert not _valid_batch_execution_receipt(
-        {**batch_receipt, "factor_reuse_count": 10891},
+        {**batch_receipt, "factor_reuse_count": 1},
         request=request,
     )
     assert not _valid_batch_execution_receipt(
@@ -331,7 +376,7 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         {
             **batch_receipt,
             "factor_result_projection_mode": "FULL_RESULT_SEMANTIC_FALLBACK",
-            "projected_result_write_count": 30730,
+            "projected_result_write_count": 22172,
             "fallback_result_write_count": 1,
         },
         request=request,
@@ -345,9 +390,7 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         causality_parity_receipt=causality,
     )
     metrics = IndependentPackageAuditMetricResult(
-        coverage_daily=pd.DataFrame(
-            {"arm_id": ARM_IDS, "decision_as_of_trade_date": pd.Timestamp("2024-07-04")}
-        ),
+        coverage_daily=pd.DataFrame({"arm_id": ARM_IDS, "decision_as_of_trade_date": pd.Timestamp("2024-07-04")}),
         arm_signal_outcomes=pd.DataFrame({"arm_id": ARM_IDS, "instrument": "000001.SZ"}),
         rankings_top50=pd.DataFrame({"arm_id": ARM_IDS}),
         recall_daily=pd.DataFrame({"arm_id": ARM_IDS, "status": "AVAILABLE"}),
@@ -420,13 +463,12 @@ def test_package_freeze_uses_only_package_owned_source_and_self_contains_factor_
 ) -> None:
     from backend.services.advisory_model_first import independent_package_alpha_audit_pipeline as pipeline
 
-    counts = dict(zip(PACKAGE_IDS, (57, 57, 50)))
+    counts = dict(zip(PACKAGE_IDS, (57, 57)))
 
     def manifest(package_id: str):  # noqa: ANN202
         count = counts[package_id]
         factors = [
-            SimpleNamespace(factor_name=f"factor_{index:03d}", sha256=f"{index + 1:064x}")
-            for index in range(count)
+            SimpleNamespace(factor_name=f"factor_{index:03d}", sha256=f"{index + 1:064x}") for index in range(count)
         ]
         model = SimpleNamespace(
             model_id=f"model_{package_id[-6:]}",
@@ -490,9 +532,7 @@ def test_package_freeze_uses_only_package_owned_source_and_self_contains_factor_
             )
             (workspace / "model" / "params.pkl").write_bytes(b"model")
             convert = _kwargs["path_converter"]
-            factor_files = {
-                name: convert(str(source.factor_source_dir / f"{name}.py")) for name in order
-            }
+            factor_files = {name: convert(str(source.factor_source_dir / f"{name}.py")) for name in order}
             entry = workspace / "strategy_package_factor_entry.py"
             entry.write_text(f"_FACTOR_FILES = {factor_files!r}\n", encoding="utf-8")
             return SimpleNamespace(
@@ -507,7 +547,7 @@ def test_package_freeze_uses_only_package_owned_source_and_self_contains_factor_
     monkeypatch.setattr(
         pipeline,
         "_factor_closure",
-        lambda _manifest, order: FACTOR_CLOSURE_57 if len(order) == 57 else FACTOR_CLOSURE_50,
+        lambda _manifest, _order: FACTOR_CLOSURE_57,
     )
 
     arms = _freeze_package_roster(
@@ -517,9 +557,7 @@ def test_package_freeze_uses_only_package_owned_source_and_self_contains_factor_
     )
 
     assert resolver.calls == [
-        action
-        for package_id in PACKAGE_IDS
-        for action in (("load_frozen", package_id), ("prepare", package_id))
+        action for package_id in PACKAGE_IDS for action in (("load_frozen", package_id), ("prepare", package_id))
     ]
     assert tuple(item.package_id for item in arms) == PACKAGE_IDS
     for arm in arms:

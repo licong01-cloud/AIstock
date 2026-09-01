@@ -11,14 +11,12 @@ import pytest
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.independent_package_alpha_audit_contracts import (
-    FACTOR_CLOSURE_50,
     FACTOR_CLOSURE_57,
     PACKAGE_378_ID,
     PACKAGE_5A5_ID,
     PACKAGE_B668_ID,
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
-    PKG_B668_ARM_ID,
     RESOURCE_MAX_WALL_SECONDS,
     FrozenPackageAuditArmV1,
     WorkspaceFileDescriptorV1,
@@ -125,7 +123,6 @@ def _request(tmp_path: Path, snapshot) -> object:  # noqa: ANN001
     specs = (
         (PKG_378_ARM_ID, PACKAGE_378_ID, "BACKTEST_APPROVED", 57, FACTOR_CLOSURE_57, "a"),
         (PKG_5A5_ARM_ID, PACKAGE_5A5_ID, "PAPER_ENABLED", 57, FACTOR_CLOSURE_57, "b"),
-        (PKG_B668_ARM_ID, PACKAGE_B668_ID, "SELECTION_ENABLED", 50, FACTOR_CLOSURE_50, "c"),
     )
     packages = []
     for arm_id, package_id, status, factor_count, closure, seed in specs:
@@ -152,17 +149,19 @@ def _request(tmp_path: Path, snapshot) -> object:  # noqa: ANN001
         n1_request_ref=_ref("n1_frozen_request", HASH_A),
         n1_request_sha256=HASH_B,
         n1_bundle_path="/artifacts/n1/bundle",
-        n1_bundle_manifest_ref=_ref(
-            "n1_formal_bundle_manifest", HASH_C, "/artifacts/n1/bundle/manifest.json"
-        ),
+        n1_bundle_manifest_ref=_ref("n1_formal_bundle_manifest", HASH_C, "/artifacts/n1/bundle/manifest.json"),
         n1_bundle_id=HASH_C,
         n2a_request_ref=_ref("n2a_frozen_request", HASH_A),
         n2a_request_sha256=HASH_B,
         n2a_bundle_path="/artifacts/n2a/bundle",
-        n2a_bundle_manifest_ref=_ref(
-            "n2a_formal_bundle_manifest", HASH_C, "/artifacts/n2a/bundle/manifest.json"
-        ),
+        n2a_bundle_manifest_ref=_ref("n2a_formal_bundle_manifest", HASH_C, "/artifacts/n2a/bundle/manifest.json"),
         n2a_bundle_id=HASH_C,
+        roster_exclusion_ref=_ref("n2b_roster_exclusion_receipt", HASH_A),
+        roster_exclusion_bug_id="BUG-1302",
+        excluded_package_id=PACKAGE_B668_ID,
+        excluded_package_status="RETIRED",
+        excluded_package_manifest_sha256="c" * 64,
+        excluded_factor_name="neg_vol_adjusted_momentum",
         registry_path=str(tmp_path / "registry.jsonl"),
         program_id="program",
         binding_version_id="binding",
@@ -188,9 +187,7 @@ def _source(decisions: pd.DatetimeIndex) -> BatchSourcePanels:
     lookback = pd.bdate_range(end=decisions[0], periods=66)
     source_dates = pd.DatetimeIndex(sorted(set(lookback).union(decisions)))
     instruments = [f"{index:06d}.SZ" for index in range(1, 61)]
-    index = pd.MultiIndex.from_product(
-        [source_dates, instruments], names=["datetime", "instrument"]
-    )
+    index = pd.MultiIndex.from_product([source_dates, instruments], names=["datetime", "instrument"])
     daily = pd.DataFrame(
         {
             "open": 1.0,
@@ -234,7 +231,7 @@ def _fake_factor_runner(
     )
 
 
-def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
+def test_batch_runner_reads_once_groups_once_and_loads_each_model_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -256,25 +253,13 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
         virtualize_io = kwargs.pop("virtualize_io", True)
         kwargs.pop("reusable_factor_values", None)
         if args[2].decision_end == args[3][0]:
-            exact_window_day_counts.append(
-                len(args[2].daily.index.get_level_values("datetime").unique())
-            )
+            exact_window_day_counts.append(len(args[2].daily.index.get_level_values("datetime").unique()))
         frame = _fake_factor_runner(*args, **kwargs)
         frame.attrs["factor_resource_receipt"] = {
-            "factor_io_mode": (
-                FACTOR_IO_MODE_IN_MEMORY
-                if virtualize_io
-                else FACTOR_IO_MODE_FILE_BACKED
-            ),
-            "factor_input_copy_mode": (
-                FACTOR_INPUT_COPY_MODE_COW
-                if virtualize_io
-                else FACTOR_INPUT_COPY_MODE_FILE
-            ),
+            "factor_io_mode": (FACTOR_IO_MODE_IN_MEMORY if virtualize_io else FACTOR_IO_MODE_FILE_BACKED),
+            "factor_input_copy_mode": (FACTOR_INPUT_COPY_MODE_COW if virtualize_io else FACTOR_INPUT_COPY_MODE_FILE),
             "factor_result_projection_mode": (
-                FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
-                if virtualize_io
-                else FACTOR_RESULT_PROJECTION_MODE_FILE
+                FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES if virtualize_io else FACTOR_RESULT_PROJECTION_MODE_FILE
             ),
             "temp_peak_bytes": 0,
             "factor_calculation_count": len(frame.columns),
@@ -304,56 +289,43 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
         temp_root=tmp_path / "temp",
     )
 
-    assert counts == {"source": 1, "factor": 780, "model": 3}
-    assert result.batch_receipt["primary_factor_group_run_count"] == 772
+    assert counts == {"source": 1, "factor": 390, "model": 2}
+    assert result.batch_receipt["primary_factor_group_run_count"] == 386
     assert result.batch_receipt["primary_decision_batch_count"] == 386
-    assert result.batch_receipt["primary_factor_group_run_count_per_decision"] == 2
-    assert result.batch_receipt["diagnostic_factor_group_run_count"] == 6
+    assert result.batch_receipt["primary_factor_group_run_count_per_decision"] == 1
+    assert result.batch_receipt["diagnostic_factor_group_run_count"] == 3
     assert result.batch_receipt["daily_wsl_process_count"] == 0
     assert result.batch_receipt["daily_db_query_count"] == 0
     assert result.batch_receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
     assert result.batch_receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
-    assert (
-        result.batch_receipt["factor_result_projection_mode"]
-        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
-    )
-    assert result.batch_receipt["result_write_count"] == result.batch_receipt[
-        "factor_calculation_count"
-    ]
-    assert result.batch_receipt["projected_result_write_count"] == result.batch_receipt[
-        "factor_calculation_count"
-    ]
+    assert result.batch_receipt["factor_result_projection_mode"] == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+    assert result.batch_receipt["result_write_count"] == result.batch_receipt["factor_calculation_count"]
+    assert result.batch_receipt["projected_result_write_count"] == result.batch_receipt["factor_calculation_count"]
     assert result.batch_receipt["fallback_result_write_count"] == 0
     assert result.batch_receipt["wall_limit_enabled"] is False
     assert result.batch_receipt["wall_limit_seconds"] is None
     assert result.batch_receipt["temp_storage_mode"] == "ENVIRONMENT_LOCAL_EPHEMERAL"
-    assert len(result.batch_receipt["factor_resource_receipts"]) == 778
-    assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 2
-    assert result.batch_receipt["all_factor_group_run_count"] == 780
-    assert len(result.batch_receipt["file_backed_parity_receipts"]) == 2
-    assert {
-        item["status"] for item in result.batch_receipt["file_backed_parity_receipts"]
-    } == {"PASS"}
+    assert len(result.batch_receipt["factor_resource_receipts"]) == 389
+    assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 1
+    assert result.batch_receipt["all_factor_group_run_count"] == 390
+    assert len(result.batch_receipt["file_backed_parity_receipts"]) == 1
+    assert {item["status"] for item in result.batch_receipt["file_backed_parity_receipts"]} == {"PASS"}
     assert set(result.batch_receipt["required_window_by_closure"].values()) == {61}
     assert result.batch_receipt["window_buffer_trading_days"] == 5
     assert result.batch_receipt["rolling_live_window_semantics"] is True
     assert set(exact_window_day_counts) == {66}
-    assert set(result.predictions) == {PKG_378_ARM_ID, PKG_5A5_ARM_ID, PKG_B668_ARM_ID}
+    assert set(result.predictions) == {PKG_378_ARM_ID, PKG_5A5_ARM_ID}
     assert all(len(frame) == 386 * 60 for frame in result.predictions.values())
     assert all(descriptor.row_count == 386 * 60 for descriptor in result.prediction_descriptors.values())
     assert result.causality_parity_receipt["status"] == "PASS"
-    assert len(result.causality_parity_receipt["checks"]) == 9
+    assert len(result.causality_parity_receipt["checks"]) == 6
 
     retry_descriptors, retry_run_ids = _publish_prediction_store(
         request=request,
         predictions=result.predictions,
     )
-    assert {
-        arm_id: descriptor.artifact_sha256
-        for arm_id, descriptor in retry_descriptors.items()
-    } == {
-        arm_id: descriptor.artifact_sha256
-        for arm_id, descriptor in result.prediction_descriptors.items()
+    assert {arm_id: descriptor.artifact_sha256 for arm_id, descriptor in retry_descriptors.items()} == {
+        arm_id: descriptor.artifact_sha256 for arm_id, descriptor in result.prediction_descriptors.items()
     }
     assert retry_run_ids == result.prediction_store_run_ids
 
@@ -573,10 +545,7 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
     assert receipt["temp_peak_bytes"] > 0
     assert receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
     assert receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
-    assert (
-        receipt["factor_result_projection_mode"]
-        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
-    )
+    assert receipt["factor_result_projection_mode"] == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
     assert receipt["factor_calculation_count"] == 1
     assert receipt["factor_reuse_count"] == 0
     assert receipt["result_write_count"] == 1
@@ -587,10 +556,7 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
     assert drifted.attrs["factor_resource_receipt"]["factor_calculation_count"] == 1
     assert drifted.attrs["factor_resource_receipt"]["factor_reuse_count"] == 0
     assert file_backed.attrs["factor_resource_receipt"]["factor_io_mode"] == FACTOR_IO_MODE_FILE_BACKED
-    assert (
-        file_backed.attrs["factor_resource_receipt"]["factor_input_copy_mode"]
-        == FACTOR_INPUT_COPY_MODE_FILE
-    )
+    assert file_backed.attrs["factor_resource_receipt"]["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_FILE
     assert (
         file_backed.attrs["factor_resource_receipt"]["factor_result_projection_mode"]
         == FACTOR_RESULT_PROJECTION_MODE_FILE
@@ -634,9 +600,7 @@ def test_virtual_factor_io_projects_result_before_materialization_with_cow_snaps
     pd.testing.assert_frame_equal(captured_clean, daily)
     assert list(captured.index.get_level_values("datetime")) == [pd.Timestamp("2025-04-22")]
     assert captured.iloc[0, 0] == 20.0
-    assert list(captured_series.index.get_level_values("datetime")) == [
-        pd.Timestamp("2025-04-22")
-    ]
+    assert list(captured_series.index.get_level_values("datetime")) == [pd.Timestamp("2025-04-22")]
     assert captured_series.iloc[0] == 40.0
 
 
@@ -753,9 +717,7 @@ def test_real_factor_batch_rejects_unsupported_virtual_io(
         encoding="utf-8",
     )
     days = pd.DatetimeIndex(["2025-04-22"])
-    index = pd.MultiIndex.from_product(
-        [days, ["000001.SZ"]], names=["datetime", "instrument"]
-    )
+    index = pd.MultiIndex.from_product([days, ["000001.SZ"]], names=["datetime", "instrument"])
     source = BatchSourcePanels(
         daily=pd.DataFrame(
             {
@@ -789,7 +751,7 @@ def test_real_factor_batch_rejects_unsupported_virtual_io(
     assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_ASSET_INVALID"
 
 
-def test_batch_runner_ignores_deprecated_wall_value(
+def test_batch_runner_reports_unbounded_wall_telemetry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -797,10 +759,8 @@ def test_batch_runner_ignores_deprecated_wall_value(
 
     decisions = _decisions()
     snapshot = _pit_snapshot()
-    request = _request(tmp_path, snapshot).model_copy(
-        update={"resource_max_wall_seconds": RESOURCE_MAX_WALL_SECONDS}
-    )
-    assert request.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
+    request = _request(tmp_path, snapshot)
+    assert request.resource_max_wall_seconds is None
     clock = iter([0.0])
     monkeypatch.setattr(batch_module.time, "monotonic", lambda: next(clock, 10**9))
 
@@ -811,11 +771,7 @@ def test_batch_runner_ignores_deprecated_wall_value(
             object(),
             "fake",
             None,
-            len(
-                json.loads(
-                    (path.parents[1] / "factor_order.json").read_text(encoding="utf-8")
-                )["factor_order"]
-            ),
+            len(json.loads((path.parents[1] / "factor_order.json").read_text(encoding="utf-8"))["factor_order"]),
         ),
         model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
         history_start_resolver=lambda _start, _window: _history_start(decisions),

@@ -7,15 +7,12 @@ from pydantic import ValidationError
 
 from backend.services.advisory_model_first.independent_package_alpha_audit_contracts import (
     ARM_IDS,
-    FACTOR_CLOSURE_50,
     FACTOR_CLOSURE_57,
     PACKAGE_378_ID,
     PACKAGE_5A5_ID,
     PACKAGE_B668_ID,
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
-    PKG_B668_ARM_ID,
-    RESOURCE_MAX_WALL_SECONDS,
     FrozenPackageAuditArmV1,
     WorkspaceFileDescriptorV1,
     build_independent_package_alpha_audit_receipt,
@@ -82,14 +79,6 @@ def _packages() -> tuple[FrozenPackageAuditArmV1, ...]:
             factor_closure=FACTOR_CLOSURE_57,
             seed="b",
         ),
-        _package(
-            arm_id=PKG_B668_ARM_ID,
-            package_id=PACKAGE_B668_ID,
-            status="SELECTION_ENABLED",
-            factor_count=50,
-            factor_closure=FACTOR_CLOSURE_50,
-            seed="c",
-        ),
     )
 
 
@@ -102,9 +91,7 @@ def _values() -> dict:
         "n1_request_ref": _ref("n1_frozen_request", HASH_A),
         "n1_request_sha256": HASH_B,
         "n1_bundle_path": "/artifacts/n1/bundle",
-        "n1_bundle_manifest_ref": _ref(
-            "n1_formal_bundle_manifest", HASH_C, uri="/artifacts/n1/bundle/manifest.json"
-        ),
+        "n1_bundle_manifest_ref": _ref("n1_formal_bundle_manifest", HASH_C, uri="/artifacts/n1/bundle/manifest.json"),
         "n1_bundle_id": HASH_C,
         "n2a_request_ref": _ref("n2a_frozen_request", HASH_A),
         "n2a_request_sha256": HASH_B,
@@ -113,6 +100,12 @@ def _values() -> dict:
             "n2a_formal_bundle_manifest", HASH_C, uri="/artifacts/n2a/bundle/manifest.json"
         ),
         "n2a_bundle_id": HASH_C,
+        "roster_exclusion_ref": _ref("n2b_roster_exclusion_receipt", HASH_A),
+        "roster_exclusion_bug_id": "BUG-1302",
+        "excluded_package_id": PACKAGE_B668_ID,
+        "excluded_package_status": "RETIRED",
+        "excluded_package_manifest_sha256": "c" * 64,
+        "excluded_factor_name": "neg_vol_adjusted_momentum",
         "registry_path": "/artifacts/n0/trial_registry.jsonl",
         "program_id": "program",
         "binding_version_id": "binding",
@@ -145,19 +138,13 @@ def test_request_is_stable_and_has_fixed_zero_trial_surface() -> None:
     assert tuple(item.package_id for item in first.packages) == (
         PACKAGE_378_ID,
         PACKAGE_5A5_ID,
-        PACKAGE_B668_ID,
     )
     assert first.study_type.value == "ORACLE_DIAGNOSTIC"
     assert first.decision_use.value == "NAVIGATION_ONLY"
     assert first.resource_max_wall_seconds is None
 
-    legacy_values = _values()
-    legacy_values["resource_max_wall_seconds"] = RESOURCE_MAX_WALL_SECONDS
-    legacy = build_independent_package_alpha_audit_request(**legacy_values)
-    assert legacy.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
-
     invalid_values = _values()
-    invalid_values["resource_max_wall_seconds"] = 60
+    invalid_values["resource_max_wall_seconds"] = 8 * 60 * 60
     with pytest.raises(ValidationError):
         build_independent_package_alpha_audit_request(**invalid_values)
 
@@ -165,12 +152,11 @@ def test_request_is_stable_and_has_fixed_zero_trial_surface() -> None:
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        (lambda rows: (rows[1], rows[0], rows[2]), "package arm order"),
+        (lambda rows: (rows[1], rows[0]), "package arm order"),
         (
             lambda rows: (
                 rows[0].model_copy(update={"package_status": "RETIRED"}),
                 rows[1],
-                rows[2],
             ),
             "lifecycle status",
         ),
@@ -178,7 +164,6 @@ def test_request_is_stable_and_has_fixed_zero_trial_surface() -> None:
             lambda rows: (
                 rows[0],
                 rows[1].model_copy(update={"factor_closure_sha256": HASH_A}),
-                rows[2],
             ),
             "factor asset closures",
         ),
@@ -201,6 +186,18 @@ def test_workspace_descriptor_rejects_missing_or_escaping_files() -> None:
 
     with pytest.raises(ValidationError, match="stay relative"):
         WorkspaceFileDescriptorV1(relative_path="../model.pkl", sha256=HASH_A, size_bytes=1)
+
+
+def test_request_rejects_roster_exclusion_identity_drift() -> None:
+    values = _values()
+    values["roster_exclusion_ref"] = _ref("wrong_role", HASH_A)
+    with pytest.raises(ValidationError, match="roster exclusion evidence role"):
+        build_independent_package_alpha_audit_request(**values)
+
+    values = _values()
+    values["excluded_package_id"] = "pkg_other"
+    with pytest.raises(ValidationError):
+        build_independent_package_alpha_audit_request(**values)
 
 
 def test_receipt_requires_every_frozen_arm_and_zero_trials() -> None:

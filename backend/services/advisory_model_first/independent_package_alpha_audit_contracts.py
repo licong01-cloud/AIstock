@@ -24,38 +24,38 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
-REQUEST_SCHEMA_VERSION = "frozen_advisory_independent_package_alpha_audit_request_v1"
-BUNDLE_SCHEMA_VERSION = "advisory_independent_package_alpha_audit_bundle_v1"
-RECEIPT_SCHEMA_VERSION = "advisory_independent_package_alpha_audit_receipt_v1"
-EXPERIMENT_ID = "ADVISORY-N2B-INDEPENDENT-PACKAGE-ALPHA-AUDIT"
+REQUEST_SCHEMA_VERSION = "frozen_advisory_independent_package_alpha_audit_request_v2"
+BUNDLE_SCHEMA_VERSION = "advisory_independent_package_alpha_audit_bundle_v2"
+RECEIPT_SCHEMA_VERSION = "advisory_independent_package_alpha_audit_receipt_v2"
+EXPERIMENT_ID = "ADVISORY-N2B-INDEPENDENT-PACKAGE-ALPHA-AUDIT-V2"
 PARENT_LINEAGE = ("ADVISORY-N2A-THREE-ARM-ALPHA-AUDIT",)
 
 CURRENT_PARENT_ARM_ID = "CURRENT_IC_PARENT"
 PKG_378_ARM_ID = "PKG_378EB9"
 PKG_5A5_ARM_ID = "PKG_5A5CCB"
-PKG_B668_ARM_ID = "PKG_B668F8"
 ARM_IDS = (
     CURRENT_PARENT_ARM_ID,
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
-    PKG_B668_ARM_ID,
 )
 
 PACKAGE_378_ID = "pkg_378eb9c91e104c64935404e257e932ee"
 PACKAGE_5A5_ID = "pkg_5a5ccb56ea5c4e3daaf6d836c8edfc27"
 PACKAGE_B668_ID = "pkg_b668f8a633c44b72a5d557a2cb8970e3"
-PACKAGE_IDS = (PACKAGE_378_ID, PACKAGE_5A5_ID, PACKAGE_B668_ID)
-PACKAGE_ARM_IDS = (PKG_378_ARM_ID, PKG_5A5_ARM_ID, PKG_B668_ARM_ID)
-PACKAGE_STATUSES = ("BACKTEST_APPROVED", "PAPER_ENABLED", "SELECTION_ENABLED")
+PACKAGE_IDS = (PACKAGE_378_ID, PACKAGE_5A5_ID)
+PACKAGE_ARM_IDS = (PKG_378_ARM_ID, PKG_5A5_ARM_ID)
+PACKAGE_STATUSES = ("BACKTEST_APPROVED", "PAPER_ENABLED")
+ROSTER_EXCLUSION_BUG_ID = "BUG-1302"
+ROSTER_EXCLUSION_FACTOR_NAME = "neg_vol_adjusted_momentum"
+ROSTER_EXCLUSION_PACKAGE_STATUS = "RETIRED"
 FACTOR_CLOSURE_57 = "977c29e8e328d393bd8235821070e19a96bb23ef0434430c5437621261fb542c"
-FACTOR_CLOSURE_50 = "f19cf6214cb0d38f75736550698916097b99c2ac1ddd28dc28e7a464558663a4"
-FACTOR_GROUP_CLOSURES = (FACTOR_CLOSURE_57, FACTOR_CLOSURE_50)
+FACTOR_GROUP_CLOSURES = (FACTOR_CLOSURE_57,)
 CAUSALITY_ANCHORS = (date(2024, 7, 4), date(2025, 4, 22), date(2026, 2, 2))
 
 RESOURCE_MAX_RSS_BYTES = 16 * 1024**3
 RESOURCE_MAX_TEMP_BYTES = 32 * 1024**3
-# Retained only so historical frozen request JSON remains readable. Execution
-# ignores this deprecated value; new requests default to ``None``.
+# Retained as a historical telemetry constant only. The v2 request contract
+# no longer accepts any wall-clock stop value.
 RESOURCE_MAX_WALL_SECONDS = 8 * 60 * 60
 SCORE_PARITY_ATOL = 1e-6
 RANK_PARITY_MIN_SPEARMAN = 0.999999
@@ -106,7 +106,7 @@ class FrozenPackageAuditArmV1(BaseModel):
         return self
 
 
-class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
+class AdvisoryIndependentPackageAlphaAuditRequestV2(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     schema_version: Literal[REQUEST_SCHEMA_VERSION] = REQUEST_SCHEMA_VERSION
@@ -131,6 +131,12 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
     n2a_bundle_path: str = Field(min_length=1)
     n2a_bundle_manifest_ref: EvidenceReferenceV1
     n2a_bundle_id: str = Field(pattern=SHA256_PATTERN)
+    roster_exclusion_ref: EvidenceReferenceV1
+    roster_exclusion_bug_id: Literal[ROSTER_EXCLUSION_BUG_ID] = ROSTER_EXCLUSION_BUG_ID
+    excluded_package_id: Literal[PACKAGE_B668_ID] = PACKAGE_B668_ID
+    excluded_package_status: Literal[ROSTER_EXCLUSION_PACKAGE_STATUS] = ROSTER_EXCLUSION_PACKAGE_STATUS
+    excluded_package_manifest_sha256: str = Field(pattern=SHA256_PATTERN)
+    excluded_factor_name: Literal[ROSTER_EXCLUSION_FACTOR_NAME] = ROSTER_EXCLUSION_FACTOR_NAME
 
     registry_path: str = Field(min_length=1)
     program_id: str = Field(min_length=1)
@@ -165,10 +171,10 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
     inference_policy: Tier1InferencePolicyV1 = Field(default_factory=Tier1InferencePolicyV1)
     resource_max_rss_bytes: Literal[RESOURCE_MAX_RSS_BYTES] = RESOURCE_MAX_RSS_BYTES
     resource_max_temp_bytes: Literal[RESOURCE_MAX_TEMP_BYTES] = RESOURCE_MAX_TEMP_BYTES
-    resource_max_wall_seconds: Literal[RESOURCE_MAX_WALL_SECONDS] | None = None
+    resource_max_wall_seconds: None = None
 
     @model_validator(mode="after")
-    def validate_frozen_identity(self) -> "AdvisoryIndependentPackageAlphaAuditRequestV1":
+    def validate_frozen_identity(self) -> "AdvisoryIndependentPackageAlphaAuditRequestV2":
         if (
             self.decision_date_start != N1_DECISION_START
             or self.decision_date_end != N1_DECISION_END
@@ -187,12 +193,11 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
             raise ValueError("package roster/order drifted")
         if tuple(item.package_status for item in self.packages) != PACKAGE_STATUSES:
             raise ValueError("package lifecycle status roster drifted")
-        if tuple(item.factor_count for item in self.packages) != (57, 57, 50):
+        if tuple(item.factor_count for item in self.packages) != (57, 57):
             raise ValueError("package factor counts drifted")
         if tuple(item.factor_closure_sha256 for item in self.packages) != (
             FACTOR_CLOSURE_57,
             FACTOR_CLOSURE_57,
-            FACTOR_CLOSURE_50,
         ):
             raise ValueError("package factor asset closures drifted")
         if len({item.package_id for item in self.packages}) != len(self.packages):
@@ -205,6 +210,8 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
             raise ValueError("N2-A request evidence role is invalid")
         if self.n2a_bundle_manifest_ref.role != "n2a_formal_bundle_manifest":
             raise ValueError("N2-A bundle evidence role is invalid")
+        if self.roster_exclusion_ref.role != "n2b_roster_exclusion_receipt":
+            raise ValueError("N2-B roster exclusion evidence role is invalid")
         for bundle_path, manifest_ref, label in (
             (self.n1_bundle_path, self.n1_bundle_manifest_ref, "N1"),
             (self.n2a_bundle_path, self.n2a_bundle_manifest_ref, "N2-A"),
@@ -223,7 +230,7 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
         return self.model_dump(mode="json", exclude={"request_id", "request_sha256", "created_at"})
 
 
-class AdvisoryIndependentPackageAlphaAuditReceiptV1(BaseModel):
+class AdvisoryIndependentPackageAlphaAuditReceiptV2(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     schema_version: Literal[RECEIPT_SCHEMA_VERSION] = RECEIPT_SCHEMA_VERSION
@@ -250,7 +257,7 @@ class AdvisoryIndependentPackageAlphaAuditReceiptV1(BaseModel):
     receipt_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
-    def validate_receipt(self) -> "AdvisoryIndependentPackageAlphaAuditReceiptV1":
+    def validate_receipt(self) -> "AdvisoryIndependentPackageAlphaAuditReceiptV2":
         if self.arm_ids != ARM_IDS:
             raise ValueError("independent package audit receipt arm roster drifted")
         for field_name in (
@@ -274,20 +281,20 @@ class AdvisoryIndependentPackageAlphaAuditReceiptV1(BaseModel):
 
 def build_independent_package_alpha_audit_request(
     **values: Any,
-) -> AdvisoryIndependentPackageAlphaAuditRequestV1:
+) -> AdvisoryIndependentPackageAlphaAuditRequestV2:
     payload = dict(values)
     payload.setdefault("schema_version", REQUEST_SCHEMA_VERSION)
     payload.setdefault("created_at", datetime.now(timezone.utc))
     payload.setdefault("arm_ids", ARM_IDS)
     payload.setdefault("factor_group_closures", FACTOR_GROUP_CLOSURES)
     payload.setdefault("causality_anchor_dates", CAUSALITY_ANCHORS)
-    functional_fields = set(AdvisoryIndependentPackageAlphaAuditRequestV1.model_fields) - {
+    functional_fields = set(AdvisoryIndependentPackageAlphaAuditRequestV2.model_fields) - {
         "request_id",
         "request_sha256",
         "created_at",
     }
     functional = {key: value for key, value in payload.items() if key in functional_fields}
-    normalized = AdvisoryIndependentPackageAlphaAuditRequestV1.model_construct(
+    normalized = AdvisoryIndependentPackageAlphaAuditRequestV2.model_construct(
         request_id="advpkgareq_" + "0" * 24,
         request_sha256="0" * 64,
         created_at=payload["created_at"],
@@ -296,27 +303,27 @@ def build_independent_package_alpha_audit_request(
     digest = canonical_json_sha256(normalized)
     payload["request_sha256"] = digest
     payload["request_id"] = f"advpkgareq_{digest[:24]}"
-    return AdvisoryIndependentPackageAlphaAuditRequestV1.model_validate(payload)
+    return AdvisoryIndependentPackageAlphaAuditRequestV2.model_validate(payload)
 
 
 def build_independent_package_alpha_audit_receipt(
     **values: Any,
-) -> AdvisoryIndependentPackageAlphaAuditReceiptV1:
+) -> AdvisoryIndependentPackageAlphaAuditReceiptV2:
     payload = dict(values)
     payload.setdefault("schema_version", RECEIPT_SCHEMA_VERSION)
     payload.setdefault("created_at", datetime.now(timezone.utc))
-    functional_fields = set(AdvisoryIndependentPackageAlphaAuditReceiptV1.model_fields) - {
+    functional_fields = set(AdvisoryIndependentPackageAlphaAuditReceiptV2.model_fields) - {
         "receipt_sha256",
         "created_at",
     }
     functional = {key: value for key, value in payload.items() if key in functional_fields}
-    normalized = AdvisoryIndependentPackageAlphaAuditReceiptV1.model_construct(
+    normalized = AdvisoryIndependentPackageAlphaAuditReceiptV2.model_construct(
         receipt_sha256="0" * 64,
         created_at=payload["created_at"],
         **functional,
     ).model_dump(mode="json", exclude={"receipt_sha256", "created_at"})
     payload["receipt_sha256"] = canonical_json_sha256(normalized)
-    return AdvisoryIndependentPackageAlphaAuditReceiptV1.model_validate(payload)
+    return AdvisoryIndependentPackageAlphaAuditReceiptV2.model_validate(payload)
 
 
 __all__ = [
@@ -325,7 +332,6 @@ __all__ = [
     "CAUSALITY_ANCHORS",
     "CURRENT_PARENT_ARM_ID",
     "EXPERIMENT_ID",
-    "FACTOR_CLOSURE_50",
     "FACTOR_CLOSURE_57",
     "FACTOR_GROUP_CLOSURES",
     "PACKAGE_378_ID",
@@ -336,12 +342,14 @@ __all__ = [
     "PARENT_LINEAGE",
     "PKG_378_ARM_ID",
     "PKG_5A5_ARM_ID",
-    "PKG_B668_ARM_ID",
+    "ROSTER_EXCLUSION_BUG_ID",
+    "ROSTER_EXCLUSION_FACTOR_NAME",
+    "ROSTER_EXCLUSION_PACKAGE_STATUS",
     "RESOURCE_MAX_RSS_BYTES",
     "RESOURCE_MAX_TEMP_BYTES",
     "RESOURCE_MAX_WALL_SECONDS",
-    "AdvisoryIndependentPackageAlphaAuditReceiptV1",
-    "AdvisoryIndependentPackageAlphaAuditRequestV1",
+    "AdvisoryIndependentPackageAlphaAuditReceiptV2",
+    "AdvisoryIndependentPackageAlphaAuditRequestV2",
     "FrozenPackageAuditArmV1",
     "WorkspaceFileDescriptorV1",
     "build_independent_package_alpha_audit_receipt",

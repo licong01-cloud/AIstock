@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -47,17 +48,17 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
     BUNDLE_SCHEMA_VERSION,
     CURRENT_PARENT_ARM_ID,
     EXPERIMENT_ID,
-    FACTOR_CLOSURE_50,
     FACTOR_CLOSURE_57,
     PACKAGE_ARM_IDS,
+    PACKAGE_B668_ID,
     PACKAGE_IDS,
     PACKAGE_STATUSES,
     PARENT_LINEAGE,
-    PKG_378_ARM_ID,
-    PKG_5A5_ARM_ID,
-    PKG_B668_ARM_ID,
-    AdvisoryIndependentPackageAlphaAuditReceiptV1,
-    AdvisoryIndependentPackageAlphaAuditRequestV1,
+    ROSTER_EXCLUSION_BUG_ID,
+    ROSTER_EXCLUSION_FACTOR_NAME,
+    ROSTER_EXCLUSION_PACKAGE_STATUS,
+    AdvisoryIndependentPackageAlphaAuditReceiptV2,
+    AdvisoryIndependentPackageAlphaAuditRequestV2,
     FrozenPackageAuditArmV1,
     WorkspaceFileDescriptorV1,
     build_independent_package_alpha_audit_receipt,
@@ -109,14 +110,7 @@ REASON_OUTCOME_INVALID = "ADVISORY_PACKAGE_ALPHA_AUDIT_OUTCOME_INVALID"
 REASON_BUNDLE_CONFLICT = "ADVISORY_PACKAGE_ALPHA_AUDIT_BUNDLE_CONFLICT"
 REASON_RESOURCE_LIMIT = "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED"
 
-_PAIRWISE_ARMS = (
-    (CURRENT_PARENT_ARM_ID, PKG_378_ARM_ID),
-    (CURRENT_PARENT_ARM_ID, PKG_5A5_ARM_ID),
-    (CURRENT_PARENT_ARM_ID, PKG_B668_ARM_ID),
-    (PKG_378_ARM_ID, PKG_5A5_ARM_ID),
-    (PKG_378_ARM_ID, PKG_B668_ARM_ID),
-    (PKG_5A5_ARM_ID, PKG_B668_ARM_ID),
-)
+_PAIRWISE_ARMS = tuple(combinations(ARM_IDS, 2))
 _RESULT_IDENTITY_EXCLUDED_FILES = frozenset(
     {
         "request.json",
@@ -157,7 +151,7 @@ class IndependentPackageAuditMetricResult:
 
 
 class IndependentPackageAuditProgress:
-    def __init__(self, request: AdvisoryIndependentPackageAlphaAuditRequestV1) -> None:
+    def __init__(self, request: AdvisoryIndependentPackageAlphaAuditRequestV2) -> None:
         self.request = request
         self.started = time.monotonic()
         self.stages: list[dict[str, Any]] = []
@@ -227,7 +221,7 @@ def build_independent_package_metrics(
     trading_calendar: Sequence[pd.Timestamp],
     n1_request: AdvisoryN1Tier1RequestV1,
 ) -> IndependentPackageAuditMetricResult:
-    """Evaluate four frozen arms without forcing a four-arm intersection."""
+    """Evaluate the three frozen v2 arms without forcing a global intersection."""
 
     decisions = pd.DatetimeIndex(pd.to_datetime(list(decision_dates))).normalize().sort_values().unique()
     if len(decisions) != 386:
@@ -288,15 +282,9 @@ def build_independent_package_metrics(
         recall_parts.append(recall)
         top5_parts.append(top5)
         oracle_parts.append(oracle)
-    recall_daily = pd.concat(recall_parts, ignore_index=True).sort_values(
-        ["arm_id", "decision_as_of_trade_date"]
-    )
-    top5_daily = pd.concat(top5_parts, ignore_index=True).sort_values(
-        ["arm_id", "decision_as_of_trade_date"]
-    )
-    oracle_daily = pd.concat(oracle_parts, ignore_index=True).sort_values(
-        ["arm_id", "decision_as_of_trade_date"]
-    )
+    recall_daily = pd.concat(recall_parts, ignore_index=True).sort_values(["arm_id", "decision_as_of_trade_date"])
+    top5_daily = pd.concat(top5_parts, ignore_index=True).sort_values(["arm_id", "decision_as_of_trade_date"])
+    oracle_daily = pd.concat(oracle_parts, ignore_index=True).sort_values(["arm_id", "decision_as_of_trade_date"])
     signal_daily = build_own_universe_signal_metrics_daily(arm_signals)
     block = n1_request.inference_policy.block_length_trading_days
     repetitions = n1_request.inference_policy.bootstrap_repetitions
@@ -345,9 +333,7 @@ def build_independent_package_metrics(
 
 def build_own_universe_signal_metrics_daily(arm_signals: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    for (arm_id, decision), frame in arm_signals.groupby(
-        ["arm_id", "decision_as_of_trade_date"], sort=True
-    ):
+    for (arm_id, decision), frame in arm_signals.groupby(["arm_id", "decision_as_of_trade_date"], sort=True):
         matured = frame[frame["outcome_status"].eq("MATURED")]
         known = frame[frame["outcome_known"].fillna(False)]
         rows.append(
@@ -360,9 +346,7 @@ def build_own_universe_signal_metrics_daily(arm_signals: pd.DataFrame) -> pd.Dat
                 "matured_pearson_ic": _safe_corr(
                     matured["score"], matured["economic_net_excess_bps"], method="pearson"
                 ),
-                "matured_rank_ic": _safe_corr(
-                    matured["score"], matured["economic_net_excess_bps"], method="spearman"
-                ),
+                "matured_rank_ic": _safe_corr(matured["score"], matured["economic_net_excess_bps"], method="spearman"),
                 "policy_rank_ic": _safe_corr(known["score"], known["slot_return_bps"], method="spearman"),
                 "quintile_spread_bps": _bucket_spread(known["score"], known["slot_return_bps"], 5),
                 "decile_spread_bps": _bucket_spread(known["score"], known["slot_return_bps"], 10),
@@ -441,9 +425,7 @@ def build_independent_arm_summary(
             "minimum_prediction_count": int(coverage["prediction_count"].min()),
             "top50_complete_day_count": int(coverage["rank_status"].eq("COMPLETE").sum()),
             "top5_evaluable_day_count": int(top5["status"].eq("AVAILABLE").sum()),
-            "top5_positive_day_fraction": _finite_mean(
-                top5.loc[top5["status"].eq("AVAILABLE"), "positive"]
-            ),
+            "top5_positive_day_fraction": _finite_mean(top5.loc[top5["status"].eq("AVAILABLE"), "positive"]),
             "oracle_evaluable_day_count": len(oracle),
             "oracle_intervention_day_count": int(oracle["intervened"].sum()) if len(oracle) else 0,
             "metrics": metrics,
@@ -460,10 +442,10 @@ def build_independent_arm_summary(
             },
         }
     return {
-        "schema_version": "advisory_independent_package_alpha_audit_summary_v1",
+        "schema_version": "advisory_independent_package_alpha_audit_summary_v2",
         "objective_contract": ObjectiveContract.ALPHA_RANKING.value,
         "decision_use": DecisionUse.NAVIGATION_ONLY.value,
-        "universe_semantics": "ARM_OWN_UNIVERSE_NO_FOUR_ARM_INTERSECTION",
+        "universe_semantics": "ARM_OWN_UNIVERSE_NO_GLOBAL_INTERSECTION",
         "arms": arms,
     }
 
@@ -479,9 +461,7 @@ def build_independent_pairwise_summary(
 ) -> dict[str, Any]:
     ranking_sets: dict[tuple[str, pd.Timestamp, int], set[str]] = {}
     ranking_maps: dict[tuple[str, pd.Timestamp], dict[str, int]] = {}
-    for (arm_id, decision), frame in rankings.groupby(
-        ["arm_id", "decision_as_of_trade_date"], sort=True
-    ):
+    for (arm_id, decision), frame in rankings.groupby(["arm_id", "decision_as_of_trade_date"], sort=True):
         normalized_day = pd.Timestamp(decision).normalize()
         ranking_maps[(str(arm_id), normalized_day)] = dict(
             zip(frame["instrument"].astype(str), frame["selection_effective_rank"].astype(int))
@@ -504,9 +484,7 @@ def build_independent_pairwise_summary(
         ].copy()
         for arm_id in ARM_IDS
     }
-    top5_pivot = top5_daily.pivot(
-        index="decision_as_of_trade_date", columns="arm_id", values="top5_net_excess_bps"
-    )
+    top5_pivot = top5_daily.pivot(index="decision_as_of_trade_date", columns="arm_id", values="top5_net_excess_bps")
     pairs: dict[str, Any] = {}
     for pair_index, (left, right) in enumerate(_PAIRWISE_ARMS):
         common = signal_by_arm[left].merge(
@@ -521,10 +499,7 @@ def build_independent_pairwise_summary(
         daily_rows: list[dict[str, Any]] = []
         for decision, frame in common.groupby("decision_as_of_trade_date", sort=True):
             decision = pd.Timestamp(decision).normalize()
-            matured = frame[
-                frame["outcome_status__left"].eq("MATURED")
-                & frame["outcome_status__right"].eq("MATURED")
-            ]
+            matured = frame[frame["outcome_status__left"].eq("MATURED") & frame["outcome_status__right"].eq("MATURED")]
             left_norm = _zscore(frame["score__left"])
             right_norm = _zscore(frame["score__right"])
             left_ranks = ranking_maps.get((left, decision), {})
@@ -600,7 +575,7 @@ def build_independent_pairwise_summary(
             "mean_top50_common_rank_spearman": _finite_mean(daily["top50_common_rank_spearman"]),
         }
     return {
-        "schema_version": "advisory_independent_package_alpha_pairwise_summary_v1",
+        "schema_version": "advisory_independent_package_alpha_pairwise_summary_v2",
         "pair_roster": [f"{left}_MINUS_{right}" for left, right in _PAIRWISE_ARMS],
         "pairwise_universe_semantics": "PAIR_ONLY_COMMON_KEYS",
         "pairs": pairs,
@@ -635,9 +610,11 @@ def _parent_signal_frame(
     signal["instrument"] = signal["instrument"].map(normalize_ts_code)
     signal = signal[signal["decision_as_of_trade_date"].isin(decisions)]
     signal["score"] = pd.to_numeric(signal.pop(score_column), errors="coerce")
-    if signal.empty or signal.duplicated(["decision_as_of_trade_date", "instrument"]).any() or not np.isfinite(
-        signal["score"].to_numpy(float)
-    ).all():
+    if (
+        signal.empty
+        or signal.duplicated(["decision_as_of_trade_date", "instrument"]).any()
+        or not np.isfinite(signal["score"].to_numpy(float)).all()
+    ):
         _raise("N2-A parent scores are invalid", REASON_SOURCE_MISMATCH)
     check = signal.merge(
         outcomes,
@@ -670,9 +647,11 @@ def _package_prediction_frame(
     value["instrument"] = value["instrument"].map(normalize_ts_code)
     value["score"] = pd.to_numeric(value["score"], errors="coerce")
     value = value[value["decision_as_of_trade_date"].isin(decisions)]
-    if value.empty or value.duplicated(["decision_as_of_trade_date", "instrument"]).any() or not np.isfinite(
-        value["score"].to_numpy(float)
-    ).all():
+    if (
+        value.empty
+        or value.duplicated(["decision_as_of_trade_date", "instrument"]).any()
+        or not np.isfinite(value["score"].to_numpy(float)).all()
+    ):
         _raise("package prediction rows are invalid", REASON_SOURCE_MISMATCH, arm_id=arm_id)
     value.insert(0, "arm_id", arm_id)
     return value[["arm_id", "decision_as_of_trade_date", "instrument", "score"]]
@@ -713,8 +692,10 @@ def _parent_rankings(parent_rankings: pd.DataFrame, parent_signal: pd.DataFrame)
         validate="one_to_one",
         suffixes=("__ranking", "__signal"),
     )
-    if len(value) != 386 * 50 or parity["score__signal"].isna().any() or not np.allclose(
-        parity["score__ranking"], parity["score__signal"], rtol=0.0, atol=1e-12
+    if (
+        len(value) != 386 * 50
+        or parity["score__signal"].isna().any()
+        or not np.allclose(parity["score__ranking"], parity["score__signal"], rtol=0.0, atol=1e-12)
     ):
         _raise("N2-A parent Top50 does not match its frozen score artifact", REASON_SOURCE_MISMATCH)
     return value[
@@ -797,8 +778,10 @@ def _build_coverage_daily(
         ]
         rows = rows.merge(detail[keep], on=["arm_id", "decision_as_of_trade_date"], how="left", validate="one_to_one")
         package_mask = rows["arm_id"].isin(PACKAGE_ARM_IDS)
-        mismatch = package_mask & rows["batch_finite_score_count"].notna() & (
-            rows["prediction_count"] != rows["batch_finite_score_count"]
+        mismatch = (
+            package_mask
+            & rows["batch_finite_score_count"].notna()
+            & (rows["prediction_count"] != rows["batch_finite_score_count"])
         )
         if mismatch.any():
             _raise("package batch coverage differs from metric input", REASON_SOURCE_MISMATCH)
@@ -813,10 +796,7 @@ def _arm_churn(ranking_sets: Mapping[tuple[str, pd.Timestamp, int], set[str]]) -
         for depth in (5, 20):
             values = [
                 1.0
-                - len(
-                    ranking_sets[(arm_id, dates[index - 1], depth)]
-                    & ranking_sets[(arm_id, dates[index], depth)]
-                )
+                - len(ranking_sets[(arm_id, dates[index - 1], depth)] & ranking_sets[(arm_id, dates[index], depth)])
                 / depth
                 for index in range(1, len(dates))
             ]
@@ -836,12 +816,17 @@ def _two_way_residual_correlation(common: pd.DataFrame) -> float:
 
 
 def _bucket_spread(scores: pd.Series, returns: pd.Series, bucket_count: int) -> float:
-    data = pd.DataFrame(
-        {
-            "score": pd.to_numeric(scores, errors="coerce"),
-            "return": pd.to_numeric(returns, errors="coerce"),
-        }
-    ).replace([np.inf, -np.inf], np.nan).dropna().sort_values("score", ascending=False)
+    data = (
+        pd.DataFrame(
+            {
+                "score": pd.to_numeric(scores, errors="coerce"),
+                "return": pd.to_numeric(returns, errors="coerce"),
+            }
+        )
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .sort_values("score", ascending=False)
+    )
     if len(data) < bucket_count * 2:
         return np.nan
     buckets = np.array_split(data["return"].to_numpy(float), bucket_count)
@@ -867,8 +852,8 @@ def _series_semantically_equal(left: pd.Series, right: pd.Series) -> bool:
         if not bool((numeric_equal | non_numeric.to_numpy()).all()):
             return False
     text_mask = numeric_left.isna() & numeric_right.isna()
-    return left[text_mask].astype(str).reset_index(drop=True).equals(
-        right[text_mask].astype(str).reset_index(drop=True)
+    return (
+        left[text_mask].astype(str).reset_index(drop=True).equals(right[text_mask].astype(str).reset_index(drop=True))
     )
 
 
@@ -878,18 +863,21 @@ def prepare_independent_package_alpha_audit_request(
     n1_bundle_path: str | Path,
     n2a_request_path: str | Path,
     n2a_bundle_path: str | Path,
+    roster_exclusion_receipt_path: str | Path,
     repository_root: str | Path,
     output_root: str | Path,
     output_path: str | Path,
     package_repository: StrategyPackageRepository | None = None,
     runtime_asset_resolver: QEExperimentRuntimeAssetResolver | None = None,
-) -> AdvisoryIndependentPackageAlphaAuditRequestV1:
+) -> AdvisoryIndependentPackageAlphaAuditRequestV2:
     """Freeze the exact package-owned sources without reading scientific data."""
 
     n1_path = _local_path(n1_request_path)
     n1_bundle_local = _local_path(n1_bundle_path)
     n2a_path = _local_path(n2a_request_path)
     n2a_bundle_local = _local_path(n2a_bundle_path)
+    roster_exclusion_path = _local_path(roster_exclusion_receipt_path)
+    _validate_roster_exclusion_receipt(roster_exclusion_path)
     try:
         n1 = AdvisoryN1Tier1RequestV1.model_validate_json(n1_path.read_text(encoding="utf-8"))
         n2a = AdvisoryThreeArmAlphaAuditRequestV1.model_validate_json(n2a_path.read_text(encoding="utf-8"))
@@ -919,6 +907,7 @@ def prepare_independent_package_alpha_audit_request(
     output_local = _local_path(output_root)
     output_local.mkdir(parents=True, exist_ok=True)
     package_repository = package_repository or StrategyPackageRepository()
+    excluded_package_manifest_sha256 = _validate_excluded_package_record(package_repository)
     runtime_asset_resolver = runtime_asset_resolver or QEExperimentRuntimeAssetResolver(
         cache_root=output_local / "_inputs" / "package_runtime"
     )
@@ -950,6 +939,16 @@ def prepare_independent_package_alpha_audit_request(
             "n2a_formal_bundle_manifest",
         ),
         n2a_bundle_id=n2a_inspected["bundle_id"],
+        roster_exclusion_ref=_evidence_reference(
+            roster_exclusion_path,
+            _wsl_path(roster_exclusion_receipt_path),
+            "n2b_roster_exclusion_receipt",
+        ),
+        roster_exclusion_bug_id=ROSTER_EXCLUSION_BUG_ID,
+        excluded_package_id=PACKAGE_B668_ID,
+        excluded_package_status=ROSTER_EXCLUSION_PACKAGE_STATUS,
+        excluded_package_manifest_sha256=excluded_package_manifest_sha256,
+        excluded_factor_name=ROSTER_EXCLUSION_FACTOR_NAME,
         registry_path=n1.registry_path,
         program_id=n1.program_id,
         binding_version_id=n1.binding_version_id,
@@ -975,7 +974,7 @@ def prepare_independent_package_alpha_audit_request(
 
 def run_independent_package_alpha_audit(request_path: str | Path) -> dict[str, Any]:
     try:
-        request = AdvisoryIndependentPackageAlphaAuditRequestV1.model_validate_json(
+        request = AdvisoryIndependentPackageAlphaAuditRequestV2.model_validate_json(
             Path(request_path).read_text(encoding="utf-8")
         )
     except Exception as exc:
@@ -1075,11 +1074,9 @@ def run_independent_package_alpha_audit(request_path: str | Path) -> dict[str, A
         n1_request=n1,
     )
     progress.stage(
-        "four_arm_metrics",
+        "three_arm_metrics",
         started,
-        arm_signal_rows={
-            arm_id: int(metrics.arm_signal_outcomes["arm_id"].eq(arm_id).sum()) for arm_id in ARM_IDS
-        },
+        arm_signal_rows={arm_id: int(metrics.arm_signal_outcomes["arm_id"].eq(arm_id).sum()) for arm_id in ARM_IDS},
         pair_count=len(metrics.pairwise_summary["pairs"]),
     )
     del parent_signal, parent_rankings, outcome, benchmark
@@ -1113,6 +1110,72 @@ def inspect_independent_package_alpha_audit_bundle(bundle_path: str | Path) -> d
     }
 
 
+def _validate_roster_exclusion_receipt(path: Path) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _raise(
+            "N2-B roster exclusion receipt cannot be read",
+            REASON_ROSTER_INVALID,
+            error_type=type(exc).__name__,
+        )
+    if not isinstance(payload, dict):
+        _raise("N2-B roster exclusion receipt must be a JSON object", REASON_ROSTER_INVALID)
+    runtime = payload.get("runtime_contract")
+    events = payload.get("events")
+    event_rows = [item for item in events or [] if isinstance(item, dict)]
+    actions = {str(item.get("action")) for item in event_rows if item.get("action")}
+    quarantine_notes = "\n".join(
+        str(item.get("note") or "")
+        for item in event_rows
+        if item.get("action") == "dev_factor_quarantine_and_package_retirement"
+    )
+    reproduce_command = str(payload.get("reproduce_command") or "")
+    if (
+        payload.get("bug_id") != ROSTER_EXCLUSION_BUG_ID
+        or payload.get("status") != "verified"
+        or not isinstance(runtime, dict)
+        or runtime.get("runtime_identity_match") is not True
+        or runtime.get("post_restart_effective_gate") != "passed"
+        or "dev_factor_quarantine_and_package_retirement" not in actions
+        or PACKAGE_B668_ID not in quarantine_notes
+        or ROSTER_EXCLUSION_PACKAGE_STATUS not in quarantine_notes
+        or PACKAGE_B668_ID not in reproduce_command
+        or ROSTER_EXCLUSION_FACTOR_NAME not in reproduce_command
+    ):
+        _raise(
+            "N2-B roster exclusion receipt is not a verified PIT quarantine closure",
+            REASON_ROSTER_INVALID,
+            bug_id=payload.get("bug_id"),
+            status=payload.get("status"),
+        )
+
+
+def _validate_excluded_package_record(repository: StrategyPackageRepository) -> str:
+    try:
+        record = repository.get(PACKAGE_B668_ID)
+    except Exception as exc:
+        _raise(
+            "the independently excluded StrategyPackage cannot be read",
+            REASON_ROSTER_INVALID,
+            package_id=PACKAGE_B668_ID,
+            error_type=type(exc).__name__,
+        )
+    if (
+        record.package_id != PACKAGE_B668_ID
+        or record.package_status.value != ROSTER_EXCLUSION_PACKAGE_STATUS
+        or not record.manifest_sha256
+        or not re.fullmatch(r"[0-9a-f]{64}", record.manifest_sha256)
+    ):
+        _raise(
+            "the independently excluded StrategyPackage is not durably retired",
+            REASON_ROSTER_INVALID,
+            package_id=PACKAGE_B668_ID,
+            actual_status=record.package_status.value,
+        )
+    return record.manifest_sha256
+
+
 def _freeze_package_roster(
     *,
     repository: StrategyPackageRepository,
@@ -1120,7 +1183,7 @@ def _freeze_package_roster(
     output_root: Path,
 ) -> tuple[FrozenPackageAuditArmV1, ...]:
     arms: list[FrozenPackageAuditArmV1] = []
-    expected_closures = (FACTOR_CLOSURE_57, FACTOR_CLOSURE_57, FACTOR_CLOSURE_50)
+    expected_closures = (FACTOR_CLOSURE_57, FACTOR_CLOSURE_57)
     for index, (arm_id, package_id, status, expected_closure) in enumerate(
         zip(PACKAGE_ARM_IDS, PACKAGE_IDS, PACKAGE_STATUSES, expected_closures)
     ):
@@ -1263,8 +1326,7 @@ def _factor_closure(manifest: Any, factor_order: Sequence[str]) -> str:
     if len(factors) != len(factor_order):
         _raise("manifest factor roster differs from prepared order", REASON_ROSTER_INVALID)
     payload = [
-        {"name": str(name), "sha256": str(asset.sha256 or "").lower()}
-        for name, asset in zip(factor_order, factors)
+        {"name": str(name), "sha256": str(asset.sha256 or "").lower()} for name, asset in zip(factor_order, factors)
     ]
     if any(len(item["sha256"]) != 64 for item in payload):
         _raise("manifest factor asset has no frozen sha256", REASON_ROSTER_INVALID)
@@ -1313,8 +1375,10 @@ def _workspace_descriptors(root: Path) -> tuple[WorkspaceFileDescriptorV1, ...]:
 
 
 def _load_and_verify_bound_requests(
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
 ) -> tuple[AdvisoryN1Tier1RequestV1, AdvisoryThreeArmAlphaAuditRequestV1]:
+    _verify_evidence_ref(request.roster_exclusion_ref)
+    _validate_roster_exclusion_receipt(Path(request.roster_exclusion_ref.artifact_uri))
     _verify_evidence_ref(request.n1_request_ref)
     _verify_evidence_ref(request.n1_bundle_manifest_ref)
     _verify_evidence_ref(request.n2a_request_ref)
@@ -1343,7 +1407,7 @@ def _load_and_verify_bound_requests(
 
 
 def _verify_bound_bundle_identities(
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     n1: AdvisoryN1Tier1RequestV1,
     n2a: AdvisoryThreeArmAlphaAuditRequestV1,
 ) -> None:
@@ -1380,7 +1444,7 @@ def _read_bound_bundle_manifest(bundle_path: Path, *, label: str) -> dict[str, A
 
 
 def _verify_source_contract(
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     n1: AdvisoryN1Tier1RequestV1,
     n2a: AdvisoryThreeArmAlphaAuditRequestV1,
     sources: Mapping[str, Any],
@@ -1427,7 +1491,7 @@ def _verify_source_contract(
 
 
 def _source_identity_receipt(
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     n1: AdvisoryN1Tier1RequestV1,
     n2a: AdvisoryThreeArmAlphaAuditRequestV1,
     sources: Mapping[str, Any],
@@ -1436,25 +1500,25 @@ def _source_identity_receipt(
     parent_signal = Path(request.n2a_bundle_path) / "full_universe_signal_outcomes.parquet"
     parent_ranking = Path(request.n2a_bundle_path) / "arm_rankings_top50.parquet"
     payload: dict[str, Any] = {
-        "schema_version": "advisory_independent_package_alpha_source_identity_receipt_v1",
+        "schema_version": "advisory_independent_package_alpha_source_identity_receipt_v2",
         "request_sha256": request.request_sha256,
         "n1_request_sha256": n1.request_sha256,
         "n1_bundle_id": request.n1_bundle_id,
         "n2a_request_sha256": n2a.request_sha256,
         "n2a_bundle_id": request.n2a_bundle_id,
+        "roster_exclusion_receipt_sha256": request.roster_exclusion_ref.sha256,
+        "roster_exclusion_bug_id": request.roster_exclusion_bug_id,
+        "excluded_package_id": request.excluded_package_id,
+        "excluded_package_status": request.excluded_package_status,
+        "excluded_package_manifest_sha256": request.excluded_package_manifest_sha256,
+        "excluded_factor_name": request.excluded_factor_name,
         "pit_spans_sha256": sources["pit_snapshot"].spans_sha256,
         "feature_schema_hash": request.feature_schema_hash,
         "parent_signal_sha256": sha256_file(parent_signal),
         "parent_rankings_top50_sha256": sha256_file(parent_ranking),
-        "package_manifest_sha256_by_arm": {
-            item.arm_id: item.manifest_sha256 for item in request.packages
-        },
-        "package_factor_closure_sha256_by_arm": {
-            item.arm_id: item.factor_closure_sha256 for item in request.packages
-        },
-        "package_model_closure_sha256_by_arm": {
-            item.arm_id: item.model_closure_sha256 for item in request.packages
-        },
+        "package_manifest_sha256_by_arm": {item.arm_id: item.manifest_sha256 for item in request.packages},
+        "package_factor_closure_sha256_by_arm": {item.arm_id: item.factor_closure_sha256 for item in request.packages},
+        "package_model_closure_sha256_by_arm": {item.arm_id: item.model_closure_sha256 for item in request.packages},
         "workspace_closure_sha256_by_arm": {
             item.arm_id: canonical_json_sha256(
                 [descriptor.model_dump(mode="json") for descriptor in item.workspace_files]
@@ -1473,7 +1537,7 @@ def _source_identity_receipt(
     return payload
 
 
-def _package_inventory_context(request: AdvisoryIndependentPackageAlphaAuditRequestV1) -> dict[str, Any]:
+def _package_inventory_context(request: AdvisoryIndependentPackageAlphaAuditRequestV2) -> dict[str, Any]:
     packages: list[dict[str, Any]] = []
     for arm in request.packages:
         _verify_evidence_ref(arm.package_snapshot_ref)
@@ -1492,17 +1556,26 @@ def _package_inventory_context(request: AdvisoryIndependentPackageAlphaAuditRequ
             }
         )
     return {
-        "schema_version": "advisory_independent_package_inventory_context_v1",
+        "schema_version": "advisory_independent_package_inventory_context_v2",
         "arm_order": list(ARM_IDS),
         "package_order": list(PACKAGE_IDS),
         "packages": packages,
+        "roster_exclusion": {
+            "bug_id": request.roster_exclusion_bug_id,
+            "receipt_sha256": request.roster_exclusion_ref.sha256,
+            "package_id": request.excluded_package_id,
+            "package_status": request.excluded_package_status,
+            "manifest_sha256": request.excluded_package_manifest_sha256,
+            "factor_name": request.excluded_factor_name,
+            "selection_basis": "INDEPENDENT_PIT_CAUSALITY_QUARANTINE_NOT_RESEARCH_RESULT",
+        },
         "sealed_holdout_accessed": False,
     }
 
 
 def _publish_bundle(
     *,
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     environment: Mapping[str, Any],
     source_receipt: Mapping[str, Any],
     package_inventory: Mapping[str, Any],
@@ -1576,18 +1649,12 @@ def _publish_bundle(
         },
         evaluable_recall_day_count_by_arm={
             arm_id: int(
-                metrics.recall_daily.loc[
-                    metrics.recall_daily["arm_id"].eq(arm_id), "status"
-                ].eq("AVAILABLE").sum()
+                metrics.recall_daily.loc[metrics.recall_daily["arm_id"].eq(arm_id), "status"].eq("AVAILABLE").sum()
             )
             for arm_id in ARM_IDS
         },
         evaluable_top5_day_count_by_arm={
-            arm_id: int(
-                metrics.top5_daily.loc[
-                    metrics.top5_daily["arm_id"].eq(arm_id), "status"
-                ].eq("AVAILABLE").sum()
-            )
+            arm_id: int(metrics.top5_daily.loc[metrics.top5_daily["arm_id"].eq(arm_id), "status"].eq("AVAILABLE").sum())
             for arm_id in ARM_IDS
         },
         created_at=request.created_at,
@@ -1613,7 +1680,7 @@ def _publish_bundle(
         study_type=ResearchStudyType.ORACLE_DIAGNOSTIC,
         hypothesis_family_id="N2B_FROZEN_INDEPENDENT_STRATEGY_PACKAGE_SIGNAL_AUDIT_V1",
         parent_lineage=PARENT_LINEAGE,
-        unique_variable="THREE_FROZEN_NON_RETIRED_INDEPENDENT_SINGLE_ALPHA_PACKAGES_V1",
+        unique_variable="TWO_SURVIVING_FROZEN_NON_RETIRED_INDEPENDENT_SINGLE_ALPHA_PACKAGES_V2",
         objective_contract=ObjectiveContract.ALPHA_RANKING,
         dataset_identity=request.dataset_identity,
         schema_identity=request.feature_schema_hash,
@@ -1672,10 +1739,10 @@ def _publish_bundle(
 def _read_bundle(path: Path) -> dict[str, Any]:
     try:
         manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-        request = AdvisoryIndependentPackageAlphaAuditRequestV1.model_validate_json(
+        request = AdvisoryIndependentPackageAlphaAuditRequestV2.model_validate_json(
             (path / "request.json").read_text(encoding="utf-8")
         )
-        receipt = AdvisoryIndependentPackageAlphaAuditReceiptV1.model_validate_json(
+        receipt = AdvisoryIndependentPackageAlphaAuditReceiptV2.model_validate_json(
             (path / "audit_receipt.json").read_text(encoding="utf-8")
         )
         source_receipt = json.loads((path / "source_identity_receipt.json").read_text(encoding="utf-8"))
@@ -1684,11 +1751,7 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         resource_report = json.loads((path / "resource_report.json").read_text(encoding="utf-8"))
         raw_record = json.loads((path / "registry_record.json").read_text(encoding="utf-8"))
         record = build_trial_record(
-            **{
-                key: value
-                for key, value in raw_record.items()
-                if key not in {"registry_entry_id", "record_sha256"}
-            }
+            **{key: value for key, value in raw_record.items() if key not in {"registry_entry_id", "record_sha256"}}
         )
     except Exception as exc:
         _raise(
@@ -1704,9 +1767,7 @@ def _read_bundle(path: Path) -> dict[str, Any]:
             "receipt_sha256": manifest.get("receipt_sha256"),
         }
     )
-    source_functional = {
-        key: value for key, value in source_receipt.items() if key != "source_identity_sha256"
-    }
+    source_functional = {key: value for key, value in source_receipt.items() if key != "source_identity_sha256"}
     result_descriptors = {
         name: descriptor
         for name, descriptor in manifest.get("files", {}).items()
@@ -1770,7 +1831,7 @@ def _read_bundle(path: Path) -> dict[str, Any]:
 def _valid_batch_execution_receipt(
     receipt: Mapping[str, Any],
     *,
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
 ) -> bool:
     windows = receipt.get("required_window_by_closure")
     model_loads = receipt.get("model_load_count_by_arm")
@@ -1784,28 +1845,27 @@ def _valid_batch_execution_receipt(
         and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in windows.values())
         and receipt.get("factor_io_mode") == FACTOR_IO_MODE_IN_MEMORY
         and receipt.get("factor_input_copy_mode") == FACTOR_INPUT_COPY_MODE_COW
-        and receipt.get("factor_result_projection_mode")
-        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+        and receipt.get("factor_result_projection_mode") == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
         and receipt.get("wall_limit_enabled") is False
         and receipt.get("wall_limit_seconds") is None
         and receipt.get("temp_storage_mode") == "ENVIRONMENT_LOCAL_EPHEMERAL"
         and receipt.get("static_h5_physical_file_count") == 1
         and receipt.get("static_h5_hardlink_alias_count") == 6
         and receipt.get("primary_decision_batch_count") == 386
-        and receipt.get("primary_factor_group_run_count_per_decision") == 2
-        and receipt.get("primary_factor_group_run_count") == 772
-        and receipt.get("diagnostic_factor_group_run_count") == 6
-        and receipt.get("factor_group_total_run_count") == 778
-        and receipt.get("file_backed_parity_factor_group_run_count") == 2
-        and receipt.get("all_factor_group_run_count") == 780
-        and receipt.get("factor_calculation_count") == 30731
-        and receipt.get("factor_reuse_count") == 10892
-        and receipt.get("result_write_count") == 30731
-        and receipt.get("projected_result_write_count") == 30731
+        and receipt.get("primary_factor_group_run_count_per_decision") == 1
+        and receipt.get("primary_factor_group_run_count") == 386
+        and receipt.get("diagnostic_factor_group_run_count") == 3
+        and receipt.get("factor_group_total_run_count") == 389
+        and receipt.get("file_backed_parity_factor_group_run_count") == 1
+        and receipt.get("all_factor_group_run_count") == 390
+        and receipt.get("factor_calculation_count") == 22173
+        and receipt.get("factor_reuse_count") == 0
+        and receipt.get("result_write_count") == 22173
+        and receipt.get("projected_result_write_count") == 22173
         and receipt.get("fallback_result_write_count") == 0
-        and receipt.get("reference_factor_calculation_count") == 107
+        and receipt.get("reference_factor_calculation_count") == 57
         and isinstance(receipt.get("file_backed_parity_receipts"), list)
-        and len(receipt["file_backed_parity_receipts"]) == 2
+        and len(receipt["file_backed_parity_receipts"]) == 1
         and all(
             isinstance(item, dict)
             and item.get("status") == "PASS"
@@ -1814,9 +1874,7 @@ def _valid_batch_execution_receipt(
             and len(item["in_memory_feature_sha256"]) == 64
             for item in receipt["file_backed_parity_receipts"]
         )
-        and {
-            item.get("closure_sha256") for item in receipt["file_backed_parity_receipts"]
-        }
+        and {item.get("closure_sha256") for item in receipt["file_backed_parity_receipts"]}
         == set(request.factor_group_closures)
         and receipt.get("daily_wsl_process_count") == 0
         and receipt.get("daily_db_query_count") == 0
@@ -1826,7 +1884,7 @@ def _valid_batch_execution_receipt(
     )
 
 
-def _find_existing_bundle(request: AdvisoryIndependentPackageAlphaAuditRequestV1) -> Path | None:
+def _find_existing_bundle(request: AdvisoryIndependentPackageAlphaAuditRequestV2) -> Path | None:
     root = Path(request.output_root) / "independent_package_alpha_audit_bundles"
     if not root.is_dir():
         return None
@@ -1860,7 +1918,7 @@ def _find_existing_bundle(request: AdvisoryIndependentPackageAlphaAuditRequestV1
 
 def _deliver_bundle(
     *,
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     bundle_path: Path,
     n1: AdvisoryN1Tier1RequestV1,
 ) -> dict[str, Any]:
@@ -1870,8 +1928,7 @@ def _deliver_bundle(
     registry = AdvisoryResearchTrialRegistryV1(request.registry_path).append_batch((loaded["record"],))
     route = generate_current_route(
         registry_path=request.registry_path,
-        parent_spike_path=Path(n1.n0_completion_ref.artifact_uri).parent
-        / "parent_prediction_extension_receipt.json",
+        parent_spike_path=Path(n1.n0_completion_ref.artifact_uri).parent / "parent_prediction_extension_receipt.json",
         window_contract_path=n1.research_window_contract_path,
         output_path=n1.route_path,
     )
@@ -1885,7 +1942,7 @@ def _deliver_bundle(
 
 
 def _verify_wsl_environment(
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     *,
     require_repository_identity: bool,
 ) -> dict[str, Any]:
@@ -1916,9 +1973,7 @@ def _verify_wsl_environment(
         "repository_commit": actual_commit,
         "requested_repository_commit": request.repository_commit,
         "repository_identity_check": (
-            "MATCHED_FOR_COMPUTE"
-            if require_repository_identity
-            else "NOT_REQUIRED_FOR_IMMUTABLE_DELIVERY_ONLY_RESUME"
+            "MATCHED_FOR_COMPUTE" if require_repository_identity else "NOT_REQUIRED_FOR_IMMUTABLE_DELIVERY_ONLY_RESUME"
         ),
         "python": platform.python_version(),
         "pandas": importlib.metadata.version("pandas"),
@@ -1928,7 +1983,7 @@ def _verify_wsl_environment(
 
 def _run_response(
     status: str,
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     bundle_path: Path,
     environment: Mapping[str, Any],
     delivery: Mapping[str, Any],
@@ -1953,11 +2008,7 @@ def _run_response(
 
 def _verify_evidence_ref(reference: EvidenceReferenceV1) -> None:
     path = Path(reference.artifact_uri)
-    if (
-        not path.is_file()
-        or sha256_file(path) != reference.sha256
-        or path.stat().st_size != reference.size_bytes
-    ):
+    if not path.is_file() or sha256_file(path) != reference.sha256 or path.stat().st_size != reference.size_bytes:
         _raise(
             "bound N2-B evidence identity changed",
             REASON_SOURCE_MISMATCH,
@@ -1977,9 +2028,9 @@ def _evidence_reference(path: Path, declared_uri: str, role: str) -> EvidenceRef
     )
 
 
-def _write_immutable_request(path: Path, request: AdvisoryIndependentPackageAlphaAuditRequestV1) -> None:
+def _write_immutable_request(path: Path, request: AdvisoryIndependentPackageAlphaAuditRequestV2) -> None:
     _write_immutable_json(path, request.model_dump(mode="json"), REASON_REQUEST_INVALID)
-    existing = AdvisoryIndependentPackageAlphaAuditRequestV1.model_validate_json(path.read_text(encoding="utf-8"))
+    existing = AdvisoryIndependentPackageAlphaAuditRequestV2.model_validate_json(path.read_text(encoding="utf-8"))
     if existing.request_sha256 != request.request_sha256:
         _raise("immutable N2-B request readback differs", REASON_REQUEST_INVALID, path=str(path))
 

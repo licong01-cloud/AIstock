@@ -32,9 +32,7 @@ class _TypedArgumentParser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _TypedArgumentParser(
-        description="Development-only independent StrategyPackage common-window alpha audit"
-    )
+    parser = _TypedArgumentParser(description="Development-only independent StrategyPackage common-window alpha audit")
     commands = parser.add_subparsers(dest="command", required=True)
 
     prepare = commands.add_parser("prepare")
@@ -43,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--n1-bundle", required=True)
     prepare.add_argument("--n2a-request", required=True)
     prepare.add_argument("--n2a-bundle", required=True)
+    prepare.add_argument("--roster-exclusion-receipt", required=True)
     prepare.add_argument("--repository-root", required=True)
     prepare.add_argument("--output-root", required=True)
     prepare.add_argument("--output", required=True)
@@ -64,6 +63,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             n1_bundle_path=args.n1_bundle,
             n2a_request_path=args.n2a_request,
             n2a_bundle_path=args.n2a_bundle,
+            roster_exclusion_receipt_path=args.roster_exclusion_receipt,
             repository_root=args.repository_root,
             output_root=args.output_root,
             output_path=args.output,

@@ -33,7 +33,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.independent_package_alpha_audit_contracts import (
     FACTOR_GROUP_CLOSURES,
     PACKAGE_ARM_IDS,
-    AdvisoryIndependentPackageAlphaAuditRequestV1,
+    AdvisoryIndependentPackageAlphaAuditRequestV2,
     FrozenPackageAuditArmV1,
 )
 from backend.services.advisory_model_first.prediction_source import ExactPredictionSource
@@ -192,7 +192,7 @@ class StrategyPackageBatchPredictionRunner:
     def run(
         self,
         *,
-        request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+        request: AdvisoryIndependentPackageAlphaAuditRequestV2,
         pit_snapshot: FrozenPitSnapshot,
         decision_dates: Sequence[pd.Timestamp | date],
         temp_root: str | Path,
@@ -201,7 +201,11 @@ class StrategyPackageBatchPredictionRunner:
         decisions = _normalize_decision_dates(decision_dates)
         if tuple(item.date() for item in decisions) != tuple(sorted(item.date() for item in decisions)):
             _raise("batch decision dates are not ordered", REASON_PREDICTION_INVALID)
-        if len(decisions) != 386 or decisions[0].date() != request.decision_date_start or decisions[-1].date() != request.decision_date_end:
+        if (
+            len(decisions) != 386
+            or decisions[0].date() != request.decision_date_start
+            or decisions[-1].date() != request.decision_date_end
+        ):
             _raise(
                 "batch decision date roster differs from the frozen N1 window",
                 REASON_PREDICTION_INVALID,
@@ -221,9 +225,7 @@ class StrategyPackageBatchPredictionRunner:
                 )
         _verify_factor_group_equivalence(request.packages, factor_orders)
         required_window_by_closure = {
-            closure: get_strategy_package_inference_required_window(
-                factor_orders[group[0].arm_id]
-            )
+            closure: get_strategy_package_inference_required_window(factor_orders[group[0].arm_id])
             for closure, group in _packages_by_factor_closure(request.packages).items()
         }
         required_window = max(required_window_by_closure.values())
@@ -241,9 +243,7 @@ class StrategyPackageBatchPredictionRunner:
                 expected=history_start.isoformat(),
                 actual=source.history_start.isoformat(),
             )
-        trading_dates = pd.DatetimeIndex(
-            source.daily.index.get_level_values("datetime").unique()
-        )
+        trading_dates = pd.DatetimeIndex(source.daily.index.get_level_values("datetime").unique())
         window_starts = {
             (decision.date(), window): _resolve_loaded_history_start(
                 trading_dates,
@@ -322,9 +322,7 @@ class StrategyPackageBatchPredictionRunner:
                 day_source = day_sources[window]
                 factor_kwargs: dict[str, Any] = {}
                 if self._requires_factor_resource_receipt:
-                    factor_kwargs["reusable_factor_values"] = day_factor_caches.setdefault(
-                        window, {}
-                    )
+                    factor_kwargs["reusable_factor_values"] = day_factor_caches.setdefault(window, {})
                 features = self._factor_runner(
                     workspaces[representative.arm_id],
                     closure,
@@ -351,17 +349,11 @@ class StrategyPackageBatchPredictionRunner:
                         }
                     )
                     factor_resource_receipts.append(resource_receipt)
-                    factor_calculation_count += int(
-                        resource_receipt.get("factor_calculation_count") or 0
-                    )
+                    factor_calculation_count += int(resource_receipt.get("factor_calculation_count") or 0)
                     factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
                     result_write_count += int(resource_receipt.get("result_write_count") or 0)
-                    projected_result_write_count += int(
-                        resource_receipt.get("projected_result_write_count") or 0
-                    )
-                    fallback_result_write_count += int(
-                        resource_receipt.get("fallback_result_write_count") or 0
-                    )
+                    projected_result_write_count += int(resource_receipt.get("projected_result_write_count") or 0)
+                    fallback_result_write_count += int(resource_receipt.get("fallback_result_write_count") or 0)
                     temp_peak_bytes = max(
                         temp_peak_bytes,
                         int(resource_receipt.get("temp_peak_bytes") or 0),
@@ -375,13 +367,10 @@ class StrategyPackageBatchPredictionRunner:
                         temp_path,
                         virtualize_io=False,
                     )
-                    reference_resource = dict(
-                        reference.attrs.get("factor_resource_receipt") or {}
-                    )
+                    reference_resource = dict(reference.attrs.get("factor_resource_receipt") or {})
                     if (
                         reference_resource.get("factor_io_mode") != FACTOR_IO_MODE_FILE_BACKED
-                        or reference_resource.get("factor_input_copy_mode")
-                        != FACTOR_INPUT_COPY_MODE_FILE
+                        or reference_resource.get("factor_input_copy_mode") != FACTOR_INPUT_COPY_MODE_FILE
                     ):
                         _raise(
                             "file-backed parity run omitted its reference I/O receipt",
@@ -421,24 +410,17 @@ class StrategyPackageBatchPredictionRunner:
                 del features
             del day_sources, day_factor_caches
 
-        predictions = {
-            arm_id: pd.concat(parts).sort_index()
-            for arm_id, parts in prediction_parts.items()
-        }
+        predictions = {arm_id: pd.concat(parts).sort_index() for arm_id, parts in prediction_parts.items()}
 
         diagnostics: list[dict[str, Any]] = []
-        diagnostic_factor_caches: dict[
-            tuple[date, date, int], dict[tuple[str, str], pd.Series]
-        ] = {}
+        diagnostic_factor_caches: dict[tuple[date, date, int], dict[tuple[str, str], pd.Series]] = {}
         for closure in request.factor_group_closures:
             group = packages_by_closure[closure]
             representative = group[0]
             for anchor in request.causality_anchor_dates:
                 active = _pit_members(pit_snapshot, anchor)
                 window = required_window_by_closure[closure]
-                diagnostic_cutoff = (
-                    anchor if anchor == request.decision_date_end else request.decision_date_end
-                )
+                diagnostic_cutoff = anchor if anchor == request.decision_date_end else request.decision_date_end
                 prefix = _precompute_source_static(
                     source.between(
                         window_starts[(anchor, window)],
@@ -467,26 +449,18 @@ class StrategyPackageBatchPredictionRunner:
                     resource_receipt.update(
                         {
                             "mode": (
-                                "ISOLATED_END_DATE_PARITY"
-                                if anchor == request.decision_date_end
-                                else "FUTURE_POISON"
+                                "ISOLATED_END_DATE_PARITY" if anchor == request.decision_date_end else "FUTURE_POISON"
                             ),
                             "closure_sha256": closure,
                             "anchor_date": anchor.isoformat(),
                         }
                     )
                     factor_resource_receipts.append(resource_receipt)
-                    factor_calculation_count += int(
-                        resource_receipt.get("factor_calculation_count") or 0
-                    )
+                    factor_calculation_count += int(resource_receipt.get("factor_calculation_count") or 0)
                     factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
                     result_write_count += int(resource_receipt.get("result_write_count") or 0)
-                    projected_result_write_count += int(
-                        resource_receipt.get("projected_result_write_count") or 0
-                    )
-                    fallback_result_write_count += int(
-                        resource_receipt.get("fallback_result_write_count") or 0
-                    )
+                    projected_result_write_count += int(resource_receipt.get("projected_result_write_count") or 0)
+                    fallback_result_write_count += int(resource_receipt.get("fallback_result_write_count") or 0)
                     temp_peak_bytes = max(temp_peak_bytes, int(resource_receipt.get("temp_peak_bytes") or 0))
                 for arm in group:
                     replay, _ = self._score_package_features(
@@ -513,13 +487,18 @@ class StrategyPackageBatchPredictionRunner:
         if model_load_counts != {arm_id: 1 for arm_id in PACKAGE_ARM_IDS}:
             _raise("one or more package models were not loaded exactly once", REASON_ASSET_INVALID)
         expected_primary_count = len(decisions) * len(request.factor_group_closures)
-        if factor_group_primary_count != expected_primary_count or factor_group_diagnostic_count != 6:
+        expected_diagnostic_count = len(request.causality_anchor_dates) * len(request.factor_group_closures)
+        if (
+            factor_group_primary_count != expected_primary_count
+            or factor_group_diagnostic_count != expected_diagnostic_count
+        ):
             _raise(
                 "factor group execution counts differ from the frozen batch contract",
                 REASON_PREDICTION_INVALID,
                 primary=factor_group_primary_count,
                 expected_primary=expected_primary_count,
                 diagnostic=factor_group_diagnostic_count,
+                expected_diagnostic=expected_diagnostic_count,
             )
 
         if temp_peak_bytes > request.resource_max_temp_bytes:
@@ -535,8 +514,7 @@ class StrategyPackageBatchPredictionRunner:
             predictions=predictions,
         )
         prediction_identity = {
-            arm_id: descriptor.model_dump(mode="json")
-            for arm_id, descriptor in sorted(prediction_descriptors.items())
+            arm_id: descriptor.model_dump(mode="json") for arm_id, descriptor in sorted(prediction_descriptors.items())
         }
         causality_payload = {
             "schema_version": "advisory_package_batch_causality_parity_receipt_v1",
@@ -559,9 +537,7 @@ class StrategyPackageBatchPredictionRunner:
                     expected=expected_resource_receipts,
                     actual=len(factor_resource_receipts),
                 )
-            factor_io_modes = {
-                str(item.get("factor_io_mode") or "") for item in factor_resource_receipts
-            }
+            factor_io_modes = {str(item.get("factor_io_mode") or "") for item in factor_resource_receipts}
             if factor_io_modes != {FACTOR_IO_MODE_IN_MEMORY}:
                 _raise(
                     "formal factor batch did not use the frozen in-memory-equivalent I/O mode",
@@ -570,8 +546,7 @@ class StrategyPackageBatchPredictionRunner:
                 )
             factor_io_mode = FACTOR_IO_MODE_IN_MEMORY
             factor_input_copy_modes = {
-                str(item.get("factor_input_copy_mode") or "")
-                for item in factor_resource_receipts
+                str(item.get("factor_input_copy_mode") or "") for item in factor_resource_receipts
             }
             if factor_input_copy_modes != {FACTOR_INPUT_COPY_MODE_COW}:
                 _raise(
@@ -581,12 +556,9 @@ class StrategyPackageBatchPredictionRunner:
                 )
             factor_input_copy_mode = FACTOR_INPUT_COPY_MODE_COW
             factor_result_projection_modes = {
-                str(item.get("factor_result_projection_mode") or "")
-                for item in factor_resource_receipts
+                str(item.get("factor_result_projection_mode") or "") for item in factor_resource_receipts
             }
-            if factor_result_projection_modes != {
-                FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
-            }:
+            if factor_result_projection_modes != {FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES}:
                 _raise(
                     "formal factor batch did not project only requested decision-date results",
                     REASON_SOURCE_READ_FAILED,
@@ -601,7 +573,7 @@ class StrategyPackageBatchPredictionRunner:
                     actual=len(file_backed_parity_receipts),
                 )
         batch_receipt: dict[str, Any] = {
-            "schema_version": "advisory_strategy_package_batch_prediction_receipt_v1",
+            "schema_version": "advisory_strategy_package_batch_prediction_receipt_v2",
             "request_sha256": request.request_sha256,
             "query_contract_sha256": CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH,
             "history_start": source.history_start.isoformat(),
@@ -629,9 +601,7 @@ class StrategyPackageBatchPredictionRunner:
             "factor_result_projection_mode": factor_result_projection_mode,
             "file_backed_parity_factor_group_run_count": len(file_backed_parity_receipts),
             "all_factor_group_run_count": (
-                factor_group_primary_count
-                + factor_group_diagnostic_count
-                + len(file_backed_parity_receipts)
+                factor_group_primary_count + factor_group_diagnostic_count + len(file_backed_parity_receipts)
             ),
             "file_backed_parity_receipts": file_backed_parity_receipts,
             "source_receipts": list(source.source_receipts),
@@ -648,11 +618,7 @@ class StrategyPackageBatchPredictionRunner:
             "prediction_identity_sha256": canonical_json_sha256(prediction_identity),
             "causality_parity_sha256": causality_payload["receipt_sha256"],
             "temp_peak_bytes": temp_peak_bytes,
-            "temp_storage_mode": (
-                "ENVIRONMENT_LOCAL_EPHEMERAL"
-                if temp_is_environment_local
-                else "CALLER_MANAGED"
-            ),
+            "temp_storage_mode": ("ENVIRONMENT_LOCAL_EPHEMERAL" if temp_is_environment_local else "CALLER_MANAGED"),
             "wall_seconds": round(time.monotonic() - started, 3),
             "wall_limit_enabled": False,
             "wall_limit_seconds": None,
@@ -865,11 +831,7 @@ def run_factor_group_batch(
         _sha256_file(workspace / "strategy_package_factor_entry.py"),
         virtualize_io,
     )
-    daily = (
-        source.daily
-        if source.canonicalized
-        else _canonical_panel_index(source.daily, label="factor market input")
-    )
+    daily = source.daily if source.canonicalized else _canonical_panel_index(source.daily, label="factor market input")
     if source.static_precomputed:
         static = (
             source.static_raw
@@ -935,11 +897,7 @@ def run_factor_group_batch(
                 for column_index, (factor_name, calculation, factor_key) in enumerate(
                     zip(order, calculations, factor_keys)
                 ):
-                    cached = (
-                        reusable_factor_values.get(factor_key)
-                        if reusable_factor_values is not None
-                        else None
-                    )
+                    cached = reusable_factor_values.get(factor_key) if reusable_factor_values is not None else None
                     if cached is None:
                         part = calculation()
                         series = _factor_series(
@@ -947,9 +905,7 @@ def run_factor_group_batch(
                             factor_name=factor_name,
                             decision_dates=decisions,
                         )
-                        dates = pd.to_datetime(
-                            series.index.get_level_values("datetime")
-                        ).normalize()
+                        dates = pd.to_datetime(series.index.get_level_values("datetime")).normalize()
                         series = series[dates.isin(decisions)]
                         factor_calculation_count += 1
                         if reusable_factor_values is not None:
@@ -986,20 +942,12 @@ def run_factor_group_batch(
         "feature_count": len(order),
         "factor_calculation_count": factor_calculation_count,
         "factor_reuse_count": factor_reuse_count,
-        "factor_io_mode": (
-            FACTOR_IO_MODE_IN_MEMORY if virtualize_io else FACTOR_IO_MODE_FILE_BACKED
-        ),
-        "factor_input_copy_mode": (
-            FACTOR_INPUT_COPY_MODE_COW if virtualize_io else FACTOR_INPUT_COPY_MODE_FILE
-        ),
+        "factor_io_mode": (FACTOR_IO_MODE_IN_MEMORY if virtualize_io else FACTOR_IO_MODE_FILE_BACKED),
+        "factor_input_copy_mode": (FACTOR_INPUT_COPY_MODE_COW if virtualize_io else FACTOR_INPUT_COPY_MODE_FILE),
         "factor_result_projection_mode": factor_result_projection_mode,
         "result_write_count": int((result_projection_stats or {}).get("result_write_count") or 0),
-        "projected_result_write_count": int(
-            (result_projection_stats or {}).get("projected_result_write_count") or 0
-        ),
-        "fallback_result_write_count": int(
-            (result_projection_stats or {}).get("fallback_result_write_count") or 0
-        ),
+        "projected_result_write_count": int((result_projection_stats or {}).get("projected_result_write_count") or 0),
+        "fallback_result_write_count": int((result_projection_stats or {}).get("fallback_result_write_count") or 0),
     }
     return features
 
@@ -1029,9 +977,7 @@ def _virtualized_factor_io(
     consumed_results: set[Path] = set()
     clean_daily: pd.DataFrame | None = None
     projected_result_dates = (
-        pd.DatetimeIndex(pd.to_datetime(list(result_dates))).normalize()
-        if result_dates is not None
-        else None
+        pd.DatetimeIndex(pd.to_datetime(list(result_dates))).normalize() if result_dates is not None else None
     )
     projection_stats = {
         "result_write_count": 0,
@@ -1047,9 +993,7 @@ def _virtualized_factor_io(
             value,
             projected_result_dates,
         )
-        projection_stats[
-            "projected_result_write_count" if exact else "fallback_result_write_count"
-        ] += 1
+        projection_stats["projected_result_write_count" if exact else "fallback_result_write_count"] += 1
         return projected
 
     def _path(value: Any) -> Path:
@@ -1248,10 +1192,7 @@ def _validated_factor_group(
             expected=len(order),
             actual=len(calculations),
         )
-    factor_keys = tuple(
-        (factor_name, _sha256_file(Path(str(factor_files[factor_name]))))
-        for factor_name in order
-    )
+    factor_keys = tuple((factor_name, _sha256_file(Path(str(factor_files[factor_name])))) for factor_name in order)
     return order, calculations, factor_keys
 
 
@@ -1262,9 +1203,7 @@ def _prepare_static_panel(
     canonicalized: bool = False,
 ) -> pd.DataFrame:
     static = (
-        static_raw.copy()
-        if canonicalized
-        else _canonical_panel_index(static_raw, label="static raw input")
+        static_raw.copy() if canonicalized else _canonical_panel_index(static_raw, label="static raw input")
     ).rename(columns=_STATIC_FIELD_MAPPING)
     try:
         static = compute_precomputed_factors(static, daily)
@@ -1334,9 +1273,7 @@ def _project_factor_result_for_decisions(
         dates = pd.DatetimeIndex(pd.to_datetime(index.get_level_values("datetime")))
         instruments = index.get_level_values("instrument")
         unique_instruments = pd.Index(instruments).unique()
-        normalized_by_value = {
-            item: normalize_ts_code(item) for item in unique_instruments
-        }
+        normalized_by_value = {item: normalize_ts_code(item) for item in unique_instruments}
     except (TypeError, ValueError, OverflowError):
         return value, False
     if not dates.equals(dates.normalize()):
@@ -1384,16 +1321,12 @@ def _scan_factor_sources(
         if require_virtual_io:
             for pattern_name, pattern in _UNSUPPORTED_VIRTUAL_IO_PATTERNS:
                 if pattern.search(text):
-                    unsupported_io.append(
-                        {"factor_name": str(factor_name), "pattern": pattern_name}
-                    )
+                    unsupported_io.append({"factor_name": str(factor_name), "pattern": pattern_name})
     if require_virtual_io:
         entry_text = entry_path.read_text(encoding="utf-8")
         for pattern_name, pattern in _UNSUPPORTED_VIRTUAL_IO_PATTERNS:
             if pattern.search(entry_text):
-                unsupported_io.append(
-                    {"factor_name": "__factor_entry__", "pattern": pattern_name}
-                )
+                unsupported_io.append({"factor_name": "__factor_entry__", "pattern": pattern_name})
     if unsupported_io:
         _raise(
             "frozen factor closure uses an input API unsupported by exact in-memory batch I/O",
@@ -1410,7 +1343,7 @@ def _scan_factor_sources(
 
 def _publish_prediction_store(
     *,
-    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV2,
     predictions: Mapping[str, pd.DataFrame],
 ) -> tuple[dict[str, PredictionArtifactDescriptor], dict[str, str]]:
     store = PredictionArtifactStore(request.prediction_store_root)
@@ -1461,7 +1394,10 @@ def _publish_prediction_store(
     source = ExactPredictionSource(request.prediction_store_root)
     descriptors = {arm_id: source.describe(run_id) for arm_id, run_id in run_ids.items()}
     for arm_id, descriptor in descriptors.items():
-        if descriptor.date_start != request.decision_date_start.isoformat() or descriptor.date_end != request.decision_date_end.isoformat():
+        if (
+            descriptor.date_start != request.decision_date_start.isoformat()
+            or descriptor.date_end != request.decision_date_end.isoformat()
+        ):
             _raise(
                 "Prediction Store descriptor does not cover the exact N1 window",
                 REASON_PREDICTION_INVALID,
@@ -1540,20 +1476,14 @@ def _compare_anchor_predictions(
     right_norm = _zscore(common["score__replay"])
     max_abs_delta = float(np.max(np.abs(left_norm - right_norm)))
     spearman = float(pd.Series(left_norm).corr(pd.Series(right_norm), method="spearman"))
-    top50_full = tuple(
-        left.sort_values(["score", "instrument"], ascending=[False, True]).head(50)["instrument"]
-    )
-    top50_replay = tuple(
-        right.sort_values(["score", "instrument"], ascending=[False, True]).head(50)["instrument"]
-    )
+    top50_full = tuple(left.sort_values(["score", "instrument"], ascending=[False, True]).head(50)["instrument"])
+    top50_replay = tuple(right.sort_values(["score", "instrument"], ascending=[False, True]).head(50)["instrument"])
     if isolated_end_date:
         passed = top50_full == top50_replay and math.isfinite(spearman) and spearman >= minimum_spearman
         reason = REASON_LIVE_PARITY
     else:
         passed = (
-            set(left["instrument"]) == set(right["instrument"])
-            and top50_full == top50_replay
-            and max_abs_delta <= atol
+            set(left["instrument"]) == set(right["instrument"]) and top50_full == top50_replay and max_abs_delta <= atol
         )
         reason = REASON_FUTURE_DEPENDENCY
     if not passed:
@@ -1633,11 +1563,7 @@ def _verified_workspace(arm: FrozenPackageAuditArmV1) -> Path:
     if len(actual) != len(arm.workspace_files):
         _raise("frozen package workspace descriptor count drifted", REASON_ASSET_INVALID)
     described = {item.relative_path for item in arm.workspace_files}
-    observed = {
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+    observed = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if observed != described:
         _raise(
             "frozen package workspace file roster drifted",
@@ -1879,11 +1805,7 @@ def _slice_panel(
 
 
 def _pit_members(snapshot: FrozenPitSnapshot, trade_date: date) -> set[str]:
-    return {
-        span.ts_code
-        for span in snapshot.spans
-        if span.eligible_start <= trade_date <= span.eligible_end
-    }
+    return {span.ts_code for span in snapshot.spans if span.eligible_start <= trade_date <= span.eligible_end}
 
 
 def _frame_sha256(frame: pd.DataFrame) -> str:

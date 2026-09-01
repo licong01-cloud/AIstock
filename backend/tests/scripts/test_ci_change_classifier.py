@@ -1206,7 +1206,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert attach_step["id"] == "frontend_dependencies"
     assert attach_step["shell"] == "powershell"
     assert "--attach-frontend-only" in attach_step["run"]
-    assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    assert (
+        '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    )
     frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
     assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_runs
     assert "node node_modules/next/dist/bin/next lint" in frontend_runs
