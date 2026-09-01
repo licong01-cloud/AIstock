@@ -83,7 +83,7 @@ class EntryGuardFrozenSignalV1(BaseModel):
     entry_gap_q10: float
     entry_gap_q50: float
     entry_gap_q90: float
-    max_acceptable_gap_bps: float | None = Field(default=None, gt=0)
+    max_acceptable_gap_bps: float | None = Field(default=None, ge=0)
     max_buy_price: float | None = Field(default=None, gt=0)
     source_binding_sha256: str = Field(pattern=SHA256_PATTERN)
     feature_schema_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -153,7 +153,7 @@ class AdvisoryEntryGuardDecisionV1(BaseModel):
     signal_sha256: str = Field(pattern=SHA256_PATTERN)
     observed_price: float | None = Field(default=None, gt=0)
     observed_gap_bps: float | None = None
-    applied_max_gap_bps: float | None = Field(default=None, gt=0)
+    applied_max_gap_bps: float | None = Field(default=None, ge=0)
     applied_max_buy_price: float | None = Field(default=None, gt=0)
     advisory_only: bool
     silent_replacement: Literal[False] = False
