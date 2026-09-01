@@ -65,8 +65,8 @@
   },
   "first_seen_at": "2026-09-01T02:23:00.237453Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+  "fixed_at": "2026-09-01T04:29:38Z",
   "github_issue_number": 4108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4108",
   "last_seen_at": "2026-09-01T02:23:00.237453Z",
@@ -74,6 +74,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,6 +96,7 @@
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -105,8 +107,32 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "source_merge_receipt": {
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "receipt_id": "2ab5ed36f57d219a",
+    "bug_id": "BUG-1297",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
+    "source_head_oid": "b8b113194c13179b3619b11fa81ca64a4694ce9e",
+    "source_merge_commit": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_module_registry_l0 -> passed",
+      "python -m nox -s qlib_data_backend -> passed",
+      "BUG-1297 targeted matrix -> 109 passed"
+    ],
+    "validation_evidence_digest": "e908cb76f40d53f5fd9be2ec02c103e6ed383ae251c5aad74a516accc63d3c8f",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_verification": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "production_gates": {
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop",
+      "production_backend_dependency_gate": "noop"
+    },
+    "recorded_at": "2026-09-01T04:48:47.762802Z"
+  },
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -115,6 +141,12 @@
     "fingerprint": "0082e8ef9225ab7619914a70",
     "source_event_id": "FE-20260901-0082e8ef9225"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s qlib_data_backend -> passed",
+    "BUG-1297 targeted matrix -> 109 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
