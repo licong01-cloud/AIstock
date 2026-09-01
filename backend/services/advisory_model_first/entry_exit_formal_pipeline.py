@@ -127,6 +127,20 @@ BUNDLE_MEMBERS = {
     "audit_receipt.json",
     "registry_records.json",
 }
+RESULT_IDENTITY_MEMBERS = frozenset(
+    {
+        "entry_decisions.parquet",
+        "entry_labels.parquet",
+        "entry_daily.parquet",
+        "entry_summary.json",
+        "entry_support.json",
+        "exit_labels.parquet",
+        "exit_decisions.parquet",
+        "exit_episode_best.parquet",
+        "exit_summary.json",
+        "exit_support.json",
+    }
+)
 
 
 def prepare_n2_action_audit_request(
@@ -784,7 +798,21 @@ def _verify_exit_baseline_parity(*, actual: pd.DataFrame, expected: pd.DataFrame
     expected_top5 = expected[expected["selection_rank"].le(5)].copy()
     left = _normalize_keys(actual)
     right = _normalize_keys(expected_top5)
-    merged = left.merge(right, on=KEYS, how="outer", suffixes=("_actual", "_expected"), indicator=True)
+    try:
+        merged = left.merge(
+            right,
+            on=KEYS,
+            how="outer",
+            suffixes=("_actual", "_expected"),
+            indicator=True,
+            validate="one_to_one",
+        )
+    except Exception as exc:
+        _raise(
+            "Exit baseline episode keys are duplicated or invalid",
+            "ADVISORY_N2_EXIT_BASELINE_PARITY_FAILED",
+            error_type=type(exc).__name__,
+        )
     if not merged["_merge"].eq("both").all():
         _raise(
             "Exit baseline episode keys differ from the frozen policy dataset",
@@ -832,6 +860,7 @@ def _publish_bundle(
     root = Path(request.output_root).resolve() / "action_audit_bundles"
     root.mkdir(parents=True, exist_ok=True)
     temp = Path(tempfile.mkdtemp(prefix=".n2-action-", dir=root))
+    published_final: Path | None = None
     try:
         _write_json(temp / "request.json", request.model_dump(mode="json"))
         source_receipt = {
@@ -855,18 +884,35 @@ def _publish_bundle(
         _write_parquet(temp / "exit_episode_best.parquet", exit_result["episode_best"])
         _write_json(temp / "exit_summary.json", exit_result["summary"])
         _write_json(temp / "exit_support.json", exit_result["support"])
+        peak_rss_bytes = _peak_rss_bytes()
+        if peak_rss_bytes > request.resource_max_rss_bytes:
+            _raise(
+                "N2 action audit exceeded frozen RSS limit while publishing",
+                "ADVISORY_N2_ACTION_RESOURCE_LIMIT_EXCEEDED",
+                stage="publish_bundle",
+                peak_rss_bytes=peak_rss_bytes,
+                limit_bytes=request.resource_max_rss_bytes,
+            )
         resource_report = {
             "schema_version": "advisory_n2_action_resource_report_v1",
             "elapsed_seconds": elapsed_seconds,
-            "peak_rss_bytes": _peak_rss_bytes(),
+            "peak_rss_bytes": peak_rss_bytes,
             "resource_max_rss_bytes": request.resource_max_rss_bytes,
         }
         _write_json(temp / "resource_report.json", resource_report)
+        result_files_sha256 = canonical_json_sha256(
+            {
+                name: descriptor
+                for name, descriptor in _file_descriptors(temp).items()
+                if name in RESULT_IDENTITY_MEMBERS
+            }
+        )
         receipt = build_n2_action_receipt(
             request_sha256=request.request_sha256,
             entry_summary=entry["summary"],
             exit_summary=exit_result["summary"],
             source_identity_sha256=sha256_file(temp / "source_identity_receipt.json"),
+            result_files_sha256=result_files_sha256,
             resource_report_sha256=sha256_file(temp / "resource_report.json"),
         )
         _write_json(temp / "audit_receipt.json", receipt.model_dump(mode="json"))
@@ -912,11 +958,18 @@ def _publish_bundle(
             shutil.rmtree(temp)
             return final
         temp.replace(final)
+        published_final = final
         _read_bundle(final)
         return final
     except Exception:
         if temp.exists():
             shutil.rmtree(temp, ignore_errors=True)
+        if (
+            published_final is not None
+            and published_final.exists()
+            and published_final.resolve().parent == root.resolve()
+        ):
+            shutil.rmtree(published_final, ignore_errors=True)
         raise
 
 
@@ -1117,27 +1170,57 @@ def _verify_m4_n1_candidate_identity(
 
 
 def _entry_overlap(m4_path: Path, baseline_path: Path) -> pd.DataFrame:
-    m4 = _normalize_keys(pd.read_parquet(m4_path))
-    baseline = _normalize_keys(pd.read_parquet(baseline_path))
-    baseline_columns = [
-        *KEYS,
-        "episode_label_id",
-        "label_status",
-        "net_return_bps",
-        "shadow_policy_sha256",
-        "cost_policy_sha256",
-    ]
-    merged = m4.merge(
-        baseline[baseline_columns],
-        on=KEYS,
-        how="inner",
-        validate="one_to_one",
-    )
+    try:
+        m4 = _normalize_keys(pd.read_parquet(m4_path))
+        baseline = _normalize_keys(pd.read_parquet(baseline_path))
+        required_m4 = {
+            *KEYS,
+            "selection_effective_rank",
+            "entry_gap_return",
+            "entry_gap_q10",
+            "entry_gap_q50",
+            "entry_gap_q90",
+        }
+        baseline_columns = [
+            *KEYS,
+            "episode_label_id",
+            "label_status",
+            "net_return_bps",
+            "shadow_policy_sha256",
+            "cost_policy_sha256",
+        ]
+        missing_m4 = sorted(required_m4 - set(m4.columns))
+        missing_baseline = sorted(set(baseline_columns) - set(baseline.columns))
+        if missing_m4 or missing_baseline:
+            _raise(
+                "M4/N1 Entry overlap sources omit required columns",
+                "ADVISORY_N2_ENTRY_KEY_OVERLAP_INVALID",
+                missing_m4=missing_m4,
+                missing_baseline=missing_baseline,
+            )
+        merged = m4.merge(
+            baseline[baseline_columns],
+            on=KEYS,
+            how="inner",
+            validate="one_to_one",
+        )
+    except AdvisoryModelFirstError:
+        raise
+    except Exception as exc:
+        _raise(
+            "M4/N1 Entry overlap cannot be built",
+            "ADVISORY_N2_ENTRY_KEY_OVERLAP_INVALID",
+            error_type=type(exc).__name__,
+        )
     return merged.rename(columns={"selection_effective_rank": "selection_rank"})
 
 
 def _validate_overlap_shape(overlap: pd.DataFrame) -> None:
     dates = pd.DatetimeIndex(overlap["decision_as_of_trade_date"].unique()).sort_values()
+    rank_sets = overlap.groupby("decision_as_of_trade_date")["selection_rank"].agg(
+        lambda values: tuple(sorted(int(value) for value in values))
+    )
+    exact_ranks = tuple(range(1, 21))
     if (
         len(overlap) != ENTRY_OVERLAP_ROW_COUNT
         or len(dates) != ENTRY_OVERLAP_DAY_COUNT
@@ -1145,6 +1228,7 @@ def _validate_overlap_shape(overlap: pd.DataFrame) -> None:
         or dates[-1].date() != ENTRY_DECISION_END
         or int(overlap["label_status"].eq("MATURED").sum()) != ENTRY_MATURED_ROW_COUNT
         or not overlap.groupby("decision_as_of_trade_date").size().eq(20).all()
+        or not rank_sets.map(lambda values: values == exact_ranks).all()
     ):
         _raise(
             "M4/N1 Entry overlap differs from the frozen 60-day identity",
@@ -1218,6 +1302,9 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         }
     )
     receipt_descriptor = descriptors["audit_receipt.json"]
+    result_descriptors = {
+        name: descriptor for name, descriptor in descriptors.items() if name in RESULT_IDENTITY_MEMBERS
+    }
     records_valid = len(records) == 2 and {item.experiment_id for item in records} == {
         ENTRY_EXPERIMENT_ID,
         EXIT_EXPERIMENT_ID,
@@ -1240,6 +1327,7 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         or manifest.get("receipt_sha256") != receipt.receipt_sha256
         or receipt.request_sha256 != request.request_sha256
         or receipt.source_identity_sha256 != descriptors["source_identity_receipt.json"].get("sha256")
+        or receipt.result_files_sha256 != canonical_json_sha256(result_descriptors)
         or receipt.resource_report_sha256 != descriptors["resource_report.json"].get("sha256")
         or receipt.entry_summary != entry_summary
         or receipt.exit_summary != exit_summary
@@ -1449,11 +1537,25 @@ def _write_immutable_request(path: Path, request: FrozenAdvisoryN2ActionAuditReq
 
 
 def _repository_commit(root: Path) -> str:
-    return _cross_os_git_commit(root)
+    try:
+        return _cross_os_git_commit(root)
+    except AdvisoryModelFirstError as exc:
+        _raise(
+            "cannot resolve N2 action repository commit",
+            "ADVISORY_N2_ACTION_REQUEST_INVALID",
+            source_reason_code=exc.reason_code,
+        )
 
 
 def _repository_dirty(root: Path) -> list[str]:
-    return _cross_os_git_dirty_paths(root)
+    try:
+        return _cross_os_git_dirty_paths(root)
+    except AdvisoryModelFirstError as exc:
+        _raise(
+            "cannot inspect N2 action repository state",
+            "ADVISORY_N2_ACTION_REQUEST_INVALID",
+            source_reason_code=exc.reason_code,
+        )
 
 
 def _verify_environment(request: FrozenAdvisoryN2ActionAuditRequestV1) -> None:

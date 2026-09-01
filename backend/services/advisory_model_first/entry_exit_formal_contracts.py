@@ -242,6 +242,7 @@ class AdvisoryN2ActionAuditReceiptV1(BaseModel):
     entry_summary: dict[str, Any]
     exit_summary: dict[str, Any]
     source_identity_sha256: str = Field(pattern=SHA256_PATTERN)
+    result_files_sha256: str = Field(pattern=SHA256_PATTERN)
     resource_report_sha256: str = Field(pattern=SHA256_PATTERN)
     sealed_holdout_accessed: Literal[False] = False
     created_at: datetime

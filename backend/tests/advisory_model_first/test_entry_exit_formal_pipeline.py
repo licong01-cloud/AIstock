@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,8 +18,10 @@ from backend.services.advisory_model_first.entry_exit_formal_contracts import (
 )
 from backend.services.advisory_model_first.entry_exit_formal_pipeline import (
     _build_entry_daily,
+    _entry_overlap,
     _exit_episode_best,
     _exit_summary,
+    _repository_commit,
     _verify_exit_baseline_parity,
     _verify_m4_n1_candidate_identity,
 )
@@ -206,3 +209,45 @@ def test_m4_and_n1_candidate_identity_uses_package_not_unrelated_request_hashes(
             m4_manifest=shared,
             policy_manifest={**shared, "package_id": "pkg_other"},
         )
+
+
+def test_cross_os_git_failure_is_remapped_to_the_n2_error_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.services.advisory_model_first import entry_exit_formal_pipeline as pipeline
+
+    def fail(_root):  # noqa: ANN001, ANN202
+        raise AdvisoryModelFirstError(
+            "source failure",
+            reason_code="ADVISORY_ALPHA_AUDIT_REQUEST_INVALID",
+        )
+
+    monkeypatch.setattr(pipeline, "_cross_os_git_commit", fail)
+    with pytest.raises(AdvisoryModelFirstError) as captured:
+        _repository_commit(Path("/repo"))
+    assert captured.value.reason_code == "ADVISORY_N2_ACTION_REQUEST_INVALID"
+
+
+def test_entry_overlap_schema_failure_is_typed(tmp_path: Path) -> None:
+    keys = {
+        "decision_as_of_trade_date": [pd.Timestamp("2025-11-07")],
+        "target_trade_date": [pd.Timestamp("2025-11-10")],
+        "instrument": ["000001.SZ"],
+    }
+    m4_path = tmp_path / "m4.parquet"
+    baseline_path = tmp_path / "baseline.parquet"
+    pd.DataFrame({**keys, "selection_effective_rank": [1]}).to_parquet(m4_path)
+    pd.DataFrame(
+        {
+            **keys,
+            "episode_label_id": ["episode"],
+            "label_status": ["MATURED"],
+            "net_return_bps": [1.0],
+            "shadow_policy_sha256": [HASH_B],
+            "cost_policy_sha256": [HASH_C],
+        }
+    ).to_parquet(baseline_path)
+
+    with pytest.raises(AdvisoryModelFirstError) as captured:
+        _entry_overlap(m4_path, baseline_path)
+    assert captured.value.reason_code == "ADVISORY_N2_ENTRY_KEY_OVERLAP_INVALID"

@@ -163,6 +163,7 @@ def test_receipt_is_navigation_only_and_binds_summaries() -> None:
         entry_summary=deepcopy(entry),
         exit_summary=deepcopy(exit_summary),
         source_identity_sha256=HASH_B,
+        result_files_sha256=HASH_A,
         resource_report_sha256=HASH_C,
         created_at="2026-09-02T00:00:00Z",
     )
