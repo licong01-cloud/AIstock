@@ -43,6 +43,12 @@ _STATUS_MAP = {
     "PAUSED": SimulationAccountStatus.PAUSED,
 }
 
+_DAILY_RUN_OPERATIONAL_PAYLOAD_KEYS = (
+    "pre_run_failure",
+    "simulation_scheduler_retry_control_v1",
+    "submit_failure",
+)
+
 
 def _json_default(value: object) -> str:
     if isinstance(value, (date, datetime)):
@@ -215,7 +221,19 @@ class LocalSimLegacyInventoryReader:
         metadata = binding_config.get("metadata") if isinstance(binding_config.get("metadata"), dict) else {}
         receipt_id = str(metadata.get("admission_receipt_id") or "").strip()
         if not receipt_id:
-            receipt_id = f"legacy_cutover_{economic_hash[:16]}"
+            authority_payload = {
+                "binding_hash": str(row["binding_hash"]),
+                "binding_id": str(row["binding_id"]),
+                "legacy_account_id": legacy_account_id,
+                "manifest_sha256": str(row["release_manifest_sha256"]),
+                "package_id": str(row["release_package_id"]),
+                "release_hash": str(row["release_hash"]),
+                "release_id": str(row["release_id"]),
+            }
+            authority_hash = hashlib.sha256(
+                json.dumps(authority_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            receipt_id = f"legacy_cutover_{authority_hash[:16]}"
         return LegacyLocalSimAccountInventoryV1(
             legacy_account_id=legacy_account_id,
             account_name=str(row["account_name"]),
@@ -239,7 +257,22 @@ class LocalSimLegacyInventoryReader:
     def _economic_facts_sha256(cur: Any, ledger_scope_id: str) -> str:
         digest = hashlib.sha256()
         for table, column in _ECONOMIC_SCOPES:
-            if column is None:
+            if table == "paper_v2.simulation_daily_run":
+                digest.update(f"{table}:{column}:economic_projection_v1\n".encode())
+                excluded_payload_keys = " ".join(f"- '{key}'" for key in _DAILY_RUN_OPERATIONAL_PAYLOAD_KEYS)
+                cur.execute(
+                    "SELECT ((to_jsonb(scoped) - 'updated_at') || "
+                    "jsonb_build_object('run_payload_json', CASE "
+                    "WHEN scoped.run_payload_json IS NULL THEN 'null'::jsonb "
+                    f"ELSE scoped.run_payload_json {excluded_payload_keys} END)) AS payload "
+                    f"FROM {table} AS scoped WHERE {column} = %s "
+                    "ORDER BY ((to_jsonb(scoped) - 'updated_at') || "
+                    "jsonb_build_object('run_payload_json', CASE "
+                    "WHEN scoped.run_payload_json IS NULL THEN 'null'::jsonb "
+                    f"ELSE scoped.run_payload_json {excluded_payload_keys} END))::text",
+                    (ledger_scope_id,),
+                )
+            elif column is None:
                 digest.update(f"{table}:run.portfolio_id\n".encode())
                 cur.execute(
                     f"SELECT to_jsonb(scoped) AS payload FROM {table} AS scoped "
