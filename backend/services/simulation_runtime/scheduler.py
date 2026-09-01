@@ -2790,7 +2790,11 @@ def build_simulation_lifecycle_scheduler_from_env(
         )
     else:
         provider = FailFastSimulationRunContextProvider()
-    quote_ingress_activation = build_miniqmt_quote_ingress_activation_from_env()
+    quote_ingress_activation = (
+        build_miniqmt_quote_ingress_activation_from_env()
+        if _env_flag("MINIQMT_ENABLED", default=False)
+        else None
+    )
     return SimulationLifecycleScheduler(
         repository=resolved_repository,
         context_provider=provider,
@@ -4036,8 +4040,13 @@ class SimulationLifecycleScheduler:
             raise ValueError("limit must be positive")
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
-        self._refresh_miniqmt_quote_context_lifecycle()
-        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
+        normalized_backend = self._normalized_backend(broker_backend) if broker_backend is not None else None
+        miniqmt_in_scope = normalized_backend in {None, SimulationBrokerBackend.MINIQMT_SIM}
+        if miniqmt_in_scope:
+            self._refresh_miniqmt_quote_context_lifecycle()
+            kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
+        else:
+            kernel_product_tick_failures = []
         stale_run_results = self._run_recovery_stage_isolated(
             stage="STALE_MINIQMT_TERMINALIZATION",
             raise_on_error=raise_on_error,
@@ -6494,6 +6503,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
         limit: int = 100,
+        broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         as_of_time: datetime | None = None,
     ) -> SimulationSchedulerRunOnceResult:
@@ -6502,23 +6512,33 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         if as_of_time is not None:
             as_of_time = self._scheduler_time(as_of_time)
-        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
-        terminalized = self._terminalize_post_close_miniqmt_runs(
-            trade_date=trade_date,
-            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-            strategy_id=strategy_id,
-            limit=limit,
-            as_of_time=as_of_time,
+        normalized_backend = self._normalized_backend(broker_backend) if broker_backend is not None else None
+        miniqmt_in_scope = normalized_backend in {None, SimulationBrokerBackend.MINIQMT_SIM}
+        localsim_in_scope = normalized_backend in {None, SimulationBrokerBackend.LOCAL_SIM}
+        kernel_product_tick_failures = (
+            self._advance_miniqmt_quote_ingress_lifecycle() if miniqmt_in_scope else []
         )
-        terminalized.extend(
-            self._terminalize_post_close_localsim_runs(
-                trade_date=trade_date,
-                broker_backend=SimulationBrokerBackend.LOCAL_SIM,
-                strategy_id=strategy_id,
-                limit=limit,
-                as_of_time=as_of_time,
+        terminalized: list[dict[str, Any]] = []
+        if miniqmt_in_scope:
+            terminalized.extend(
+                self._terminalize_post_close_miniqmt_runs(
+                    trade_date=trade_date,
+                    broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    as_of_time=as_of_time,
+                )
             )
-        )
+        if localsim_in_scope:
+            terminalized.extend(
+                self._terminalize_post_close_localsim_runs(
+                    trade_date=trade_date,
+                    broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    as_of_time=as_of_time,
+                )
+            )
         unmatched_failure_result = self._unmatched_kernel_product_failure_result(
             failures=kernel_product_tick_failures,
             data_source=data_source,
@@ -15361,12 +15381,14 @@ class SimulationLifecycleBackgroundScheduler:
         tca_eod_observation_hook: TcaEodObservationHook | None = None,
         tca_observation_metrics_emitter: TcaObservationMetricsEmitter | None = None,
         localsim_replay_lifecycle_owner: Any | None = None,
+        miniqmt_enabled: bool = True,
     ) -> None:
         self.lifecycle_scheduler = lifecycle_scheduler or SimulationLifecycleScheduler()
         self._trading_calendar_service = trading_calendar_service or TradingCalendarStatusService()
         self._tca_eod_observation_hook = tca_eod_observation_hook or TcaEodObservationHook()
         self._tca_observation_metrics_emitter = tca_observation_metrics_emitter or TcaObservationMetricsEmitter()
         self._localsim_replay_lifecycle_owner = localsim_replay_lifecycle_owner
+        self._miniqmt_enabled = bool(miniqmt_enabled)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -15465,6 +15487,12 @@ class SimulationLifecycleBackgroundScheduler:
             "default_submit": self._default_submit,
             "data_source": self._data_source,
             "data_source_policy": self._data_source_policy(),
+            "miniqmt_enabled": self._miniqmt_enabled,
+            "scheduled_broker_backends": (
+                [SimulationBrokerBackend.LOCAL_SIM.value, SimulationBrokerBackend.MINIQMT_SIM.value]
+                if self._miniqmt_enabled
+                else [SimulationBrokerBackend.LOCAL_SIM.value]
+            ),
             "limit": self._limit,
             "last_run_at": last_run_at.isoformat() if last_run_at else None,
             "last_result": last_result,
@@ -15535,6 +15563,9 @@ class SimulationLifecycleBackgroundScheduler:
                         trade_date=trade_date,
                         data_source=self._data_source,
                         limit=self._limit,
+                        broker_backend=(
+                            None if self._miniqmt_enabled else SimulationBrokerBackend.LOCAL_SIM
+                        ),
                         as_of_time=now,
                     )
                 else:
@@ -15542,6 +15573,9 @@ class SimulationLifecycleBackgroundScheduler:
                         trade_date=trade_date,
                         data_source=self._data_source,
                         limit=self._limit,
+                        broker_backend=(
+                            None if self._miniqmt_enabled else SimulationBrokerBackend.LOCAL_SIM
+                        ),
                         submit=bool(decision["submit"]),
                         as_of_time=now,
                     )
@@ -16091,6 +16125,7 @@ _background_trading_calendar_service = TradingCalendarStatusService()
 simulation_lifecycle_background_scheduler = SimulationLifecycleBackgroundScheduler(
     lifecycle_scheduler=simulation_lifecycle_scheduler,
     trading_calendar_service=_background_trading_calendar_service,
+    miniqmt_enabled=SimulationLifecycleBackgroundScheduler._env_flag("MINIQMT_ENABLED", default=False),
     localsim_replay_lifecycle_owner=build_localsim_replay_lifecycle_owner(
         lifecycle_scheduler=simulation_lifecycle_scheduler,
         trading_calendar_service=_background_trading_calendar_service,
