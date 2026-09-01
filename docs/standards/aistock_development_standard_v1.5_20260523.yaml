@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 68b774bd23637cd63649e4a890d11d9fb62bdabd6c10dba29e802e14689ea209
+source_sha256: 0b834139b15bc7a1b1111597257d909996a031a019ee6fa964a5dbfad8dd6cf5
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-29"
+updated_at: "2026-09-02"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -558,13 +558,17 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - independent_source_pr_aggregate_uses_exact_per_bug_mapping
+        - aggregate_missing_evidence_requires_commit_bound_source_pr_receipt
+        - aggregate_excludes_runtime_pending_and_never_waits_for_batch
+        - aggregate_pr_merge_and_own_cleanup_supported
         - same_run_github_actions_read_prohibited
         - nightly_failure_groups_are_module_scoped
         - heterogeneous_failure_groups_require_triage
         - host_wide_counter_and_permanent_reservation_remain_authoritative
         - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
-    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
+    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. When two or more independently merged non-runtime BUGs are already ready, use close-sync-aggregate with exact per-BUG source identity and commit-bound receipt recovery instead of separate metadata PRs, but never wait to accumulate a batch. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
   - rule_id: PROD-DEPENDENCY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001

@@ -6190,6 +6190,9 @@ production DDL/DML、依赖和HMM runtime均无变化。
    model/READY/database/runtime write=false。
 6. **后续状态更新**：P2B adapter与601日输入预检在G2-A内部闭合且不增加`11/17`产品完成度；HR1随后正式执行并以NOT_AVAILABLE终止。
    当前下一动作以§4.3.4.9/§24.1为准：精确批准唯一RW1；不得以99.49% input coverage宣称CAPABILITY_AVAILABLE，也不得重跑HR1、先做第二candidate、调阈值或API/UI静态壳。
+7. **L2投影边界修正（BUG-1309）**：上述31行权威只证明taxonomy L1到published L1的投影，不能把C-013历史区间内实际出现的
+   126个taxonomy L2推导成正式131个published L2 catalog。immutable input bundle必须另行绑定§23.43的versioned L2 projection；
+   旧authority envelope缺少该对象时fail closed，不得回退live/latest DB、`is_pub`、观测集合、字符串规则或既有126行结果。
 
 ### 23.36 BUG-1184 详细设计正式审核
 
@@ -6352,3 +6355,49 @@ Design Acceptance Matrix、§23.35和§24.1。审核目标是消除“首个闭�
 6. **DESIGN-COMPLIANCE-001：PASS_PENDING_FINAL_HEAD_EVIDENCE**。禁止简化交付：bundle不增加产品进度，失败不输出partial；禁止静默错误：missing/mask/hash/authority/resource/DB fallback全部fail closed；禁止业务逻辑迁移：RW1模型、feature、target、window、alpha、seed、fold、D4/D5、holdout和24-fit不变；禁止私增门禁：资源预算仅是已批准的确定性源码验收，不增加人工审批、运行时ack或研究淘汰。
 
 当前结论：`C-012-RL1-IB-D1～D6 = USER_APPROVED_EXACT_CONTRACT_SOURCE_VERIFIED_PENDING_PR`。当前源码已达到创建PR的技术条件；仍须CI通过及用户另行批准合入。源码合入也不授权正式bundle build或RW1 24-fit。
+
+### 23.43 BUG-1309：C-013 canonical published L2 projection authority
+
+本节只修复immutable bundle在任何fit前暴露的catalog authority缺口，不改变RW1模型、feature、target、window、alpha、seed、fold、
+D4/D5/D6、hard semantic authority、24-fit预算或产品验收。C-013继续是唯一历史`stock/date -> taxonomy identity` PIT权威；L2 projection
+只把已经由C-013解析的taxonomy L2 identity映射到published index code，不取得历史成员归属权。
+
+1. **独立冻结源与分母**：L2 projection同时绑定完整SW2021 taxonomy L2 snapshot、
+   `market.sw_index_classify:index_classify:SW2021:L2`的134行分类snapshot、冻结`sw_index_member` member rows、既有31行L1
+   projection identity及各source ID/hash。分类源双方必须按numeric `industry_code`闭合相同134行；member rows重聚合的domain必须严格为131个
+   唯一published code且是134行published catalog的子集。131不得从C-013实际观察行、训练窗口、`is_pub`、名称、前缀或当前DB查询推导。
+   每条member row的L1/L2 parent ownership必须与published catalog一致；当前三个从未有member的published分类code只能因不在该冻结domain而排除，
+   不能在实现中硬编码代码名单。
+2. **逐行父子闭合**：每个正式row固定保存taxonomy L1 code/name、taxonomy L2 code/name、canonical L1 code/name、canonical L2 code/name
+   与row hash。taxonomy L1必须由已冻结31行L1 projection映射到该published L2 row的`parent_code`；taxonomy/published名称只作同码
+   readback invariant，不参与推断。任一duplicate taxonomy code、duplicate published code、parent漂移、名称漂移、row/hash/provenance漂移、
+   130/132分母或134源catalog不完整均使用typed `StateModelSetError` fail closed。
+3. **adapter绑定与解析**：authority envelope必须显式包含`l1_projection`和`l2_projection`；adapter先bind L1、再bind L2，未绑定L2时
+   `resolve`、preflight、constituents和mapping manifest均不得工作。131行projection必须覆盖C-013区间中全部已观察taxonomy L2，允许完整
+   catalog包含窗口内未出现的合法taxonomy L2。resolved output的`l2_code/l2_name`必须来自published projection；不得继续回传numeric taxonomy
+   L2。L1 constituents由完整131行projection构建并保存L2 projection schema/hash，不再由126个观察值构建。
+4. **artifact/readback**：preflight必须保存L1/L2 projection status/hash；mapping manifest的`canonical_l2_count`必须来自冻结131行projection，
+   并保存L2 projection hash和包含该hash的constituent manifest hash。rotation input bundle reader按exact-key schema拒绝旧authority和缺少L2 hash的
+   mapping manifest；对应schema分别升级为`hmm_risk_industry_pit_601d_preflight_v2`和`hmm_risk_pit_mapping_manifest_v3`，不存在
+   同版本静默加字段、兼容fallback或静默升级。修复后的正式bundle必须重建，旧中断产物不得grandfather。
+5. **执行与安全边界**：projection builder只消费显式snapshot参数，不在bundle build或adapter resolve中查询DB；本BUG不执行DDL/DML、
+   dependency install、模型训练、selection、D6、model/READY或进程控制。源码进入backend-main后仍按workflow runtime contract保持
+   source merge与用户拥有的backend restart/post-restart readback分离。
+6. **验收**：定向测试至少覆盖31/131正例、130/132、134 source closure、parent/name/hash/provenance漂移、已观察taxonomy L2遗漏、旧authority
+   envelope、unbound L2、published L2输出及mapping/preflight hash readback；随后执行`hmm_risk_backend`、module registry、L0、F2 validator、
+   changed-file lint/compile与`git diff --check`。四项DESIGN-COMPLIANCE-001分别要求：不以126/partial catalog简化交付；不吞并authority错误；
+   不改变历史PIT或模型业务语义；不新增人工审批或模型淘汰门禁。
+
+7. **正式审核修复**：第一轮发现preflight/mapping在旧schema identity下追加字段会形成静默schema漂移，已分别升级到v2/v3，并补旧authority
+   拒绝测试。第二轮发现由调用方直接提供131-code list仍可形成错误但自洽的member domain，已改为消费冻结member rows、重聚合131 L2并逐row
+   校验canonical/taxonomy L1 owner。第三轮复核确认member中的numeric L1 alias只经已冻结L1 projection映射，同一L2出现多owner、130/132、
+   134源不闭合、duplicate、name/parent/hash漂移均fail closed。
+8. **验证结果**：直接矩阵`47 passed`；`hmm_risk_backend=676 passed`、branch coverage=`76.26%>=70%`；module registry=`8 passed/14 mapped`；
+   L0两套guardrail均`blocking=0`；F2 validator=`PASS/3 items/17 rows/0 warnings`；Ruff、py_compile、fresh-process import与`git diff --check`
+   均通过。未执行bundle build、24-fit、selection、D6、model/READY、DB写入或runtime动作。
+9. **DESIGN-COMPLIANCE-001**：禁止简化交付=`PASS`（126 observed taxonomy L2不能冒充131 catalog）；禁止静默错误=`PASS`（所有source、
+   denominator、owner、schema与hash漂移显式失败）；禁止业务逻辑迁移=`PASS`（C-013 PIT与全部模型合同不变）；禁止私增门禁审批=`PASS`
+   （只有确定性authority validation，无人工审批、模型淘汰或runtime ack）。
+
+当前状态：`BUG-1309 = SOURCE_REVIEWED_MERGE_READY_PENDING_PR_CI`。该状态不表示immutable bundle已构建、RW1 24-fit已执行、模型已通过或
+板块轮动产品可用；源码合入后的backend restart/post-restart readback仍由用户控制。

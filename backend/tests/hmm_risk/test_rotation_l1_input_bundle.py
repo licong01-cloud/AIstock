@@ -64,6 +64,7 @@ def _mapping_manifest() -> dict[str, object]:
         "active_classification_basis": "stable_taxonomy_backcast",
         "non_as_known_taxonomy": True,
         "l1_code_projection_sha256": "a" * 64,
+        "l2_code_projection_sha256": "c" * 64,
         "constituent_manifest_hash": "b" * 64,
     }
 
@@ -1197,6 +1198,55 @@ def test_builder_cli_persists_typed_failure_without_final_bundle(
     assert failure["primary_reason_code"] == subject.REASON_SOURCE_COMPONENT_MISSING
     assert failure["database_read_performed"] is False
     assert failure["model_write_performed"] is False
+
+
+def test_industry_adapter_rejects_legacy_authority_without_frozen_l2_projection(tmp_path: Path) -> None:
+    authority = {
+        "artifact_root": str(tmp_path.resolve()),
+        "identity": {},
+        "research_basis": {},
+        "l1_projection": {},
+    }
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._industry_adapter(authority, forbidden_roots=())
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_industry_adapter_binds_both_projection_authorities_before_use(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Adapter:
+        @classmethod
+        def from_artifact_root(cls, **_kwargs):
+            calls.append("artifact")
+            return cls()
+
+        def bind_research_basis_contract(self, _authority):
+            calls.append("research")
+
+        def bind_l1_code_projection(self, _authority):
+            calls.append("l1")
+
+        def bind_l2_code_projection(self, _authority):
+            calls.append("l2")
+
+    monkeypatch.setattr(subject, "HMMIndustryPitAdapter", Adapter)
+    authority = {
+        "artifact_root": str(tmp_path.resolve()),
+        "identity": {},
+        "research_basis": {},
+        "l1_projection": {},
+        "l2_projection": {},
+    }
+
+    result = subject._industry_adapter(authority, forbidden_roots=())
+
+    assert isinstance(result, Adapter)
+    assert calls == ["artifact", "research", "l1", "l2"]
 
 
 def test_moneyflow_contributor_eligibility_is_frozen_train_only_not_day_local() -> None:
