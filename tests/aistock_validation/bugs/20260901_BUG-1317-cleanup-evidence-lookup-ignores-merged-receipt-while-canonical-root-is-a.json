@@ -1,0 +1,279 @@
+{
+  "actual": "The first cleanup invocation blocks with missing_durable_receipt until the operator manually fast-forwards canonical main and reruns cleanup.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260901_BUG-1317-cleanup-evidence-lookup-ignores-merged-receipt-while-canonical-root-is-a.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1317",
+  "closed_at": "2026-09-01T20:38:01Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-01T20:11:46.059152Z",
+  "description": "The first cleanup invocation blocks with missing_durable_receipt until the operator manually fast-forwards canonical main and reruns cleanup.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260901-2e113163b84b",
+      "timestamp": "2026-09-01T20:11:46.059152Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-829 close-sync PR #4165: first cleanup blocked; manual root fast-forward followed by identical cleanup succeeded."
+  ],
+  "expected": "After exact merged-PR identity verification, cleanup planning should resolve a BUG evidence record from the explicit receipt path or origin/main snapshot, then safely sync root and clean the task worktree in one invocation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-09-01T20:11:46.059152Z",
+  "fix_branch": null,
+  "fix_commit": "9439c0e5a4e32a32d29839972922ddd7ecc654ed",
+  "fixed_at": "2026-09-01T20:38:01Z",
+  "github_issue_number": 4167,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4167",
+  "last_seen_at": "2026-09-01T20:11:46.059152Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4168",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Run cleanup-after-merge --sync-root for a just-merged close-sync PR while canonical main is one commit behind and the merged BUG JSON contains fixed status, fix_commit, pr_url, and validation_evidence.",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1317",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9e410dc8dbd3bc0a",
+    "recorded_at": "2026-09-01T20:39:51.442130Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3778f289b87c72959a631de13290f2d2e1c16c94",
+    "source_merge_commit": "9439c0e5a4e32a32d29839972922ddd7ecc654ed",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4168",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 516 passed, 2 skipped",
+      "focused cleanup receipt authority tests -> 5 passed",
+      "changed-files guardrail -> passed, 0 blocking, 3/3 mapped",
+      "validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+      "workflow-smoke and batch-workflow-smoke -> passed",
+      "ruff check, compileall, git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "7ab2995d8b3bfedd6ecfda8df6f0d8d67d1525c7d3e95912da417de8bab5bd44"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Cleanup evidence lookup ignores merged receipt while canonical root is awaiting fast-forward",
+  "trigger_condition": {
+    "fingerprint": "2e113163b84b26d5dd8ffb6b",
+    "source_event_id": "FE-20260901-2e113163b84b"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 516 passed, 2 skipped",
+    "focused cleanup receipt authority tests -> 5 passed",
+    "changed-files guardrail -> passed, 0 blocking, 3/3 mapped",
+    "validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "workflow-smoke and batch-workflow-smoke -> passed",
+    "ruff check, compileall, git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

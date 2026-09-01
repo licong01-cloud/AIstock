@@ -13462,21 +13462,22 @@ def _cleanup_protected_receipt_paths(bug_id: str | None) -> set[str]:
     return {receipt_ref} if receipt_ref and not summary_durable else set()
 
 
-def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
-    if not bug_id:
+def _cleanup_evidence_finalization_from_record(
+    record: dict[str, Any],
+    *,
+    source: str,
+    expected_bug_id: str | None,
+) -> dict[str, Any]:
+    observed_bug_id = str(record.get("bug_id") or "").strip().upper()
+    canonical_expected = str(expected_bug_id or "").strip().upper()
+    if canonical_expected and observed_bug_id != canonical_expected:
         return {
             "schema_version": "aistock_cleanup_evidence_finalization_v1",
-            "status": "not_required_without_bug_record",
-            "durable_receipt_present": True,
-        }
-    try:
-        record, source_path = find_bug_record(bug_id=bug_id, issue_json=None)
-    except Exception as exc:
-        return {
-            "schema_version": "aistock_cleanup_evidence_finalization_v1",
-            "status": "bug_record_unavailable",
+            "status": "bug_record_identity_mismatch",
             "durable_receipt_present": False,
-            "error": str(exc),
+            "expected_bug_id": canonical_expected,
+            "observed_bug_id": observed_bug_id or None,
+            "bug_json": source,
         }
     evidence = [
         *flow._as_list(record.get("validation_receipts")),
@@ -13500,9 +13501,32 @@ def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
         "durable_receipt_present": durable_receipt_present,
         "structured_receipt_present": structured_receipt_present,
         "legacy_closure_present": legacy_closure_present,
-        "bug_json": _repo_rel(source_path),
+        "bug_json": source,
         "evidence_item_count": len(evidence),
     }
+
+
+def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
+    if not bug_id:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "not_required_without_bug_record",
+            "durable_receipt_present": True,
+        }
+    try:
+        record, source_path = find_bug_record(bug_id=bug_id, issue_json=None)
+    except Exception as exc:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "bug_record_unavailable",
+            "durable_receipt_present": False,
+            "error": str(exc),
+        }
+    return _cleanup_evidence_finalization_from_record(
+        record,
+        source=_repo_rel(source_path),
+        expected_bug_id=bug_id,
+    )
 
 
 def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
@@ -19460,14 +19484,84 @@ def build_cleanup_after_merge_plan(
     protected_receipt_paths = _cleanup_protected_receipt_paths(evidence_bug_id)
     evidence_finalization = _cleanup_evidence_finalization(evidence_bug_id)
     loaded_source_receipt = source_merge_receipt
+    explicit_record_finalization: dict[str, Any] | None = None
     if loaded_source_receipt is None and source_receipt_path:
-        receipt_path = Path(source_receipt_path)
-        if not receipt_path.is_absolute():
-            receipt_path = root / receipt_path
-        if receipt_path.is_file():
+        requested_receipt_path = Path(source_receipt_path)
+        receipt_candidates: list[tuple[Path, bool]] = []
+        relative_receipt_path: Path | None = None
+        if requested_receipt_path.is_absolute():
+            receipt_candidates.append((requested_receipt_path, True))
+        elif ".." not in requested_receipt_path.parts:
+            relative_receipt_path = requested_receipt_path
+            if worktree_path:
+                receipt_candidates.append((worktree_path / requested_receipt_path, True))
+            receipt_candidates.append((root / requested_receipt_path, True))
+        seen_receipt_paths: set[str] = set()
+        for receipt_path, tracked_candidate in receipt_candidates:
+            try:
+                resolved_receipt_path = receipt_path.resolve()
+            except OSError:
+                continue
+            receipt_key = os.path.normcase(str(resolved_receipt_path))
+            if receipt_key in seen_receipt_paths or not resolved_receipt_path.is_file():
+                continue
+            seen_receipt_paths.add(receipt_key)
             with contextlib.suppress(OSError, UnicodeError, json.JSONDecodeError, WorkflowError):
-                candidate = _load_json(receipt_path)
+                candidate = _load_json(resolved_receipt_path)
+                trusted_roots = [base.resolve() for base in (root, worktree_path) if base]
+                trusted_bug_record = False
+                for trusted_root in trusted_roots:
+                    if resolved_receipt_path == trusted_root or trusted_root not in resolved_receipt_path.parents:
+                        continue
+                    tracked_relative_path = resolved_receipt_path.relative_to(trusted_root).as_posix()
+                    tracked_bug_path = _git(
+                        ["ls-files", "--error-unmatch", "--", tracked_relative_path],
+                        cwd=trusted_root,
+                        check=False,
+                    ).strip()
+                    if tracked_candidate and tracked_bug_path == tracked_relative_path:
+                        trusted_bug_record = True
+                        break
+                if trusted_bug_record and candidate.get("bug_id"):
+                    candidate_finalization = _cleanup_evidence_finalization_from_record(
+                        candidate,
+                        source=_repo_rel(resolved_receipt_path, worktree_path or root),
+                        expected_bug_id=evidence_bug_id,
+                    )
+                    if candidate_finalization.get("durable_receipt_present"):
+                        explicit_record_finalization = {
+                            **candidate_finalization,
+                            "evidence_source": "explicit_tracked_bug_record",
+                        }
                 loaded_source_receipt = candidate.get("source_merge_receipt") or candidate
+                if explicit_record_finalization or candidate.get("source_merge_receipt"):
+                    break
+        if relative_receipt_path and explicit_record_finalization is None:
+            origin_record = _run_command(
+                ["git", "show", f"origin/main:{relative_receipt_path.as_posix()}"],
+                cwd=root,
+                timeout=30,
+            )
+            if origin_record.get("ok"):
+                with contextlib.suppress(json.JSONDecodeError, TypeError, WorkflowError):
+                    candidate = json.loads(str(origin_record.get("stdout") or ""))
+                    if isinstance(candidate, dict) and candidate.get("bug_id"):
+                        candidate_finalization = _cleanup_evidence_finalization_from_record(
+                            candidate,
+                            source=f"origin/main:{relative_receipt_path.as_posix()}",
+                            expected_bug_id=evidence_bug_id,
+                        )
+                        if candidate_finalization.get("durable_receipt_present"):
+                            explicit_record_finalization = {
+                                **candidate_finalization,
+                                "evidence_source": "origin_main_bug_record",
+                            }
+                    if isinstance(candidate, dict) and candidate.get("source_merge_receipt"):
+                        loaded_source_receipt = candidate["source_merge_receipt"]
+                    elif loaded_source_receipt is None and isinstance(candidate, dict):
+                        loaded_source_receipt = candidate
+    if explicit_record_finalization:
+        evidence_finalization = explicit_record_finalization
     if worktree_path and worktree_path.exists():
         try:
             current_cwd = Path.cwd().resolve()
