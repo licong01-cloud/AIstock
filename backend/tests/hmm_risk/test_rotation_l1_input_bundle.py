@@ -672,6 +672,46 @@ def test_day_level_grouping_preserves_symbol_order_and_projects_only_l2_after_l1
     ]
 
 
+def test_security_resolution_index_preserves_explicit_intervals_and_caches_identical_defaults() -> None:
+    explicit = SimpleNamespace(
+        source_dataset="market.daily_basic",
+        canonical_ts_code="000001.SZ",
+        source_ts_code="000001.OLD",
+        effective_start=date(2022, 1, 1),
+        effective_end=date(2022, 1, 31),
+    )
+
+    class Manifest:
+        rows = (explicit,)
+
+        def __init__(self) -> None:
+            self.resolve_calls: list[tuple[str, date, str]] = []
+
+        def resolve(self, symbol, day, dataset):
+            self.resolve_calls.append((symbol, day, dataset))
+            return SimpleNamespace(
+                source_dataset=dataset,
+                canonical_ts_code=symbol,
+                source_ts_code=symbol,
+                effective_start=None,
+                effective_end=None,
+            )
+
+        @staticmethod
+        def evidence():
+            return {"manifest": "evidence"}
+
+    manifest = Manifest()
+    index = subject._SecurityResolutionIndex(manifest)
+
+    assert index.resolve("000001.SZ", date(2022, 1, 3), "market.daily_basic") is explicit
+    first = index.resolve("000001.SZ", date(2022, 2, 1), "market.daily_basic")
+    second = index.resolve("000001.SZ", date(2022, 3, 1), "market.daily_basic")
+    assert first is second
+    assert manifest.resolve_calls == [("000001.SZ", date(2022, 2, 1), "market.daily_basic")]
+    assert index.evidence() == {"manifest": "evidence"}
+
+
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

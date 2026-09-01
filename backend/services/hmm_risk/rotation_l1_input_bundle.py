@@ -1024,6 +1024,37 @@ def _load_benchmark_returns(path: Path, *, calendar: Sequence[date]) -> dict[dat
     return output
 
 
+class _SecurityResolutionIndex:
+    def __init__(self, manifest: Any) -> None:
+        self._manifest = manifest
+        self.rows = manifest.rows
+        grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
+        for row in self.rows:
+            grouped[(row.source_dataset, row.canonical_ts_code)].append(row)
+        self._rows_by_key: dict[tuple[str, str], tuple[Any, ...]] = {}
+        for key, rows in grouped.items():
+            ordered = tuple(sorted(rows, key=lambda row: (row.effective_start, row.effective_end)))
+            for previous, current in zip(ordered, ordered[1:]):
+                if current.effective_start <= previous.effective_end:
+                    raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"security source intervals overlap: {key}")
+            self._rows_by_key[key] = ordered
+        self._default_cache: dict[tuple[str, str], Any] = {}
+
+    def resolve(self, canonical_ts_code: str, trade_date: date, source_dataset: str) -> Any:
+        key = (source_dataset, canonical_ts_code)
+        for row in self._rows_by_key.get(key, ()):
+            if row.effective_start <= trade_date <= row.effective_end:
+                return row
+        cached = self._default_cache.get(key)
+        if cached is None:
+            cached = self._manifest.resolve(canonical_ts_code, trade_date, source_dataset)
+            self._default_cache[key] = cached
+        return cached
+
+    def evidence(self) -> dict[str, Any]:
+        return self._manifest.evidence()
+
+
 def _spool_qlib_months(
     qlib_root: Path,
     *,
@@ -1619,6 +1650,7 @@ def build_rotation_l1_inputs_from_assets(
         )
     except Exception as exc:
         raise _fail(REASON_AUTHORITY_AMBIGUOUS, "security/provider authority cannot be bound") from exc
+    security = _SecurityResolutionIndex(security)
     suspension_keys = _load_suspend_keys(
         assets["files"]["suspend_data"],
         assets["files"]["suspend_manifest"],
