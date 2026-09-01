@@ -54,6 +54,7 @@ class _Cursor:
         self.inventory_rows = inventory_rows
         self.rows: list[dict[str, Any]] = []
         self.inventory_params: tuple[list[str], date] | None = None
+        self.executed_queries: list[str] = []
 
     def __enter__(self) -> _Cursor:
         return self
@@ -63,6 +64,7 @@ class _Cursor:
 
     def execute(self, query: str, params: tuple[Any, ...] | None = None) -> None:
         normalized = " ".join(query.split())
+        self.executed_queries.append(normalized)
         if normalized.startswith("SET TRANSACTION"):
             self.rows = []
         elif "SELECT portfolio.portfolio_id AS legacy_account_id" in normalized:
@@ -95,13 +97,18 @@ class _Connection:
         return self.cursor_value
 
 
-def _read(rows: list[dict[str, Any]]) -> tuple[Any, ...]:
+def _read_with_cursor(rows: list[dict[str, Any]]) -> tuple[tuple[Any, ...], _Cursor]:
     cursor = _Cursor(rows)
     result = LocalSimLegacyInventoryReader(_Connection(cursor)).read(
         [ACCOUNT_ID],
         authority_trade_date=AUTHORITY_DATE,
     )
     assert cursor.inventory_params == ([ACCOUNT_ID], AUTHORITY_DATE)
+    return result, cursor
+
+
+def _read(rows: list[dict[str, Any]]) -> tuple[Any, ...]:
+    result, _cursor = _read_with_cursor(rows)
     return result
 
 
@@ -148,3 +155,14 @@ def test_inventory_uses_release_binding_manifest_and_rejects_their_drift() -> No
                 )
             ]
         )
+
+
+def test_economic_hash_scopes_fills_through_authoritative_run_ledger_scope() -> None:
+    _result, cursor = _read_with_cursor(
+        [_row(binding_id="binding_current", effective_from=AUTHORITY_DATE)]
+    )
+
+    fills_query = next(query for query in cursor.executed_queries if "FROM paper_v2.fills AS scoped" in query)
+    assert "JOIN paper_v2.run AS owner ON owner.run_id = scoped.run_id" in fills_query
+    assert "WHERE owner.portfolio_id = %s" in fills_query
+    assert "WHERE portfolio_id = %s" not in fills_query

@@ -15,14 +15,14 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 from .successor_models import LegacyLocalSimAccountInventoryV1, SimulationAccountStatus
 
 
-_ECONOMIC_SCOPES: tuple[tuple[str, str], ...] = (
+_ECONOMIC_SCOPES: tuple[tuple[str, str | None], ...] = (
     ("paper_v2.simulation_daily_run", "strategy_id"),
     ("paper_v2.execution_plan", "portfolio_id"),
     ("paper_v2.run", "portfolio_id"),
     ("paper_v2.positions", "portfolio_id"),
     ("paper_v2.intraday_snapshots", "portfolio_id"),
     ("paper_v2.orders", "portfolio_id"),
-    ("paper_v2.fills", "portfolio_id"),
+    ("paper_v2.fills", None),
     ("paper_v2.cash_ledger", "portfolio_id"),
     ("paper_v2.errors", "portfolio_id"),
 )
@@ -239,12 +239,21 @@ class LocalSimLegacyInventoryReader:
     def _economic_facts_sha256(cur: Any, ledger_scope_id: str) -> str:
         digest = hashlib.sha256()
         for table, column in _ECONOMIC_SCOPES:
-            digest.update(f"{table}:{column}\n".encode())
-            cur.execute(
-                f"SELECT to_jsonb(scoped) AS payload FROM {table} AS scoped "
-                f"WHERE {column} = %s ORDER BY to_jsonb(scoped)::text",
-                (ledger_scope_id,),
-            )
+            if column is None:
+                digest.update(f"{table}:run.portfolio_id\n".encode())
+                cur.execute(
+                    f"SELECT to_jsonb(scoped) AS payload FROM {table} AS scoped "
+                    "JOIN paper_v2.run AS owner ON owner.run_id = scoped.run_id "
+                    "WHERE owner.portfolio_id = %s ORDER BY to_jsonb(scoped)::text",
+                    (ledger_scope_id,),
+                )
+            else:
+                digest.update(f"{table}:{column}\n".encode())
+                cur.execute(
+                    f"SELECT to_jsonb(scoped) AS payload FROM {table} AS scoped "
+                    f"WHERE {column} = %s ORDER BY to_jsonb(scoped)::text",
+                    (ledger_scope_id,),
+                )
             count = 0
             for result in cur:
                 payload = result["payload"] if isinstance(result, dict) else result[0]
