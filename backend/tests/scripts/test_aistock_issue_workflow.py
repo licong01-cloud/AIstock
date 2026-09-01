@@ -16763,6 +16763,154 @@ def test_cleanup_after_merge_allows_squash_merge_when_remote_branch_deleted(
     assert payload["merge_verification"]["path_equivalence"]["changed_files"] == ["scripts/aistock_issue_workflow.py"]
 
 
+def test_cleanup_after_merge_accepts_exact_merged_pr_when_source_four_state_is_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-already-absent"
+    head_oid = "a" * 40
+    merge_commit = "b" * 40
+    pr_url = "https://github.example/pull/357"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if tuple(args[:3]) in {
+            ("for-each-ref", "--format=%(refname:short)", "refs/heads"),
+            ("branch", "--format=%(refname:short)", "--merged"),
+        }:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_preflight_fetch_origin",
+        lambda root, apply: _fetched_origin_payload(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": url,
+                "headRefName": branch,
+                "headRefOid": head_oid,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref == "origin/main")
+    monkeypatch.setattr(workflow, "_git_commit_is_ancestor", lambda commit, target, root: target == "origin/main")
+    monkeypatch.setattr(workflow, "_registered_worktree_for_branch", lambda branch, cwd=None: None)
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "dirty": False,
+            "dirty_count": 0,
+            "head": merge_commit,
+            "origin_main": merge_commit,
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url=pr_url,
+        apply=True,
+        sync_root=False,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["blocking"] == []
+    assert payload["actions"] == []
+    assert payload["merge_verification"]["method"] == "merged_pr_source_four_state_already_absent"
+    assert all(payload["merge_verification"]["already_absent_profile"].values())
+
+
+@pytest.mark.parametrize(
+    ("remote_ref", "head_branch"),
+    [
+        (f"{'a' * 40}\trefs/heads/bug/BUG-199-already-absent", "bug/BUG-199-already-absent"),
+        ("", "bug/BUG-200-different-head"),
+    ],
+)
+def test_cleanup_after_merge_absent_recovery_rejects_present_ref_or_pr_identity_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    remote_ref: str,
+    head_branch: str,
+) -> None:
+    branch = "bug/BUG-199-already-absent"
+    merge_commit = "b" * 40
+    pr_url = "https://github.example/pull/358"
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:2] == ["ls-remote", "--heads"]:
+            return remote_ref
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": url,
+                "headRefName": head_branch,
+                "headRefOid": "a" * 40,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref == "origin/main")
+    monkeypatch.setattr(workflow, "_git_commit_is_ancestor", lambda commit, target, root: target == "origin/main")
+    monkeypatch.setattr(workflow, "_registered_worktree_for_branch", lambda branch, cwd=None: None)
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "dirty": False,
+            "dirty_count": 0,
+            "head": merge_commit,
+            "origin_main": merge_commit,
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url=pr_url,
+        sync_root=False,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["blocking"] == [f"branch is not merged into origin/main: {branch}"]
+
+
 def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

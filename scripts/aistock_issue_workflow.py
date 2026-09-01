@@ -19441,7 +19441,13 @@ def build_cleanup_after_merge_plan(
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
     merge_verified = bool(merge_verification["verified"])
-    worktree_path = Path(worktree) if worktree else _registered_worktree_for_branch(branch, cwd=root)
+    explicit_worktree_path = Path(worktree) if worktree else None
+    registered_worktree_path = (
+        None
+        if explicit_worktree_path and explicit_worktree_path.exists()
+        else _registered_worktree_for_branch(branch, cwd=root)
+    )
+    worktree_path = explicit_worktree_path or registered_worktree_path
     worktree_clean = True
     worktree_registered = False
     worktree_exists = bool(worktree_path and worktree_path.exists())
@@ -19498,6 +19504,45 @@ def build_cleanup_after_merge_plan(
                     "references": [],
                 }
             )
+    already_absent_profile = {
+        "local_branch_absent": branch not in local_branches,
+        "remote_branch_absent": bool(remote_ref_result.get("ok") and not remote_ref.strip()),
+        "registered_worktree_absent": registered_worktree_path is None and not worktree_exists,
+        "worktree_path_absent": not worktree_exists,
+        "pr_identity_verified": bool(
+            pr_url
+            and _cleanup_verified_pr_check_matches_target(
+                pr_check,
+                pr_url=pr_url,
+                branch=branch,
+            )
+        ),
+        "merge_commit_in_origin_main": False,
+    }
+    absent_merge_commit = _merge_commit_from_pr_check(pr_check)
+    already_absent_profile["merge_commit_in_origin_main"] = bool(
+        absent_merge_commit
+        and _git_commit_is_ancestor(absent_merge_commit, "origin/main", root=root)
+    )
+    already_absent_verified = bool(
+        not merge_verified
+        and all(already_absent_profile.values())
+    )
+    merge_verification["already_absent_profile"] = already_absent_profile
+    if already_absent_verified:
+        merge_verification.update(
+            {
+                "method": "merged_pr_source_four_state_already_absent",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": _pr_head_oid_from_pr_check(pr_check),
+                "tree_equivalence_target": absent_merge_commit,
+            }
+        )
+        merge_verified = True
+        squash_merge_verified = True
+        tree_equivalent = False
     if (
         worktree_ignored_artifacts
         and worktree_ignored_artifacts.get("transient_count")
