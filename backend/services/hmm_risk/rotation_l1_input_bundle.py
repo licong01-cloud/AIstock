@@ -61,7 +61,7 @@ from backend.services.quantevolver.qe_dataset_contract import QEFormalDatasetBin
 
 INPUT_CONTRACT_VERSION = "C-012-RL1-IB-D1-D6"
 ALGORITHM_VERSION = "hmm_risk_rotation_l1_input_bundle_v1"
-MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_input_bundle_manifest_v1"
+MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_input_bundle_manifest_v2"
 BUILD_RECEIPT_SCHEMA_VERSION = "hmm_risk_rotation_l1_input_bundle_build_receipt_v1"
 CANONICAL_SERIALIZATION_VERSION = "hmm_risk_rotation_l1_input_bundle_canonical_v1"
 SOURCE_REVISION = "c013-g2a-hmm-input-bundle-v1"
@@ -133,6 +133,7 @@ _UNAVAILABLE_DTYPE = np.dtype(
 _SECURITY_INTERVAL_DTYPE = np.dtype(
     [
         ("canonical_security_id", "S16"),
+        ("source_dataset", "S32"),
         ("valid_from", "<i4"),
         ("valid_to", "<i4"),
         ("source_code", "S16"),
@@ -166,6 +167,7 @@ _INTERVAL_DATASETS = (
     "industry_projection_intervals",
     "source_status_intervals",
 )
+_SECURITY_INTERVAL_SOURCE_DATASETS = frozenset({"market.daily_basic", "market.moneyflow_ts"})
 _QLIB_SOURCE_DTYPE = np.dtype(
     [("trade_date", "<i4"), ("symbol", "S16"), *[(field, "<f4") for field in QLIB_STOCK_FIELDS]],
     align=False,
@@ -1673,23 +1675,26 @@ def _security_intervals(security: Any, spans: Mapping[str, Sequence[tuple[date, 
             ordered = sorted(boundaries)
             for left, right in zip(ordered, ordered[1:]):
                 segment_end = right - timedelta(days=1)
-                source_codes = {
-                    security.resolve(symbol, left, dataset).source_ts_code
-                    for dataset in ("market.daily_basic", "market.moneyflow_ts")
-                }
-                if len(source_codes) > 1:
-                    raise _fail(
-                        REASON_AUTHORITY_AMBIGUOUS, f"security source aliases differ by dataset: {symbol}/{left}"
+                for dataset in ("market.daily_basic", "market.moneyflow_ts"):
+                    resolution = security.resolve(symbol, left, dataset)
+                    output.append(
+                        {
+                            "canonical_security_id": symbol,
+                            "source_dataset": dataset,
+                            "valid_from": left.isoformat(),
+                            "valid_to": segment_end.isoformat(),
+                            "source_code": resolution.source_ts_code,
+                        }
                     )
-                output.append(
-                    {
-                        "canonical_security_id": symbol,
-                        "valid_from": left.isoformat(),
-                        "valid_to": segment_end.isoformat(),
-                        "source_code": next(iter(source_codes), symbol),
-                    }
-                )
-    return sorted(output, key=lambda row: (row["canonical_security_id"], row["valid_from"], row["source_code"]))
+    return sorted(
+        output,
+        key=lambda row: (
+            row["canonical_security_id"],
+            row["source_dataset"],
+            row["valid_from"],
+            row["source_code"],
+        ),
+    )
 
 
 def _canonical_sector_codes(adapter: HMMIndustryPitAdapter) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2157,10 +2162,10 @@ def _bundle_evidence_arrays(inputs: Mapping[str, Any]) -> dict[str, np.ndarray]:
         evidence["security_identity_intervals"],
         dataset="security_identity_intervals",
         dtype=_SECURITY_INTERVAL_DTYPE,
-        fields=("canonical_security_id", "valid_from", "valid_to", "source_code"),
+        fields=("canonical_security_id", "source_dataset", "valid_from", "valid_to", "source_code"),
         date_fields=frozenset({"valid_from", "valid_to"}),
         open_end_fields=frozenset({"valid_to"}),
-        widths={"canonical_security_id": 16, "source_code": 16},
+        widths={"canonical_security_id": 16, "source_dataset": 32, "source_code": 16},
     )
     industry = _strict_structured_rows(
         evidence["industry_projection_intervals"],
@@ -2183,6 +2188,9 @@ def _bundle_evidence_arrays(inputs: Mapping[str, Any]) -> dict[str, np.ndarray]:
     unavailable_reasons = {bytes(value).rstrip(b"\x00").decode("ascii") for value in unavailable["reason_code"]}
     if not unavailable_reasons.issubset(_UNAVAILABLE_REASON_CODES):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "unavailable evidence contains an unknown reason code")
+    security_datasets = {bytes(value).rstrip(b"\x00").decode("ascii") for value in security["source_dataset"]}
+    if security_datasets != _SECURITY_INTERVAL_SOURCE_DATASETS:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "security identity evidence source dataset set differs")
     for raw in status:
         status_value = bytes(raw["status"]).rstrip(b"\x00").decode("ascii")
         reason_value = bytes(raw["reason_code"]).rstrip(b"\x00").decode("ascii")
@@ -2197,13 +2205,13 @@ def _bundle_evidence_arrays(inputs: Mapping[str, Any]) -> dict[str, np.ndarray]:
             or (status_value == "source_invalid" and reason_value not in _SOURCE_INVALID_REASONS)
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "source status evidence contains an unknown status/reason")
-    for name, values in {
-        "security_identity_intervals": security,
-        "industry_projection_intervals": industry,
-        "source_status_intervals": status,
-    }.items():
-        starts = values[values.dtype.names[1]].astype(np.int64)
-        ends = values[values.dtype.names[2]].astype(np.int64)
+    for name, values, start_field, end_field in (
+        ("security_identity_intervals", security, "valid_from", "valid_to"),
+        ("industry_projection_intervals", industry, "effective_from", "effective_to"),
+        ("source_status_intervals", status, "valid_from", "valid_to"),
+    ):
+        starts = values[start_field].astype(np.int64)
+        ends = values[end_field].astype(np.int64)
         if np.any(starts > ends):
             raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"{name} contains a reversed interval")
     return {
@@ -2311,6 +2319,7 @@ _EVIDENCE_SCHEMAS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "security_identity_intervals": (
         ("canonical_security_id", "str"),
+        ("source_dataset", "str"),
         ("valid_from", "i64"),
         ("valid_to", "i64"),
         ("source_code", "str"),
@@ -2360,6 +2369,12 @@ def _validate_evidence_readback(evidence: Mapping[str, np.ndarray]) -> None:
     unavailable_reasons = {bytes(value).rstrip(b"\x00").decode("ascii") for value in unavailable["reason_code"]}
     if not unavailable_reasons.issubset(_UNAVAILABLE_REASON_CODES):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "unavailable evidence contains an unknown reason code")
+    security_datasets = {
+        bytes(value).rstrip(b"\x00").decode("ascii")
+        for value in evidence["security_identity_intervals"]["source_dataset"]
+    }
+    if security_datasets != _SECURITY_INTERVAL_SOURCE_DATASETS:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "security identity evidence source dataset set differs")
     for raw in evidence["source_status_intervals"]:
         status_value = bytes(raw["status"]).rstrip(b"\x00").decode("ascii")
         reason_value = bytes(raw["reason_code"]).rstrip(b"\x00").decode("ascii")
@@ -2374,14 +2389,22 @@ def _validate_evidence_readback(evidence: Mapping[str, np.ndarray]) -> None:
             or (status_value == "source_invalid" and reason_value not in _SOURCE_INVALID_REASONS)
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "source status evidence contains an unknown status/reason")
-    for name in _INTERVAL_DATASETS:
+    for name, start_field, end_field, identity_fields in (
+        (
+            "security_identity_intervals",
+            "valid_from",
+            "valid_to",
+            ("canonical_security_id", "source_dataset"),
+        ),
+        ("industry_projection_intervals", "effective_from", "effective_to", ("canonical_security_id",)),
+        ("source_status_intervals", "valid_from", "valid_to", ("canonical_security_id",)),
+    ):
         values = evidence[name]
-        start_field, end_field = values.dtype.names[1:3]
         if np.any(values[start_field] > values[end_field]):
             raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"{name} contains a reversed interval")
-        previous: dict[bytes, int] = {}
+        previous: dict[tuple[bytes, ...], int] = {}
         for raw in values:
-            identity = bytes(raw["canonical_security_id"]).rstrip(b"\x00")
+            identity = tuple(bytes(raw[field]).rstrip(b"\x00") for field in identity_fields)
             start = int(raw[start_field])
             end = int(raw[end_field])
             if identity in previous and start <= previous[identity]:
@@ -2401,11 +2424,16 @@ def _validate_authority_daily_coverage(
             result[bytes(row["canonical_security_id"]).rstrip(b"\x00")].append(row)
         return result
 
-    security = grouped("security_identity_intervals")
+    security: dict[bytes, dict[bytes, list[np.void]]] = defaultdict(lambda: defaultdict(list))
+    for row in evidence["security_identity_intervals"]:
+        symbol = bytes(row["canonical_security_id"]).rstrip(b"\x00")
+        dataset = bytes(row["source_dataset"]).rstrip(b"\x00")
+        security[symbol][dataset].append(row)
     industry = grouped("industry_projection_intervals")
     statuses = grouped("source_status_intervals")
     calendar_values = [int(day.strftime("%Y%m%d")) for day in trading_dates]
-    for symbol_index, (symbol, spans) in enumerate(security.items()):
+    expected_datasets = {value.encode("ascii") for value in _SECURITY_INTERVAL_SOURCE_DATASETS}
+    for symbol_index, (symbol, spans_by_dataset) in enumerate(security.items()):
         if resource_started is not None and symbol_index % 64 == 0:
             _resource_checkpoint(
                 resource_started,
@@ -2415,20 +2443,28 @@ def _validate_authority_daily_coverage(
             )
         industry_rows = industry.get(symbol, [])
         status_rows = statuses.get(symbol, [])
-        security_index = 0
+        if set(spans_by_dataset) != expected_datasets:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "security identity dataset coverage differs")
+        security_indices = {dataset: 0 for dataset in expected_datasets}
         industry_index = 0
         status_index = 0
         for day in calendar_values:
-            while security_index < len(spans) and int(spans[security_index]["valid_to"]) < day:
-                security_index += 1
-            security_hit = (
-                spans[security_index]
-                if security_index < len(spans)
-                and int(spans[security_index]["valid_from"]) <= day <= int(spans[security_index]["valid_to"])
-                else None
-            )
-            if security_hit is None:
+            security_hits: dict[bytes, np.void | None] = {}
+            for dataset in expected_datasets:
+                spans = spans_by_dataset[dataset]
+                index = security_indices[dataset]
+                while index < len(spans) and int(spans[index]["valid_to"]) < day:
+                    index += 1
+                security_indices[dataset] = index
+                security_hits[dataset] = (
+                    spans[index]
+                    if index < len(spans) and int(spans[index]["valid_from"]) <= day <= int(spans[index]["valid_to"])
+                    else None
+                )
+            if all(hit is None for hit in security_hits.values()):
                 continue
+            if any(hit is None for hit in security_hits.values()):
+                raise _fail(REASON_AUTHORITY_AMBIGUOUS, "security identity daily dataset coverage differs")
             while status_index < len(status_rows) and int(status_rows[status_index]["valid_to"]) < day:
                 status_index += 1
             status_hit = (

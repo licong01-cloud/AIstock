@@ -1,147 +1,167 @@
 {
-  "actual": "Untracked non-ignored files are absent from _l0_changed_files and can bypass both static guardrail scanners.",
+  "actual": "_security_intervals unions daily_basic and moneyflow source codes and raises authority_ambiguous whenever the correct dataset-specific aliases differ.",
   "allowed_write_scope": [
-    "noxfile.py",
-    "backend/tests/test_noxfile_validation_env.py",
-    "tests/aistock_validation/bugs/20260722_BUG-829-p1-workflow-l0-default-changed-file-scope-omits-untracked-feature-files.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "tests/aistock_validation/bugs/20260901_BUG-1316-immutable-hmm-bundle-collapses-dataset-specific-security-aliases.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-829",
-  "closed_at": "2026-07-22T18:58:17Z",
+  "bug_id": "BUG-1316",
+  "closed_at": "2026-09-01T21:19:59Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-22T10:39:42.169947Z",
-  "description": "Untracked non-ignored files are absent from _l0_changed_files and can bypass both static guardrail scanners.",
+  "created_at": "2026-09-01T20:06:58.020427Z",
+  "description": "_security_intervals unions daily_basic and moneyflow source codes and raises authority_ambiguous whenever the correct dataset-specific aliases differ.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260722-6cf90a0dd65b",
-      "timestamp": "2026-07-22T10:39:42.169940Z"
+      "note": "Promoted from IC-20260901-7a0d959f9ecf",
+      "timestamp": "2026-09-01T20:06:58.020396Z"
     }
   ],
   "evidence_uris": [
-    "F-014 Phase 2 local L0 initially scanned only tracked modifications until the 32 changed paths were passed explicitly."
+    "F:\\Dev\\AIstock_artifacts\\BUG1306_hmm_input_bundle_validation_20260902_bc2d71da\\.input_bundle.failed.bf7bb12f62454009a9de15354b69f4d0\\build.failure.json"
   ],
-  "expected": "Default L0 scope includes branch commits, worktree modifications, index changes, and untracked non-ignored files exactly once.",
+  "expected": "Each frozen (canonical_security_id, source_dataset, valid interval) row preserves its exact source_code. Dataset-specific aliases coexist without conflict, remain sorted/hash-bound/readback-validated, and no alias is copied across datasets.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "tests/aistock_validation/bugs/20260901_BUG-1316-immutable-hmm-bundle-collapses-dataset-specific-security-aliases.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "tests/aistock_validation/bugs/20260901_BUG-1316-immutable-hmm-bundle-collapses-dataset-specific-security-aliases.json"
     ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "noxfile.py",
-        "backend/tests/test_noxfile_validation_env.py"
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
       ],
       "impacted_modules": [
-        "validation.runner",
-        "validation.center",
-        "validation.guardrails",
-        "validation.module_quality",
-        "tests.backend",
-        "tests.frontend",
-        "validation.coverage"
+        "hmm.risk",
+        "docs.architecture",
+        "validation.module_quality"
       ],
       "matched_rules": [
         {
-          "file": "noxfile.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.guardrails",
-            "validation.module_quality",
-            "tests.backend",
-            "tests.frontend"
-          ],
-          "primary_module": "validation.runner",
+          "file": "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
           "risk_level": "high",
-          "rule_id": "noxfile_validation_runner"
+          "rule_id": "hmm_risk_services"
         },
         {
-          "file": "backend/tests/test_noxfile_validation_env.py",
+          "file": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
           "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.coverage",
-            "validation.guardrails",
             "validation.module_quality"
           ],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "validation_backend_tests"
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
         }
       ],
       "risk_levels": [
         "high",
-        "medium"
+        "low"
       ],
       "suggested_scope": [
-        "noxfile.py",
-        "backend/tests/test_noxfile_validation_env.py"
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
       ],
       "unmatched_files": []
     },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
     ]
   },
-  "first_seen_at": "2026-07-22T10:39:42.169947Z",
+  "first_seen_at": "2026-09-01T20:06:58.020427Z",
   "fix_branch": null,
-  "fix_commit": "56001b809e4386393f64a407f30bdf42a8c9be6d",
-  "fixed_at": "2026-07-22T18:58:17Z",
-  "github_issue_number": 2629,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2629",
-  "last_seen_at": "2026-07-22T10:39:42.169947Z",
-  "module": "validation",
+  "fix_commit": "2c3f898ab3e4c2c82342be6ba69bfd5a56186e18",
+  "fixed_at": "2026-09-01T21:19:59Z",
+  "github_issue_number": 4166,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4166",
+  "last_seen_at": "2026-09-01T20:06:58.020427Z",
+  "module": "hmm.risk",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2630",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4171",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "Create an untracked Python file, call noxfile._l0_changed_files(), and observe that the path is absent.",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/hmm_risk/build_rotation_l1_input_bundle.py with the frozen BUG-1306 source binding",
   "required_verification": [
     "l0",
-    "validation_catalog_integrity"
+    "hmm_risk_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
     "post_restart_receipt_ref": null,
-    "runtime_identity_match": "not_required"
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "validation"
+    "hmm.risk"
   ],
-  "title": "[P1][Workflow] L0 default changed-file scope omits untracked feature files",
+  "title": "Immutable HMM bundle collapses dataset-specific security aliases",
   "trigger_condition": {
-    "fingerprint": "6cf90a0dd65bb5698d572f44",
-    "source_event_id": "FE-20260722-6cf90a0dd65b"
+    "fingerprint": "7a0d959f9ecfd69a3ee7e3d9",
+    "source_event_id": "FE-20260901-7a0d959f9ecf"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/test_noxfile_validation_env.py -q -> 17 passed"
+    "PR #4171 CI verdict and CodeQL verdict passed; local hmm_risk_backend 683 passed with coverage 76.51%; runtime_impact=none"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "validation",
-        "validation_catalog_integrity"
+        "hmm.risk",
+        "hmm_risk"
       ],
       "plans": [
-        "validation_catalog_integrity"
+        "hmm_risk_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -180,7 +200,7 @@
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -188,7 +208,6 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -196,11 +215,11 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "validation",
-          "validation_catalog_integrity"
+          "hmm.risk",
+          "hmm_risk"
         ],
         "plans": [
-          "validation_catalog_integrity"
+          "hmm_risk_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
