@@ -133,3 +133,15 @@ def test_entry_guard_rejects_clock_or_instrument_mismatch() -> None:
             observation=_observation(instrument="000002.SZ"),
         )
     assert excinfo.value.reason_code == "ADVISORY_ENTRY_GUARD_CLOCK_MISMATCH"
+
+
+def test_dynamic_entry_guard_accepts_a_frozen_zero_gap_ceiling() -> None:
+    result = evaluate_entry_guard(
+        policy=build_entry_guard_policy(EntryGuardMode.FROZEN_DYNAMIC),
+        signal=_signal(max_acceptable_gap_bps=0.0, max_buy_price=10.0),
+        observation=_observation(open_price=10.01),
+    )
+
+    assert result.action == EntryGuardAction.SKIP
+    assert result.reason_code == "SKIP_OPEN_GAP_EXCEEDED"
+    assert result.applied_max_gap_bps == 0.0
