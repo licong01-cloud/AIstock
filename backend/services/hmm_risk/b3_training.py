@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -15,18 +16,44 @@ from backend.services.hmm_risk.b3_acceptance import (
     D4_LIKELIHOOD_VERSION,
     D4_OCCUPANCY_VERSION,
     D5_SELECTION_VERSION,
+    D6_AVAILABILITY_VERSION,
+    D6_NA_SEMANTIC_VERSION,
     D6_SEMANTIC_VERSION,
     L2_RETRAIN_VERSION,
     RESTART_SCHEDULE,
     evaluate_covariance_acceptance,
     evaluate_likelihood_acceptance,
-    evaluate_semantic_validation,
+    evaluate_semantic_validation_calendar,
     evaluate_train_occupancy,
+    map_covariance_prior_objective,
+    map_numeric_envelope,
+    validate_d4_training_receipts,
+)
+from backend.services.hmm_risk.b3_mixed_dimension import (
+    INACTIVE_DIMENSION_REASON_CODE,
+    MIXED_DIMENSION_CONTRACT_VERSION,
+    MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
+    MIXED_MODEL_SCHEMA_VERSION,
+    MIXED_REPEAT_SCHEMA_VERSION,
+    MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
+    build_level_dimension_identity,
+    build_projection_receipt,
+    uses_mixed_dimension_level,
+    validate_projection_receipt,
+)
+from backend.services.hmm_risk.b3_transition_dwell import (
+    CONTRACT_VERSION as TRANSITION_DWELL_CONTRACT_VERSION,
+    REASON_MAP_NON_FINITE as TRANSITION_MAP_NON_FINITE_REASON,
+    TransitionDwellContractError,
+    assert_target_scope as assert_transition_dwell_target_scope,
+    build_transition_prior,
+    transition_map_objective,
 )
 from backend.services.hmm_risk.state_model_set import (
     ALL_CORE_FEATURES,
     BASE_FEATURES,
     C008_B3_DIAG04_NU,
+    D6ValidationCalendarSeries,
     HMM_N_ITER,
     L1TrainingSeries,
     SCHEMA_VERSION,
@@ -36,7 +63,6 @@ from backend.services.hmm_risk.state_model_set import (
     _finite_array,
     _fit_preprocess,
     _manual_b3_diag04_initialization,
-    _monitor_diagnostic,
     _probability_vector,
     _sector_local_reference_variance,
     _transition_matrix,
@@ -46,13 +72,16 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_json_bytes,
     canonical_sha256,
     causal_forward_posteriors,
+    causal_forward_posteriors_calendar,
+    validate_d6_frozen_input_manifest,
 )
-from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
+from backend.services.hmm_risk.stock_fact_observation import C010_FORMULA_VERSION, validate_c010_policy_manifest
 
 
 REFIT03_RAW_COVARIANCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_raw_capture_v1"
 REFIT03_RAW_COVARIANCE_AUTHORITY = "gaussian_hmm_internal_diag_covars_v1"
 REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_b3_training_stage_evidence_v1"
+SELECTED_LEVEL_SCHEMA_VERSION_D6_NA = "hmm_risk_b3_selected_level_artifact_v2_d6_na"
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -75,6 +104,24 @@ class B3TrainingStageError(StateModelSetError):
         self.stage_evidence = dict(stage_evidence or {})
 
 
+class _MapJointFitFailure(StateModelSetError):
+    def __init__(self, stage: str, reason_code: str, message: str, *, evidence: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.reason_code = reason_code
+        self.evidence = dict(evidence)
+
+
+@dataclass(frozen=True)
+class _MapJointFitResult:
+    likelihood: Mapping[str, Any]
+    covariance: Mapping[str, Any]
+    covariance_evidence: Mapping[str, Any]
+    raw_covariance_evidence: Mapping[str, Any]
+    raw_covars: np.ndarray
+    terminal_raw_likelihood: float
+
+
 @dataclass(frozen=True)
 class B3FittedModel:
     family: str
@@ -92,10 +139,15 @@ class B3FittedModel:
     observation_manifest_hash: str
     pit_constituent_manifest_hash: str
     model_payload_sha256: str
+    projection_receipt: Mapping[str, Any] | None = None
+    transition_dwell_contract: str | None = None
+    transition_prior_sha256: str | None = None
 
     def payload(self) -> dict[str, Any]:
-        return {
-            "schema_version": "hmm_risk_b3_fitted_model_v1",
+        body = {
+            "schema_version": (
+                MIXED_MODEL_SCHEMA_VERSION if self.projection_receipt is not None else "hmm_risk_b3_fitted_model_v1"
+            ),
             "contract_version": D3_CONTRACT_VERSION,
             "family": self.family,
             "level": self.level,
@@ -112,8 +164,26 @@ class B3FittedModel:
             "numeric_environment_sha256": self.numeric_environment_sha256,
             "observation_manifest_hash": self.observation_manifest_hash,
             "pit_constituent_manifest_hash": self.pit_constituent_manifest_hash,
-            "model_payload_sha256": self.model_payload_sha256,
         }
+        if self.projection_receipt is not None:
+            body.update(
+                {
+                    "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                    "feature_count": len(self.feature_names),
+                    "likelihood_feature_names": list(self.projection_receipt["active_feature_names"]),
+                    "likelihood_feature_count": self.projection_receipt["likelihood_feature_count"],
+                    "projection_receipt": dict(self.projection_receipt),
+                    "projection_sha256": self.projection_receipt["projection_sha256"],
+                }
+            )
+        if self.transition_dwell_contract is not None:
+            body.update(
+                {
+                    "transition_dwell_contract": self.transition_dwell_contract,
+                    "transition_prior_sha256": self.transition_prior_sha256,
+                }
+            )
+        return {**body, "model_payload_sha256": self.model_payload_sha256}
 
 
 @dataclass(frozen=True)
@@ -192,6 +262,8 @@ class _B3PreparedTrainOnlyInitialization:
     means: np.ndarray
     covars: np.ndarray
     prior: np.ndarray
+    transmat_prior: float | np.ndarray
+    transition_prior_evidence: Mapping[str, Any] | None
     evidence: Mapping[str, Any]
 
 
@@ -375,16 +447,33 @@ def build_train_only_series(
     return {value.sector_code: value for value in values}
 
 
-def formal_b3_parameter_profile() -> dict[str, Any]:
+def formal_b3_parameter_profile(*, transition_dwell_b: bool = False) -> dict[str, Any]:
     diagnostic_profile = c008_b3_diag04_parameter_profile()
-    return {
+    profile = {
         **diagnostic_profile,
         "schema_version": "hmm_risk_b3_parameter_profile_v1",
         "contract": D3_CONTRACT_VERSION,
+        "d4_likelihood_contract": D4_LIKELIHOOD_VERSION,
+        "d4_covariance_contract": D4_COVARIANCE_VERSION,
+        "d4_occupancy_contract": D4_OCCUPANCY_VERSION,
+        "convergence_authority": "covariance_prior_map_objective_with_d4_02_joint_stop",
+        "em_executor": "hmmlearn_0_3_3_private_estep_mstep_v1",
+        "raw_likelihood_role": "diagnostic_and_d5_joint_stop_score_only",
         "numeric_contract_status": "USER_APPROVED_FORMAL_CONTRACT",
         "formal_acceptance_thresholds_applied_by_independent_d4_receipts": True,
         "selection_performed_by_profile": False,
     }
+    if transition_dwell_b:
+        profile.update(
+            {
+                "schema_version": "hmm_risk_b3_transition_dwell_parameter_profile_v1",
+                "transition_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "convergence_authority": "covariance_and_transition_prior_map_objective_with_d4_02_joint_stop",
+                "transmat_prior_role": "train_only_kmeans_sequence_dirichlet_map_prior",
+                "expected_dwell_role": "diagnostic_only",
+            }
+        )
+    return profile
 
 
 def _prepare_b3_preprocessed_train_only_initialization(
@@ -392,6 +481,7 @@ def _prepare_b3_preprocessed_train_only_initialization(
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> _B3PreparedTrainOnlyInitialization:
     """Apply the exact D3 initialization contract without invoking HMM fit."""
 
@@ -421,13 +511,33 @@ def _prepare_b3_preprocessed_train_only_initialization(
             "hmm_risk_model_initialization_failed",
             exc,
         ) from exc
-    initialization = {
+    transition_prior_evidence: Mapping[str, Any] | None = None
+    transmat_prior: float | np.ndarray = 1.0
+    if transition_dwell_b:
+        try:
+            transition_prior_evidence = build_transition_prior(initialization.get("transition_counts"))
+            transmat_prior = np.asarray(transition_prior_evidence["transmat_prior"], dtype=np.float64)
+        except TransitionDwellContractError as exc:
+            raise B3TrainingStageError(
+                "initialization",
+                exc.reason_code,
+                exc,
+            ) from exc
+    initialization_body = {
         **initialization,
         "schema_version": "hmm_risk_b3_manual_initialization_v1",
         "contract_version": D3_CONTRACT_VERSION,
         "diagnostic_source_contract": initialization.get("schema_version"),
         "formal_initialization_contract_applied": True,
     }
+    if transition_dwell_b:
+        initialization_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_evidence": dict(transition_prior_evidence or {}),
+            }
+        )
+    initialization = initialization_body
     prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, prepared.shape[1])).copy()
     return _B3PreparedTrainOnlyInitialization(
         train=prepared,
@@ -437,6 +547,8 @@ def _prepare_b3_preprocessed_train_only_initialization(
         means=means,
         covars=initialized_covars,
         prior=prior,
+        transmat_prior=transmat_prior,
+        transition_prior_evidence=transition_prior_evidence,
         evidence=initialization,
     )
 
@@ -446,10 +558,16 @@ def prepare_b3_preprocessed_train_only_initialization(
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> Mapping[str, Any]:
     """Return canonical initialization evidence without importing or invoking HMM."""
 
-    prepared = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    prepared = _prepare_b3_preprocessed_train_only_initialization(
+        item,
+        train=train,
+        seed=seed,
+        transition_dwell_b=transition_dwell_b,
+    )
     return dict(prepared.evidence)
 
 
@@ -584,11 +702,390 @@ def _training_stage_evidence(
     return {**body, "stage_evidence_sha256": canonical_sha256(body)}
 
 
+def _map_joint_loop_evidence(
+    *,
+    raw_likelihood_history: Sequence[float],
+    map_objective_history: Sequence[float],
+    map_prior_adjustment_history: Sequence[float],
+    objective_component_history: Sequence[Mapping[str, Any]],
+    covariance_valid_history: Sequence[bool],
+    covariance_receipt_sha256_history: Sequence[str],
+    joint_stop_iteration: int | None,
+    transition_dwell_b: bool = False,
+) -> dict[str, Any]:
+    return {
+        "authority": (
+            "covariance_and_transition_prior_map_objective" if transition_dwell_b else "covariance_prior_map_objective"
+        ),
+        "maximum_iterations": HMM_N_ITER,
+        "raw_likelihood_history": list(raw_likelihood_history),
+        "map_objective_history": list(map_objective_history),
+        "map_prior_adjustment_history": list(map_prior_adjustment_history),
+        "objective_component_history": [dict(value) for value in objective_component_history],
+        "covariance_valid_history": list(covariance_valid_history),
+        "covariance_receipt_sha256_history": list(covariance_receipt_sha256_history),
+        "joint_stop_iteration": joint_stop_iteration,
+        "raw_likelihood_is_diagnostic_only": True,
+        "postfit_projection_performed": False,
+    }
+
+
+def _evaluate_map_loop_or_fail(
+    loop_evidence: Mapping[str, Any],
+    *,
+    iteration: int,
+    raw_covariance_evidence: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    try:
+        return evaluate_likelihood_acceptance(loop_evidence)
+    except (ValueError, FloatingPointError) as exc:
+        raise _MapJointFitFailure(
+            "likelihood",
+            "hmm_risk_model_likelihood_evidence_invalid",
+            str(exc),
+            evidence={
+                "iteration": iteration,
+                "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective", "covariance"],
+                "raw_covariance_evidence": (None if raw_covariance_evidence is None else dict(raw_covariance_evidence)),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
+                "covariance_status": "insufficient_evidence",
+                "covariance_valid": False,
+                "state_posterior_mass": None,
+                "posterior_weighted_variance_about_weighted_mean": None,
+                "posterior_second_moment_about_fitted_mean": None,
+                "mstep_expected_covariance": None,
+                "dynamic_lower_reference": None,
+                "dynamic_upper_reference": None,
+                "mstep_relative_residual": None,
+            },
+        ) from exc
+
+
+def _run_b3_map_joint_em(
+    model: Any,
+    prepared: np.ndarray,
+    reference: np.ndarray,
+    *,
+    transition_dwell_b: bool = False,
+) -> _MapJointFitResult:
+    """Run the approved MAP/D4-02 joint-stop loop without hmmlearn's raw-likelihood monitor."""
+
+    lengths = np.asarray([prepared.shape[0]], dtype=np.int64)
+    raw_history: list[float] = []
+    map_history: list[float] = []
+    prior_history: list[float] = []
+    component_history: list[Mapping[str, Any]] = []
+    covariance_valid_history: list[bool] = []
+    covariance_hash_history: list[str] = []
+    latest_covariance: Mapping[str, Any] | None = None
+    latest_covariance_evidence: Mapping[str, Any] | None = None
+    latest_raw_capture: Mapping[str, Any] | None = None
+    latest_raw_covars: np.ndarray | None = None
+    try:
+        model._init(prepared, lengths)
+        model._check()
+    except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise _MapJointFitFailure(
+            "fit",
+            "hmm_risk_model_fit_failed",
+            str(exc),
+            evidence={"error_type": type(exc).__name__, "error": str(exc), "fit_phase": "model_check"},
+        ) from exc
+
+    for iteration in range(1, HMM_N_ITER + 1):
+        try:
+            stats, raw_log_likelihood = model._do_estep(prepared, lengths)
+        except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+            raise _MapJointFitFailure(
+                "fit",
+                "hmm_risk_model_fit_failed",
+                str(exc),
+                evidence={"error_type": type(exc).__name__, "error": str(exc), "iteration": iteration},
+            ) from exc
+        try:
+            raw_source = model._covars_
+        except AttributeError as exc:
+            raw_capture = capture_raw_diag_covariance_evidence(
+                None,
+                expected_shape=(3, prepared.shape[1]),
+                evidence_unavailable_reason="gaussian_hmm_internal_diag_covars_missing",
+            )
+            raise _MapJointFitFailure(
+                "covariance",
+                "hmm_risk_model_covariance_raw_type_invalid",
+                str(exc),
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture"],
+                    "raw_covariance_evidence": raw_capture,
+                    "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+                    "covariance_status": "failed",
+                    "covariance_valid": False,
+                    "evidence_unavailable_reason": "gaussian_hmm_internal_diag_covars_missing",
+                },
+            ) from exc
+
+        raw_capture = capture_raw_diag_covariance_evidence(
+            raw_source,
+            expected_shape=(3, prepared.shape[1]),
+        )
+        if raw_capture.get("raw_validity") is not True:
+            raise _MapJointFitFailure(
+                "covariance",
+                str((raw_capture.get("reason_codes") or ["hmm_risk_model_covariance_invalid"])[0]),
+                "raw covariance is invalid during MAP iteration",
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture"],
+                    "raw_covariance_evidence": raw_capture,
+                    "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+                    "covariance_status": "failed",
+                    "covariance_valid": False,
+                    "state_posterior_mass": None,
+                    "posterior_weighted_variance_about_weighted_mean": None,
+                    "posterior_second_moment_about_fitted_mean": None,
+                    "mstep_expected_covariance": None,
+                    "dynamic_lower_reference": None,
+                    "dynamic_upper_reference": None,
+                    "mstep_relative_residual": None,
+                },
+            )
+        raw_covars = np.asarray(raw_source, dtype=np.float64)
+        try:
+            objective = map_covariance_prior_objective(
+                raw_log_likelihood,
+                raw_covars,
+                model.covars_prior,
+                model.covars_weight,
+            )
+        except (TypeError, ValueError, FloatingPointError) as exc:
+            raise _MapJointFitFailure(
+                "likelihood",
+                "hmm_risk_model_map_objective_non_finite",
+                str(exc),
+                evidence={"iteration": iteration, "raw_covariance_evidence": raw_capture},
+            ) from exc
+        if transition_dwell_b:
+            try:
+                transition_component = transition_map_objective(model.transmat_, model.transmat_prior)
+            except TransitionDwellContractError as exc:
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    exc.reason_code,
+                    str(exc),
+                    evidence={"iteration": iteration, **exc.evidence},
+                ) from exc
+            covariance_adjustment = float(objective["prior_adjustment"])
+            transition_adjustment = float(transition_component["transition_prior_adjustment"])
+            total_adjustment = covariance_adjustment + transition_adjustment
+            combined_map = float(objective["raw_log_likelihood"]) + total_adjustment
+            if not np.isfinite(combined_map):
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    TRANSITION_MAP_NON_FINITE_REASON,
+                    "combined covariance and transition MAP objective is non-finite",
+                    evidence={"iteration": iteration},
+                )
+            objective = {
+                **objective,
+                "covariance_prior_adjustment": covariance_adjustment,
+                "transition_prior_adjustment": transition_adjustment,
+                "transition_component_sha256": transition_component["transition_component_sha256"],
+                "raw_transmat": transition_component["raw_transmat"],
+                "raw_transmat_sha256": transition_component["raw_transmat_sha256"],
+                "transmat_prior": transition_component["transmat_prior"],
+                "transmat_prior_sha256": transition_component["transmat_prior_sha256"],
+                "expected_dwell_diagnostic_only": transition_component["expected_dwell_diagnostic_only"],
+                "prior_adjustment": total_adjustment,
+                "map_objective": combined_map,
+            }
+
+        try:
+            covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
+                model,
+                prepared,
+                raw_covars=raw_covars,
+                sector_reference_variance=reference,
+            )
+            covariance_evidence = {
+                **covariance_evidence,
+                "train_rows": int(prepared.shape[0]),
+                "postfit_projection_performed": False,
+                "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
+                "map_iteration": iteration,
+            }
+            covariance = evaluate_covariance_acceptance(covariance_evidence)
+        except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+            audit_unavailable = getattr(exc, "stage", None) == "smoothed_posterior_audit" and bool(
+                (getattr(exc, "evidence", {}) or {}).get("error_type")
+            )
+            raise _MapJointFitFailure(
+                "covariance",
+                "hmm_risk_model_covariance_invalid",
+                str(exc),
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective"],
+                    "raw_covariance_evidence": raw_capture,
+                    **dict(getattr(exc, "evidence", {}) or {}),
+                    "d4_derived_evidence_status": (
+                        "not_computable_posterior_audit_unavailable"
+                        if audit_unavailable
+                        else "not_computable_posterior_audit_invalid"
+                    ),
+                    "covariance_status": "insufficient_evidence" if audit_unavailable else "failed",
+                    "covariance_valid": False,
+                    "state_posterior_mass": None,
+                    "posterior_weighted_variance_about_weighted_mean": None,
+                    "posterior_second_moment_about_fitted_mean": None,
+                    "mstep_expected_covariance": None,
+                    "dynamic_lower_reference": None,
+                    "dynamic_upper_reference": None,
+                    "mstep_relative_residual": None,
+                },
+            ) from exc
+
+        raw_history.append(float(objective["raw_log_likelihood"]))
+        map_history.append(float(objective["map_objective"]))
+        prior_history.append(float(objective["prior_adjustment"]))
+        component_history.append({"iteration": iteration, **objective})
+        covariance_valid_history.append(covariance.get("covariance_valid") is True)
+        covariance_hash_history.append(str(covariance["receipt_sha256"]))
+        latest_covariance = covariance
+        latest_covariance_evidence = covariance_evidence
+        latest_raw_capture = raw_capture
+        latest_raw_covars = raw_covars
+
+        joint_stop = False
+        if len(map_history) >= 2:
+            map_delta = map_history[-1] - map_history[-2]
+            envelope = map_numeric_envelope(map_history[-2])
+            if map_delta < -envelope:
+                loop_evidence = _map_joint_loop_evidence(
+                    raw_likelihood_history=raw_history,
+                    map_objective_history=map_history,
+                    map_prior_adjustment_history=prior_history,
+                    objective_component_history=component_history,
+                    covariance_valid_history=covariance_valid_history,
+                    covariance_receipt_sha256_history=covariance_hash_history,
+                    joint_stop_iteration=None,
+                    transition_dwell_b=transition_dwell_b,
+                )
+                likelihood = _evaluate_map_loop_or_fail(
+                    loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
+                )
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    "hmm_risk_model_map_objective_decrease",
+                    "MAP objective decreased beyond the approved numeric envelope",
+                    evidence={
+                        "iteration": iteration,
+                        "completed_stages": [
+                            "initialization",
+                            "fit",
+                            "raw_covariance_capture",
+                            "map_objective",
+                            "covariance",
+                        ],
+                        "likelihood": likelihood,
+                        "raw_covariance_evidence": raw_capture,
+                        "covariance_stage_evidence": {**covariance_evidence, "acceptance": dict(covariance)},
+                    },
+                )
+            joint_stop = abs(map_delta) <= envelope and covariance.get("covariance_valid") is True
+
+        if joint_stop:
+            loop_evidence = _map_joint_loop_evidence(
+                raw_likelihood_history=raw_history,
+                map_objective_history=map_history,
+                map_prior_adjustment_history=prior_history,
+                objective_component_history=component_history,
+                covariance_valid_history=covariance_valid_history,
+                covariance_receipt_sha256_history=covariance_hash_history,
+                joint_stop_iteration=iteration,
+                transition_dwell_b=transition_dwell_b,
+            )
+            likelihood = _evaluate_map_loop_or_fail(
+                loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
+            )
+            if likelihood.get("convergence_valid") is not True or likelihood.get("likelihood_valid") is not True:
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    str(likelihood.get("primary_reason_code") or "hmm_risk_model_map_joint_convergence_unavailable"),
+                    "MAP joint-stop receipt is not accepted",
+                    evidence={
+                        "iteration": iteration,
+                        "completed_stages": [
+                            "initialization",
+                            "fit",
+                            "raw_covariance_capture",
+                            "map_objective",
+                            "covariance",
+                        ],
+                        "likelihood": likelihood,
+                        "raw_covariance_evidence": raw_capture,
+                        "covariance_stage_evidence": {**covariance_evidence, "acceptance": dict(covariance)},
+                    },
+                )
+            assert latest_covariance is not None
+            assert latest_covariance_evidence is not None
+            assert latest_raw_capture is not None
+            assert latest_raw_covars is not None
+            return _MapJointFitResult(
+                likelihood=likelihood,
+                covariance=latest_covariance,
+                covariance_evidence=latest_covariance_evidence,
+                raw_covariance_evidence=latest_raw_capture,
+                raw_covars=latest_raw_covars,
+                terminal_raw_likelihood=raw_history[-1],
+            )
+
+        if iteration < HMM_N_ITER:
+            try:
+                model._do_mstep(stats)
+            except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+                raise _MapJointFitFailure(
+                    "fit",
+                    "hmm_risk_model_fit_failed",
+                    str(exc),
+                    evidence={"error_type": type(exc).__name__, "error": str(exc), "iteration": iteration},
+                ) from exc
+
+    loop_evidence = _map_joint_loop_evidence(
+        raw_likelihood_history=raw_history,
+        map_objective_history=map_history,
+        map_prior_adjustment_history=prior_history,
+        objective_component_history=component_history,
+        covariance_valid_history=covariance_valid_history,
+        covariance_receipt_sha256_history=covariance_hash_history,
+        joint_stop_iteration=None,
+        transition_dwell_b=transition_dwell_b,
+    )
+    likelihood = _evaluate_map_loop_or_fail(
+        loop_evidence,
+        iteration=HMM_N_ITER,
+        raw_covariance_evidence=latest_raw_capture,
+    )
+    raise _MapJointFitFailure(
+        "likelihood",
+        "hmm_risk_model_map_joint_convergence_unavailable",
+        "MAP objective and D4-02-A did not jointly converge within 300 iterations",
+        evidence={
+            "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective", "covariance"],
+            "likelihood": likelihood,
+            "covariance": latest_covariance,
+        },
+    )
+
+
 def fit_b3_preprocessed_train_only(
     item: B3TrainOnlySeries,
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> B3CoreFitEvidence:
     """Fit one already-preprocessed train matrix without artifact or selection semantics."""
 
@@ -597,7 +1094,12 @@ def fit_b3_preprocessed_train_only(
     except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
         raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
     try:
-        prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+        prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(
+            item,
+            train=train,
+            seed=seed,
+            transition_dwell_b=transition_dwell_b,
+        )
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         stage_evidence = _training_stage_evidence(
             fit_invoked=False,
@@ -630,7 +1132,7 @@ def fit_b3_preprocessed_train_only(
             covariance_type="diag",
             min_covar=0.0,
             startprob_prior=1.0,
-            transmat_prior=1.0,
+            transmat_prior=prepared_initialization.transmat_prior,
             means_prior=0.0,
             means_weight=0.0,
             covars_prior=prior,
@@ -649,7 +1151,42 @@ def fit_b3_preprocessed_train_only(
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
         fit_invoked = True
-        model.fit(prepared)
+        if transition_dwell_b:
+            map_fit = _run_b3_map_joint_em(
+                model,
+                prepared,
+                reference,
+                transition_dwell_b=True,
+            )
+        else:
+            map_fit = _run_b3_map_joint_em(model, prepared, reference)
+    except _MapJointFitFailure as exc:
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=fit_invoked,
+            fit_returned=False,
+            completed_stages=list(exc.evidence.get("completed_stages") or ["initialization"]),
+            initialization=initialization,
+            likelihood=(
+                exc.evidence.get("likelihood") if isinstance(exc.evidence.get("likelihood"), Mapping) else None
+            ),
+            raw_covariance_evidence=(
+                exc.evidence.get("raw_covariance_evidence")
+                if isinstance(exc.evidence.get("raw_covariance_evidence"), Mapping)
+                else None
+            ),
+            covariance_evidence=(
+                exc.evidence.get("covariance_stage_evidence")
+                if isinstance(exc.evidence.get("covariance_stage_evidence"), Mapping)
+                else None
+            ),
+            stage_specific_cause_evidence=exc.evidence,
+        )
+        raise B3TrainingStageError(
+            exc.stage,
+            exc.reason_code,
+            exc,
+            stage_evidence=stage_evidence,
+        ) from exc
     except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         stage_evidence = _training_stage_evidence(
             fit_invoked=fit_invoked,
@@ -668,7 +1205,7 @@ def fit_b3_preprocessed_train_only(
             stage_evidence=stage_evidence,
         ) from exc
     try:
-        raw_covariance_source = model._covars_
+        raw_covariance_source = map_fit.raw_covars
     except AttributeError as exc:
         raw_covariance_evidence = capture_raw_diag_covariance_evidence(
             None,
@@ -699,105 +1236,11 @@ def fit_b3_preprocessed_train_only(
         raw_covariance_source,
         expected_shape=(3, prepared.shape[1]),
     )
-    monitor_evidence: Mapping[str, Any] | None = None
-    try:
-        monitor_evidence = _monitor_diagnostic(model)
-        likelihood = evaluate_likelihood_acceptance(monitor_evidence)
-    except (StateModelSetError, ValueError, FloatingPointError) as exc:
-        cause_evidence = {
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
-            "covariance_status": "insufficient_evidence",
-            "covariance_valid": False,
-            "state_posterior_mass": None,
-            "posterior_weighted_variance_about_weighted_mean": None,
-            "posterior_second_moment_about_fitted_mean": None,
-            "mstep_expected_covariance": None,
-            "dynamic_lower_reference": None,
-            "dynamic_upper_reference": None,
-            "mstep_relative_residual": None,
-        }
-        completed_stages = ["initialization", "fit", "raw_covariance_capture"]
-        if monitor_evidence is not None:
-            completed_stages.append("monitor")
-        stage_evidence = _training_stage_evidence(
-            fit_invoked=True,
-            fit_returned=True,
-            completed_stages=completed_stages,
-            initialization=initialization,
-            monitor_evidence=monitor_evidence,
-            raw_covariance_evidence=raw_covariance_evidence,
-            stage_specific_cause_evidence=cause_evidence,
-        )
-        raise B3TrainingStageError(
-            "likelihood",
-            "hmm_risk_model_likelihood_evidence_invalid",
-            exc,
-            stage_evidence=stage_evidence,
-        ) from exc
-    try:
-        raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
-        covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
-            model,
-            prepared,
-            raw_covars=raw_covars,
-            sector_reference_variance=reference,
-        )
-    except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
-        if raw_covariance_evidence.get("raw_validity") is not True:
-            derived_status = "not_computable_raw_covariance_invalid"
-            covariance_status = "failed"
-        elif getattr(exc, "stage", None) == "smoothed_posterior_audit" and (
-            (getattr(exc, "evidence", {}) or {}).get("error_type")
-        ):
-            derived_status = "not_computable_posterior_audit_unavailable"
-            covariance_status = "insufficient_evidence"
-        else:
-            derived_status = "not_computable_posterior_audit_invalid"
-            covariance_status = "failed"
-        cause_evidence = {
-            **dict(getattr(exc, "evidence", {}) or {}),
-            "d4_derived_evidence_status": derived_status,
-            "covariance_status": covariance_status,
-            "covariance_valid": False,
-            "state_posterior_mass": None,
-            "posterior_weighted_variance_about_weighted_mean": None,
-            "posterior_second_moment_about_fitted_mean": None,
-            "mstep_expected_covariance": None,
-            "dynamic_lower_reference": None,
-            "dynamic_upper_reference": None,
-            "mstep_relative_residual": None,
-        }
-        stage_evidence = _training_stage_evidence(
-            fit_invoked=True,
-            fit_returned=True,
-            completed_stages=[
-                "initialization",
-                "fit",
-                "raw_covariance_capture",
-                "monitor",
-                "likelihood",
-            ],
-            initialization=initialization,
-            monitor_evidence=monitor_evidence,
-            likelihood=likelihood,
-            raw_covariance_evidence=raw_covariance_evidence,
-            stage_specific_cause_evidence=cause_evidence,
-        )
-        raise B3TrainingStageError(
-            "covariance",
-            "hmm_risk_model_covariance_invalid",
-            exc,
-            stage_evidence=stage_evidence,
-        ) from exc
-    covariance_evidence = {
-        **covariance_evidence,
-        "train_rows": int(prepared.shape[0]),
-        "postfit_projection_performed": False,
-        "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
-    }
-    covariance = evaluate_covariance_acceptance(covariance_evidence)
+    monitor_evidence: Mapping[str, Any] = dict(map_fit.likelihood["evidence"])
+    likelihood = dict(map_fit.likelihood)
+    raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
+    covariance_evidence = dict(map_fit.covariance_evidence)
+    covariance = dict(map_fit.covariance)
     covariance_stage_evidence = {
         **covariance_evidence,
         "acceptance": dict(covariance),
@@ -846,8 +1289,7 @@ def fit_b3_preprocessed_train_only(
             exc,
             stage_evidence=stage_evidence,
         ) from exc
-    monitor_history = list(monitor_evidence.get("history") or ())
-    terminal_likelihood = monitor_history[-1] if monitor_history else None
+    terminal_likelihood = map_fit.terminal_raw_likelihood
     independent_valid = (
         likelihood.get("convergence_valid") is True
         and likelihood.get("likelihood_valid") is True
@@ -910,25 +1352,71 @@ def _fit_b3_train_only(
     preprocess: Mapping[str, Any],
     seed: int,
     numeric_environment: Mapping[str, Any],
+    dimension_contract_version: str | None = None,
+    transition_dwell_b: bool = False,
 ) -> tuple[dict[str, Any], B3FittedModel]:
     """Fit one formal B3 entry without touching validation or future utility."""
 
     item.validate(len(feature_names))
     try:
-        train = _apply_preprocess(item.train_observations, preprocess)
+        full_train = _apply_preprocess(item.train_observations, preprocess)
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         raise B3TrainingStageError(
             "initialization",
             "hmm_risk_model_initialization_failed",
             exc,
         ) from exc
-    core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
+    projection_receipt: Mapping[str, Any] | None = None
+    train = full_train
+    mixed_dimension = dimension_contract_version is not None
+    if mixed_dimension and (
+        dimension_contract_version != MIXED_DIMENSION_CONTRACT_VERSION or not uses_mixed_dimension_level(family, level)
+    ):
+        raise B3TrainingStageError(
+            "projection",
+            INACTIVE_DIMENSION_REASON_CODE,
+            StateModelSetError(INACTIVE_DIMENSION_REASON_CODE),
+        )
+    if mixed_dimension:
+        try:
+            projection_receipt, train = build_projection_receipt(
+                family=family,
+                level=level,
+                sector_code=item.sector_code,
+                full_feature_names=feature_names,
+                preprocess=preprocess,
+                raw_observations=item.train_observations,
+                preprocessed_observations=full_train,
+                train_input_manifest=item.train_input_manifest,
+            )
+        except (StateModelSetError, ValueError, FloatingPointError) as exc:
+            raise B3TrainingStageError(
+                "projection",
+                INACTIVE_DIMENSION_REASON_CODE,
+                exc,
+            ) from exc
+    if transition_dwell_b:
+        try:
+            assert_transition_dwell_target_scope(family=family, level=level)
+        except TransitionDwellContractError as exc:
+            raise B3TrainingStageError("initialization", exc.reason_code, exc) from exc
+    if transition_dwell_b:
+        core = fit_b3_preprocessed_train_only(
+            item,
+            train=train,
+            seed=seed,
+            transition_dwell_b=True,
+        )
+    else:
+        core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
     fitted_startprob = core.startprob
     fitted_transmat = core.transmat
     fitted_means = core.means
     raw_covars = core.covars
     model_body = {
-        "schema_version": "hmm_risk_b3_fitted_model_v1",
+        "schema_version": (
+            MIXED_MODEL_SCHEMA_VERSION if projection_receipt is not None else "hmm_risk_b3_fitted_model_v1"
+        ),
         "contract_version": D3_CONTRACT_VERSION,
         "family": family,
         "level": level,
@@ -941,11 +1429,33 @@ def _fit_b3_train_only(
         "means": fitted_means.tolist(),
         "covariance_type": "diag",
         "covars": raw_covars.tolist(),
-        "parameter_profile_sha256": canonical_sha256(formal_b3_parameter_profile()),
+        "parameter_profile_sha256": canonical_sha256(
+            formal_b3_parameter_profile(transition_dwell_b=transition_dwell_b)
+        ),
         "numeric_environment_sha256": canonical_sha256(dict(numeric_environment)),
         "observation_manifest_hash": item.observation_manifest_hash,
         "pit_constituent_manifest_hash": item.pit_constituent_manifest_hash,
     }
+    if projection_receipt is not None:
+        model_body.update(
+            {
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "feature_count": len(feature_names),
+                "likelihood_feature_names": list(projection_receipt["active_feature_names"]),
+                "likelihood_feature_count": projection_receipt["likelihood_feature_count"],
+                "projection_receipt": dict(projection_receipt),
+                "projection_sha256": projection_receipt["projection_sha256"],
+            }
+        )
+    transition_prior_sha256 = None
+    if transition_dwell_b:
+        transition_prior_sha256 = str(core.initialization["transition_prior_evidence"]["transition_prior_sha256"])
+        model_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_sha256": transition_prior_sha256,
+            }
+        )
     model_hash = canonical_sha256(model_body)
     fitted = B3FittedModel(
         family=family,
@@ -963,9 +1473,16 @@ def _fit_b3_train_only(
         observation_manifest_hash=item.observation_manifest_hash,
         pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
         model_payload_sha256=model_hash,
+        projection_receipt=projection_receipt,
+        transition_dwell_contract=(TRANSITION_DWELL_CONTRACT_VERSION if transition_dwell_b else None),
+        transition_prior_sha256=transition_prior_sha256,
     )
     entry_body = {
-        "schema_version": "hmm_risk_b3_training_entry_receipt_v1",
+        "schema_version": (
+            MIXED_TRAINING_ENTRY_SCHEMA_VERSION
+            if projection_receipt is not None
+            else "hmm_risk_b3_training_entry_receipt_v1"
+        ),
         "contract_version": D3_CONTRACT_VERSION,
         "retrain_contract_version": L2_RETRAIN_VERSION if level == "L2" else None,
         "family": family,
@@ -978,14 +1495,14 @@ def _fit_b3_train_only(
         "model_entry_status": core.model_entry_status,
         "model_entry_valid": core.model_entry_valid,
         "initialization_evidence": dict(core.initialization),
-        "parameter_profile": formal_b3_parameter_profile(),
+        "parameter_profile": formal_b3_parameter_profile(transition_dwell_b=transition_dwell_b),
         "numeric_environment": dict(numeric_environment),
         "monitor_evidence": dict(core.monitor_evidence),
         "likelihood": dict(core.likelihood),
         "covariance": dict(core.covariance),
         "train_occupancy": dict(core.train_occupancy),
         "final_train_log_likelihood": core.terminal_likelihood,
-        "final_train_log_likelihood_source": "monitor_history_terminal_value",
+        "final_train_log_likelihood_source": "map_joint_stop_raw_observed_log_likelihood",
         "model_payload_sha256": model_hash,
         "validation_accessed": False,
         "future_utility_accessed": False,
@@ -994,6 +1511,22 @@ def _fit_b3_train_only(
         "artifact_write_performed": False,
         "postfit_projection_performed": False,
     }
+    if projection_receipt is not None:
+        entry_body.update(
+            {
+                "likelihood_feature_count": int(train.shape[1]),
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "projection_receipt": dict(projection_receipt),
+                "projection_sha256": projection_receipt["projection_sha256"],
+            }
+        )
+    if transition_dwell_b:
+        entry_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_sha256": transition_prior_sha256,
+            }
+        )
     return {**entry_body, "entry_receipt_sha256": canonical_sha256(entry_body)}, fitted
 
 
@@ -1033,10 +1566,13 @@ def run_level_repeat(
     feature_names: Sequence[str],
     preprocess_family: str,
     process_identity: str,
+    transition_dwell_b: bool = False,
 ) -> tuple[dict[str, Any], dict[tuple[int, str], B3FittedModel]]:
     """Run the complete 8-seed level grid; failures are retained and never trigger early stop."""
 
     features = tuple(str(value) for value in feature_names)
+    if transition_dwell_b:
+        assert_transition_dwell_target_scope(family=family, level=level)
     if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
         raise StateModelSetError("formal B3 feature_names must be the approved 7/20 dimensional family")
     expected_count = 31 if level == "L1" else 131 if level == "L2" else 0
@@ -1050,6 +1586,7 @@ def run_level_repeat(
     if package_version != "0.3.3":
         raise StateModelSetError(f"formal B3 requires hmmlearn==0.3.3 actual={package_version}")
     preprocess = _fit_preprocess(series, preprocess_family=preprocess_family)
+    mixed_dimension = uses_mixed_dimension_level(family, level)
     entries: list[dict[str, Any]] = []
     models: dict[tuple[int, str], B3FittedModel] = {}
     for seed in RESTART_SCHEDULE:
@@ -1064,10 +1601,16 @@ def run_level_repeat(
                     preprocess=preprocess,
                     seed=seed,
                     numeric_environment=environment,
+                    dimension_contract_version=(MIXED_DIMENSION_CONTRACT_VERSION if mixed_dimension else None),
+                    transition_dwell_b=transition_dwell_b,
                 )
             except B3TrainingStageError as exc:
                 failure_body = {
-                    "schema_version": "hmm_risk_b3_training_entry_receipt_v1",
+                    "schema_version": (
+                        MIXED_TRAINING_ENTRY_SCHEMA_VERSION
+                        if mixed_dimension
+                        else "hmm_risk_b3_training_entry_receipt_v1"
+                    ),
                     "contract_version": D3_CONTRACT_VERSION,
                     "retrain_contract_version": L2_RETRAIN_VERSION if level == "L2" else None,
                     "family": family,
@@ -1089,6 +1632,13 @@ def run_level_repeat(
                     "d6_status_accessed": False,
                     "artifact_write_performed": False,
                 }
+                if mixed_dimension:
+                    failure_body.update(
+                        {
+                            "likelihood_feature_count": None,
+                            "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                        }
+                    )
                 entries.append({**failure_body, "entry_receipt_sha256": canonical_sha256(failure_body)})
                 continue
             entries.append(entry)
@@ -1105,8 +1655,10 @@ def run_level_repeat(
         "entries": entries,
         "models": model_payloads,
     }
+    if mixed_dimension:
+        candidate_payload["dimension_contract_version"] = MIXED_DIMENSION_CONTRACT_VERSION
     payload = {
-        "schema_version": "hmm_risk_b3_level_repeat_receipt_v1",
+        "schema_version": (MIXED_REPEAT_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_level_repeat_receipt_v1"),
         "contract_version": D3_CONTRACT_VERSION,
         "retrain_contract_version": L2_RETRAIN_VERSION if level == "L2" else None,
         "process_identity": process_identity,
@@ -1129,6 +1681,15 @@ def run_level_repeat(
         "selection_performed": False,
         "artifact_write_performed": False,
     }
+    if transition_dwell_b:
+        payload["transition_dwell_contract"] = TRANSITION_DWELL_CONTRACT_VERSION
+    if mixed_dimension:
+        payload.update(
+            {
+                "feature_count": len(features),
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+            }
+        )
     return {
         **payload,
         "entry_payload_sha256": canonical_sha256(entries),
@@ -1144,13 +1705,58 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
     repeat_level = str(repeat.get("level") or "")
     expected_codes = tuple(str(value) for value in repeat.get("canonical_sector_codes") or ())
     expected_features = tuple(str(value) for value in repeat.get("feature_names") or ())
+    mixed_dimension = uses_mixed_dimension_level(repeat_family, repeat_level)
+    transition_dwell_contract = str(repeat.get("transition_dwell_contract") or "") or None
+    if transition_dwell_contract is not None and transition_dwell_contract != TRANSITION_DWELL_CONTRACT_VERSION:
+        raise StateModelSetError("repeat transition-dwell contract is invalid")
+    if mixed_dimension:
+        if (
+            repeat.get("schema_version") != MIXED_REPEAT_SCHEMA_VERSION
+            or repeat.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+            or expected_features != ALL_CORE_FEATURES
+            or repeat.get("feature_count") != len(ALL_CORE_FEATURES)
+        ):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    if transition_dwell_contract is not None and (repeat_family != "autocycle_all_core" or repeat_level != "L2"):
+        raise StateModelSetError("repeat transition-dwell scope is invalid")
     for raw in repeat.get("models") or ():
         feature_names = tuple(str(value) for value in raw.get("feature_names") or ())
         startprob = _probability_vector(raw.get("startprob"), "repeat.startprob", 3)
         transmat = _transition_matrix(raw.get("transmat"), "repeat.transmat", 3)
         means = _finite_array(raw.get("means"), "repeat.means", ndim=2)
         covars = _finite_array(raw.get("covars"), "repeat.covars", ndim=2)
-        if means.shape != covars.shape or means.shape != (3, len(feature_names)) or np.any(covars <= 0.0):
+        projection_receipt = raw.get("projection_receipt")
+        raw_transition_contract = str(raw.get("transition_dwell_contract") or "") or None
+        raw_transition_prior_sha256 = str(raw.get("transition_prior_sha256") or "") or None
+        if raw_transition_contract != transition_dwell_contract or (
+            transition_dwell_contract is not None
+            and (raw_transition_prior_sha256 is None or len(raw_transition_prior_sha256) != 64)
+        ):
+            raise StateModelSetError("repeat transition-dwell model identity is invalid")
+        effective_count = len(feature_names)
+        if mixed_dimension:
+            if not isinstance(projection_receipt, Mapping):
+                raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+            effective_count = validate_projection_receipt(
+                projection_receipt,
+                family=repeat_family,
+                level=repeat_level,
+                sector_code=str(raw.get("sector_code") or ""),
+                full_feature_names=feature_names,
+                preprocess=raw.get("preprocess") or {},
+                means_shape=means.shape,
+                covariance_shape=covars.shape,
+            )
+            if (
+                raw.get("schema_version") != MIXED_MODEL_SCHEMA_VERSION
+                or raw.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+                or raw.get("feature_count") != len(feature_names)
+                or raw.get("likelihood_feature_count") != effective_count
+                or tuple(raw.get("likelihood_feature_names") or ()) != tuple(projection_receipt["active_feature_names"])
+                or raw.get("projection_sha256") != projection_receipt["projection_sha256"]
+            ):
+                raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+        if means.shape != covars.shape or means.shape != (3, effective_count) or np.any(covars <= 0.0):
             raise StateModelSetError("repeat model parameter shape is invalid")
         expected_hash = str(raw.get("model_payload_sha256") or "")
         body = {key: value for key, value in raw.items() if key != "model_payload_sha256"}
@@ -1172,6 +1778,9 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
             observation_manifest_hash=str(raw.get("observation_manifest_hash") or ""),
             pit_constituent_manifest_hash=str(raw.get("pit_constituent_manifest_hash") or ""),
             model_payload_sha256=expected_hash,
+            projection_receipt=(dict(projection_receipt) if isinstance(projection_receipt, Mapping) else None),
+            transition_dwell_contract=transition_dwell_contract,
+            transition_prior_sha256=raw_transition_prior_sha256,
         )
         if (
             fitted.family != repeat_family
@@ -1188,6 +1797,37 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
     if canonical_sha256([models[key].payload() for key in sorted(models)]) != repeat.get("model_payload_sha256"):
         raise StateModelSetError("repeat aggregate model hash mismatch")
     return models
+
+
+def _prepare_d6_calendar_observations(
+    carrier: D6ValidationCalendarSeries,
+    fitted: B3FittedModel,
+) -> np.ndarray:
+    """Validate full-dimensional availability, then preprocess full features before fixed projection."""
+
+    carrier.validate(len(fitted.feature_names))
+    raw_validation = np.asarray(carrier.observation_values_f64, dtype=np.float64)
+    if fitted.projection_receipt is not None:
+        inactive_indices = tuple(fitted.projection_receipt["inactive_feature_indices"])
+        if inactive_indices and not np.all(raw_validation[:, inactive_indices] == 0.0):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    validation = _apply_preprocess(raw_validation, fitted.preprocess)
+    if fitted.projection_receipt is not None:
+        validate_projection_receipt(
+            fitted.projection_receipt,
+            family=fitted.family,
+            level=fitted.level,
+            sector_code=fitted.sector_code,
+            full_feature_names=fitted.feature_names,
+            preprocess=fitted.preprocess,
+            means_shape=fitted.means.shape,
+            covariance_shape=fitted.covars.shape,
+        )
+        validation = np.ascontiguousarray(
+            validation[:, tuple(fitted.projection_receipt["active_feature_indices"])],
+            dtype=np.float64,
+        )
+    return validation
 
 
 def build_selected_level_artifact(
@@ -1243,26 +1883,21 @@ def build_selected_level_artifact(
             or training_receipt.get("model_payload_sha256") != fitted.model_payload_sha256
         ):
             raise StateModelSetError(f"selected training receipt is not accepted for {code}")
-        validation = _apply_preprocess(item.validation_observations, fitted.preprocess)
-        posterior = causal_forward_posteriors(
+        carrier = item.validation_calendar_series
+        if carrier is None:
+            raise StateModelSetError("active D6-NA-A requires frozen input manifest v2 calendar carrier")
+        validation = _prepare_d6_calendar_observations(carrier, fitted)
+        posterior = causal_forward_posteriors_calendar(
             validation,
+            carrier.observation_available_mask,
             startprob=fitted.startprob,
             transmat=fitted.transmat,
             means=fitted.means,
             covars=fitted.covars,
         )
-        semantic = evaluate_semantic_validation(
+        semantic = evaluate_semantic_validation_calendar(
             posterior,
-            item.validation_dates,
-            {
-                **item.validation_future_components,
-                "source_cutoff": (
-                    None
-                    if item.validation_utility_source_cutoff is None
-                    else item.validation_utility_source_cutoff.isoformat()
-                ),
-                "formula_version": item.validation_utility_formula_version,
-            },
+            carrier,
             frozen_input_manifest=item.validation_input_manifest,
             selected_model_payload_sha256=fitted.model_payload_sha256,
         )
@@ -1270,6 +1905,7 @@ def build_selected_level_artifact(
             **fitted.payload(),
             "training_receipt": training_receipt,
             "semantic": semantic,
+            "validation_input_manifest": dict(item.validation_input_manifest),
             "validation_accessed_after_selection": True,
             "future_utility_accessed_after_selection": True,
             "selection_reexecuted": False,
@@ -1281,8 +1917,25 @@ def build_selected_level_artifact(
         and entry["semantic"]["semantic_evidence"]["semantic_evidence_valid"]
         for entry in entries
     )
+    mixed_dimension = uses_mixed_dimension_level(
+        str(selection.get("evidence", {}).get("family") or ""),
+        str(selection.get("evidence", {}).get("level") or ""),
+    )
+    dimension_identity = (
+        build_level_dimension_identity(
+            entries,
+            family=str(selection.get("evidence", {}).get("family") or ""),
+            level=str(selection.get("evidence", {}).get("level") or ""),
+            expected_sector_codes=expected_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
+        )
+        if mixed_dimension
+        else None
+    )
     body = {
-        "schema_version": "hmm_risk_b3_selected_level_artifact_v1",
+        "schema_version": (
+            MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
+        ),
         "family": selection.get("evidence", {}).get("family"),
         "level": selection.get("evidence", {}).get("level"),
         "selected_seed": selected_seed,
@@ -1293,6 +1946,8 @@ def build_selected_level_artifact(
         "selection_reexecuted": False,
         "ready": False,
     }
+    if dimension_identity is not None:
+        body.update(dimension_identity)
     return {**body, "artifact_sha256": canonical_sha256(body)}
 
 
@@ -1325,7 +1980,11 @@ def _validate_ready_layer(
     semantic_l2_stock_fact_manifest_hash: str,
     feature_domain_policy_sha256: str,
 ) -> None:
-    if artifact.get("schema_version") != "hmm_risk_b3_selected_level_artifact_v1":
+    mixed_dimension = uses_mixed_dimension_level(family, level)
+    expected_artifact_schema = (
+        MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
+    )
+    if artifact.get("schema_version") != expected_artifact_schema:
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
     if artifact.get("family") != family or artifact.get("level") != level:
         raise StateModelSetError(f"B3 READY selected artifact identity is invalid for {family}/{level}")
@@ -1347,6 +2006,7 @@ def _validate_ready_layer(
         or evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
         or selected_seed not in RESTART_SCHEDULE
         or artifact.get("selection_receipt_sha256") != selection.get("receipt_sha256")
+        or (mixed_dimension and evidence.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION)
     ):
         raise StateModelSetError(f"B3 READY selection contract is invalid for {family}/{level}")
     canonical_codes = tuple(str(value) for value in evidence.get("canonical_sector_codes") or ())
@@ -1388,6 +2048,7 @@ def _validate_ready_layer(
         raise StateModelSetError(f"B3 READY selected entry count is invalid for {family}/{level}")
     codes: set[str] = set()
     durable_training_receipt_hashes: dict[str, str] = {}
+    durable_score_inputs: dict[str, dict[str, Any]] = {}
     model_keys = (
         "schema_version",
         "contract_version",
@@ -1407,13 +2068,22 @@ def _validate_ready_layer(
         "observation_manifest_hash",
         "pit_constituent_manifest_hash",
     )
+    mixed_model_keys = (
+        "dimension_contract_version",
+        "feature_count",
+        "likelihood_feature_names",
+        "likelihood_feature_count",
+        "projection_receipt",
+        "projection_sha256",
+    )
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise StateModelSetError(f"B3 READY selected entry is invalid for {family}/{level}")
         _require_canonical_receipt_hash(entry, field="selected_entry_sha256", label=f"{family}/{level} entry")
-        if any(key not in entry for key in model_keys):
+        required_model_keys = model_keys + mixed_model_keys if mixed_dimension else model_keys
+        if any(key not in entry for key in required_model_keys):
             raise StateModelSetError(f"B3 READY model payload is incomplete for {family}/{level}")
-        model_body = {key: entry[key] for key in model_keys}
+        model_body = {key: entry[key] for key in required_model_keys}
         if canonical_sha256(model_body) != entry.get("model_payload_sha256"):
             raise StateModelSetError(f"B3 READY model payload hash mismatch for {family}/{level}")
         try:
@@ -1426,8 +2096,24 @@ def _validate_ready_layer(
             raise StateModelSetError(f"B3 READY model parameters are invalid for {family}/{level}") from None
         expected_preprocess = "identity" if family == "legacy_covfix" else "winsor_zscore_1_99_train_global_v1"
         preprocess = entry.get("preprocess")
+        effective_feature_count = expected_feature_count
+        if mixed_dimension:
+            projection = entry.get("projection_receipt")
+            if not isinstance(projection, Mapping):
+                raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+            effective_feature_count = validate_projection_receipt(
+                projection,
+                family=family,
+                level=level,
+                sector_code=str(entry.get("sector_code") or ""),
+                full_feature_names=features,
+                preprocess=preprocess,
+                means_shape=means.shape,
+                covariance_shape=covars.shape,
+            )
         if (
-            entry.get("schema_version") != "hmm_risk_b3_fitted_model_v1"
+            entry.get("schema_version")
+            != (MIXED_MODEL_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_fitted_model_v1")
             or entry.get("contract_version") != D3_CONTRACT_VERSION
             or features != expected_features
             or not isinstance(preprocess, Mapping)
@@ -1435,8 +2121,8 @@ def _validate_ready_layer(
             or entry.get("covariance_type") != "diag"
             or startprob.shape != (3,)
             or transmat.shape != (3, 3)
-            or means.shape != (3, expected_feature_count)
-            or covars.shape != (3, expected_feature_count)
+            or means.shape != (3, effective_feature_count)
+            or covars.shape != (3, effective_feature_count)
             or not all(np.isfinite(value).all() for value in (startprob, transmat, means, covars))
             or np.any(startprob < 0.0)
             or not np.isclose(startprob.sum(), 1.0, atol=1e-12, rtol=0)
@@ -1445,6 +2131,26 @@ def _validate_ready_layer(
             or np.any(covars <= 0.0)
         ):
             raise StateModelSetError(f"B3 READY model parameter contract is invalid for {family}/{level}")
+        if mixed_dimension and (
+            entry.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+            or entry.get("feature_count") != expected_feature_count
+            or entry.get("likelihood_feature_count") != effective_feature_count
+            or tuple(entry.get("likelihood_feature_names") or ())
+            != tuple(entry["projection_receipt"]["active_feature_names"])
+            or entry.get("projection_sha256") != entry["projection_receipt"]["projection_sha256"]
+        ):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+        if mixed_dimension:
+            projection_sources = entry["projection_receipt"].get("source_identities", {})
+            if projection_sources != {
+                "dataset_manifest_hash": dataset_manifest_hash,
+                "mapping_manifest_hash": mapping_manifest_hash,
+                "calendar_manifest_hash": calendar_manifest_hash,
+                "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+                "feature_domain_policy_sha256": feature_domain_policy_sha256,
+                "formula_version": C010_FORMULA_VERSION,
+            }:
+                raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
         if family == "legacy_covfix":
             if any(preprocess.get(field) is not None for field in ("winsor_low", "winsor_high", "center", "scale")):
                 raise StateModelSetError(f"B3 READY legacy preprocess contract is invalid for {family}/{level}")
@@ -1483,7 +2189,9 @@ def _validate_ready_layer(
             or code not in canonical_codes
             or not isinstance(training_receipt, Mapping)
             or not isinstance(semantic, Mapping)
-            or semantic.get("contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("contract_version") != D6_NA_SEMANTIC_VERSION
+            or semantic.get("base_contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("availability_contract_version") != D6_AVAILABILITY_VERSION
             or entry.get("semantic_mapping") != semantic.get("semantic_mapping")
             or entry.get("validation_accessed_after_selection") is not True
             or entry.get("future_utility_accessed_after_selection") is not True
@@ -1496,6 +2204,13 @@ def _validate_ready_layer(
             label=f"{family}/{level}/{code} training receipt",
         )
         durable_training_receipt_hashes[code] = str(training_receipt["entry_receipt_sha256"])
+        if mixed_dimension:
+            durable_score_inputs[code] = {
+                "final_train_log_likelihood": training_receipt.get("final_train_log_likelihood"),
+                "training_rows": training_receipt.get("training_rows"),
+                "effective_dimension": training_receipt.get("likelihood_feature_count"),
+                "projection_sha256": training_receipt.get("projection_sha256"),
+            }
         likelihood = training_receipt.get("likelihood")
         covariance = training_receipt.get("covariance")
         occupancy = training_receipt.get("train_occupancy")
@@ -1513,19 +2228,38 @@ def _validate_ready_layer(
             )
             if receipt.get("contract_version") != contract or not receipt.get("evidence"):
                 raise StateModelSetError(f"B3 READY {label} evidence is incomplete for {family}/{level}/{code}")
+        likelihood_evidence = likelihood.get("evidence")
+        if not isinstance(likelihood_evidence, Mapping):
+            raise StateModelSetError(f"B3 READY likelihood evidence is incomplete for {family}/{level}/{code}")
         if (
             training_receipt.get("fit_status") != "accepted"
+            or training_receipt.get("schema_version")
+            != (MIXED_TRAINING_ENTRY_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_training_entry_receipt_v1")
             or training_receipt.get("model_entry_status") != "accepted"
             or training_receipt.get("model_entry_valid") is not True
             or training_receipt.get("model_payload_sha256") != entry.get("model_payload_sha256")
+            or (
+                mixed_dimension
+                and (
+                    training_receipt.get("feature_count") != expected_feature_count
+                    or training_receipt.get("likelihood_feature_count") != effective_feature_count
+                    or training_receipt.get("projection_sha256") != entry.get("projection_sha256")
+                    or training_receipt.get("projection_receipt") != entry.get("projection_receipt")
+                    or training_receipt.get("projection_receipt", {}).get("projected_matrix_shape", [None])[0]
+                    != training_receipt.get("training_rows")
+                )
+            )
             or likelihood.get("monitor_status") != "accepted"
             or likelihood.get("convergence_valid") is not True
             or likelihood.get("likelihood_status") not in {"accepted", "accepted_with_warning"}
             or likelihood.get("likelihood_valid") is not True
+            or not likelihood_evidence.get("covariance_receipt_sha256_history")
+            or likelihood_evidence.get("covariance_receipt_sha256_history", [])[-1] != covariance.get("receipt_sha256")
             or covariance.get("covariance_status") != "accepted"
             or covariance.get("covariance_valid") is not True
             or occupancy.get("train_occupancy_status") != "accepted"
             or occupancy.get("train_occupancy_valid") is not True
+            or not validate_d4_training_receipts(training_receipt)
         ):
             raise StateModelSetError(f"B3 READY training evidence is not accepted for {family}/{level}/{code}")
         occupancy_evidence = occupancy["evidence"]
@@ -1561,12 +2295,31 @@ def _validate_ready_layer(
             or set(semantic["semantic_mapping"].values()) != {"fading", "neutral", "trending"}
             or not assignment.get("evidence")
             or not semantic_evidence.get("evidence")
-            or assignment.get("evidence", {}).get("validation_rows") != 182
+            or assignment.get("evidence", {}).get("calendar_rows") != 182
             or assignment.get("evidence", {}).get("selected_model_payload_sha256") != entry.get("model_payload_sha256")
             or semantic_evidence.get("evidence", {}).get("selected_model_payload_sha256")
             != entry.get("model_payload_sha256")
         ):
             raise StateModelSetError(f"B3 READY semantic evidence is not accepted for {family}/{level}/{code}")
+        validation_manifest = entry.get("validation_input_manifest")
+        if not isinstance(validation_manifest, Mapping):
+            raise StateModelSetError(f"B3 READY D6 manifest v2 is missing for {family}/{level}/{code}")
+        carrier_payload = validation_manifest.get("calendar_carrier_payload")
+        if not isinstance(carrier_payload, Mapping):
+            raise StateModelSetError(f"B3 READY D6 calendar carrier is missing for {family}/{level}/{code}")
+        carrier = D6ValidationCalendarSeries.from_payload(carrier_payload)
+        validate_d6_frozen_input_manifest(
+            validation_manifest,
+            carrier,
+            sector_code=code,
+            direct_sector_level=level,
+        )
+        if (
+            assignment.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("evidence_rows", 0) < 30
+        ):
+            raise StateModelSetError(f"B3 READY D6 calendar readback is invalid for {family}/{level}/{code}")
         for evidence_receipt in (assignment, semantic_evidence):
             receipt_evidence = evidence_receipt["evidence"]
             if (
@@ -1582,6 +2335,50 @@ def _validate_ready_layer(
         codes.add(code)
     if codes != set(canonical_codes):
         raise StateModelSetError(f"B3 READY canonical sector set is incomplete for {family}/{level}")
+    if mixed_dimension:
+        expected_dimension_identity = build_level_dimension_identity(
+            entries,
+            family=family,
+            level=level,
+            expected_sector_codes=canonical_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
+        )
+        for field, expected_value in expected_dimension_identity.items():
+            if artifact.get(field) != expected_value:
+                raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+        selected_aggregate = selected_candidates[0].get("aggregate")
+        score_receipts = (
+            selected_aggregate.get("ordered_sector_scores") if isinstance(selected_aggregate, Mapping) else None
+        )
+        if not isinstance(score_receipts, list) or len(score_receipts) != expected_count:
+            raise StateModelSetError("hmm_risk_model_selection_level_incomplete")
+        for code, score_receipt in zip(canonical_codes, score_receipts, strict=True):
+            if not isinstance(score_receipt, Mapping):
+                raise StateModelSetError("hmm_risk_model_selection_contract_unsatisfied")
+            score_body = {key: value for key, value in score_receipt.items() if key != "score_sha256"}
+            score_input = durable_score_inputs.get(code)
+            if not isinstance(score_input, Mapping):
+                raise StateModelSetError("hmm_risk_model_selection_level_incomplete")
+            try:
+                final = float(score_input["final_train_log_likelihood"])
+                rows = int(score_input["training_rows"])
+                dimension = int(score_input["effective_dimension"])
+                expected_score = final / (rows * dimension)
+            except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                raise StateModelSetError("hmm_risk_model_selection_contract_unsatisfied") from None
+            if (
+                score_receipt.get("schema_version") != "hmm_risk_b3_d5_effective_dimension_score_receipt_v1"
+                or score_receipt.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+                or score_receipt.get("sector_code") != code
+                or score_receipt.get("final_train_log_likelihood") != final
+                or score_receipt.get("training_rows") != rows
+                or score_receipt.get("effective_dimension") != dimension
+                or score_receipt.get("denominator") != rows * dimension
+                or score_receipt.get("projection_sha256") != score_input["projection_sha256"]
+                or score_receipt.get("score") != expected_score
+                or score_receipt.get("score_sha256") != canonical_sha256(score_body)
+            ):
+                raise StateModelSetError("hmm_risk_model_selection_contract_unsatisfied")
     if selected_receipt_hashes != tuple(durable_training_receipt_hashes[code] for code in canonical_codes):
         raise StateModelSetError(f"B3 READY selection receipt lineage is invalid for {family}/{level}")
 
@@ -1675,6 +2472,16 @@ def write_b3_ready_model_set(
             "selection_receipt_sha256": selection.get("receipt_sha256"),
             "selected_seed": selection.get("evidence", {}).get("selected_seed"),
         }
+        if uses_mixed_dimension_level(family, level):
+            layers[key].update(
+                {
+                    "dimension_contract_version": artifact.get("dimension_contract_version"),
+                    "likelihood_feature_count_histogram": artifact.get("likelihood_feature_count_histogram"),
+                    "ordered_entry_dimension_identities_sha256": artifact.get(
+                        "ordered_entry_dimension_identities_sha256"
+                    ),
+                }
+            )
     body = {
         "schema_version": SCHEMA_VERSION,
         "status": "READY",
@@ -1692,6 +2499,10 @@ def write_b3_ready_model_set(
         "contracts": {
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
+            "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
         },
         "layers": layers,
         "selection_receipts": {
@@ -1712,3 +2523,169 @@ def write_b3_ready_model_set(
     manifest_path = root / "manifest.json"
     _write_immutable(manifest_path, canonical_json_bytes(manifest))
     return manifest_path
+
+
+def read_b3_selected_level_artifact(
+    artifact_path: str | Path,
+    *,
+    selection: Mapping[str, Any],
+    family: str,
+    level: str,
+    expected_count: int,
+    dataset_manifest_hash: str,
+    mapping_manifest_hash: str,
+    calendar_manifest_hash: str,
+    l2_stock_fact_manifest_hash: str,
+    semantic_dataset_manifest_hash: str,
+    semantic_mapping_manifest_hash: str,
+    semantic_calendar_manifest_hash: str,
+    semantic_l2_stock_fact_manifest_hash: str,
+    feature_domain_policy_sha256: str,
+) -> dict[str, Any]:
+    """Read back one durable selected-level artifact through the writer's validation authority."""
+
+    path = Path(artifact_path).resolve()
+    try:
+        payload = path.read_bytes()
+        artifact = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateModelSetError(f"B3 selected artifact readback failed: {path}") from exc
+    if not isinstance(artifact, dict) or payload != canonical_json_bytes(artifact):
+        raise StateModelSetError(f"B3 selected artifact canonical readback failed: {path}")
+    _validate_ready_layer(
+        artifact,
+        selection,
+        family=family,
+        level=level,
+        expected_count=expected_count,
+        dataset_manifest_hash=dataset_manifest_hash,
+        mapping_manifest_hash=mapping_manifest_hash,
+        calendar_manifest_hash=calendar_manifest_hash,
+        l2_stock_fact_manifest_hash=l2_stock_fact_manifest_hash,
+        semantic_dataset_manifest_hash=semantic_dataset_manifest_hash,
+        semantic_mapping_manifest_hash=semantic_mapping_manifest_hash,
+        semantic_calendar_manifest_hash=semantic_calendar_manifest_hash,
+        semantic_l2_stock_fact_manifest_hash=semantic_l2_stock_fact_manifest_hash,
+        feature_domain_policy_sha256=feature_domain_policy_sha256,
+    )
+    return artifact
+
+
+def read_b3_ready_model_set(manifest_path: str | Path) -> dict[str, Any]:
+    """Read back a complete four-layer READY set without fallback to a prior or partial artifact."""
+
+    path = Path(manifest_path).resolve()
+    try:
+        payload = path.read_bytes()
+        manifest = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateModelSetError(f"B3 READY manifest readback failed: {path}") from exc
+    if not isinstance(manifest, dict) or payload != canonical_json_bytes(manifest):
+        raise StateModelSetError(f"B3 READY manifest canonical readback failed: {path}")
+    body = {key: value for key, value in manifest.items() if key not in {"state_model_set_id", "state_model_set_hash"}}
+    expected_hash = canonical_sha256(body)
+    if (
+        manifest.get("schema_version") != SCHEMA_VERSION
+        or manifest.get("status") != "READY"
+        or manifest.get("state_model_set_hash") != expected_hash
+        or manifest.get("state_model_set_id") != f"hmms_{expected_hash[:24]}"
+        or manifest.get("ready_requires_both_families") is not True
+        or manifest.get("ready_requires_direct_l1_and_l2") is not True
+        or manifest.get("contracts")
+        != {
+            "d3": D3_CONTRACT_VERSION,
+            "l2_retrain": L2_RETRAIN_VERSION,
+            "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
+        }
+    ):
+        raise StateModelSetError("B3 READY manifest identity is invalid")
+    for field, label in (
+        ("dataset_manifest_hash", "dataset manifest hash"),
+        ("mapping_manifest_hash", "mapping manifest hash"),
+        ("calendar_manifest_hash", "calendar manifest hash"),
+        ("l2_stock_fact_manifest_hash", "L2 stock-fact manifest hash"),
+        ("semantic_dataset_manifest_hash", "semantic dataset manifest hash"),
+        ("semantic_mapping_manifest_hash", "semantic mapping manifest hash"),
+        ("semantic_calendar_manifest_hash", "semantic calendar manifest hash"),
+        ("semantic_l2_stock_fact_manifest_hash", "semantic L2 stock-fact manifest hash"),
+        ("feature_domain_policy_sha256", "feature-domain policy hash"),
+    ):
+        _require_hex_identity(str(manifest.get(field) or ""), length=64, label=label)
+    _require_hex_identity(str(manifest.get("producer_commit") or ""), length=40, label="producer commit")
+    policy = manifest.get("feature_domain_policy_manifest")
+    if not isinstance(policy, Mapping):
+        raise StateModelSetError("B3 READY feature-domain policy manifest is missing")
+    try:
+        validated_policy = validate_c010_policy_manifest(policy)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
+    if (
+        validated_policy.get("receipt_sha256") != manifest.get("feature_domain_policy_sha256")
+        or validated_policy.get("dataset_manifest_hash") != manifest.get("dataset_manifest_hash")
+        or validated_policy.get("mapping_manifest_hash") != manifest.get("mapping_manifest_hash")
+        or validated_policy.get("calendar_manifest_hash") != manifest.get("calendar_manifest_hash")
+        or validated_policy.get("l2_stock_fact_manifest_hash") != manifest.get("l2_stock_fact_manifest_hash")
+    ):
+        raise StateModelSetError("B3 READY feature-domain policy source identity is invalid")
+    root = path.parent.resolve()
+    if root.name != manifest["state_model_set_id"]:
+        raise StateModelSetError("B3 READY manifest path identity is invalid")
+    required = {(family, level) for family in ("legacy_covfix", "autocycle_all_core") for level in ("L1", "L2")}
+    layers = manifest.get("layers")
+    selections = manifest.get("selection_receipts")
+    expected_keys = {f"{family}:{level}" for family, level in required}
+    if not isinstance(layers, Mapping) or not isinstance(selections, Mapping):
+        raise StateModelSetError("B3 READY manifest layer evidence is missing")
+    if set(layers) != expected_keys or set(selections) != expected_keys:
+        raise StateModelSetError("B3 READY requires both families and both direct levels")
+    for family, level in sorted(required):
+        key = f"{family}:{level}"
+        layer = layers[key]
+        selection = selections[key]
+        expected_count = 31 if level == "L1" else 131
+        if not isinstance(layer, Mapping) or not isinstance(selection, Mapping):
+            raise StateModelSetError(f"B3 READY layer is invalid for {key}")
+        artifact_sha256 = str(layer.get("artifact_sha256") or "")
+        expected_uri = f"artifacts/{artifact_sha256}.{family}.{level.lower()}.json"
+        if (
+            layer.get("family") != family
+            or layer.get("level") != level
+            or layer.get("status") != "accepted"
+            or layer.get("sector_count") != expected_count
+            or layer.get("artifact_uri") != expected_uri
+            or layer.get("selection_receipt_sha256") != selection.get("receipt_sha256")
+            or layer.get("selected_seed") != selection.get("evidence", {}).get("selected_seed")
+        ):
+            raise StateModelSetError(f"B3 READY layer identity is invalid for {key}")
+        artifact_path = (root / expected_uri).resolve()
+        if not artifact_path.is_relative_to(root):
+            raise StateModelSetError(f"B3 READY artifact escapes its model-set root for {key}")
+        artifact = read_b3_selected_level_artifact(
+            artifact_path,
+            selection=selection,
+            family=family,
+            level=level,
+            expected_count=expected_count,
+            dataset_manifest_hash=str(manifest.get("dataset_manifest_hash") or ""),
+            mapping_manifest_hash=str(manifest.get("mapping_manifest_hash") or ""),
+            calendar_manifest_hash=str(manifest.get("calendar_manifest_hash") or ""),
+            l2_stock_fact_manifest_hash=str(manifest.get("l2_stock_fact_manifest_hash") or ""),
+            semantic_dataset_manifest_hash=str(manifest.get("semantic_dataset_manifest_hash") or ""),
+            semantic_mapping_manifest_hash=str(manifest.get("semantic_mapping_manifest_hash") or ""),
+            semantic_calendar_manifest_hash=str(manifest.get("semantic_calendar_manifest_hash") or ""),
+            semantic_l2_stock_fact_manifest_hash=str(manifest.get("semantic_l2_stock_fact_manifest_hash") or ""),
+            feature_domain_policy_sha256=str(manifest.get("feature_domain_policy_sha256") or ""),
+        )
+        if canonical_sha256(artifact) != artifact_sha256:
+            raise StateModelSetError(f"B3 READY artifact identity is invalid for {key}")
+        if uses_mixed_dimension_level(family, level) and (
+            layer.get("dimension_contract_version") != artifact.get("dimension_contract_version")
+            or layer.get("likelihood_feature_count_histogram") != artifact.get("likelihood_feature_count_histogram")
+            or layer.get("ordered_entry_dimension_identities_sha256")
+            != artifact.get("ordered_entry_dimension_identities_sha256")
+        ):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    return manifest

@@ -38,6 +38,52 @@ from score_weighted_strategy import ScoreWeightedTopkStrategy
 logger = logging.getLogger(__name__)
 
 
+def _rank_scores_canonically(scores):
+    """Rank by score descending and instrument ascending for exact ties.
+
+    A stable score sort alone is not deterministic when recorder/process input
+    order differs. Normalized QE score indexes are instrument strings, so an
+    initial stable index sort establishes the explicit secondary key before the
+    stable primary score sort.
+    """
+    return scores.sort_index(kind="mergesort").sort_values(
+        ascending=False,
+        kind="mergesort",
+    )
+
+
+def _order_scored_holdings_canonically(final_holdings, scores):
+    """Return scored holdings in a deterministic instrument order.
+
+    ``rank`` weighting assigns ordinal weights, including to exact score ties.
+    The incoming holding order can differ across restored recorders, so it must
+    not be allowed to decide which tied instrument receives which weight.
+    """
+    return sorted(
+        (instrument for instrument in final_holdings if instrument in scores.index),
+        key=str,
+    )
+
+
+def _ordered_topk_candidates(ranked, topk, current_holdings):
+    """Return Top-K membership and buy candidates in canonical rank order.
+
+    Sets are safe for membership checks but cannot be ordering authorities.
+    ``ranked`` already carries the canonical score-desc/instrument-asc order,
+    so preserve that order.
+    """
+    ranked_topk = ranked.head(int(topk))
+    ordered_ids = ranked_topk.index.tolist()
+    topk_membership = set(ordered_ids)
+    current_membership = set(current_holdings)
+    buy_candidates = [
+        (sid, float(score))
+        for sid, score in zip(ordered_ids, ranked_topk.to_numpy())
+        if sid not in current_membership
+    ]
+    return topk_membership, buy_candidates
+
+
 class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
     """
     ScoreWeightedTopkStrategy 的修复版，topk 持仓数量严格受控。
@@ -78,7 +124,7 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         if not blocked_sectors:
             return pred_score
 
-        sorted_scores = pred_score.sort_values(ascending=False)
+        sorted_scores = _rank_scores_canonically(pred_score)
         protected = set(sorted_scores.head(protect_top).index)
         current_holdings = set(self.trade_position.get_stock_list())
 
@@ -166,10 +212,15 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         current_holdings = list(self.trade_position.get_stock_list())
 
         # 3. TopK 候选
-        # kind='mergesort': stable sort ensures deterministic tie-breaking
+        # Canonical score-desc/instrument-asc ordering handles exact ties even
         # across different CPU SIMD (AVX-512 vs AVX2) — fixes cross-node divergence
-        ranked = scores.sort_values(ascending=False, kind='mergesort')
-        topk_stocks = set(ranked.head(self.topk).index.tolist())
+        # The instrument key also removes recorder/input-order dependence.
+        ranked = _rank_scores_canonically(scores)
+        topk_stocks, buy_candidates = _ordered_topk_candidates(
+            ranked,
+            self.topk,
+            current_holdings,
+        )
 
         # ── Fix #2: 幽灵持仓强制卖出 ──
         # 无评分的旧持仓（停牌/退市等）直接加入卖出列表，不再静默积累
@@ -189,14 +240,7 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
             if sid not in topk_stocks:
                 sc = float(scores.get(sid, -999.0))
                 sell_candidates.append((sid, sc))
-        sell_candidates.sort(key=lambda x: x[1])
-
-        buy_candidates = []
-        for sid in topk_stocks:
-            if sid not in current_holdings:
-                sc = float(scores.get(sid, 0.0))
-                buy_candidates.append((sid, sc))
-        buy_candidates.sort(key=lambda x: -x[1])
+        sell_candidates.sort(key=lambda x: (x[1], str(x[0])))
 
         # 5. 建仓/补仓 vs 动态 n_drop
         # 建仓阶段：直接买入填满到 topk（不限制速度）
@@ -245,7 +289,10 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         # 6. 计算最终持仓列表和权重
         # 此时 final_holdings 中所有股票都在 scores.index 中，无需再过滤
         final_holdings = [s for s in current_holdings if s not in all_sells_set] + actual_buys
-        scored_final_holdings = [s for s in final_holdings if s in scores.index]
+        scored_final_holdings = _order_scored_holdings_canonically(
+            final_holdings,
+            scores,
+        )
         final_scores = np.array([float(scores[s]) for s in scored_final_holdings])
         weights = self._compute_weights(final_scores) if len(scored_final_holdings) else np.array([])
 

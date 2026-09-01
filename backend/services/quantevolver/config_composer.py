@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
+from ..trading_core.execution_algo_retirement import require_execution_algo_active
 from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
@@ -44,13 +45,21 @@ from .qe_dataset_contract import (
     QE_FROZEN_SUSPEND_PARQUET_SHA256,
     QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
     QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
+    QE_FORMAL_DATASET_REQUEST_PARAM,
     QE_ST_PIT_UNIVERSE_KEY,
+    QEFormalDatasetBinding,
+    QEFormalDatasetRequest,
     require_qe_dataset_window,
+    require_qe_formal_dataset_binding_projection,
+    require_qe_formal_dataset_request,
+    require_qe_formal_dataset_window,
 )
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
+
+QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -68,6 +77,13 @@ _REMOVED_GATS_RESOURCE_OPTIONS = {
 }
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
+_LOCAL_WSL_QE_NODE_IDS = {"wsl2-5080"}
+_LOCAL_WSL_THREAD_ENV = (
+    "export OMP_NUM_THREADS=4",
+    "export MKL_NUM_THREADS=4",
+    "export OPENBLAS_NUM_THREADS=4",
+    "export NUMEXPR_NUM_THREADS=4",
+)
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -92,6 +108,22 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _formal_dataset_binding(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetBinding | None:
+    request = _formal_dataset_request(custom_params)
+    return request.binding() if request is not None else None
+
+
+def _formal_dataset_request(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetRequest | None:
+    raw = (custom_params or {}).get(QE_FORMAL_DATASET_REQUEST_PARAM)
+    if raw is None:
+        return None
+    return require_qe_formal_dataset_request(raw)
+
+
 def _requires_qe_custom_loaders(
     *,
     has_custom_factors: bool,
@@ -106,6 +138,37 @@ def _requires_qe_custom_loaders(
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
     normalized = str(node_id or "").strip().lower()
     return normalized not in _CPU_ONLY_QE_NODE_IDS
+
+
+def _is_local_wsl_qe_node(node_id: Optional[str]) -> bool:
+    """Treat the legacy/unspecified composer target as the local WSL node."""
+
+    normalized = str(node_id or "").strip().lower()
+    return not normalized or normalized in _LOCAL_WSL_QE_NODE_IDS
+
+
+def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
+    """Quote one Linux path and reject control characters before shell use."""
+
+    text = str(value or "")
+    if not text or any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(
+            "reason_code=qe_shell_path_invalid: "
+            f"{field_name} must be a non-empty single-line path"
+        )
+    return shlex.quote(text)
+
+
+def _qe_subprocess_credential_scrub_command() -> str:
+    """Load the shared scrub helper after ConfigComposer initialization.
+
+    ``multi_alpha.__init__`` imports ConfigComposer for compatibility exports,
+    so a module-level reverse import would create an initialization cycle.
+    """
+
+    from ..multi_alpha.qe_subprocess_env import qe_subprocess_credential_scrub_command
+
+    return qe_subprocess_credential_scrub_command()
 
 
 def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
@@ -433,8 +496,6 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
     "TWAP",
     "CLOSE_PRICE",
     "V24_PLAN",
-    "V25_TWO_STAGE",
-    "V25_1_SMALL_CAP",
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
@@ -460,8 +521,6 @@ QE_STRATEGY_RUNTIME_HELPER_FILES = (
 )
 
 QE_MINUTE_RUNTIME_HELPER_FILES = (
-    "tail_twap_v25_strategy.py",
-    "tail_twap_v25_1_strategy.py",
     "close_execution_strategy.py",
     *QE_STRATEGY_RUNTIME_HELPER_FILES,
 )
@@ -471,12 +530,7 @@ QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
     AISTOCK_PROJECT_ROOT / "scripts",
 ]
-AUTHORITATIVE_QE_HELPER_ASSETS = {
-    # V25 is a strategy/model asset. Keep the authority in the AIstock repo
-    # instead of probing an RDAgent/WSL workspace from Windows.
-    "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
-    "tail_twap_v25_1_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_1_strategy.py",
-}
+AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {}
 
 
 class ConfigComposer:
@@ -671,7 +725,7 @@ class ConfigComposer:
                 node_id=node_id,
             )
 
-        remote_node = bool(node_id and node_id != "wsl2-5080")
+        remote_node = not _is_local_wsl_qe_node(node_id)
         callback_base_configured = any(
             (os.getenv(name) or "").strip()
             for name in (
@@ -723,7 +777,11 @@ class ConfigComposer:
 
     @classmethod
     def _execution_algo_catalog_entry(cls, algo_code: str) -> Dict[str, Any]:
-        algo = str(algo_code).strip().upper()
+        algo = require_execution_algo_active(
+            algo_code,
+            operation="qe_execution_catalog_resolve",
+            semantic_path="qe_config.execution_algo",
+        )
         cached = cls._execution_algo_catalog_cache.get(algo)
         if cached is not None:
             return dict(cached)
@@ -870,6 +928,11 @@ class ConfigComposer:
         raw = (execution_algo or DEFAULT_QE_EXECUTION_ALGO).strip().upper()
         aliases = {"": DEFAULT_QE_EXECUTION_ALGO, "NONE": DEFAULT_QE_EXECUTION_ALGO, "DEFAULT": DEFAULT_QE_EXECUTION_ALGO}
         raw = aliases.get(raw, raw)
+        raw = require_execution_algo_active(
+            raw,
+            operation="qe_config_compose",
+            semantic_path="qe_config.execution_algo",
+        )
         if raw == "VWAP":
             raise ValueError(
                 "execution_algo='VWAP' is not implemented in QE minute execution. "
@@ -966,28 +1029,6 @@ class ConfigComposer:
                 "module_path": "tail_twap_v24_strategy",
                 "kwargs": params,
             }
-        if algo == "V25_TWO_STAGE":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25TwoStageStrategy",
-                "module_path": "tail_twap_v25_strategy",
-                "kwargs": params,
-            }
-        if algo == "V25_1_SMALL_CAP":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25_1SmallCapStrategy",
-                "module_path": "tail_twap_v25_1_strategy",
-                "kwargs": params,
-            }
         raise AssertionError(f"unreachable execution algo: {algo}")
 
     @classmethod
@@ -1014,10 +1055,8 @@ class ConfigComposer:
 
     @classmethod
     def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
-        return cls._normalize_execution_algo(execution_algo) in {
-            "V25_TWO_STAGE",
-            "V25_1_SMALL_CAP",
-        }
+        cls._normalize_execution_algo(execution_algo)
+        return False
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -1308,7 +1347,16 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
-        require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
+        formal_request = _formal_dataset_request(custom_params)
+        formal_binding = formal_request.binding() if formal_request is not None else None
+        if formal_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_binding,
+                start_date=backtest_start,
+                end_date=backtest_end,
+            )
+        else:
+            require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
 
         provider_uri_day = str(qlib_data_path or QLIB_DATA_PATH_WSL).strip()
         if not provider_uri_day:
@@ -1317,6 +1365,63 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
+
+        dataset_identity = {
+            "contract_id": QE_DATASET_CONTRACT_ID,
+            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "rule_version": "frozen_qlib_bin_universe_v1",
+        }
+        qlib_pins = {
+            "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
+            "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
+            "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
+        }
+        suspend_identity = {
+            "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
+            "provider_uri": posixpath.join(
+                posixpath.dirname(provider_uri_day.rstrip("/")),
+                QE_FROZEN_SUSPEND_DATASET_ID,
+            ),
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
+            "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+            "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
+        }
+        if formal_request is not None and formal_binding is not None:
+            pins = formal_request.runtime_pins.validated()
+            dataset_identity = {
+                "contract_id": formal_binding.release_id,
+                "st_universe_key": formal_binding.qe_runtime_universe_key,
+                "canonical_frozen_universe_key": formal_binding.frozen_universe_key,
+                "authority_id": formal_binding.authority_id,
+                "rule_version": formal_binding.rule_version,
+                "rule_parameters_digest": formal_binding.rule_parameters_digest,
+                "release_manifest_digest": formal_binding.manifest_digest,
+                "frozen_snapshot_digest": formal_binding.frozen_snapshot_digest,
+            }
+            qlib_pins = {
+                "snapshot_id": pins.qlib_bin_snapshot_id,
+                # The physical candidate sidecars carry the immutable W2
+                # frozen key.  The QE-prefixed key is only a compatibility
+                # namespace for the existing Selection risk-profile type.
+                "universe_key": formal_binding.frozen_universe_key,
+                "instruments_sha256": pins.qlib_instruments_sha256,
+                "calendar_sha256": pins.qlib_calendar_sha256,
+                "meta_export_sha256": pins.qlib_meta_export_sha256,
+            }
+            suspend_identity = {
+                "dataset_id": pins.suspend_dataset_id,
+                "provider_uri": posixpath.join(
+                    posixpath.dirname(provider_uri_day.rstrip("/")),
+                    pins.suspend_dataset_id,
+                ),
+                "universe_key": formal_binding.frozen_universe_key,
+                "parquet_sha256": pins.suspend_parquet_sha256,
+                "manifest_sha256": pins.suspend_manifest_sha256,
+                "source_contract": pins.suspend_source_contract,
+            }
 
         payload = {
             "schema_version": "qe_frozen_build_spec_v1",
@@ -1331,35 +1436,15 @@ class ConfigComposer:
                 "visible_time_mode": profile.visible_time_mode,
                 "strict_data_ready": profile.strict_data_ready,
             },
-            "dataset": {
-                "contract_id": QE_DATASET_CONTRACT_ID,
-                "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
-                "rule_version": "frozen_qlib_bin_universe_v1",
-            },
-            "pins": {
-                "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
-                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
-                "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
-                "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
-                "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
-            },
+            "dataset": dataset_identity,
+            "pins": qlib_pins,
             # Frozen suspend_d candidate dataset pins (BUG-989 continuation):
             # the suspend sidecar is a versioned sibling of the frozen bin
             # directory on every compute node.  qe_build_frozen_suspend_filter.py
             # rebuilds qe_suspend_filter.json from these pins before qrun;
             # any pin/identity/coverage mismatch fails closed on the compute
             # node and there is no database fallback.
-            "suspend": {
-                "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
-                "provider_uri": posixpath.join(
-                    posixpath.dirname(provider_uri_day.rstrip("/")),
-                    QE_FROZEN_SUSPEND_DATASET_ID,
-                ),
-                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
-                "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
-                "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
-                "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
-            },
+            "suspend": suspend_identity,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
@@ -1374,7 +1459,12 @@ class ConfigComposer:
             custom_params,
             source="ConfigComposer._prepare_risk_policy_runtime",
         )
-        custom_params["risk_policy"]["st_universe_key"] = QE_ST_PIT_UNIVERSE_KEY
+        formal_binding = _formal_dataset_binding(custom_params)
+        custom_params["risk_policy"]["st_universe_key"] = (
+            formal_binding.qe_runtime_universe_key
+            if formal_binding is not None
+            else QE_ST_PIT_UNIVERSE_KEY
+        )
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
         frozen_build_spec_json = self._build_qe_frozen_risk_policy_spec(
@@ -1702,7 +1792,11 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -1902,6 +1996,13 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        if formal_dataset_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_dataset_binding,
+                start_date=self._parse_date(data_split["train_start"]),
+                end_date=self._parse_date(data_split["backtest_end"]),
+            )
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
@@ -1983,6 +2084,14 @@ class ConfigComposer:
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
+        if formal_dataset_binding is not None:
+            experiment_files[QE_FORMAL_DATASET_BINDING_FILE] = json.dumps(
+                formal_dataset_binding.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
@@ -2081,6 +2190,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             execution_algo=execution_algo,
             execution_algo_params=execution_algo_params,
+            node_id=node_id,
             initial_cash=(strategy_params or {}).get("initial_cash"),
         )
         experiment_files["conf.yaml"] = conf_yaml
@@ -2093,7 +2203,12 @@ class ConfigComposer:
                 if code:
                     experiment_files[f"factors/{f['factor_name']}.py"] = code
 
-            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                factor_data_dir=factor_data_dir,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
             if prepare_factors_py:
                 experiment_files["prepare_factors.py"] = prepare_factors_py
 
@@ -2265,7 +2380,7 @@ class ConfigComposer:
                 llm_hypothesis=llm_hypothesis,
             )
 
-        return {
+        result = {
             "experiment_files": experiment_files,
             "wsl_command": wsl_command,
             "wsl_command_core": " && ".join(auto_core_parts),
@@ -2276,6 +2391,9 @@ class ConfigComposer:
             "has_custom_factors": has_custom_factors,
             "long_trend_evaluation_descriptor": normalized_long_trend_descriptor,
         }
+        if formal_dataset_binding is not None:
+            result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
+        return result
 
     # ── 内存生成辅助方法 ──
 
@@ -2325,7 +2443,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -2838,7 +2956,11 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -2983,6 +3105,7 @@ class ConfigComposer:
         execution_algo: Optional[str] = None,  # None/"TWAP" → TailTWAPWithLimitStrategy | "CLOSE_PRICE" → CloseExecutionStrategy
         execution_algo_params: Optional[Dict[str, Any]] = None,
         initial_cash: Optional[int] = None,  # 初始资金，None → 100000000
+        node_id: Optional[str] = None,
     ) -> str:
         """生成QLib conf.yaml内容。
 
@@ -3001,6 +3124,7 @@ class ConfigComposer:
         model_type_tag = None  # "TimeSeries" | "Tabular" | None
         model_dataset_cls = "DatasetH"
         model_step_len: Optional[int] = None
+        local_wsl_host_safe = _is_local_wsl_qe_node(node_id)
 
         if model_info:
             model_type = (model_info.get("model_type") or "").upper()
@@ -3039,15 +3163,21 @@ class ConfigComposer:
                     "weight_decay": float(thp.get("weight_decay", 1e-4)) if isinstance(thp.get("weight_decay", 1e-4), str) else thp.get("weight_decay", 1e-4),
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                     "use_amp": False,
                     "gradient_accumulation_steps": 1,
-                    "pin_memory": True,
-                    "prefetch_factor": 2,
+                    "pin_memory": not local_wsl_host_safe,
                     "persistent_workers": False,
                     "pt_model_uri": "model.model_cls",
                 }
+                if not local_wsl_host_safe:
+                    model_kwargs["prefetch_factor"] = 2
+                for loader_key in ("n_jobs", "pin_memory", "prefetch_factor", "persistent_workers"):
+                    if loader_key in thp:
+                        # Preserve the request long enough for the authoritative
+                        # local-WSL contract below to accept it or fail closed.
+                        model_kwargs[loader_key] = thp[loader_key]
                 if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
                     model_kwargs.update(
                         {
@@ -3233,9 +3363,16 @@ class ConfigComposer:
                     "weight_decay": 1e-4,
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                 }
+                if local_wsl_host_safe:
+                    model_kwargs.update(
+                        {
+                            "pin_memory": False,
+                            "persistent_workers": False,
+                        }
+                    )
 
                 training_hp = model_info.get("model_training_hyperparameters")
                 if training_hp:
@@ -3472,6 +3609,7 @@ class ConfigComposer:
             "archive_policy",        # QE Archive policy metadata, not a strategy kwarg
             "archive_reason",
             "archive_allow_override",
+            "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -3489,6 +3627,7 @@ class ConfigComposer:
             "sector_risk_overlay_manifest_source",
             "sector_risk_overlay_data_source",
             "_seed_ensemble_config",
+            QE_FORMAL_DATASET_REQUEST_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -3567,6 +3706,34 @@ class ConfigComposer:
             if set(custom_params.keys()) - set(filtered_params.keys()):
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
+
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES and local_wsl_host_safe:
+            try:
+                normalized_n_jobs = int(model_kwargs.get("n_jobs", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: GeneralPTNN n_jobs must be 0 on local WSL"
+                ) from exc
+            unsafe_loader_options = {
+                "n_jobs": model_kwargs.get("n_jobs") if normalized_n_jobs != 0 else None,
+                "pin_memory": model_kwargs.get("pin_memory") if _bool_param(model_kwargs.get("pin_memory", False)) else None,
+                "persistent_workers": (
+                    model_kwargs.get("persistent_workers")
+                    if _bool_param(model_kwargs.get("persistent_workers", False))
+                    else None
+                ),
+                "prefetch_factor": model_kwargs.get("prefetch_factor"),
+            }
+            unsafe_loader_options = {key: value for key, value in unsafe_loader_options.items() if value is not None}
+            if unsafe_loader_options:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: "
+                    f"unsupported_options={sorted(unsafe_loader_options)}"
+                )
+            model_kwargs["n_jobs"] = 0
+            model_kwargs["pin_memory"] = False
+            model_kwargs["persistent_workers"] = False
+            model_kwargs.pop("prefetch_factor", None)
 
         model_name_for_ltr = str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class)
         model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
@@ -4041,13 +4208,7 @@ class ConfigComposer:
         lines.append("            open_cost: 0.000095")
         lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
-        if backtest_freq != "day" and algo_cfg["effective_algo"] == "V25_1_SMALL_CAP":
-            lines.append("            # V25.1 legalizes child orders with stock-aware board-lot rules.")
-            lines.append("            # Disable Qlib's global 100-share rounding so STAR 200+1 orders survive.")
-            lines.append("            trade_unit: ~")
-            lines.append("            board_lot_trade_unit: true")
-        else:
-            lines.append("            trade_unit: 100")
+        lines.append("            trade_unit: 100")
         quote_universe_codes = (custom_params or {}).get("quote_universe_codes")
         if quote_universe_codes:
             if isinstance(quote_universe_codes, str):
@@ -4208,6 +4369,7 @@ class ConfigComposer:
         *,
         start_date: str,
         end_date: str,
+        formal_dataset_binding: QEFormalDatasetBinding | None = None,
     ) -> Dict[str, Any]:
         """Return frozen ST PIT metadata that generated factor caches must match.
 
@@ -4229,6 +4391,24 @@ class ConfigComposer:
         )
 
         _ = (start_date, end_date)  # window is validated against the dataset contract upstream
+        if formal_dataset_binding is not None:
+            formal = require_qe_formal_dataset_binding_projection(
+                formal_dataset_binding
+            )
+            return {
+                "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
+                "universe_key": formal.frozen_universe_key,
+                "universe_rule_version": formal.rule_version,
+                "universe_fingerprint_sha256": formal.frozen_snapshot_digest,
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+                "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+                "authority_id": formal.authority_id,
+                "rule_parameters_digest": formal.rule_parameters_digest,
+                "release_id": formal.release_id,
+                "release_cutoff": formal.cutoff.isoformat(),
+                "release_manifest_digest": formal.manifest_digest,
+                "formal_usage_mode": formal.usage_mode,
+            }
         return {
             "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
             "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -4238,11 +4418,96 @@ class ConfigComposer:
             "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
         }
 
+    @staticmethod
+    def _normalize_observation_panel_contract(
+        custom_params: Optional[Dict[str, Any]],
+        factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Validate the opt-in matched-experiment observation panel contract.
+
+        The contract is deliberately limited to custom-factor-only experiments.
+        Alpha158 uses a separate loader/index and therefore cannot make the same
+        reference-factor intersection guarantee.
+        """
+
+        if custom_params is None or "observation_panel" not in custom_params:
+            return {}
+
+        raw_contract = custom_params.get("observation_panel")
+        if not isinstance(raw_contract, dict):
+            raise ValueError(
+                "qe_observation_panel_contract_invalid: observation_panel must be an object"
+            )
+
+        allowed_keys = {
+            "schema_version",
+            "panel_id",
+            "mode",
+            "reference_factor_names",
+        }
+        unknown_keys = sorted(set(raw_contract) - allowed_keys)
+        if unknown_keys:
+            raise ValueError(
+                "qe_observation_panel_unknown_keys: " + ",".join(unknown_keys)
+            )
+
+        if raw_contract.get("schema_version") != "qe_observation_panel_v1":
+            raise ValueError(
+                "qe_observation_panel_schema_invalid: expected qe_observation_panel_v1"
+            )
+        if raw_contract.get("mode") != "reference_factor_intersection":
+            raise ValueError(
+                "qe_observation_panel_mode_invalid: expected reference_factor_intersection"
+            )
+
+        panel_id = raw_contract.get("panel_id")
+        if not isinstance(panel_id, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", panel_id
+        ) is None:
+            raise ValueError(
+                "qe_observation_panel_id_invalid: panel_id must be a stable identifier"
+            )
+
+        reference_factor_names = raw_contract.get("reference_factor_names")
+        if (
+            not isinstance(reference_factor_names, list)
+            or not reference_factor_names
+            or any(not isinstance(name, str) or not name for name in reference_factor_names)
+        ):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_invalid: "
+                "reference_factor_names must be a non-empty string list"
+            )
+        if len(set(reference_factor_names)) != len(reference_factor_names):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_duplicate: "
+                "reference_factor_names must be unique"
+            )
+
+        missing_factor_names = sorted(set(reference_factor_names) - set(factor_names))
+        if missing_factor_names:
+            raise ValueError(
+                "qe_observation_panel_reference_factor_not_configured: "
+                + ",".join(missing_factor_names)
+            )
+        if custom_params.get("disable_alpha158") is not True:
+            raise ValueError(
+                "qe_observation_panel_alpha158_not_supported: disable_alpha158 must be true"
+            )
+
+        return {
+            "schema_version": "qe_observation_panel_v1",
+            "panel_id": panel_id,
+            "mode": "reference_factor_intersection",
+            "reference_factor_names": list(reference_factor_names),
+        }
+
     def _compose_prepare_factors(
         self,
         factors_info: List[Dict],
         factor_data_dir: Optional[str] = None,
         data_split: Optional[Dict[str, str]] = None,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """生成 prepare_factors.py 预处理脚本（含因子值缓存集成）。
 
@@ -4263,9 +4528,19 @@ class ConfigComposer:
             return None
 
         factor_names = [f["factor_name"] for f in custom_factors]
+        observation_panel_contract = self._normalize_observation_panel_contract(
+            custom_params,
+            factor_names,
+        )
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        metadata_kwargs: Dict[str, Any] = {
+            "start_date": train_start,
+            "end_date": test_end,
+        }
+        if formal_dataset_binding is not None:
+            metadata_kwargs["formal_dataset_binding"] = formal_dataset_binding
         factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
-            start_date=train_start,
-            end_date=test_end,
+            **metadata_kwargs
         )
 
         lines: list[str] = []
@@ -4291,15 +4566,21 @@ class ConfigComposer:
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
         lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', {repr(factor_data_dir or RDAGENT_FACTOR_DATA_WSL)})")
+        expected_dataset_meta: Dict[str, Any] = {
+            "snapshot_id": QE_DATASET_CONTRACT_ID,
+            "start": QE_DATASET_START_DATE.isoformat(),
+            "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
+        }
+        if formal_dataset_binding is not None:
+            expected_dataset_meta = {
+                "snapshot_id": formal_dataset_binding.release_id,
+                "start": QE_DATASET_START_DATE.isoformat(),
+                "end": formal_dataset_binding.cutoff.isoformat(),
+                "canonical_pit_dataset_binding": formal_dataset_binding.as_dict(),
+            }
+        lines.append("QE_DATASET_EXPECTED_META = " + repr(expected_dataset_meta))
         lines.append(
-            "QE_DATASET_EXPECTED_META = "
-            + repr(
-                {
-                    "snapshot_id": QE_DATASET_CONTRACT_ID,
-                    "start": QE_DATASET_START_DATE.isoformat(),
-                    "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
-                }
-            )
+            "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
         lines.append("")
         lines.append("")
@@ -4312,7 +4593,7 @@ class ConfigComposer:
         lines.append("    mismatches = {")
         lines.append("        key: {'expected': expected, 'actual': actual.get(key)}")
         lines.append("        for key, expected in QE_DATASET_EXPECTED_META.items()")
-        lines.append("        if str(actual.get(key) or '') != str(expected)")
+        lines.append("        if actual.get(key) != expected")
         lines.append("    }")
         lines.append("    if mismatches:")
         lines.append("        raise RuntimeError('QE factor_data dataset contract mismatch: ' + _json.dumps(mismatches, ensure_ascii=False, sort_keys=True))")
@@ -4355,6 +4636,12 @@ class ConfigComposer:
                         "universe_fingerprint_sha256",
                         "index_policy",
                         "coverage_semantics",
+                        "authority_id",
+                        "rule_parameters_digest",
+                        "release_id",
+                        "release_cutoff",
+                        "release_manifest_digest",
+                        "formal_usage_mode",
                     )
                 }
             )
@@ -4471,13 +4758,12 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _cache_universe_mismatch(entry, expected):")
-        lines.append("    required_keys = ('universe_key', 'index_policy')")
+        lines.append("    required_keys = ('universe_key', 'index_policy', 'universe_fingerprint_sha256')")
+        lines.append("    if expected.get('release_id'):")
+        lines.append("        required_keys += ('data_freshness_profile', 'coverage_semantics', 'authority_id', 'universe_rule_version', 'rule_parameters_digest', 'release_id', 'release_cutoff', 'release_manifest_digest', 'formal_usage_mode')")
         lines.append("    for key in required_keys:")
         lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
         lines.append("            return key")
-        lines.append("    expected_fp = expected.get('universe_fingerprint_sha256')")
-        lines.append("    if expected_fp and entry.get('universe_fingerprint_sha256') != expected_fp:")
-        lines.append("        return 'universe_fingerprint_sha256'")
         lines.append("    return ''")
         lines.append("")
         lines.append("")
@@ -4767,6 +5053,72 @@ class ConfigComposer:
         lines.append("        return _execute_factor_locked(factor_name, factor_code, work_dir)")
         lines.append("")
         lines.append("")
+        lines.append("def _require_factor_results(factor_names, factor_results):")
+        lines.append("    missing_results = [")
+        lines.append("        name for name in factor_names if factor_results.get(name) is None")
+        lines.append("    ]")
+        lines.append("    if missing_results:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_incomplete: ' + ','.join(missing_results)")
+        lines.append("        )")
+        lines.append("    missing_columns = [")
+        lines.append("        name")
+        lines.append("        for name in factor_names")
+        lines.append("        if name not in factor_results[name].columns")
+        lines.append("    ]")
+        lines.append("    if missing_columns:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_column_missing: ' + ','.join(missing_columns)")
+        lines.append("        )")
+        lines.append("")
+        lines.append("")
+        lines.append("def _select_factor_results(factor_names, factor_results):")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("        _require_factor_results(factor_names, factor_results)")
+        lines.append("        return [factor_results[name] for name in factor_names]")
+        lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
+        lines.append("    # omitted while the remaining successful factors still form the outer union.")
+        lines.append("    return [")
+        lines.append("        factor_results[name]")
+        lines.append("        for name in factor_names")
+        lines.append("        if factor_results.get(name) is not None")
+        lines.append("    ]")
+        lines.append("")
+        lines.append("")
+        lines.append("def _apply_observation_panel(combined):")
+        lines.append("    contract = QE_OBSERVATION_PANEL_CONTRACT")
+        lines.append("    if not contract:")
+        lines.append("        return combined")
+        lines.append("    reference_factor_names = list(contract['reference_factor_names'])")
+        lines.append("    missing_references = [")
+        lines.append("        name for name in reference_factor_names if name not in combined.columns")
+        lines.append("    ]")
+        lines.append("    if missing_references:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_reference_factor_missing: '")
+        lines.append("            + ','.join(missing_references)")
+        lines.append("        )")
+        lines.append("    rows_before = len(combined)")
+        lines.append("    reference_mask = combined.loc[:, reference_factor_names].notna().all(axis=1)")
+        lines.append("    filtered = combined.loc[reference_mask].copy()")
+        lines.append("    if filtered.empty:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_empty: '")
+        lines.append("            + str(contract['panel_id'])")
+        lines.append("        )")
+        lines.append("    logger.info(")
+        lines.append("        'QE observation panel applied: panel_id=%s mode=%s references=%s '")
+        lines.append("        'rows_before=%d rows_after=%d rows_dropped=%d',")
+        lines.append("        contract['panel_id'],")
+        lines.append("        contract['mode'],")
+        lines.append("        reference_factor_names,")
+        lines.append("        rows_before,")
+        lines.append("        len(filtered),")
+        lines.append("        rows_before - len(filtered),")
+        lines.append("    )")
+        lines.append("    return filtered")
+        lines.append("")
+        lines.append("")
         lines.append("def main():")
         lines.append("    script_dir = os.path.dirname(os.path.abspath(__file__))")
         lines.append("    os.chdir(script_dir)")
@@ -4788,20 +5140,23 @@ class ConfigComposer:
 
         lines.append("")
         lines.append("    # 逐个执行因子")
-        lines.append("    factor_results = []")
+        lines.append("    factor_results = {}")
         lines.append("    for factor_name, factor_code in factor_codes.items():")
         lines.append("        logger.info(f'Executing factor: {factor_name}...')")
         lines.append("        result = execute_factor(factor_name, factor_code, script_dir)")
-        lines.append("        if result is not None:")
-        lines.append("            factor_results.append(result)")
+        lines.append("        factor_results[factor_name] = result")
         lines.append("")
         lines.append("    # 合并为 combined_factors_df.parquet")
-        lines.append("    if not factor_results:")
+        lines.append("    selected_factor_results = _select_factor_results(")
+        lines.append("        list(factor_codes), factor_results")
+        lines.append("    )")
+        lines.append("    if not selected_factor_results:")
         lines.append("        logger.error('No factors computed successfully!')")
         lines.append("        sys.exit(1)")
-        lines.append("")
-        lines.append("    logger.info(f'Combining {len(factor_results)} factor results...')")
-        lines.append("    combined = pd.concat(factor_results, axis=1)")
+        lines.append("    logger.info(f'Combining {len(selected_factor_results)} factor results...')")
+        lines.append("    combined = pd.concat(")
+        lines.append("        selected_factor_results, axis=1")
+        lines.append("    )")
         lines.append("    combined = combined.sort_index()")
         lines.append("    combined = combined.loc[:, ~combined.columns.duplicated(keep='last')]")
         lines.append("")
@@ -4824,6 +5179,8 @@ class ConfigComposer:
         lines.append("            logger.info('Swapping index levels to (datetime, instrument)...')")
         lines.append("            combined = combined.swaplevel('datetime', 'instrument')")
         lines.append("        combined = combined.sort_index()")
+        lines.append("")
+        lines.append("    combined = _apply_observation_panel(combined)")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")
@@ -5207,7 +5564,10 @@ class ConfigComposer:
         # Every generated workspace may contain QE-owned runtime modules such as
         # the long-horizon label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
-        env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        env_lines.append(
+            f'export PYTHONPATH={quoted_wsl_path}:"${{QLIB_RDAGENT_ROOT_WSL:-.}}:${{PYTHONPATH:-}}"'
+        )
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
@@ -5264,13 +5624,17 @@ class ConfigComposer:
                     "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_dir, field_name='factor_cache_dir')}"
+            )
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
             if not _is_official_factor_cache_path_shape(factor_cache_wsl):
                 raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_wsl, field_name='factor_cache_dir')}"
+            )
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (
@@ -5281,11 +5645,16 @@ class ConfigComposer:
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
         core_parts = [
+            scrub_credentials,
             self._build_conda_activate_chain(),
+            scrub_credentials,
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
+        if _is_local_wsl_qe_node(node_id):
+            core_parts.extend(_LOCAL_WSL_THREAD_ENV)
         if _is_gpu_qe_node(node_id):
             core_parts.append(_CUDA_EXPANDABLE_SEGMENTS_ENV)
         if train_only:
@@ -5295,14 +5664,19 @@ class ConfigComposer:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
+            core_parts.append(scrub_credentials)
             core_parts.append("python prepare_factors.py")
             core_parts.append(". ./.factor_env")
+            core_parts.append(scrub_credentials)
         runner_cmd = f"python {runner} conf.yaml"
         if train_only:
             runner_cmd += " --train-only"
+        core_parts.append(scrub_credentials)
         core_parts.append(runner_cmd)
         if long_trend_postprocess_enabled:
+            core_parts.append(scrub_credentials)
             core_parts.append("python long_trend_postprocess_adapter.py")
+        core_parts.append(scrub_credentials)
         core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
@@ -5356,10 +5730,22 @@ class ConfigComposer:
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
         )
         env_block = "\n".join(env_lines)
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        manual_conda_chain = self._build_conda_activate_chain()
+        manual_runtime_guard_lines = ["set -euo pipefail", scrub_credentials]
+        if _is_local_wsl_qe_node(node_id):
+            manual_runtime_guard_lines.extend(_LOCAL_WSL_THREAD_ENV)
+        manual_runtime_guard_block = "\n".join(manual_runtime_guard_lines)
+        manual_factor_data_default = _quote_qe_shell_path(
+            str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "."),
+            field_name="factor_data_dir",
+        )
 
         # 手动模式的数据链接步骤（可读格式）
         _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
-_FDD="${{RDAGENT_FACTOR_DATA_WSL:-{RDAGENT_FACTOR_DATA_WSL}}}"
+_FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
+[ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
@@ -5369,7 +5755,7 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd {wsl_path}", *core_parts])
+            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""
@@ -5377,32 +5763,42 @@ done"""
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 {_link_data_manual}
 
 # 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
+{scrub_credentials}
 python prepare_factors.py
 
 # 步骤2: 设置环境变量
 {env_block}
 # 加载因子预处理输出的 num_features（由 prepare_factors.py 自动计算）
 . .factor_env
+{scrub_credentials}
 
 # 步骤3: 运行QLib回测
 python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         elif use_custom_model:
             return f"""# QuantEvolver 实验执行命令（含自定义模型）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
@@ -5410,26 +5806,35 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 # 运行QLib回测
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         else:
             return f"""# QuantEvolver 实验执行命令
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
 
 {_link_data_manual}
 
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
 
@@ -5716,7 +6121,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

@@ -4,10 +4,11 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from backend.services.multi_alpha.combine_backtest import delta, metric_columns
 from backend.services.multi_alpha.durable_execution_adapter import (
@@ -40,6 +41,7 @@ from backend.services.multi_alpha.durable_runtime_health import (
     mark_durable_orchestrator_stopped,
     mark_durable_orchestrator_unavailable,
 )
+from backend.services.multi_alpha.durable_wakeup import durable_orchestrator_wakeup
 from backend.services.qe_archive.event_capture import QEArchiveEventCapture
 from backend.services.quantevolver.qe_active_execution_capacity import (
     QEActiveExecutionImportService,
@@ -91,9 +93,11 @@ class DurableOrchestratorError(RuntimeError):
 class DurableOrchestratorConfig:
     poll_seconds: float = 2.0
     lease_seconds: int = 600
-    heartbeat_seconds: float = 30.0
+    heartbeat_seconds: float = 60.0
     items_per_pass: int = 8
     archive_batch_size: int = 200
+    remote_poll_seconds: int = 60
+    safety_sweep_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not 0.2 <= self.poll_seconds <= 60.0:
@@ -129,9 +133,31 @@ class DurableOrchestratorConfig:
                 reason_code="multi_alpha_durable_config_invalid",
                 context={"archive_batch_size": self.archive_batch_size},
             )
+        if not 60 <= self.remote_poll_seconds <= 3600:
+            raise DurableOrchestratorError(
+                "durable orchestrator remote poll interval must be between 60 and 3600 seconds",
+                reason_code="multi_alpha_durable_config_invalid",
+                context={"remote_poll_seconds": self.remote_poll_seconds},
+            )
+        if not 0.01 <= self.safety_sweep_seconds <= 3600.0:
+            raise DurableOrchestratorError(
+                "durable orchestrator safety sweep interval is invalid",
+                reason_code="multi_alpha_durable_config_invalid",
+                context={"safety_sweep_seconds": self.safety_sweep_seconds},
+            )
 
     @classmethod
     def from_env(cls) -> DurableOrchestratorConfig:
+        heartbeat_seconds = _env_float(
+            "AISTOCK_MULTI_ALPHA_DURABLE_HEARTBEAT_SECONDS",
+            60.0,
+        )
+        if heartbeat_seconds < 60.0:
+            raise DurableOrchestratorError(
+                "durable orchestrator database lease heartbeat cannot run more than once per minute",
+                reason_code="multi_alpha_durable_config_invalid",
+                context={"heartbeat_seconds": heartbeat_seconds, "minimum_seconds": 60},
+            )
         return cls(
             poll_seconds=_env_float(
                 "AISTOCK_MULTI_ALPHA_DURABLE_POLL_SECONDS",
@@ -141,10 +167,7 @@ class DurableOrchestratorConfig:
                 "AISTOCK_MULTI_ALPHA_DURABLE_LEASE_SECONDS",
                 600,
             ),
-            heartbeat_seconds=_env_float(
-                "AISTOCK_MULTI_ALPHA_DURABLE_HEARTBEAT_SECONDS",
-                30.0,
-            ),
+            heartbeat_seconds=heartbeat_seconds,
             items_per_pass=_env_int(
                 "AISTOCK_MULTI_ALPHA_DURABLE_ITEMS_PER_PASS",
                 8,
@@ -152,6 +175,10 @@ class DurableOrchestratorConfig:
             archive_batch_size=_env_int(
                 "AISTOCK_MULTI_ALPHA_DURABLE_ARCHIVE_BATCH_SIZE",
                 200,
+            ),
+            remote_poll_seconds=_env_int(
+                "AISTOCK_MULTI_ALPHA_DURABLE_REMOTE_POLL_SECONDS",
+                60,
             ),
         )
 
@@ -473,6 +500,7 @@ class DurableMultiAlphaOrchestrator:
         recovery_worker: DurableRecoveryWorker | None = None,
         config: DurableOrchestratorConfig | None = None,
         owner_id: str | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._repository = repository or MultiAlphaDurableRepository()
         self._planner = planner or DeterministicChildPlanner(self._repository)
@@ -504,8 +532,13 @@ class DurableMultiAlphaOrchestrator:
         self._p0_2_schema_ready = False
         self._last_claimed_run_id: str | None = None
         self._last_claimed_attempt_id: str | None = None
+        self._last_deferred_attempt_id: str | None = None
         self._last_claimed_command_id: str | None = None
         self._last_claimed_delivery_id: str | None = None
+        self._monotonic = monotonic
+        self._last_remote_observation_at: dict[str, float] = {}
+        self._last_capacity_wait_at: dict[str, tuple[float, str]] = {}
+        self._last_full_capacity_observation_at: dict[str, float] = {}
 
     @property
     def owner_id(self) -> str:
@@ -561,7 +594,7 @@ class DurableMultiAlphaOrchestrator:
             recoveries = 0
             cancellations = 0
         planned = await self._run_bounded_pass(self.planner_pass_once)
-        dispatched = await self._run_attempt_pass(self.dispatch_pass_once)
+        dispatched = await self._run_dispatch_pass()
         cancel_reconciled = (
             await self._run_attempt_pass(self.cancel_reconcile_pass_once)
             if self._p0_2_schema_ready
@@ -587,18 +620,25 @@ class DurableMultiAlphaOrchestrator:
         stale_after_seconds = max(
             60,
             self._config.lease_seconds * 2,
-            int(self._config.poll_seconds * 4),
+            int(self._config.safety_sweep_seconds * 4),
         )
         mark_durable_orchestrator_starting(
             owner_id=self._owner_id,
             stale_after_seconds=stale_after_seconds,
         )
+        loop = asyncio.get_running_loop()
+        wake_event = asyncio.Event()
+        durable_orchestrator_wakeup.register(loop=loop, event=wake_event)
+        # Startup/restart recovery performs one immediate read-only due scan.
+        wake_event.set()
         try:
             while not stop_event.is_set():
                 if not self._activation_import_completed:
+                    wake_event.clear()
                     try:
                         await self.initialize()
                         mark_durable_orchestrator_ready(owner_id=self._owner_id)
+                        wake_event.set()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -611,19 +651,48 @@ class DurableMultiAlphaOrchestrator:
                             "multi_alpha_durable_initialization_unavailable; retrying: %s",
                             error,
                         )
-                        try:
-                            await asyncio.wait_for(
-                                stop_event.wait(),
-                                timeout=self._config.poll_seconds,
-                            )
-                            break
-                        except asyncio.TimeoutError:
-                            continue
+                        await self._wait_for_wakeup_or_safety_sweep(
+                            wake_event=wake_event,
+                            stop_event=stop_event,
+                        )
+                        continue
+                if not wake_event.is_set():
+                    await self._wait_for_wakeup_or_safety_sweep(
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                    )
+                if stop_event.is_set():
+                    break
+                # Clear before the SELECT/cycle. A commit that arrives while
+                # processing sets the Event again and cannot be lost.
+                wake_event.clear()
                 try:
+                    due = await asyncio.to_thread(
+                        self._repository.has_due_orchestrator_work,
+                        p0_2_schema_ready=self._p0_2_schema_ready,
+                        remote_poll_seconds=self._config.remote_poll_seconds,
+                        archive_enabled=bool(
+                            getattr(self._archive_capture, "enabled", False)
+                        ),
+                        excluded_recent_attempt_ids=tuple(
+                            sorted(
+                                set(self._recent_remote_observation_ids())
+                                | set(self._recent_capacity_wait_ids())
+                            )
+                        ),
+                    )
+                    if not due:
+                        mark_durable_orchestrator_ready(owner_id=self._owner_id)
+                        continue
                     cycle = await self.run_cycle()
                     mark_durable_orchestrator_ready(owner_id=self._owner_id)
                     if cycle.work_count:
                         logger.info("multi-alpha durable cycle completed: %s", cycle)
+                        # Drain backlogs immediately in bounded batches.  The
+                        # Event coalesces this self-wake with any concurrent
+                        # submission/control commit, while a follow-up due
+                        # summary prevents empty claim passes.
+                        wake_event.set()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -633,15 +702,88 @@ class DurableMultiAlphaOrchestrator:
                         "multi-alpha durable cycle failed without changing remote execution ownership: %s",
                         error,
                     )
-                try:
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=self._config.poll_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    continue
         finally:
+            durable_orchestrator_wakeup.unregister(loop=loop, event=wake_event)
             mark_durable_orchestrator_stopped()
+
+    async def _wait_for_wakeup_or_safety_sweep(
+        self,
+        *,
+        wake_event: asyncio.Event,
+        stop_event: asyncio.Event,
+    ) -> None:
+        wake_task = asyncio.create_task(wake_event.wait())
+        stop_task = asyncio.create_task(stop_event.wait())
+        tasks = {wake_task, stop_task}
+        try:
+            await asyncio.wait(
+                tasks,
+                timeout=self._config.safety_sweep_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _recent_remote_observation_ids(self) -> tuple[str, ...]:
+        now = self._monotonic()
+        cutoff = now - float(self._config.remote_poll_seconds)
+        self._last_remote_observation_at = {
+            attempt_id: observed_at
+            for attempt_id, observed_at in self._last_remote_observation_at.items()
+            if observed_at > cutoff
+        }
+        return tuple(sorted(self._last_remote_observation_at))
+
+    def _recent_capacity_wait_ids(self) -> tuple[str, ...]:
+        now = self._monotonic()
+        cutoff = now - float(self._config.remote_poll_seconds)
+        self._last_capacity_wait_at = {
+            attempt_id: observation
+            for attempt_id, observation in self._last_capacity_wait_at.items()
+            if observation[0] > cutoff
+        }
+        self._last_full_capacity_observation_at = {
+            node_id: observed_at
+            for node_id, observed_at in self._last_full_capacity_observation_at.items()
+            if observed_at > cutoff
+        }
+        return tuple(sorted(self._last_capacity_wait_at))
+
+    def _record_capacity_wait(
+        self,
+        *,
+        attempt_id: str,
+        node_id: str,
+        confirm_node_full: bool = True,
+    ) -> None:
+        now = self._monotonic()
+        normalized_node_id = str(node_id).strip()
+        self._last_capacity_wait_at[attempt_id] = (now, normalized_node_id)
+        if confirm_node_full:
+            self._last_full_capacity_observation_at[normalized_node_id] = now
+
+    def _capacity_probe_due_for_node(self, node_id: str) -> bool:
+        observed_at = self._last_full_capacity_observation_at.get(str(node_id).strip())
+        if observed_at is None:
+            return True
+        return (
+            self._monotonic() - observed_at
+            >= float(self._config.remote_poll_seconds)
+        )
+
+    def _release_capacity_waits_for_node(self, node_id: str) -> None:
+        normalized = str(node_id or "").strip()
+        if not normalized:
+            return
+        self._last_full_capacity_observation_at.pop(normalized, None)
+        self._last_capacity_wait_at = {
+            attempt_id: observation
+            for attempt_id, observation in self._last_capacity_wait_at.items()
+            if observation[1] != normalized
+        }
 
     async def planner_pass_once(self, *, excluded_run_ids: Sequence[str] = ()) -> bool:
         run = await asyncio.to_thread(
@@ -833,45 +975,81 @@ class DurableMultiAlphaOrchestrator:
         *,
         excluded_attempt_ids: Sequence[str] = (),
     ) -> bool:
-        attempt = await asyncio.to_thread(
-            self._repository.claim_next_attempt,
-            owner_id=self._owner_id,
-            lease_seconds=self._config.lease_seconds,
-            claim_kind="dispatch",
-            excluded_attempt_ids=excluded_attempt_ids,
+        self._last_deferred_attempt_id = None
+        locally_throttled = set(self._recent_capacity_wait_ids())
+        observation = await asyncio.to_thread(
+            self._repository.observe_next_dispatchable_attempt,
+            p0_2_schema_ready=self._p0_2_schema_ready,
+            excluded_attempt_ids=tuple(
+                sorted(locally_throttled | set(excluded_attempt_ids))
+            ),
         )
-        if attempt is None:
+        if observation is None:
             return False
-        attempt_id = str(attempt["attempt_id"])
-        self._last_claimed_attempt_id = attempt_id
-        token = _ownership_token(attempt)
+        attempt_id = str(observation["attempt_id"])
+        token: OwnershipToken | None = None
         try:
             child = _required(
                 "child",
-                attempt["child_id"],
-                self._repository.get_child(str(attempt["child_id"])),
+                observation["child_id"],
+                self._repository.get_child(str(observation["child_id"])),
             )
             run = _required(
                 "run",
-                attempt["run_id"],
-                self._repository.get_run(str(attempt["run_id"])),
-            )
-            artifacts = self._adapter.load_published_artifacts(
-                run_id=str(run["id"]),
-                child_id=str(child["child_id"]),
-                attempt_id=attempt_id,
+                observation["run_id"],
+                self._repository.get_run(str(observation["run_id"])),
             )
             request = self._adapter.request_from_run(run)
             node_id = str(
-                attempt.get("node_id")
+                observation.get("node_id")
                 or request.backtest_config.get("node_id")
                 or "wsl2-5080"
             )
             intent = self._adapter.prepare_submission_intent(
                 run=run,
                 child=child,
-                attempt=attempt,
+                attempt=observation,
                 node_id=node_id,
+            )
+            if str(observation.get("phase") or "") == "waiting_capacity":
+                if not self._capacity_probe_due_for_node(node_id):
+                    self._last_deferred_attempt_id = attempt_id
+                    self._record_capacity_wait(
+                        attempt_id=attempt_id,
+                        node_id=node_id,
+                        confirm_node_full=False,
+                    )
+                    return False
+                capacity = await asyncio.to_thread(
+                    self._adapter.observe_submission_capacity,
+                    run=run,
+                    intent=intent,
+                )
+                if not capacity.available:
+                    self._last_deferred_attempt_id = attempt_id
+                    self._record_capacity_wait(
+                        attempt_id=attempt_id,
+                        node_id=node_id,
+                    )
+                    return False
+            attempt = await asyncio.to_thread(
+                self._repository.claim_observed_dispatch_attempt,
+                attempt_id,
+                p0_2_schema_ready=self._p0_2_schema_ready,
+                expected_row_version=int(observation["row_version"]),
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+            )
+            if attempt is None:
+                self._last_deferred_attempt_id = attempt_id
+                return False
+            self._last_claimed_attempt_id = attempt_id
+            self._last_capacity_wait_at.pop(attempt_id, None)
+            token = _ownership_token(attempt)
+            artifacts = self._adapter.load_published_artifacts(
+                run_id=str(run["id"]),
+                child_id=str(child["child_id"]),
+                attempt_id=attempt_id,
             )
             refreshed = await asyncio.to_thread(
                 self._repository.heartbeat_attempt,
@@ -886,7 +1064,12 @@ class DurableMultiAlphaOrchestrator:
                 attempt_token=token,
             )
             if outcome.waiting_capacity:
-                return True
+                self._last_deferred_attempt_id = attempt_id
+                self._record_capacity_wait(
+                    attempt_id=attempt_id,
+                    node_id=node_id,
+                )
+                return False
             token = self._owned_attempt_token_from_outcome(
                 attempt_id=attempt_id,
                 outcome=outcome,
@@ -909,6 +1092,21 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id,
                 _exception_payload(exc),
             )
+            if token is None:
+                claimed_after_error = await asyncio.to_thread(
+                    self._repository.claim_observed_dispatch_attempt,
+                    attempt_id,
+                    p0_2_schema_ready=self._p0_2_schema_ready,
+                    expected_row_version=int(observation["row_version"]),
+                    owner_id=self._owner_id,
+                    lease_seconds=self._config.lease_seconds,
+                )
+                if claimed_after_error is None:
+                    self._last_deferred_attempt_id = attempt_id
+                    return False
+                token = _ownership_token(claimed_after_error)
+                self._last_claimed_attempt_id = attempt_id
+            assert token is not None
             await self._fail_attempt_from_current_owner(
                 attempt_id=attempt_id,
                 token=token,
@@ -926,8 +1124,10 @@ class DurableMultiAlphaOrchestrator:
             self._repository.claim_next_attempt,
             owner_id=self._owner_id,
             lease_seconds=self._config.lease_seconds,
+            p0_2_schema_ready=self._p0_2_schema_ready,
             claim_kind="cancel",
             excluded_attempt_ids=excluded_attempt_ids,
+            write_claim_event=False,
         )
         if attempt is None:
             return False
@@ -972,38 +1172,44 @@ class DurableMultiAlphaOrchestrator:
         *,
         excluded_attempt_ids: Sequence[str] = (),
     ) -> bool:
-        attempt = await asyncio.to_thread(
-            self._repository.claim_next_attempt,
-            owner_id=self._owner_id,
-            lease_seconds=self._config.lease_seconds,
-            claim_kind="reconcile",
-            excluded_attempt_ids=excluded_attempt_ids,
+        locally_throttled = set(self._recent_remote_observation_ids())
+        observation = await asyncio.to_thread(
+            self._repository.observe_next_reconcilable_attempt,
+            p0_2_schema_ready=self._p0_2_schema_ready,
+            excluded_attempt_ids=tuple(
+                sorted(locally_throttled | set(excluded_attempt_ids))
+            ),
+            min_recheck_interval_seconds=self._config.remote_poll_seconds,
         )
-        if attempt is None:
+        if observation is None:
             return False
-        attempt_id = str(attempt["attempt_id"])
+        attempt_id = str(observation["attempt_id"])
         self._last_claimed_attempt_id = attempt_id
-        token = _ownership_token(attempt)
+        token: OwnershipToken | None = None
         try:
             child = _required(
                 "child",
-                attempt["child_id"],
-                self._repository.get_child(str(attempt["child_id"])),
+                observation["child_id"],
+                self._repository.get_child(str(observation["child_id"])),
             )
             run = _required(
                 "run",
-                attempt["run_id"],
-                self._repository.get_run(str(attempt["run_id"])),
+                observation["run_id"],
+                self._repository.get_run(str(observation["run_id"])),
             )
             if str(run.get("status") or "") in {"cancel_requested", "cancelling"}:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 await self._reconcile_cancelled_attempt_claimed(
-                    attempt=attempt,
+                    attempt=claimed,
                     token=token,
                     child=child,
                     run=run,
                 )
                 return True
-            node_id = str(attempt.get("node_id") or "").strip()
+            node_id = str(observation.get("node_id") or "").strip()
             if not node_id:
                 raise DurableOrchestratorError(
                     "submitted durable attempt is missing node_id",
@@ -1013,7 +1219,7 @@ class DurableMultiAlphaOrchestrator:
             intent = self._adapter.prepare_submission_intent(
                 run=run,
                 child=child,
-                attempt=attempt,
+                attempt=observation,
                 node_id=node_id,
             )
             artifacts = self._adapter.load_published_artifacts(
@@ -1022,8 +1228,13 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id=attempt_id,
             )
             try:
+                self._last_remote_observation_at[attempt_id] = self._monotonic()
                 inspection = await self._adapter.inspect_remote(intent=intent)
             except Exception as exc:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 await self._keep_attempt_reconciling(
                     attempt_id=attempt_id,
                     token=token,
@@ -1034,6 +1245,10 @@ class DurableMultiAlphaOrchestrator:
                 return True
             remote_status = str(inspection.status.get("status") or "").strip().lower()
             if remote_status == "not_reserved":
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 outcome = await self._adapter.submit(
                     artifacts=artifacts,
                     intent=intent,
@@ -1057,6 +1272,51 @@ class DurableMultiAlphaOrchestrator:
                     **dict(inspection.status),
                     "submission_receipt": _receipt_evidence(inspection.receipt),
                 }
+            if token is None and not self._remote_observation_requires_write(
+                run=run,
+                child=child,
+                attempt=observation,
+                remote_status=remote_status,
+                remote_payload=remote_payload,
+            ):
+                return True
+            if token is None:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
+            else:
+                claimed = _required(
+                    "attempt",
+                    attempt_id,
+                    self._repository.get_attempt(attempt_id),
+                )
+                token = self._owned_attempt_token_from_row(
+                    attempt_id=attempt_id,
+                    current=claimed,
+                    lineage=token,
+                )
+            # Control may have changed the parent while the remote read was in
+            # flight. Re-read after the exact row-version claim before applying
+            # any side effect.
+            child = _required(
+                "child",
+                claimed["child_id"],
+                self._repository.get_child(str(claimed["child_id"])),
+            )
+            run = _required(
+                "run",
+                claimed["run_id"],
+                self._repository.get_run(str(claimed["run_id"])),
+            )
+            if str(run.get("status") or "") in {"cancel_requested", "cancelling"}:
+                await self._reconcile_cancelled_attempt_claimed(
+                    attempt=claimed,
+                    token=token,
+                    child=child,
+                    run=run,
+                )
+                return True
             await self._apply_remote_status(
                 run=run,
                 child=child,
@@ -1074,6 +1334,11 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id,
                 _exception_payload(exc),
             )
+            if token is None:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
             await self._fail_attempt_from_current_owner(
                 attempt_id=attempt_id,
                 token=token,
@@ -1081,6 +1346,53 @@ class DurableMultiAlphaOrchestrator:
                 phase="reconcile_failed",
             )
             return True
+
+    async def _claim_observed_attempt(
+        self,
+        observation: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        return await asyncio.to_thread(
+            self._repository.claim_observed_attempt,
+            str(observation["attempt_id"]),
+            p0_2_schema_ready=self._p0_2_schema_ready,
+            expected_row_version=int(observation["row_version"]),
+            owner_id=self._owner_id,
+            lease_seconds=self._config.lease_seconds,
+        )
+
+    def _remote_observation_requires_write(
+        self,
+        *,
+        run: Mapping[str, Any],
+        child: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        remote_status: str,
+        remote_payload: Mapping[str, Any],
+    ) -> bool:
+        normalized = str(remote_status or "").strip().lower()
+        if normalized not in ACTIVE_REMOTE_STATUSES:
+            return True
+        if str(child.get("status") or "") == "queued":
+            return True
+        if (
+            str(attempt.get("status") or "") == "submitting"
+            and normalized in {"running", "processing"}
+        ):
+            return True
+        previous_remote = str(attempt.get("remote_status") or "").strip().lower()
+        if previous_remote != normalized:
+            return True
+        request = self._adapter.request_from_run(run)
+        observed_deadlines = _execution_deadline_evidence(
+            run=run,
+            attempt=attempt,
+            scheme_timeout_seconds=request.scheme_timeout_seconds,
+            run_timeout_seconds=request.run_timeout_seconds,
+            remote_status=normalized,
+            remote_payload=remote_payload,
+        )
+        existing_deadlines = _deadline_evidence_from_attempt(attempt)
+        return any(kind not in existing_deadlines for kind in observed_deadlines)
 
     async def finalizer_pass_once(
         self,
@@ -1092,6 +1404,8 @@ class DurableMultiAlphaOrchestrator:
             owner_id=self._owner_id,
             lease_seconds=self._config.lease_seconds,
             excluded_run_ids=excluded_run_ids,
+            min_recheck_interval_seconds=self._config.remote_poll_seconds,
+            write_claim_event=False,
         )
         if run is None:
             return False
@@ -1150,6 +1464,7 @@ class DurableMultiAlphaOrchestrator:
                     run_id,
                     token=token,
                     phase="waiting_business_dependencies",
+                    write_event=False,
                 )
                 return progressed
             next_status, reason = _parent_status(children=children, run=run)
@@ -1208,18 +1523,30 @@ class DurableMultiAlphaOrchestrator:
                 run_id,
                 _exception_payload(exc),
             )
-            await self._append_item_error(
+            await self._append_item_error_if_new(
                 run_id=run_id,
                 phase="business_finalize_error",
                 error=exc,
             )
-            await self._yield_run_if_owned(run_id=run_id, token=token, phase="business_finalize_error")
+            await self._yield_run_if_owned(
+                run_id=run_id,
+                token=token,
+                phase="business_finalize_error",
+                write_event=False,
+            )
             return True
 
     async def archive_pass(self) -> int:
+        # When archive capture is globally disabled, exit before querying
+        # terminal runs at all. archive_skipped_disabled is treated as the final
+        # archive disposition for the current configuration (list_runs_pending_archive
+        # excludes it), so the 2s orchestrator cycle no longer re-scans those runs.
+        if not getattr(self._archive_capture, "enabled", False):
+            return 0
         runs = await asyncio.to_thread(
             self._repository.list_runs_pending_archive,
             limit=self._config.archive_batch_size,
+            archive_retry_backoff_seconds=self._config.remote_poll_seconds,
         )
         completed = 0
         for run in runs:
@@ -1309,6 +1636,7 @@ class DurableMultiAlphaOrchestrator:
                 lineage=token,
             )
             await self._ensure_child_running(child_id=str(child["child_id"]))
+            state_changed = False
             if current["status"] == "submitting" and normalized in {"running", "processing"}:
                 current = await asyncio.to_thread(
                     self._repository.transition_attempt_with_event,
@@ -1321,20 +1649,26 @@ class DurableMultiAlphaOrchestrator:
                     event_payload={"remote": dict(remote_payload)},
                 )
                 token = _ownership_token(current)
-            elif current["status"] in {"submitting", "running", "reconciling"}:
-                await self._append_item_event(
-                    run_id=str(run["id"]),
-                    child_id=str(child["child_id"]),
-                    attempt_id=attempt_id,
-                    event_type="status",
-                    phase="remote_active",
-                    payload={"remote_status": normalized, "remote": dict(remote_payload)},
-                )
+                state_changed = True
+            elif current["status"] in {"running", "reconciling"}:
+                # Active polling with unchanged attempt status. Persist a
+                # remote_status change on the current row only; do not append a
+                # remote_active event for unchanged state (event table noise).
+                previous_remote = str(current.get("remote_status") or "").strip().lower()
+                if previous_remote != normalized:
+                    current = await asyncio.to_thread(
+                        self._repository.update_attempt_remote_status,
+                        attempt_id,
+                        token=token,
+                        remote_status=normalized,
+                    )
+                    token = _ownership_token(current)
             await asyncio.to_thread(
                 self._repository.yield_attempt_ownership,
                 attempt_id,
                 token=token,
                 phase="waiting_remote",
+                write_event=state_changed,
             )
             return
         if normalized in {"reserved_not_started", "submission_unknown"}:
@@ -1370,6 +1704,7 @@ class DurableMultiAlphaOrchestrator:
                     error=exc,
                 )
                 return
+            self._release_capacity_waits_for_node(intent.node_id)
             current = _required(
                 "attempt",
                 attempt_id,
@@ -1475,6 +1810,7 @@ class DurableMultiAlphaOrchestrator:
                 owner_id=self._owner_id,
                 remote_status="failed",
             )
+            self._release_capacity_waits_for_node(intent.node_id)
             await self._terminalize_attempt_and_child(
                 attempt_id=attempt_id,
                 token=token,
@@ -1495,6 +1831,7 @@ class DurableMultiAlphaOrchestrator:
                 owner_id=self._owner_id,
                 remote_status="cancelled",
             )
+            self._release_capacity_waits_for_node(intent.node_id)
             await self._terminalize_attempt_and_child(
                 attempt_id=attempt_id,
                 token=token,
@@ -1697,7 +2034,8 @@ class DurableMultiAlphaOrchestrator:
                 lease_seconds=self._config.lease_seconds,
             )
             token = _ownership_token(current)
-        await self._append_item_event(
+        await asyncio.to_thread(
+            self._repository.append_event_if_phase_new,
             run_id=str(child.get("run_id") or ""),
             child_id=str(child.get("child_id") or "") or None,
             attempt_id=attempt_id,
@@ -1711,6 +2049,7 @@ class DurableMultiAlphaOrchestrator:
             attempt_id,
             token=token,
             phase=phase,
+            write_event=False,
         )
 
     async def _record_execution_deadline_evidence(
@@ -1850,7 +2189,7 @@ class DurableMultiAlphaOrchestrator:
                 lease_seconds=self._config.lease_seconds,
             )
             token = _ownership_token(current)
-            await self._append_item_error(
+            await self._append_item_error_if_new(
                 run_id=str(child["run_id"]),
                 child_id=str(child["child_id"]),
                 attempt_id=attempt_id,
@@ -1863,6 +2202,7 @@ class DurableMultiAlphaOrchestrator:
             attempt_id,
             token=token,
             phase=phase,
+            write_event=False,
         )
 
     async def _terminalize_attempt_and_child(
@@ -2156,6 +2496,7 @@ class DurableMultiAlphaOrchestrator:
         run_id: str,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> None:
         run = self._repository.get_run(run_id)
         if run is None or str(run.get("owner_id") or "") != self._owner_id:
@@ -2165,6 +2506,7 @@ class DurableMultiAlphaOrchestrator:
             run_id,
             token=_ownership_token(run),
             phase=phase,
+            write_event=write_event,
         )
 
     def _failure_materialization_metadata(
@@ -2288,6 +2630,31 @@ class DurableMultiAlphaOrchestrator:
             payload={"error": payload},
         )
 
+    async def _append_item_error_if_new(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        error: Exception,
+        child_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> None:
+        """Append an error event only when the error fingerprint is new.
+
+        A repeated identical failure keeps its first event and is not re-appended
+        every orchestrator cycle, while a genuinely new failure (changed
+        reason_code / message / context) still records a fresh event. This keeps
+        retryable failures observable without amplifying the event table."""
+        payload = _exception_payload(error)
+        await asyncio.to_thread(
+            self._repository.append_error_if_fingerprint_new,
+            run_id=run_id,
+            child_id=child_id,
+            attempt_id=attempt_id,
+            phase=phase,
+            error=payload,
+        )
+
     async def _run_bounded_pass(self, pass_once: Any) -> int:
         completed = 0
         excluded: list[str] = []
@@ -2311,6 +2678,7 @@ class DurableMultiAlphaOrchestrator:
                 owner_id=self._owner_id,
                 lease_seconds=self._config.lease_seconds,
                 excluded_command_ids=tuple(excluded),
+                min_recheck_interval_seconds=self._config.remote_poll_seconds,
             )
             if command is None:
                 break
@@ -2417,6 +2785,32 @@ class DurableMultiAlphaOrchestrator:
             latest = self._latest_claimed_identity("attempt", before)
             if latest:
                 excluded.append(latest)
+        return completed
+
+    async def _run_dispatch_pass(self) -> int:
+        """Dispatch a bounded batch without counting unchanged capacity waits.
+
+        A deferred row is excluded for the remainder of this pass so work for
+        another node can proceed.  If the batch contains only deferred rows the
+        returned progress is zero, preventing the worker from self-waking.
+        """
+
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            dispatched = await self.dispatch_pass_once(
+                excluded_attempt_ids=tuple(excluded),
+            )
+            if dispatched:
+                completed += 1
+                attempt_id = self._last_claimed_attempt_id
+            else:
+                attempt_id = self._last_deferred_attempt_id
+            if attempt_id and attempt_id not in excluded:
+                excluded.append(attempt_id)
+                continue
+            if not dispatched:
+                break
         return completed
 
     async def _run_finalizer_pass(self) -> int:

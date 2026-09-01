@@ -416,16 +416,16 @@ def test_tick_routes_only_same_symbol_active_subscribers_in_stable_order() -> No
     assert targets == tuple(sorted((active_a.algo_instance_id, active_b.algo_instance_id)))
 
 
-def test_ingress_coordinator_routes_from_repository_owned_complete_algo_set() -> None:
+def test_ingress_coordinator_rejects_durable_tick_before_repository_access() -> None:
     active = _algo(slot="slot_repository_authority", status=ExecutionAlgoPersistenceStatusV2.ACTIVE)
     repository = _AuthoritativeIngressRepository((active,))
 
-    result = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog()).ingest(
-        event=_event(EventTypeV2.TICK),
-    )
-
-    assert result["targets"] == (active.algo_instance_id,)
-    assert repository.received == result
+    with pytest.raises(KernelEventRoutingError) as raised:
+        KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog()).ingest(
+            event=_event(EventTypeV2.TICK),
+        )
+    assert raised.value.reason_code == "MINIQMT_HOT_MARKET_DATA_DURABLE_INGRESS_FORBIDDEN"
+    assert repository.received is None
 
 
 def test_owner_scoped_coordinator_requires_and_routes_exact_durable_algo_identity() -> None:
@@ -660,18 +660,15 @@ def test_routing_rejects_missing_or_conflicting_plugin_descriptor() -> None:
     assert raised.value.reason_code == "MINIQMT_RUNTIME_EVENT_ROUTING_PLUGIN_IDENTITY_CONFLICT"
 
 
-def test_ingress_coordinator_builds_exact_successor_and_fails_loud_without_predecessor() -> None:
+def test_ingress_coordinator_never_builds_a_durable_tick_successor() -> None:
     algo = _algo(slot="slot_coordinator", status=ExecutionAlgoPersistenceStatusV2.ACTIVE)
     event = _event(EventTypeV2.TICK)
     repository = _IngressRepository(algo)
     coordinator = KernelIngressCoordinatorV1(repository=repository, catalog_runtime=_catalog())
-    result = coordinator.ingest(
-        event=event,
-    )
-    delivery = result["deliveries"][0]
-    assert delivery.algo_delivery_sequence == 2
-    assert delivery.previous_delivery_id == _tail(algo).delivery_id
-    assert delivery.status is DeliveryStatusV1.PENDING
+    with pytest.raises(KernelEventRoutingError) as raised:
+        coordinator.ingest(event=event)
+    assert raised.value.reason_code == "MINIQMT_HOT_MARKET_DATA_DURABLE_INGRESS_FORBIDDEN"
+    assert repository.received is None
 
     missing = KernelIngressCoordinatorV1(
         repository=_IngressRepository(algo, missing_tail=True),
@@ -679,7 +676,7 @@ def test_ingress_coordinator_builds_exact_successor_and_fails_loud_without_prede
     )
     with pytest.raises(KernelEventRoutingError) as raised:
         missing.ingest(event=event)
-    assert raised.value.reason_code == "MINIQMT_RUNTIME_EVENT_ROUTING_PREDECESSOR_MISSING"
+    assert raised.value.reason_code == "MINIQMT_HOT_MARKET_DATA_DURABLE_INGRESS_FORBIDDEN"
 
 
 def test_non_callback_ingress_rejects_callback_mapping_mutation() -> None:

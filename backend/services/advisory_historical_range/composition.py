@@ -11,11 +11,17 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+from pydantic import ValidationError
 
+from backend.services.strategy_package.advisory_input_projection import (
+    AdvisoryInputProjectionError,
+    project_historical_range_inputs,
+)
 from backend.services.strategy_package.historical_selection_providers import (
     build_historical_range_read_only_providers,
     historical_read_only_connection_factory,
 )
+from backend.services.strategy_package.manifest import compute_manifest_sha256
 from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.selection_computation import StrategyPackageSelectionComputation
@@ -114,7 +120,7 @@ from .runtime_factories import (
     R5_QUERY_REGISTRY_VERSION,
 )
 from backend.services.advisory_program import AdvisoryProgramPGRepository
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.models import PackageStatus, StrategyPackageManifest
 
 
 def build_historical_range_candidate_producer(
@@ -851,7 +857,7 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT package_id, package_name, alpha_mode,
+                    SELECT package_id, package_name, alpha_mode, manifest_json,
                            jsonb_array_length(
                                COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)
                            ) AS alpha_count,
@@ -866,6 +872,8 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
         finally:
             conn.rollback()
     for record in package_rows:
+        if not _is_historical_range_package_ready(record):
+            continue
         packages.append(
             {
                 "package_id": str(record["package_id"]),
@@ -891,6 +899,24 @@ def _project_historical_range_options(conn_factory: Callable[[], Any]) -> dict[s
             },
         },
     }
+
+
+def _is_historical_range_package_ready(record: dict[str, Any]) -> bool:
+    try:
+        manifest = StrategyPackageManifest.model_validate(record["manifest_json"])
+        if (
+            manifest.package_id != str(record["package_id"])
+            or manifest.package_version != str(record["package_version"])
+            or manifest.manifest_sha256 != str(record["manifest_sha256"])
+            or compute_manifest_sha256(manifest) != str(record["manifest_sha256"])
+            or set(manifest.alpha_combination_policy.weights)
+            != {component.alpha_id for component in manifest.alpha_components}
+        ):
+            return False
+        project_historical_range_inputs(manifest)
+    except (KeyError, ValidationError, AdvisoryInputProjectionError):
+        return False
+    return True
 
 
 def _historical_range_code_set_hash(

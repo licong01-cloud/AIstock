@@ -1,0 +1,279 @@
+{
+  "actual": "Bundle 256570b73d139e05c73389125c75f45c87b61679cabd98ea69021c9f16064f1a publishes positive_excess_h5 coefficient=-0.0946 and signal_survival_h5 coefficient=-2.5655 as CALIBRATED, reversing their test AUC.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/outcome_calibration.py",
+    "backend/tests/advisory_model_first/test_outcome_calibration.py",
+    "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md",
+    "tests/aistock_validation/bugs/20260812_BUG-1039-m5b-platt-calibration-publishes-negative-slope-probability-inversions.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/advisory_model_first/outcome_calibration_bundle.py",
+    "backend/tests/advisory_model_first/test_outcome_calibration_bundle.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1039",
+  "closed_at": "2026-08-12T10:40:05.974146Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-12T06:55:15.117452Z",
+  "description": "Bundle 256570b73d139e05c73389125c75f45c87b61679cabd98ea69021c9f16064f1a publishes positive_excess_h5 coefficient=-0.0946 and signal_survival_h5 coefficient=-2.5655 as CALIBRATED, reversing their test AUC.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260812-95d1ebe32a7c",
+      "timestamp": "2026-08-12T06:55:15.117439Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Real WSL bundle validation proved the negative-slope UNCALIBRATED reason must be accepted by the bundle contract and directly tested.",
+      "timestamp": "2026-08-12T07:01:35.6757171Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_model_artifacts\\advisory_model_first\\outcome_calibration_runs\\advoutcal_6b5004e178f8caa8b2706231\\calibration.json"
+  ],
+  "expected": "A Platt head with a non-positive fitted slope must remain explicitly UNCALIBRATED with raw probability preserved; positive-slope heads continue independently and the main Advisory flow remains unaffected.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/outcome_calibration.py",
+      "backend/tests/advisory_model_first/test_outcome_calibration.py",
+      "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md",
+      "backend/services/advisory_model_first/outcome_calibration_bundle.py",
+      "backend/tests/advisory_model_first/test_outcome_calibration_bundle.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/outcome_calibration.py",
+        "backend/tests/advisory_model_first/test_outcome_calibration.py",
+        "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/outcome_calibration.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_outcome_calibration.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/outcome_calibration.py",
+        "backend/tests/advisory_model_first/test_outcome_calibration.py",
+        "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/outcome_calibration.py",
+      "backend/tests/advisory_model_first/test_outcome_calibration.py",
+      "docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md",
+      "backend/services/advisory_model_first/outcome_calibration_bundle.py",
+      "backend/tests/advisory_model_first/test_outcome_calibration_bundle.py"
+    ]
+  },
+  "first_seen_at": "2026-08-12T06:55:15.117452Z",
+  "fix_branch": null,
+  "fix_commit": "546b8d47360ee577dc470742ce2c50cda7f7e89a",
+  "fixed_at": "2026-08-12T09:21:25Z",
+  "github_issue_number": 3323,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3323",
+  "last_seen_at": "2026-08-12T06:55:15.117452Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3326",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/advisory_outcome_calibration_train_wsl.py --request-windows F:\\Dev\\AIstock_model_artifacts\\advisory_model_first\\outcome_calibration_requests\\m5b_real_20260812_bug1038.json --request-wsl /mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/outcome_calibration_requests/m5b_real_20260812_bug1038.json --repository-root-wsl /mnt/f/Dev/AIstock_worktrees/advisory-model-first-m5b-runtime-20260812",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/model-shadow?target_trade_date=2026-07-16",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu request advoutcal_723094bf448ce84ac71782ca loaded commit 019e574eccb688fd65d66eebd3f86924a46c2636, kept two negative-slope heads UNCALIBRATED, and exact retry reproduced bundle cc5a786ee62cba5b3021422e18c366fc0ed4bf9f53027884065be5faab47ff1a",
+      "WSL rdagent-gpu request advoutcal_20c72aec313fae683cfc2d84 loaded commit 03b8a1775ccc0a2c283f6ff528d7acd88524fd1a and exact retry preserved two order-reversal heads as explicit UNCALIBRATED"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1039/post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1039",
+      "catalog_sha256": "504a7920630201f685ff5c7bf97480655cacd1b10da766418373a47974e32c80",
+      "contract_digest": "77b2ff1ec8168a26b11ab43416c6feb22866a8bb4838566beebb4b1cb794e5e1",
+      "expected_identity": "546b8d47360ee577dc470742ce2c50cda7f7e89a",
+      "generated_at": "2026-08-12T10:24:13.849267Z",
+      "mode": "read_only",
+      "observed_identity": "eb8cc21ebf2c52f61eca15fbd4709cca635961a3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e1e057c9b693fd9776a4d96dbeae8cdd988562e34911bf4ef6128d503d57ee52",
+      "receipt_sha256": "39f7dce5cfd9749efc49c74d45814ada4f236d77d0079bfe2717b0cbae7a7431",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6198d000075d79b3abdbfa04dbc76f929c49ce83d47752f0f4ee24b48fb2a89b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "M5B Platt calibration publishes negative-slope probability inversions",
+  "trigger_condition": {
+    "fingerprint": "95d1ebe32a7ce2917757092a",
+    "source_event_id": "FE-20260812-95d1ebe32a7c"
+  },
+  "validation_evidence": [
+    "python -m nox -s advisory_modeling_backend -> 202 passed, 1 skipped",
+    "python -m nox -s advisory_modeling_backend -> passed: 202 tests, 1 skipped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1,0 +1,290 @@
+{
+  "actual": "详细设计已合入，但 P1 candidate 与 P2A 共享数据层尚未实现，HMM/P3/P4 消费者必须保持阻断。",
+  "allowed_write_scope": [
+    "backend/services/industry_pit/__init__.py",
+    "backend/services/industry_pit/artifact_store.py",
+    "backend/services/industry_pit/candidate_builder.py",
+    "backend/services/industry_pit/contracts.py",
+    "backend/services/industry_pit/resolver.py",
+    "backend/tests/industry_pit/test_artifact_store.py",
+    "backend/tests/industry_pit/test_candidate_builder.py",
+    "backend/tests/industry_pit/test_contracts_resolver.py",
+    "backend/tests/scripts/test_build_industry_pit_candidates.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "noxfile.py",
+    "scripts/build_industry_pit_candidates.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260825_BUG-1189-c-013-authority-pit-candidate-fail-closed-resolver.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1189",
+  "closed_at": "2026-08-25T09:01:49.062832Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-25T03:10:27.623566Z",
+  "description": "详细设计已合入，但 P1 candidate 与 P2A 共享数据层尚未实现，HMM/P3/P4 消费者必须保持阻断。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260825-50a223ef4454",
+      "timestamp": "2026-08-25T03:10:27.623548Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md#2335-c-013"
+  ],
+  "expected": "双 authority 分离构建并以冻结分母闭合；共享 resolver 仅 resolved 或 typed unavailable，order-invariant、fail-closed，无生产 DDL/DML 或运行时激活。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/industry_pit/__init__.py",
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/services/industry_pit/candidate_builder.py",
+      "backend/services/industry_pit/contracts.py",
+      "backend/services/industry_pit/resolver.py",
+      "backend/tests/industry_pit/test_artifact_store.py",
+      "backend/tests/industry_pit/test_candidate_builder.py",
+      "backend/tests/industry_pit/test_contracts_resolver.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "scripts/build_industry_pit_candidates.py"
+    ],
+    "changed_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/industry_pit/__init__.py",
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/services/industry_pit/candidate_builder.py",
+      "backend/services/industry_pit/contracts.py",
+      "backend/services/industry_pit/resolver.py",
+      "backend/tests/industry_pit/test_artifact_store.py",
+      "backend/tests/industry_pit/test_candidate_builder.py",
+      "backend/tests/industry_pit/test_contracts_resolver.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/build_industry_pit_candidates.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-08-25T03:10:27.623566Z",
+  "fix_branch": null,
+  "fix_commit": "e66d868015eaad28f52f52c54112d2cd23a1d4a5",
+  "fixed_at": "2026-08-25T07:37:30Z",
+  "github_issue_number": 3788,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3788",
+  "last_seen_at": "2026-08-25T03:10:27.623566Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3795",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Design C-013 §23.35 implementation gap",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.services.industry_pit and the candidate CLI without database, broker, scheduler, or process side effects",
+      "python -c import backend.services.industry_pit -> passed in fresh process",
+      "python scripts/build_industry_pit_candidates.py --help -> passed with exit code 0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/validation/BUG-1189/post_restart_receipt_20260825_passed.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1189",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "33378f1fcbef8a5fc4c2baa3c53c2aa4cf15d6271575530b1625caddde17c81a",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "e66d868015eaad28f52f52c54112d2cd23a1d4a5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-25T09:00:19.763962Z",
+      "mode": "read_only",
+      "observed_identity": "e66d868015eaad28f52f52c54112d2cd23a1d4a5",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "12501fd2f7d6264453d0aa89282e09e411792dd7d662eef8e08eadd3d2e9d1cc",
+      "receipt_sha256": "4d60b79cbc55e3b2e7317d2d581b7acede33727b59ce896034590488b3dafa30",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "da0ac2a40de7a902c245bc3b1854c7c6f96cb9c1de916689a318ba5f8b537c46",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1189",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1c2da1fb1452825b",
+    "recorded_at": "2026-08-25T07:43:16.135492Z",
+    "runtime_contract_digest": "2a6afe6209f22c729b8a680af74037f72df20578f2e260fe92ecc79a5196179c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "abf2aba667d5d432cd383981c0596be0a536a417",
+    "source_merge_commit": "e66d868015eaad28f52f52c54112d2cd23a1d4a5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3795",
+    "validation_evidence": [
+      "python -m pytest backend/tests/industry_pit backend/tests/scripts/test_build_industry_pit_candidates.py -q -p no:cacheprovider -> 29 passed"
+    ],
+    "validation_evidence_digest": "4c6bdba051fdb7e4ca35be210682ea7e8ed1d25c7438f19776aba91299b2e98e"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "C-013 双 authority 数据准备缺少 PIT candidate 与共享 fail-closed resolver",
+  "trigger_condition": {
+    "fingerprint": "50a223ef44549fb87731ff17",
+    "source_event_id": "FE-20260825-50a223ef4454"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/industry_pit backend/tests/scripts/test_build_industry_pit_candidates.py -q -p no:cacheprovider -> 29 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

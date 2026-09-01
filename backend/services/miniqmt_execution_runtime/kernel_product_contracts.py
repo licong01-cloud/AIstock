@@ -1563,7 +1563,7 @@ class ProductCommandEvaluationEvidenceV3(FrozenStrictModel):
     oms_preflight_receipt: OMSPreflightProjectionReceiptV1
     mini_qmt_risk_decision_receipt: MiniQMTRiskDecisionReceiptV1
     plugin_route_compatibility_receipt: PluginRouteCompatibilityReceiptV1
-    market_data_projection: FrozenJsonObjectFieldV1
+    market_data_projection: FrozenJsonObjectFieldV1 | None
     account_projection: FrozenJsonObjectFieldV1
     contract_projection: FrozenJsonObjectFieldV1
     kill_switch_state: FrozenJsonObjectFieldV1
@@ -1626,7 +1626,6 @@ class ProductCommandEvaluationEvidenceV3(FrozenStrictModel):
                 raise ValueError(f"{projection_type.value} shared projection reference is invalid")
         raw_payloads = {
             KernelProjectionTypeV1.CONTRACT: self.contract_projection,
-            KernelProjectionTypeV1.MARKET_DATA: self.market_data_projection,
             KernelProjectionTypeV1.ACCOUNT: self.account_projection,
             KernelProjectionTypeV1.KILL_SWITCH_STATE: self.kill_switch_state,
         }
@@ -1635,6 +1634,18 @@ class ProductCommandEvaluationEvidenceV3(FrozenStrictModel):
             ref = refs.get(projection_type)
             if ref is None or ref.payload_sha256 != payload_sha256 or ref.source_event_id != self.event_id:
                 raise ValueError(f"{projection_type.value} payload differs from execution projection reference")
+        market_ref = refs.get(KernelProjectionTypeV1.MARKET_DATA)
+        if self.market_data_projection is None:
+            if market_ref is not None:
+                raise ValueError("null market projection cannot retain a market projection reference")
+        else:
+            market_hash = hash_hex_v1("miniqmt_market_data_projection_v2", thaw_json_v1(self.market_data_projection))
+            if (
+                market_ref is None
+                or market_ref.payload_sha256 != market_hash
+                or market_ref.source_event_id != self.event_id
+            ):
+                raise ValueError("MARKET_DATA payload differs from execution projection reference")
         expected = hash_hex_v1(
             "miniqmt_product_command_evaluation_evidence_v3",
             self.canonical_payload_v1(exclude={"evidence_sha256"}),
@@ -1664,7 +1675,7 @@ class ProductCommandAuthorityItemV3(FrozenStrictModel):
     oms_preflight_receipt_sha256: Sha256V1
     risk_decision_receipt_sha256: Sha256V1
     route_compatibility_receipt_sha256: Sha256V1
-    market_data_projection_sha256: Sha256V1
+    market_data_projection_sha256: Sha256V1 | None
     account_projection_sha256: Sha256V1
     contract_projection_sha256: Sha256V1
     disposition: ProductCommandDispositionV3
@@ -1694,9 +1705,9 @@ class ProductCommandAuthorityItemV3(FrozenStrictModel):
             "oms_preflight_receipt_sha256": evidence.oms_preflight_receipt.receipt_sha256,
             "risk_decision_receipt_sha256": evidence.mini_qmt_risk_decision_receipt.receipt_sha256,
             "route_compatibility_receipt_sha256": evidence.plugin_route_compatibility_receipt.receipt_sha256,
-            "market_data_projection_sha256": hash_hex_v1(
-                "miniqmt_market_data_projection_v2", thaw_json_v1(evidence.market_data_projection)
-            ),
+            "market_data_projection_sha256": None
+            if evidence.market_data_projection is None
+            else hash_hex_v1("miniqmt_market_data_projection_v2", thaw_json_v1(evidence.market_data_projection)),
             "account_projection_sha256": hash_hex_v1(
                 "miniqmt_account_projection_v1", thaw_json_v1(evidence.account_projection)
             ),
@@ -1742,7 +1753,9 @@ class ProductCommandAuthorityItemV3(FrozenStrictModel):
             evidence.oms_preflight_receipt.receipt_sha256,
             evidence.mini_qmt_risk_decision_receipt.receipt_sha256,
             evidence.plugin_route_compatibility_receipt.receipt_sha256,
-            hash_hex_v1("miniqmt_market_data_projection_v2", thaw_json_v1(evidence.market_data_projection)),
+            None
+            if evidence.market_data_projection is None
+            else hash_hex_v1("miniqmt_market_data_projection_v2", thaw_json_v1(evidence.market_data_projection)),
             hash_hex_v1("miniqmt_account_projection_v1", thaw_json_v1(evidence.account_projection)),
             hash_hex_v1("miniqmt_contract_projection_v1", thaw_json_v1(evidence.contract_projection)),
         )

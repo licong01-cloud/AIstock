@@ -11,6 +11,7 @@ import backend.services.stock_universe_pit_service as pit_service
 from backend.services.tushare_dataset_specs import (
     CYQ_PERF,
     DATASET_REGISTRY,
+    DIVIDEND,
     QueryMode,
     STOCK_ST_EVENTS,
     SUSPEND_D,
@@ -147,6 +148,34 @@ def test_sync_by_date_treats_empty_stock_st_events_as_valid_no_change(monkeypatc
     assert audit_params[-2] == "empty_valid"
 
 
+def test_sync_by_date_treats_empty_dividend_as_valid_complete_set(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    ex_date = dt.date(2026, 8, 12)
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [])
+    monkeypatch.setattr(engine, "_upsert_batch", lambda conn, spec, rows: 0)
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DIVIDEND, ex_date, ex_date, uuid.uuid4())
+
+    assert result.ok is True
+    assert result.success_batches == 1
+    assert result.inserted_rows == 0
+    assert conn.executed[0] == (
+        "DELETE FROM market.dividend WHERE ex_date = %s",
+        (ex_date,),
+    )
+    audit_params = next(
+        params
+        for sql, params in conn.executed
+        if "dataset_date_refresh_audit" in sql
+    )
+    assert audit_params[4] == "success"
+    assert audit_params[-2] == "empty_valid"
+
+
 def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
@@ -180,6 +209,53 @@ def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():
         assert spec.tushare_api == api
         assert spec.date_column == "ann_date"
         assert spec.incremental_cursor_from_audit is True
+
+
+def test_dividend_dataset_is_target_ex_date_refreshable() -> None:
+    assert DATASET_REGISTRY["dividend"] is DIVIDEND
+    assert DIVIDEND.query_mode == QueryMode.BY_DATE
+    assert DIVIDEND.tushare_api == "dividend"
+    assert DIVIDEND.date_column == "ex_date"
+    assert DIVIDEND.date_param_name == "ex_date"
+    assert DIVIDEND.replace_existing_dates is True
+    assert DIVIDEND.incremental_cursor_from_audit is True
+    assert DIVIDEND.nullable_identity_columns == ["ann_date"]
+    assert DIVIDEND.create_table_script.endswith(
+        "add_advisory_price_range_dividend_20260810.sql"
+    )
+
+
+def test_dividend_provider_contract_preserves_nullable_plan_announcement_date() -> None:
+    row = {
+        "ts_code": "300750.SZ",
+        "end_date": "20260630",
+        "ann_date": None,
+        "div_proc": "implemented",
+        "ex_date": "20260810",
+        "imp_ann_date": "20260804",
+        "cash_div_tax": 1.411,
+    }
+
+    TushareSyncEngine()._validate_rows_for_date(DIVIDEND, [row], dt.date(2026, 8, 10))
+
+    missing_symbol = {**row, "ts_code": None}
+    with pytest.raises(RuntimeError, match="missing required fields.*ts_code"):
+        TushareSyncEngine()._validate_rows_for_date(
+            DIVIDEND,
+            [missing_symbol],
+            dt.date(2026, 8, 10),
+        )
+
+
+def test_provider_contract_rejects_nullable_identity_columns_outside_primary_keys() -> None:
+    invalid_spec = replace(DIVIDEND, nullable_identity_columns=["imp_ann_date"])
+
+    with pytest.raises(RuntimeError, match="nullable identity columns are not primary keys"):
+        TushareSyncEngine()._validate_rows_for_date(
+            invalid_spec,
+            [{"ts_code": "300750.SZ"}],
+            dt.date(2026, 8, 10),
+        )
 
 
 def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):
@@ -306,6 +382,14 @@ def test_trade_date_tushare_specs_use_trading_day_sequence():
     assert "suspend_d" in sync_engine.ZERO_ROW_VALID_DATASETS
     assert "stk_limit" not in sync_engine.ZERO_ROW_VALID_DATASETS
     assert "margin_detail" not in sync_engine.ZERO_ROW_VALID_DATASETS
+
+
+def test_stock_st_events_requests_current_tushare_st_type_field():
+    """BUG-994: Tushare fixed the historical "st_tpye" typo; the spec must
+    request the current "st_type" field so the mapped column is populated."""
+    spec = DATASET_REGISTRY["stock_st_events"]
+    assert "st_type" in spec.columns
+    assert spec.api_field_map == {}
 
 
 def test_trading_day_sequence_uses_calendar_service_for_trade_date_specs(monkeypatch):
@@ -931,3 +1015,144 @@ def test_by_code_batched_warns_on_empty_upsert_with_local_history(monkeypatch):
     warnings = [args for args in logs if len(args) >= 4 and str(args[2]).lower() == "warning"]
     assert len(warnings) == 1
     assert "upstream returned no rows but local history exists" in warnings[0][3]
+
+
+class _CapturingAudit:
+    def __init__(self):
+        self.success_calls = []
+        self.failure_calls = []
+
+    def record_success(self, **kwargs):
+        self.success_calls.append(kwargs)
+
+    def record_failure(self, **kwargs):
+        self.failure_calls.append(kwargs)
+
+
+def _run_by_date_with_rows(monkeypatch, spec, count):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    trade_date = dt.date(2026, 8, 21)
+    required = (set(spec.primary_keys) | {spec.date_column}) - set(spec.nullable_identity_columns)
+
+    def _row(i):
+        return {
+            col: ("20260821" if col == spec.date_column else f"{col}-{i}")
+            for col in required
+    }
+
+    rows = [_row(i) for i in range(count)]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, spec, trade_date, trade_date, uuid.uuid4())
+    return result, audit
+
+
+def test_min_expected_rows_marks_partial_day_low_coverage_by_date(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=5000)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
+
+    assert result.failed_batches == 0
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == "low_coverage"
+    assert call["expected_rows"] == 5000
+    assert call["coverage_ratio"] == pytest.approx(100 / 5000)
+    assert call["written_rows"] == 100
+
+
+def test_min_expected_rows_boundary_count_stays_ok(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=100)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+    assert "coverage_ratio" not in call
+    assert "failure_category" not in call
+
+
+def test_without_min_expected_rows_partial_day_stays_ok(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=None)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+
+
+def test_min_expected_rows_does_not_change_zero_row_semantics(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=5000)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 0)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "empty_valid"
+    assert "expected_rows" not in call
+
+
+def test_record_by_code_audit_marks_partial_day_low_coverage(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    conn = _FakeConn()
+    spec = replace(SW_DAILY, min_expected_rows=100)
+    trade_date = dt.date(2026, 8, 21)
+    job_id = uuid.uuid4()
+    result = sync_engine.SyncResult(dataset=spec.name, mode="sync", job_id=job_id, success_batches=1)
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_trading_dates_between", lambda _conn, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_table_row_counts_by_date", lambda _conn, _spec, start, end: {trade_date: 42})
+
+    engine._record_by_code_audit(spec, trade_date, trade_date, job_id, result)
+
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == "low_coverage"
+    assert call["expected_rows"] == 100
+    assert call["coverage_ratio"] == pytest.approx(42 / 100)
+    assert call["written_rows"] == 42
+
+
+def test_record_by_code_audit_full_day_stays_ok(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    conn = _FakeConn()
+    spec = replace(SW_DAILY, min_expected_rows=100)
+    trade_date = dt.date(2026, 8, 21)
+    job_id = uuid.uuid4()
+    result = sync_engine.SyncResult(dataset=spec.name, mode="sync", job_id=job_id, success_batches=1)
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_trading_dates_between", lambda _conn, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_table_row_counts_by_date", lambda _conn, _spec, start, end: {trade_date: 131})
+
+    engine._record_by_code_audit(spec, trade_date, trade_date, job_id, result)
+
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+
+
+def test_chip_and_margin_specs_carry_min_expected_rows():
+    from backend.services.tushare_dataset_specs import MARGIN_DETAIL
+
+    assert CYQ_PERF.min_expected_rows == 5000
+    assert MARGIN_DETAIL.min_expected_rows == 4000
+    assert SW_DAILY.min_expected_rows == 100

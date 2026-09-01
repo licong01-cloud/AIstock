@@ -26,6 +26,10 @@ from backend.services.multi_alpha.combine_backtest import (
     ingest_enhanced_metrics,
     prepare_pred_backtest_workspace,
 )
+from backend.services.multi_alpha.qe_subprocess_env import (
+    db_credential_scrub_command,
+    is_qe_subprocess_credential_key,
+)
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.qe_active_execution_capacity import (
     QEExecutionSourceClaimFactory,
@@ -1144,13 +1148,18 @@ def _remote_wsl_command(
     runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings, node=node)
     runtime_empty_files = _remote_runtime_empty_file_commands(runtime_file_manifest or {})
     runtime_file_verification = _remote_runtime_file_verify_commands(runtime_file_manifest or {})
+    scrub_credentials = db_credential_scrub_command() + "; "
     command = "".join(
         [
             "set -euo pipefail; ",
+            # QE data plane is file-only: the QE workspace subprocess must never
+            # inherit PostgreSQL credentials or have any database fallback.
+            scrub_credentials,
             workspace_cd,
             "test -f conf.yaml; test -f qrun_limit_minute.py; test -f read_exp_res.py; ",
             env_exports,
             conda_activation,
+            scrub_credentials,
             "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').rglob('*.b64')]\"; ",
             runtime_artifact_links,
             runtime_empty_files,
@@ -1166,11 +1175,13 @@ def _remote_wsl_command(
             "export FACTOR_CACHE_DIR=" + factor_cache + "; ",
             "export RDAGENT_FACTOR_DATA_WSL=" + factor_cache + "; ",
             "export FACTOR_CACHE_DATA_MODE='backtest_factor_data_dir'; ",
+            scrub_credentials,
             "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl; ",
+            scrub_credentials,
             "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py",
         ]
     )
-    return "bash -lc " + _shell_quote(command)
+    return "bash --noprofile --norc -c " + _shell_quote(command)
 
 
 def _remote_conda_activation(
@@ -1421,6 +1432,12 @@ def _remote_env_exports(backtest_config: Mapping[str, Any]) -> str:
             raise MultiAlphaCombineBacktestError(
                 "remote_env contains an invalid shell variable name",
                 reason_code="remote_env_invalid",
+                context={"key": key_str},
+            )
+        if is_qe_subprocess_credential_key(key_str):
+            raise MultiAlphaCombineBacktestError(
+                "remote_env contains a credential or process-injection variable forbidden in QE compute",
+                reason_code="remote_env_credential_forbidden",
                 context={"key": key_str},
             )
         exports.append(f"export {key_str}={_shell_quote(str(value))}; ")

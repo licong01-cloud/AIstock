@@ -476,6 +476,77 @@ def test_nightly_cli_discovers_failed_session_results_from_sibling_artifact(
     assert artifact_payload["suspected_modules"] == ["advisory.historical_range"]
 
 
+def test_nightly_cli_does_not_query_its_own_in_progress_actions_run(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation_root = tmp_path / "tmp" / "validation"
+    status_path = validation_root / "nightly_failure_issue" / "nightly-status.json"
+    session_results_path = validation_root / "nightly_l3" / "session-results.json"
+    output_path = validation_root / "nightly_failure_issue" / "summary.json"
+    status_path.parent.mkdir(parents=True)
+    session_results_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps({"statuses": {"nightlyL3": "failure"}, "run_id": "9001"}),
+        encoding="utf-8",
+    )
+    session_results_path.write_text(
+        json.dumps([{"session": "advisory_historical_range_backend", "result": "failure"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        summary,
+        "summarize_actions_run",
+        lambda **_kwargs: pytest.fail("same-run GitHub Actions read must not occur"),
+    )
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--run-id",
+            "9001",
+            "--output",
+            str(output_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    capsys.readouterr()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["nightly_detail_enrichment"] == {
+        "source": "local_completed_job_and_session_receipts",
+        "workflow_gate": "not_required",
+        "reason": "same_run_github_actions_read_prohibited",
+    }
+
+
+def test_nightly_heterogeneous_failure_groups_are_not_auto_filed() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9001",
+            "nightly_session_results": [
+                {"session": "advisory_historical_range_backend", "result": "failure"},
+                {"session": "paper_v2_l3", "result": "failure"},
+            ],
+        }
+    )
+
+    assert len(payload["nightly_failure_groups"]) == 2
+    assert payload["issue_creation_policy"] == {
+        "allowed": False,
+        "reason": "nightly_heterogeneous_failures_require_group_triage",
+        "next_command": "inspect nightly_failure_groups and promote only one confirmed root-cause group",
+    }
+    assert payload["suspected_modules"] == ["validation.runner"]
+    assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
+    with pytest.raises(ValueError, match="nightly_heterogeneous_failures"):
+        summary.build_github_issue_payload(payload)
+
+
 def test_cli_persists_tmp_failure_candidate_history(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -603,6 +674,79 @@ def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.M
     with pytest.raises(ValueError, match="not actionable yet"):
         summary.build_github_issue_payload(payload)
     assert all("--job" not in call for call in calls)
+
+
+def test_actions_run_transport_failures_fall_back_to_rest_run_jobs_and_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> dict[str, object]:
+        commands.append(args)
+        if args[:3] == ["gh", "run", "view"]:
+            return {"ok": False, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/actions/runs/300"):
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "id": 300,
+                        "name": "AIstock CI",
+                        "display_title": "failure",
+                        "event": "pull_request",
+                        "head_branch": "bug/test",
+                        "head_sha": "a" * 40,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://github.example/actions/runs/300",
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and "/actions/runs/300/jobs?" in args[2]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "total_count": 1,
+                        "jobs": [
+                            {
+                                "id": 9,
+                                "name": "paper_v2_l3",
+                                "conclusion": "failure",
+                                "html_url": "https://github.example/jobs/9",
+                            }
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and args[2].endswith("/actions/jobs/9/logs"):
+            return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    monkeypatch.setattr(
+        summary,
+        "locate_last_green_run",
+        lambda payload, repo: summary._last_green_payload(payload, status="not_requested"),
+    )
+
+    payload = summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock",
+        run_id="300",
+        wait_for_completion=True,
+        wait_attempts=5,
+        wait_seconds=0,
+    )
+
+    assert payload["failed_jobs"][0]["error_signature"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
+    assert payload["read_fallbacks"] == [
+        {"stage": "actions_run", "source": "github_rest"},
+        {"stage": "job_log", "source": "github_rest", "job_id": "9"},
+    ]
+    assert sum(args[:3] == ["gh", "run", "view"] and "--job" not in args for args in commands) == 2
+    assert sum(args[:3] == ["gh", "run", "view"] and "--job" in args for args in commands) == 2
 
 
 def test_actions_run_defers_issue_when_job_log_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -879,6 +1023,46 @@ def test_locate_last_green_run_finds_previous_success() -> None:
     assert locator["previous_success_run"]["run_id"] == "198"
 
 
+def test_locate_last_green_run_transport_failure_uses_rest() -> None:
+    commands: list[list[str]] = []
+
+    def provider(args: list[str], **_kwargs: object) -> dict[str, object]:
+        commands.append(args)
+        if args[:3] == ["gh", "run", "list"]:
+            return {"ok": False, "stdout": "", "stderr": "TLS handshake timeout"}
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "workflow_runs": [
+                        {
+                            "id": 99,
+                            "name": "AIstock CI",
+                            "head_sha": "b" * 40,
+                            "head_branch": "main",
+                            "conclusion": "success",
+                            "status": "completed",
+                            "html_url": "https://github.example/actions/runs/99",
+                            "created_at": "2026-08-27T00:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "stderr": "",
+        }
+
+    locator = summary.locate_last_green_run(
+        {"run_id": "100", "workflow": "AIstock CI", "branch": "main", "commit": "a" * 40},
+        repo="licong01-cloud/AIstock",
+        run_provider=provider,
+    )
+
+    assert locator["status"] == "found"
+    assert locator["previous_success_run"]["run_id"] == "99"
+    assert sum(args[:3] == ["gh", "run", "list"] for args in commands) == 2
+    assert commands[2][:2] == ["gh", "api"]
+
+
 def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
     payload = summary.finalize_summary(
@@ -970,15 +1154,15 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
     assert context_pack["failure_event"]["failure_kind"] == "real_github_actions"
-    assert context_pack["llm_triage_advice"]["provider"] == "github_models"
+    assert context_pack["llm_triage_advice"]["provider"] == "deepseek_api"
+    assert context_pack["llm_triage_advice"]["model"] == "deepseek-v4-flash"
     assert "reason: `schema_quality_smoke_no_network`" in issue_payload["body"]
     assert "triage_advice_mode: `schema_smoke_no_network`" in issue_payload["body"]
 
 
-def test_nightly_status_cli_enriches_generic_stage_with_failed_action_log(
+def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     status_path = tmp_path / "status.json"
     summary_path = tmp_path / "summary.json"
@@ -999,42 +1183,6 @@ def test_nightly_status_cli_enriches_generic_stage_with_failed_action_log(
             }
         ),
         encoding="utf-8",
-    )
-
-    def fake_run(args: list[str], **_: object) -> dict[str, object]:
-        if "--job" in args:
-            return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "databaseId": 28973219723,
-                    "workflowName": "AIstock Nightly L3 + DR",
-                    "displayTitle": "Nightly",
-                    "event": "schedule",
-                    "headBranch": "main",
-                    "headSha": "1a0bf5e41cc6379658d001d111b3e4bd30560b79",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723",
-                    "jobs": [
-                        {
-                            "databaseId": 811,
-                            "name": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
-                            "conclusion": "failure",
-                            "url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723/job/811",
-                        }
-                    ],
-                }
-            ),
-            "stderr": "",
-        }
-
-    monkeypatch.setattr(summary, "_run", fake_run)
-    monkeypatch.setattr(
-        summary,
-        "locate_last_green_run",
-        lambda payload, repo: summary._last_green_payload(payload, status="not_requested"),
     )
 
     assert summary.main(
@@ -1058,14 +1206,12 @@ def test_nightly_status_cli_enriches_generic_stage_with_failed_action_log(
     body = issue_payload["body"]
 
     assert stdout_payload["failed_jobs_count"] == 1
-    assert payload["nightly_detail_enrichment"]["workflow_gate"] == "enriched"
-    assert payload["failed_jobs"][0]["error_signature"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
-    assert payload["failed_jobs"][0]["failed_tests"] == ["frontend/tests/paper-v2/paper-v2-real-flow.spec.ts:573:7"]
-    assert payload["reproduce_command"] == "npm run test:e2e -- tests/paper-v2"
-    assert "Nightly failed: nightly_l3=failure" not in body
-    assert "paper-v2-real-flow.spec.ts:573:7" in body
-    assert "LIVE_INFERENCE_PREFLIGHT_FAILED" in body
-    assert "pkg_378eb9c91e104c64935404e257e932ee" in body
+    assert payload["nightly_detail_enrichment"]["workflow_gate"] == "not_required"
+    assert payload["failed_jobs"][0]["error_signature"] == "Nightly failed: nightly_l3=failure"
+    assert payload["failed_jobs"][0]["failed_tests"] == []
+    assert payload["reproduce_command"] == "gh run view 28973219723 --repo licong01-cloud/AIstock"
+    assert "Nightly failed: nightly_l3=failure" in body
+    assert "LIVE_INFERENCE_PREFLIGHT_FAILED" not in body
 
 
 def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(

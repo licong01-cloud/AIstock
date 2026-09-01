@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, is_vnpy_style_algo
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle
+from backend.services.simulation_execution.broker import BrokerBackend, OrderHandle
 from backend.services.qmt_strategy_ledger.order_service import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
@@ -28,19 +28,22 @@ from backend.services.trading_core.errors import (
     MarketDataUnavailableError,
     RuntimeConfigInvalidError,
 )
+from backend.services.trading_core.execution_algo_retirement import (
+    RETIRED_EXECUTION_ALGO_CODES,
+    require_execution_algo_active,
+)
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 from .models import (
     ExecutionPathNotCanonicalError,
     ExecutionPlan,
     ExecutionPlanIntent,
-    MiniQMTUnsupportedExecutionAlgoError,
     SimulationReleaseBinding,
     canonical_json_sha256,
 )
 
 
-MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
+MINIQMT_UNSUPPORTED_V25_ALGOS = RETIRED_EXECUTION_ALGO_CODES
 MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_RATIO = Decimal("0.02")
 MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_AMOUNT = Decimal("10000")
 MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS = (
@@ -555,8 +558,10 @@ def _reject_v25_for_miniqmt_broker_execution(plan: ExecutionPlan) -> None:
     matched = _infer_unsupported_v25_algo_from_values(candidates)
     if matched is None:
         return
-    raise MiniQMTUnsupportedExecutionAlgoError(
-        "MiniQMT broker execution does not support V25_* execution algorithms",
+    require_execution_algo_active(
+        matched,
+        operation="miniqmt_simulation_bridge_submit",
+        semantic_path="execution_plan.execution_policy.algo_code",
         context=_policy_error_context(
             plan=plan,
             policy_container=policy_container,
@@ -645,9 +650,6 @@ def _infer_unsupported_v25_algo_from_values(values: tuple[Any, ...]) -> str | No
         for segment in normalized.split(":"):
             if segment in MINIQMT_UNSUPPORTED_V25_ALGOS:
                 return segment
-        for algo_code in MINIQMT_UNSUPPORTED_V25_ALGOS:
-            if algo_code in normalized:
-                return algo_code
     return None
 
 

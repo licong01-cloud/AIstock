@@ -11,7 +11,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 
 ## Context Budget
 
-- Prefer RTK for supported high-output interactive commands; unsupported calls use direct fallback, RTK is never a gate, and no window may self-authorize `rtk trust`.
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 - Read project rules once, then this skill plus the approved Feature Card/design.
 - Use `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design.
 - Do not read BUG workflow, docs workflow, quickstarts, archived standards, or unrelated module designs.

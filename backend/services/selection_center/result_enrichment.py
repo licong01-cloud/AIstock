@@ -8,6 +8,7 @@ display-only realtime quotes.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Any, Callable, Iterable, Iterator
 from zoneinfo import ZoneInfo
@@ -17,16 +18,17 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.models.analysis import StockQuote
 from backend.services.analysis_service import get_realtime_quote
-from backend.services.paper_trading_v2.market_data import PRICE_UNIT_DIVISOR
+from backend.services.simulation_data.contracts import PRICE_UNIT_DIVISOR
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionCandidate
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 ConnFactory = Callable[[], Iterator[Any]]
 QuoteFetcher = Callable[[str], StockQuote]
 
 DISPLAY_COMPONENT_KEY = "selection_result_display"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+logger = logging.getLogger(__name__)
 
 
 class SelectionResultEnrichmentService:
@@ -58,11 +60,7 @@ class SelectionResultEnrichmentService:
         quotes = self._load_current_quotes(symbols)
         today = self._today_provider()
         reference_trade_date = self._reference_price_trade_date(runtime_config or {}, fallback=trade_date)
-        historical_rows = (
-            {}
-            if trade_date >= today
-            else self._load_daily_rows(symbols, reference_trade_date)
-        )
+        historical_rows = {} if trade_date >= today else self._load_daily_rows(symbols, reference_trade_date)
         enriched: list[SelectionCandidate] = []
         missing_current_entry_price: list[str] = []
         for candidate in rows:
@@ -74,10 +72,7 @@ class SelectionResultEnrichmentService:
             current_time = _iso_or_none(getattr(quote, "quote_timestamp", None))
             current_source = str(getattr(quote, "quote_source", None) or "TDX_REALTIME") if quote else None
             stock_name = (
-                candidate.stock_name
-                or names.get(symbol)
-                or str(getattr(quote, "name", "") or "").strip()
-                or None
+                candidate.stock_name or names.get(symbol) or str(getattr(quote, "name", "") or "").strip() or None
             )
 
             if trade_date >= today:
@@ -178,7 +173,15 @@ class SelectionResultEnrichmentService:
                         (trade_date, clean),
                     )
                     rows = cur.fetchall()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "historical selection entry price query failed; using persisted candidate reference prices: "
+                "trade_date=%s symbol_count=%s source=%s error_type=%s",
+                trade_date.isoformat(),
+                len(clean),
+                "market.kline_daily_raw",
+                type(exc).__name__,
+            )
             return {}
         result: dict[str, dict[str, float]] = {}
         for row in rows:
@@ -199,8 +202,14 @@ class SelectionResultEnrichmentService:
             if raw:
                 try:
                     return date.fromisoformat(str(raw))
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    raise RuntimeConfigInvalidError(
+                        "invalid point_in_time_context reference_price_trade_date",
+                        context={
+                            "reference_price_trade_date": raw,
+                            "allowed_format": "YYYY-MM-DD",
+                        },
+                    ) from exc
         return fallback
 
 

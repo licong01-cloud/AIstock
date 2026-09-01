@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -34,15 +36,109 @@ def test_validate_snapshot_requires_critical_field_coverage() -> None:
         )
 
 
-def test_build_upsert_sql_only_fills_null_target_values() -> None:
+def test_build_upsert_sql_only_fills_null_or_non_finite_target_values() -> None:
     sql = backfill.build_upsert_sql(backfill.DEFAULT_FIELDS)
 
     assert "ON CONFLICT (trade_date, ts_code) DO UPDATE" in sql
-    assert "turnover_rate_f = COALESCE(target.turnover_rate_f, EXCLUDED.turnover_rate_f)" in sql
-    assert "volume_ratio = COALESCE(target.volume_ratio, EXCLUDED.volume_ratio)" in sql
-    assert "target.turnover_rate_f IS NULL AND EXCLUDED.turnover_rate_f IS NOT NULL" in sql
-    assert "target.volume_ratio IS NULL AND EXCLUDED.volume_ratio IS NOT NULL" in sql
+    assert "turnover_rate_f = CASE WHEN" in sql
+    assert "volume_ratio = CASE WHEN" in sql
+    assert "target.turnover_rate_f::text IN ('NaN', 'Infinity', '-Infinity')" in sql
+    assert "EXCLUDED.turnover_rate_f::text IN ('NaN', 'Infinity', '-Infinity')" in sql
+    assert "target.volume_ratio::text IN ('NaN', 'Infinity', '-Infinity')" in sql
+    assert "THEN EXCLUDED.turnover_rate_f ELSE target.turnover_rate_f END" in sql
+    assert "AND NOT (EXCLUDED.turnover_rate_f IS NULL OR" in sql
     assert "DELETE" not in sql
+
+
+def test_validate_snapshot_rejects_non_finite_provider_coverage() -> None:
+    frame = _snapshot()
+    frame.loc[:499, "turnover_rate_f"] = float("inf")
+
+    with pytest.raises(backfill.DailyBasicBackfillError, match="turnover_rate_f non_null_ratio"):
+        backfill.validate_snapshot(
+            frame,
+            trade_date=dt.date(2026, 7, 13),
+            fill_fields=("turnover_rate_f",),
+            min_rows=5000,
+            min_non_null_ratio=0.95,
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        pd.NA,
+        np.float64("nan"),
+        np.float32("inf"),
+        float("-inf"),
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "nan",
+        "inf",
+        "-inf",
+    ],
+)
+def test_finite_numeric_value_rejects_all_supported_non_finite_forms(value: object) -> None:
+    assert backfill._is_finite_numeric_value(value) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [Decimal("1.25"), np.float64("1.25"), np.int64(1), 1.25, "1.25"],
+)
+def test_finite_numeric_value_accepts_finite_numeric_forms(value: object) -> None:
+    assert backfill._is_finite_numeric_value(value) is True
+
+
+def test_snapshot_rows_and_source_codes_exclude_non_finite_provider_values() -> None:
+    frame = _snapshot(rows=3)
+    frame["turnover_rate_f"] = [Decimal("1.25"), "NaN", np.float64("inf")]
+
+    rows = backfill.snapshot_rows(frame, dt.date(2026, 7, 13))
+
+    assert rows[0][4] == Decimal("1.25")
+    assert rows[1][4] is None
+    assert rows[2][4] is None
+    assert backfill._source_non_null_codes(frame, "turnover_rate_f") == {"000000.SZ"}
+
+
+def test_preview_database_counts_postgres_numeric_special_values_as_missing() -> None:
+    class Cursor:
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, *_args: object) -> None:
+            return None
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [
+                ("000001.SZ", Decimal("NaN"), Decimal("1.25")),
+                ("000002.SZ", Decimal("Infinity"), Decimal("-Infinity")),
+                ("000003.SZ", Decimal("2.5"), None),
+            ]
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    preview = backfill.preview_database(
+        Connection(),
+        dt.date(2026, 7, 13),
+        ("turnover_rate_f", "free_share"),
+    )
+
+    assert preview.stats.non_null == {"turnover_rate_f": 1, "free_share": 1}
+    assert preview.missing_by_field == {"turnover_rate_f": 2, "free_share": 2}
+    assert preview.non_null_codes_by_field["turnover_rate_f"] == {"000003.SZ"}
+    assert preview.non_null_codes_by_field["free_share"] == {"000001.SZ"}
 
 
 def test_parse_fields_rejects_unknown_columns() -> None:

@@ -5,12 +5,15 @@
 > **状态**：v2.0（D1=a 精化完成，用户已 ratify D1-D4 + N1+N2 + §12.1-12.7），待 Codex D5 协商
 > **基于**：`qe_realtime_experiment_warehouse_top_level_design_20260502.md` v2.1 + `qe_experiment_data_completeness_prewarehouse_plan_20260503.md` v1.1
 > **关键修订（v1 → v2）**：D1=a 精化——paper_v2 portfolio_run **不**共享 qe_archive.run，独立成 paper_v2_run 主表，避免 grain 不匹配（research run 是 logical_experiment_id × attempt_no，paper_v2 是 portfolio_id × trade_date）
+> **BUG-1001 退役修订（2026-08-09）**：本文档中 **因子值自动归档（factor_value 表 + FactorValueArchiveHandler + factor.recompute.completed 事件）** 整体退役。当前指标以 `aistock_factor_metrics`/月度 IC 表为唯一权威；历史 QE run 使用完成时冻结的 `run_factor.independent_metrics_snapshot`；因子值精确复现走 catalog/version/code-hash/manifest/content-hash 身份而非批量复制。详见 §7。paper_v2 与 regime_label 部分不受影响。
 
 ---
 
 ## §0 一句话核心
 
-扩展现有 `qe_archive` 数仓 schema，**事件驱动**覆盖 paper_v2 全部 21 张运行时表 + **因子值跟随因子库重算同步** + **market.regime_label** 派生维度。**零新建 schema**、复用 outbox+worker+archive_job 通用框架，与 QE 入库机制 100% 同构。
+扩展现有 `qe_archive` 数仓 schema，**事件驱动**覆盖 paper_v2 全部 21 张运行时表 + **market.regime_label** 派生维度。**零新建 schema**、复用 outbox+worker+archive_job 通用框架，与 QE 入库机制 100% 同构。
+
+> **BUG-1001 修订**：原设计的第三支柱「因子值跟随因子库重算同步」已退役——不再以 `factor.recompute.completed` 事件驱动 `qe_archive.factor_value` 批量复制。因子指标 authority 与历史 run snapshot authority 分离，详见 §7。
 
 ---
 
@@ -28,7 +31,7 @@
 | daemon SQLite 旁路修复 | **路径 A**（daemon 直连 PG outbox） |
 | paper_v2 表 ETL scope | **全 21 张一次性纳入** |
 | dw 工作面 | 新开 worktree `dw-foundation-20260510`（不在 paper-v2 团队内） |
-| 因子值更新策略 | **跟随因子库重算**（事件驱动 factor.recompute.completed） |
+| 因子值更新策略 | **因子值自动归档退役（BUG-1001）**：不再跟随因子库重算自动复制 factor_value；当前指标 authority = `aistock_factor_metrics`/月度 IC，历史 run authority = `run_factor.independent_metrics_snapshot` |
 | 文档优先 | 先完成本文档 → Codex 协商 → 并行开发 |
 
 ### §1.2 不动的（边界）
@@ -38,14 +41,15 @@
 - ❌ 不动 outbox_event + archive_job 表 schema（已稳定）
 - ❌ 不动 worker.py 主框架（仅注册新 handler）
 - ❌ 不动 market.* 现有表 schema（日 K / 分钟 K / 指数 K 全保留）
+- ❌ **因子值自动归档不再实施（BUG-1001）**：不向 `qe_archive.factor_value` 自动批量复制逐股票逐交易日因子值；该表保持 write-only 遗留态，无生产读取路径
 
 ### §1.3 新增的（本设计范围）
 
 - ✅ qe_archive 新增 18 张 paper_v2_* 表族（含 paper_v2_run 独立主表 + 17 张明细/维度/事件表，NOT 共享 qe_archive.run）
-- ✅ qe_archive 新增 1 张 factor_value 表
+- ❌ ~~qe_archive 新增 1 张 factor_value 表~~（**BUG-1001 退役**：表已存在但自动归档写入停止，无生产消费者）
 - ✅ market 新增 1 张 regime_label 表
-- ✅ outbox_event 新增 4 类 event_type（paper.* / factor.*）
-- ✅ 新建 handler：PaperV2ArchiveHandler / FactorValueArchiveHandler
+- ✅ outbox_event 新增 3 类 event_type（paper.*；`factor.recompute.completed` 已由 BUG-1001 退役，不再作为归档事件产生）
+- ✅ 新建 handler：PaperV2ArchiveHandler（~~FactorValueArchiveHandler~~ 已由 BUG-1001 退役删除）
 - ✅ paper_v2.daemon 改为直连 PG outbox（路径 A）
 - ✅ 新建 regime_label 计算脚本（每日盘后定时）
 
@@ -142,9 +146,9 @@ ETL scope 全 21 张：
 | 20 | config_change_audit | paper_v2_config_change_audit | append | config.changed |
 | 21 | reset_audit | paper_v2_reset_audit | append | run.completed |
 
-### §3.2.1 表数对账（T12 二次修正，21 → 22；per dw-schema T12 实施 commit a86b337 + §5.12 paper_v2_error 独立 DDL）
+### §3.2.1 表数对账（21 张 active paper_v2 表 + 1 张退役遗留表）
 
-**Codex 发现 D5 文中存在 3 个表数描述不一致**："21 runtime tables in scope" / "18 + 1" / 列举 1+3+13+5=22。T11（commit de26e5a）首次修正为 21；T12 实施时发现 §5.12 paper_v2_error 在 §3.2.1 旧表中被遗漏，本节修正为 **22**（21 paper_v2_* + 1 factor_value）。
+T12 物理 bootstrap 历史上创建了 22 张表：21 张 active `paper_v2_*` 表和 1 张 `factor_value`。BUG-1001 后，`factor_value` 只作为已有安装兼容和历史审计的退役遗留表保留，不属于 active runtime archive surface，不得拥有 producer、handler、reader 或新数据写入。
 
 | 类别 | 数量 | 表 |
 |---|---|---|
@@ -155,10 +159,10 @@ ETL scope 全 21 张：
 | 事件表（append-only）| 4 | paper_v2_session_event / paper_v2_run_event / paper_v2_order_event / paper_v2_config_change_audit |
 | 错误表（append-only）| 1 | paper_v2_error（含 broker 异常，per §3.2.2 + §5.12）|
 | **paper_v2_* 总计** | **21** | |
-| factor_value | 1 | factor_value（单独，按月分区）|
-| **qe_archive 新增总计** | **22** | |
+| 退役遗留表 | 1 | factor_value（保留物理 schema；无 producer/handler/reader/new writes）|
+| **物理 bootstrap 总计** | **22** | **active runtime surface = 21** |
 
-注：之前 v1/v2 文中"18+1"是漏算的旧表，T11 修正的 21 漏算了 paper_v2_error（独立类别，非事件、非事实），T12 修正为 22。paper_v2_error standalone 实施依据是 §3.2.2 broker_error 合并政策 + §5.12 完整 DDL + §3.2.3 source-to-archive mapping (errors → paper_v2_error)。本节为权威。
+注：之前 v1/v2 文中"18+1"是漏算的旧表，T11 修正的 21 漏算了 `paper_v2_error`。本节的 22 仅为物理兼容口径，不能再解释为 22 条 active archive 路线；active runtime 只有 21 张 `paper_v2_*` 表。
 
 ### §3.2.2 paper_v2_error 与 broker_error 合并政策（T11 决定）
 
@@ -197,7 +201,7 @@ error_class TEXT  -- 'BrokerBackendError' 子类 / 'StrategyPackageError' / 'Gen
 | config_change_audit | paper_v2_config_change_audit | audit_id append | config.changed | |
 | reset_audit | paper_v2_reset_audit | audit_id append | run.completed | |
 
-**总计**：21 source tables → **20 paper_v2_* archive tables**（errors 合并到 paper_v2_error，dim_paper_v2_portfolio SCD2 一对多）+ **1 factor_value**（来源 single/parquet）= **21 archive tables 新增**。
+**当前 active 映射总计**：21 source tables → 21 张 `paper_v2_*` archive tables。`factor_value` 不属于 source-to-archive 映射；其历史物理表仅兼容保留，不读取 `single/parquet`，不产生新归档事实。
 
 ### §3.3 增量去重策略
 
@@ -209,14 +213,15 @@ error_class TEXT  -- 'BrokerBackendError' 子类 / 'StrategyPackageError' / 'Gen
 
 ## §4 事件 schema + handler 接口
 
-### §4.1 新增 event_type（4 类）
+### §4.1 新增 event_type（3 类）
 
 | event_type | 触发点 | payload schema |
 |---|---|---|
 | `paper.portfolio_run.completed` | paper_v2.run status → 'completed' | {portfolio_id, run_id, trade_date, occurred_at} |
 | `paper.daily_snapshot.captured` | daily_snapshots 写完 | {portfolio_id, trade_date, snapshot_id, occurred_at} |
 | `paper.config.changed` | config_change_audit 写入 | {portfolio_id, change_type, audit_id, occurred_at} |
-| `factor.recompute.completed` | 因子库 _save_metrics 完成 | {factor_name, code_text_hash, data_start, data_end, snapshot_date, occurred_at} |
+
+> **BUG-1001 退役**：原第 4 类 `factor.recompute.completed` 已退役。因子库 `_save_metrics()` 不再向 outbox 写入该事件（消除与权威指标事务的耦合），archive worker 也从未注册该事件类型。历史 pending 积压的治理见 §7.6。
 
 ### §4.2 outbox_event 写入示例
 
@@ -286,32 +291,15 @@ class PaperV2ArchiveHandler:
         return ArchiveResult(rows_inserted=N, rows_upserted=M, status='completed')
 
     # ... 其他 handler 方法
-
-
-class FactorValueArchiveHandler:
-    """处理 factor.recompute.completed 事件，从 single/{name}.parquet 入库。"""
-
-    def can_handle(self, event_type: str) -> bool:
-        return event_type == 'factor.recompute.completed'
-
-    def handle(self, event, job) -> ArchiveResult:
-        factor_name = event.payload['factor_name']
-        code_text_hash = event.payload['code_text_hash']
-        snapshot_date = event.payload['snapshot_date']
-
-        parquet_path = f"single/{factor_name}.parquet"
-        df = pd.read_parquet(parquet_path)
-
-        # 增量去重：(factor_name, code_text_hash, trade_date, code) 已存在则跳过
-        new_rows = self._diff_with_existing(df, factor_name, code_text_hash)
-        self._bulk_insert(new_rows, factor_name, code_text_hash, snapshot_date)
-
-        return ArchiveResult(rows_inserted=len(new_rows), status='completed')
 ```
+
+> **BUG-1001 退役**：原 `FactorValueArchiveHandler`（处理 `factor.recompute.completed`，从 `single/{name}.parquet` 批量入库 `qe_archive.factor_value`）已退役并删除。该表无生产读取路径，事件也从未被 archive worker 注册，属于「看似可用、实际永不被消费」的平行路径。
 
 ### §4.4 Worker 派发逻辑
 
-worker.py 主循环 claim outbox_event 后，根据 event_type 前缀派发到对应 handler。当前 QE 已注册 `qe.*` handler，本设计新增 `paper.*` 和 `factor.*` 两个 handler。
+worker.py 主循环 claim outbox_event 后，根据 event_type 前缀派发到对应 handler。当前 QE 已注册 `qe.*` handler，本设计新增 `paper.*` handler。
+
+> **BUG-1001 退役**：不再新增 `factor.*` handler；`factor.recompute.completed` 从生产事件合同中移除。
 
 ---
 
@@ -821,63 +809,78 @@ T2 完成后本节细化为可实施版本。
 
 ---
 
-## §7 因子值与因子库同步
+## §7 因子值与因子库同步（BUG-1001 退役修订）
 
-### §7.1 触发点
+> **2026-08-09 BUG-1001 退役**：本节原设计「因子值跟随因子库重算 → `factor.recompute.completed` 事件 → `FactorValueArchiveHandler` 批量复制 `qe_archive.factor_value`」已**整体退役**。根因：
+>
+> 1. 归档事件由 `_save_metrics()` 在权威指标事务内无条件写入 `qe_archive.outbox_event`，但 archive worker 正式注册表从不包含 `factor.recompute.completed`，事件永不被消费 → 累计 2348 条孤儿 pending outbox。
+> 2. 若被消费，会把逐股票逐交易日因子值（按原 §7.4 估算 ~50 亿行 / ~400GB）批量 UPSERT 到 **write-only** 的 `qe_archive.factor_value`（无任何生产查询读取）。
+> 3. emit 与权威指标保存共用同一事务：outbox 不可用会直接回滚权威指标写入，违反解耦要求。
+>
+> 修复：移除 emit hook（`factor_official_evaluation_service.py`），删除 `FactorValueArchiveHandler`，停止 `qe_archive.factor_value` 新写入。生产 DML 未执行，历史积压治理见 §7.6。
 
-`factor_pipeline_v2`（exec 沙箱模式）的 `on_factor_success` 回调：
+### §7.1 当前指标 authority
 
-```python
-# 在 _save_metrics() 完成 + 因子值写入 single/{name}.parquet 后 emit
-def on_factor_success(factor_name, code_text_hash, data_start, data_end, snapshot_date):
-    # ... 现有 _save_metrics() ...
+当前、最新的因子 IC / RankIC / ICIR / 评级 / 分类查询，**直接读取因子库权威表**：
 
-    # 新增：emit 事件
-    enqueue_factor_recompute_completed(
-        factor_name=factor_name,
-        code_text_hash=code_text_hash,
-        data_start=data_start,
-        data_end=data_end,
-        snapshot_date=snapshot_date,
-    )
-```
+- `aistock_factor_metrics`（独立指标主表）
+- 对应月度 IC 权威表（`_save_monthly_ic` 写入）
 
-### §7.2 qe_archive.factor_value 表
+**不得**在 QE archive 建立另一套当前指标副本。`qe_archive.factor_value` 不承载任何当前指标查询语义。
 
-```sql
-CREATE TABLE qe_archive.factor_value (
-    value_pk             BIGSERIAL PRIMARY KEY,
-    factor_name          TEXT NOT NULL,
-    code_text_hash       TEXT NOT NULL,         -- 因子代码版本指纹
-    trade_date           DATE NOT NULL,
-    code                 TEXT NOT NULL,         -- 股票代码
-    value                NUMERIC(18,8),
-    snapshot_date        DATE NOT NULL,         -- 因子计算的快照基准
-    captured_at          TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (factor_name, code_text_hash, trade_date, code)
-) PARTITION BY RANGE (trade_date);
+### §7.2 历史 run snapshot authority
 
-CREATE TABLE qe_archive.factor_value_y2026m05
-    PARTITION OF qe_archive.factor_value
-    FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+历史 QE run 的指标查询必须读取该 run 完成时**冻结**的：
 
-CREATE INDEX ix_factor_value_factor ON qe_archive.factor_value (factor_name, trade_date);
-CREATE INDEX ix_factor_value_code ON qe_archive.factor_value (code, trade_date);
-```
+- `run_factor.independent_metrics_snapshot`（JSONB，run completion 归档时写入）
+- 对应 snapshot / hash / as-of / version 信息
 
-### §7.3 增量去重
+禁止历史 run 回查当前 `aistock_factor_metrics`，否则历史结果会在后续指标重算后发生语义漂移。两条 authority 互不替代：当前指标权威在因子库表，历史快照权威在 `run_factor`。
 
-UNIQUE (factor_name, code_text_hash, trade_date, code) → 因子代码不变，重复入库无影响；因子代码变（hash 变），自动新增一行（不覆盖旧版）。
+### §7.3 因子值复现合同（artifact/manifest identity）
 
-### §7.4 体积估算
+独立指标计算完成**不得**自动复制整批逐股票、逐交易日因子值到 PostgreSQL QE 数仓。若历史实验需要精确复现因子值，保存已有的权威身份而非复制数据：
 
-- 假设 500 因子 × 5000 股票 × 8 年（~2000 交易日）= 50 亿行
-- 每行 ~80 bytes → ~400 GB
-- 必须分区 + 压缩（pg_partman + pg_dump 压缩档案）
+- factor catalog / version identity
+- factor code hash（`code_text_hash`）
+- dataset / as-of identity
+- artifact / cache manifest identity
+- content hash
+- immutable URI / path identity（如 `rdagent_assets/factor_values/single/{factor_name}.parquet` 的不可变路径）
 
-### §7.5 触发频率
+不得为「可能以后使用」默认复制海量因子值。
 
-跟随因子库重算节奏（用户拍板）。当前因子库重算频率约每周-每月（视情况）。每次重算只入新增/变化部分。
+### §7.4 解耦事务
+
+因子权威指标写入与 QE archive **完全解耦**：
+
+- QE archive / outbox 不可用，不得导致权威指标事务失败或回滚。
+- 不使用 `except: pass`、默认成功、假 ACK 或 silent fallback 实现解耦。
+- 正确方案是取消这项不应存在的归档副作用（BUG-1001 已移除），而不是吞掉失败。
+- 权威指标保存自身保持事务闭合：UPSERT 失败回滚并上报，不返回假成功。
+
+### §7.5 生产实现状态
+
+- ❌ `factor.recompute.completed` emit hook：已从 `factor_official_evaluation_service.py` 移除（BUG-1001）。
+- ❌ `FactorValueArchiveHandler`：已退役删除（BUG-1001）。
+- ❌ `qe_archive.factor_value` 新写入：已停止（BUG-1001）。
+- ✅ `run_factor.independent_metrics_snapshot` run-completion 写入：保留。
+- ✅ archive worker 注册表：保持不含 `factor.recompute.completed`。
+
+### §7.6 历史 pending outbox 治理边界
+
+现有 2348 条 `factor.recompute.completed` pending outbox **不属于本次无授权 DML 范围**：
+
+- 不删除、不伪装 completed、不静默跳过、不自行执行生产 DML。
+- 不 DROP / 清空 `qe_archive.factor_value`，不导出、备份或创建数据库快照。
+
+后续版本化治理方案（待用户单独授权后实施）：
+
+1. 新增 `SKIPPED_RETIRED`（或等价）终态 + `reason` 字段，标注事件所属生产合同已退役。
+2. 由 archive worker / 治理脚本对 `source_system='qe_factor_official_evaluation'` 且 `event_type='factor.recompute.completed'` 的 pending 行执行幂等终态迁移。
+3. 迁移保留 audit 轨迹，不删除原始 payload，便于事后审计。
+
+该治理需单独授权，不属于 BUG-1001 源码合入范围。
 
 ---
 
@@ -958,9 +961,9 @@ PRIMARY KEY (trade_date, source_method) 允许同一交易日多种方法并存�
 | # | 改动 | Codex 协商点 |
 |---|---|---|
 | 1 | qe_archive 新增 18 张 paper_v2_* 表族（含 paper_v2_run 独立主表 + 17 子表，**NOT 共享 qe_archive.run**） | qe_archive schema 治理是 Codex 主体；新增表必须同意；独立主表设计避免 grain 冲突 |
-| 2 | qe_archive 新增 1 张 factor_value 表 | 同上 |
-| 3 | outbox_event 新增 4 类 event_type（paper.* / factor.*） | event_type 命名空间需 Codex 同意 |
-| 4 | qe_archive worker 注册新 handler（PaperV2ArchiveHandler / FactorValueArchiveHandler） | worker.py 注册位置需 Codex 同意 |
+| 2 | ~~qe_archive 新增 1 张 factor_value 表~~（**BUG-1001 退役**：表已存在，不再自动写入，无生产消费者） | 见 §7 |
+| 3 | outbox_event 新增 3 类 event_type（paper.*；`factor.recompute.completed` 已退役） | event_type 命名空间需 Codex 同意 |
+| 4 | qe_archive worker 注册新 handler（PaperV2ArchiveHandler；FactorValueArchiveHandler 已退役删除） | worker.py 注册位置需 Codex 同意 |
 
 ### §9.2 不需要 Codex 协商（2 项）
 
@@ -969,13 +972,13 @@ PRIMARY KEY (trade_date, source_method) 允许同一交易日多种方法并存�
 | 1 | paper_v2.daemon 改为直连 PG outbox（路径 A） | paper_v2 工作面（D1 边界内） |
 | 2 | market.regime_label 新表 + 计算脚本 | 市场数据 schema，不是 Codex 工作面 |
 
-### §9.3 因子库 emit 事件 hook（边界灰色）
+### §9.3 因子库 emit 事件 hook（边界灰色 → BUG-1001 已退役）
 
-`factor_pipeline_v2._save_metrics()` 完成后 emit `factor.recompute.completed`，需要在因子库代码里加 hook。
+原设计在 `factor_pipeline_v2._save_metrics()` 完成后 emit `factor.recompute.completed`，需要在因子库代码里加 hook。
 
-- 如果因子库归 RDAgent 主线团队 → 不需要 Codex 协商
-- 如果因子库归 Codex Phase 0-7 → 需 Codex 同意
-- **建议在 D5 协商时一并问清楚**
+- **BUG-1001 已移除该 emit hook**（`factor_official_evaluation_service.py`），消除了与权威指标事务的耦合。
+- 该事件类型从生产事件合同退役，不再需要协商 hook 工作面。
+- 历史 pending 积压治理（§7.6）为后续单独授权事项。
 
 ---
 
@@ -990,24 +993,24 @@ Hello Codex. Claude Code strategy session requesting your review on extending qe
 
 # Background
 
-paper_v2 (21 runtime tables) and factor values (single/factor_name.parquet) currently do not flow into the warehouse. User ratified:
+paper_v2 (21 runtime tables) currently do not flow into the warehouse. User ratified:
 - Warehouse = qe_archive (no new schema)
 - Event-driven capture (reuse outbox + worker + archive_job)
 - All 21 paper_v2 tables in scope
-- Factor values follow factor library recompute (event-driven)
+- ~~Factor values follow factor library recompute (event-driven)~~ — **RETIRED by BUG-1001**; current-metrics authority is aistock_factor_metrics/monthly IC, historical runs use frozen run_factor.independent_metrics_snapshot. No factor_value auto-archive.
 - regime_label placed under market schema (not qe_archive)
 - D1 boundary already accepted: paper_v2 portfolio_run does NOT share qe_archive.run main table due to grain mismatch (research run is logical_experiment_id x attempt_no, paper_v2 run is portfolio_id x trade_date). New independent paper_v2_run main table proposed instead.
 
 # 4 specific protocol points
 
-## D5.Q1: qe_archive new tables - 18 paper_v2_* family + 1 factor_value
+## D5.Q1: qe_archive new tables - 18 paper_v2_* family (factor_value RETIRED)
 
 Naming convention adopted (paper_v2_ prefix family, NOT sharing qe_archive.run):
 - 1 main table: paper_v2_run (independent main table, grain = portfolio_id x trade_date, UNIQUE on natural key)
 - 3 SCD2 dimensions: dim_paper_v2_portfolio / dim_paper_v2_runtime_profile / dim_paper_v2_runtime_profile_version
 - 13 fact tables: paper_v2_session / paper_v2_session_day / paper_v2_order / paper_v2_order_execution_state / paper_v2_fill / paper_v2_position_snapshot / paper_v2_daily_snapshot / paper_v2_intraday_snapshot / paper_v2_cash_ledger / paper_v2_error / paper_v2_runtime_config_activation / paper_v2_execution_policy_activation / paper_v2_reset_audit
 - 5 append-only event tables: paper_v2_session_event / paper_v2_run_event / paper_v2_order_event / paper_v2_config_change_audit / paper_v2_broker_error (the 5th may merge into paper_v2_error subject to schema review)
-- 1 factor value: factor_value (PARTITION BY RANGE trade_date, monthly partitions)
+- ~~1 factor value: factor_value (PARTITION BY RANGE trade_date, monthly partitions)~~ — **RETIRED by BUG-1001**
 
 Q1.a: Approve adding these tables under qe_archive schema?
 Q1.b: Name conventions (paper_v2_* / dim_paper_v2_* / factor_value) compatible with your Phase 0-7 design?
@@ -1020,15 +1023,15 @@ New types added (no schema change to outbox_event table itself):
 - paper.portfolio_run.completed
 - paper.daily_snapshot.captured
 - paper.config.changed
-- factor.recompute.completed
+- ~~factor.recompute.completed~~ — **RETIRED by BUG-1001** (producer emit removed; worker never registered it)
 
-Q2.a: event_type names (paper.* / factor.* prefix) conflict with your existing qe.* namespace?
+Q2.a: event_type names (paper.* prefix) conflict with your existing qe.* namespace?
 Q2.b: payload schema needs to follow your Phase 0-7 standardized template?
 Q2.c: retry / timeout / dead-letter strategies reuse existing worker config?
 
 ## D5.Q3: worker registers new handlers
 
-PaperV2ArchiveHandler / FactorValueArchiveHandler registration location:
+PaperV2ArchiveHandler registration location (FactorValueArchiveHandler RETIRED by BUG-1001):
 - Option a: handler files at backend/services/qe_archive/handlers/, registered by worker.py at startup (coexist with existing qe handlers)
 - Option b: handlers in separate backend/services/paper_v2_archive/, worker.py loads via plugin discovery
 
@@ -1038,11 +1041,11 @@ Q3.c: worker default disabled to enabled in production: any conflict with your P
 
 ## D5.Q4: factor pipeline emit-hook workspace ownership
 
-factor_pipeline_v2._save_metrics() will emit factor.recompute.completed event after success.
+~~factor_pipeline_v2._save_metrics() will emit factor.recompute.completed event after success.~~ — **RETIRED by BUG-1001**: the emit hook was removed from factor_official_evaluation_service.py; no factor archive event is produced. This protocol point is no longer open.
 
-Q4.a: factor library (factor_pipeline_v2 / qe_factors / aistock_factor_catalog) under your Phase 0-7 or RDAgent main?
-Q4.b: who adds the emit hook (affects next-batch workspace assignment)?
-Q4.c: emit frequency upper bound to prevent recompute storms triggering warehouse pressure?
+Q4.a: (moot — emit hook removed)
+Q4.b: (moot — emit hook removed)
+Q4.c: (moot — no recompute-storm warehouse pressure from factor archive events)
 
 # Claude Code commitments / boundaries
 
@@ -1089,7 +1092,7 @@ M2（明天 → 后天）：Codex 协商完成
    - 文档 v2.0 进 main
 
 M3（M2 完成 → 1 周）：双方并行开发
-   - 新开 dw-foundation worktree（含 regime_label + factor_value handler）
+   - 新开 dw-foundation worktree（仅 active paper_v2/regime 工作面；不含 factor_value handler）
    - paper_v2 团队：daemon 直连 PG outbox（路径 A）+ source 端 emit_paper_event 调用
    - Codex 工作面（如承接）：qe_archive 17 张表 DDL + handler 注册
    - 我（战略）：监督 + 集成 review
@@ -1104,8 +1107,8 @@ M4（M3 完成 → 2 天）：联调点 1（关键）
    - 重跑 ETL 行数不变（幂等验证）
 
 M5（M4 完成 → 1 周）：联调点 2 + 上线
-   - 因子库下次重算时 emit factor.recompute.completed 验证
-   - factor_value 入库 + 增量去重验证
+   - ~~因子库下次重算时 emit factor.recompute.completed 验证~~（**BUG-1001 退役**：事件与 handler 已移除，不再验证）
+   - ~~factor_value 入库 + 增量去重验证~~（**BUG-1001 退役**）
    - 60 天 paper_v2 数据 → qe_archive 完整保留对照
    - Worker 监控告警接入
    - 文档 v3.0 含联调记录 + 已知问题进 main
@@ -1128,7 +1131,7 @@ M5（M4 完成 → 1 周）：联调点 2 + 上线
 | N2 | 基础设施 fallback 永久层归属 | RDAgent main 同批做（合并到 N1，已完成 commit 6275e9d） |
 | §12.1 | DDL SQL 文件 | 独立文件 `backend/db/init_qe_archive_paper_v2_extension_20260510.sql` |
 | §12.2 | dw-foundation worktree | 独立小团队 |
-| §12.3 | factor_value 分区 | 按月分区 |
+| §12.3 | ~~factor_value 分区~~ | **BUG-1001 退役**：按月分区设计不再实施（表保持 write-only 遗留态，自动写入停止） |
 | §12.4 | Worker 启动方式 | systemd 单元 + ENV `QE_ARCHIVE_WORKER_ENABLED=true` |
 | §12.5 | D2.b 与 schema migration 节奏 | paper_v2 D2.b 先合 → 再启动数仓 schema migration |
 | §12.7 | 本文档 commit + push main | 是（D1=a 修订完成后立即合 main） |
@@ -1137,7 +1140,7 @@ M5（M4 完成 → 1 周）：联调点 2 + 上线
 
 1. **handler 注册位置**（D5.Q3.a）：(a) qe_archive/handlers/ vs (b) 独立 paper_v2_archive/——等 Codex 表态
 2. **DDL 起草分工**（D5.Q1.d）：Claude Code 战略起草 vs Codex 接手——等 Codex 表态
-3. **因子库 hook 工作面**（D5.Q4.a）：Codex Phase 0-7 vs RDAgent 主线——等 Codex 确认
+3. ~~**因子库 hook 工作面**（D5.Q4.a）~~：**BUG-1001 已关闭该议题**；hook 与 handler 均已退役，不再分配开发工作面
 4. **dw-foundation worktree 启动时机**：D5 Codex 答复后立即建（推荐）vs 等 paper_v2 D2.b 合 main 后建
 
 ---

@@ -12,7 +12,7 @@ from backend.execution_algos.vnpy_style.plugin_manifests import (
 )
 from backend.execution_algos.vnpy_style.plugin_factories import current_three_process_bindings_v3
 from backend.services.miniqmt_execution_runtime.full_five_catalog_authority import (
-    build_full_five_catalog_authority_v1,
+    build_hot_full_five_catalog_authority_v1,
 )
 from backend.services.miniqmt_execution_runtime.kernel_creation import (
     KernelAlgoCreationCoordinatorV1,
@@ -68,7 +68,7 @@ def _catalog():
 
 @lru_cache(maxsize=1)
 def _full_five_authority():
-    return build_full_five_catalog_authority_v1(gateway_catalog=_gateway())
+    return build_hot_full_five_catalog_authority_v1(gateway_catalog=_gateway())
 
 
 def _gateway() -> GatewayCapabilityCatalogV1:

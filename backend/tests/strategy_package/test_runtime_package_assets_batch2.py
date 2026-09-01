@@ -480,7 +480,7 @@ def test_runtime_asset_admission_rejects_manifest_asset_closure_drift(tmp_path: 
         ("backend/services/paper_trading_v2/readiness.py", ".validate_manifest_identity_for_paper_trading("),
         ("backend/services/paper_trading_v2/live_session.py", ".validate_manifest_identity_for_paper_trading("),
         ("backend/services/paper_trading_v2/runner.py", ".validate_for_paper_trading("),
-        ("backend/services/simulation_runtime/selection.py", ".require_eligible("),
+        ("backend/services/simulation_signal/strategy_package_selection.py", ".require_eligible("),
         ("backend/services/selection_center/service.py", ".require_eligible("),
         ("backend/services/qmt_strategy_ledger/package_binding.py", ".require_eligible("),
     ],

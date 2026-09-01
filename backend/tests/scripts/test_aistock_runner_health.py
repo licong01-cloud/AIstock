@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +47,80 @@ def test_runner_health_ready_with_online_self_hosted_windows_runner() -> None:
     assert payload["blocking"] == []
 
 
+def test_runner_health_requires_distinct_fast_and_security_roles() -> None:
+    payload = health.build_runner_health_report(
+        required_roles={
+            "fast": ["self-hosted", "windows", "aistock-ci"],
+            "security": ["self-hosted", "windows", "aistock-ci-security"],
+        },
+        runners_payload={
+            "total_count": 2,
+            "runners": [
+                {
+                    "id": 10,
+                    "name": "aistock-fast",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                    ],
+                },
+                {
+                    "id": 11,
+                    "name": "aistock-security",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                },
+            ],
+        },
+        runs_payload={"workflow_runs": []},
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["runner_roles"]["fast"][0]["name"] == "aistock-fast"
+    assert payload["runner_roles"]["security"][0]["name"] == "aistock-security"
+
+
+def test_runner_health_rejects_one_runner_covering_both_parallel_roles() -> None:
+    payload = health.build_runner_health_report(
+        required_roles={
+            "fast": ["self-hosted", "windows", "aistock-ci"],
+            "security": ["self-hosted", "windows", "aistock-ci-security"],
+        },
+        runners_payload={
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 10,
+                    "name": "aistock-combined",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                }
+            ],
+        },
+        runs_payload={"workflow_runs": []},
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert any("distinct online capacity" in item for item in payload["blocking"])
+
+
 def test_runner_health_reports_stale_queued_runs() -> None:
     payload = health.build_runner_health_report(
         required_labels=["self-hosted", "windows"],
@@ -86,13 +161,14 @@ def test_render_markdown_includes_actionable_sections() -> None:
     assert "production_ddl_gate" in markdown
 
 
-def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys) -> None:
+def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys, monkeypatch) -> None:
     runners = tmp_path / "runners.json"
     runs = tmp_path / "runs.json"
     output_json = tmp_path / "runner-health.json"
     output_md = tmp_path / "runner-health.md"
     runners.write_text(json.dumps({"total_count": 0, "runners": []}), encoding="utf-8")
     runs.write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
     rc = health.main(
         [
@@ -111,7 +187,9 @@ def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys) -> None:
     assert rc == 2
     assert json.loads(output_json.read_text(encoding="utf-8"))["workflow_gate"] == "blocked"
     assert "AIstock Runner Health" in output_md.read_text(encoding="utf-8")
-    assert json.loads(capsys.readouterr().out)["schema_version"] == "aistock_runner_health_v1"
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["schema_version"] == "aistock_runner_health_v1"
+    assert "::error::no online GitHub Actions runner" in captured.err
 
 
 def test_resolve_github_token_prefers_env_over_gh(monkeypatch) -> None:
@@ -138,3 +216,18 @@ def test_resolve_github_token_uses_gh_auth_fallback(monkeypatch) -> None:
 
     assert token == "fallback-token"
     assert source == "gh_auth_token"
+
+
+def test_resolve_github_token_reports_gh_subprocess_failure(monkeypatch) -> None:
+    for name in ("AISTOCK_RUNNER_HEALTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("gh", 10)
+
+    monkeypatch.setattr(health.subprocess, "run", raise_timeout)
+
+    token, source = health.resolve_github_token()
+
+    assert token is None
+    assert source == "gh_auth_error:TimeoutExpired"

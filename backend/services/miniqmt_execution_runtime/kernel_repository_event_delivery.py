@@ -952,6 +952,8 @@ class KernelRepositoryEventDeliveryMixin:
 
         if not isinstance(event, RuntimeEventEnvelopeV2):
             raise TypeError("event must be RuntimeEventEnvelopeV2")
+        if event.event_type is EventTypeV2.TICK:
+            raise KernelRepositoryConflict("ordinary TICK cannot enter durable event persistence")
         if not isinstance(catalog_runtime, PluginCatalogRuntimeV2):
             raise TypeError("catalog_runtime must be PluginCatalogRuntimeV2")
         if not isinstance(correlated_algo_instance_ids, tuple) or any(

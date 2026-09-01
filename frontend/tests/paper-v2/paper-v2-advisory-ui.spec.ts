@@ -4,6 +4,7 @@ type JsonObject = Record<string, unknown>;
 
 const PROGRAM_ID = "adv_codex_smoke_20260604";
 const REVIEW_COUNT = 35;
+const OUTCOME_HORIZONS = [1, 3, 5, 10, 20] as const;
 const ACTIVE_SORT_COLUMNS = [
   "symbol",
   "status",
@@ -18,6 +19,160 @@ const ACTIVE_SORT_COLUMNS = [
   "price_quality_status",
   "exit_reason",
 ];
+
+function outcomeCandidate(symbol: string) {
+  return {
+    symbol,
+    horizons: OUTCOME_HORIZONS.map((horizon) => ({
+      horizon_days: horizon,
+      excess_return_q10: -horizon / 2000,
+      excess_return_q50: horizon / 1000,
+      excess_return_q90: horizon / 500,
+      positive_probability: 0.6,
+      signal_survival_probability: 0.55,
+      path_mfe_q50: horizon / 800,
+      path_mfe_q90: horizon / 400,
+      path_mae_loss_q50: horizon / 1600,
+      path_mae_loss_q90: horizon / 800,
+    })),
+    holding_period: {
+      probabilities: { "1": 0.1, "3": 0.2, "5": 0.4, "10": 0.2, "20": 0.1 },
+      mode_days: 5,
+      range_low_days: 3,
+      range_high_days: 10,
+    },
+  };
+}
+
+function calibratedOutcomeCandidate(symbol: string) {
+  const candidate = outcomeCandidate(symbol);
+  return {
+    ...candidate,
+    horizons: candidate.horizons.map((row) => ({
+      ...row,
+      excess_return_calibrated_q10: row.excess_return_q10 - 0.01,
+      excess_return_calibrated_q50: row.excess_return_q50,
+      excess_return_calibrated_q90: row.excess_return_q90 + 0.01,
+      positive_probability_calibrated: 0.64,
+      signal_survival_probability_calibrated: 0.58,
+      path_mfe_calibrated_q50: row.path_mfe_q50,
+      path_mfe_calibrated_q90: row.path_mfe_q90 + 0.02,
+      path_mae_loss_calibrated_q50: row.path_mae_loss_q50,
+      path_mae_loss_calibrated_q90: row.path_mae_loss_q90 + 0.02,
+      positive_probability_calibration_state: "CALIBRATED",
+      signal_survival_probability_calibration_state: "CALIBRATED",
+      return_interval_calibration_state: "CALIBRATED",
+      path_mfe_calibration_state: "CALIBRATED",
+      path_mae_loss_calibration_state: "CALIBRATED",
+    })),
+    holding_period: { ...candidate.holding_period, calibration_state: "UNCALIBRATED" },
+  };
+}
+
+function priceRangeCandidate(symbol: string) {
+  return {
+    symbol,
+    status: "EXPERIMENTAL_SHADOW",
+    projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
+    entry_executable_probability: 0.62,
+    decision_reference_price: 10,
+    target_raw_price_multiplier: 1,
+    entry_price: { condition: "ENTRY_EXECUTABLE", low: 9.9, mid: 10, high: 10.1 },
+    take_profit_price: { low: 11.1, high: 12.1, horizon_trade_days: 5 },
+    protective_price: {
+      status: "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION",
+      policy_activation_price: 11.8,
+      model_peak_low: 11.1,
+      model_peak_high: 12.1,
+      floor_low: 10.4,
+      floor_high: 11.4,
+    },
+    stop_loss_price: { status: "AVAILABLE", low: 9.2, high: 9.6, hard_stop_price: 9.2 },
+    tick_size: 0.01,
+    regulatory_price_range: {
+      status: "LIMITED",
+      low: 9,
+      high: 11,
+      rule_id: "MAIN_10PCT_V1",
+      source: "DECISION_TIME_BOARD_ST_RULE",
+    },
+    review_policy: {
+      review_policy_sha256: "review_hash",
+      stop_loss_bps: 800,
+      take_profit_bps: 1800,
+      trailing_stop_bps: 700,
+      take_profit_mode: "trailing",
+    },
+    reason_code: null,
+    message: null,
+  };
+}
+
+function calibratedPriceRangeCandidate(symbol: string) {
+  return {
+    ...priceRangeCandidate(symbol),
+    calibrated_entry_price: {
+      condition: "ENTRY_EXECUTABLE",
+      low: 9.8,
+      mid: 10,
+      high: 10.2,
+    },
+    entry_gap_calibration_state: "CALIBRATED",
+    entry_gap_calibration_method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+    entry_gap_calibration_delta: 0.01,
+    entry_executable_calibration_state: "UNCALIBRATED",
+  };
+}
+
+function forwardPredictionPayload(): JsonObject {
+  return {
+    status: "EXPERIMENTAL_SHADOW",
+    calibration_state: "NOT_APPLICABLE_RANKING_SCORE",
+    program_id: PROGRAM_ID,
+    binding_version_id: activeBinding.binding_version_id,
+    package_id: "pkg_codex_smoke",
+    manifest_sha256: "a".repeat(64),
+    decision_as_of_trade_date: "2026-08-12",
+    target_trade_date: "2026-08-13",
+    selection_runtime_semantics_hash: "b".repeat(64),
+    model_version: "advmreq_forward",
+    bundle_id: "bundle_forward",
+    feature_schema_version: "advisory_feature_schema_v1",
+    candidate_count: 2,
+    shortlist_count: 2,
+    candidates: [
+      { symbol: "000002.SZ", selection_effective_rank: 2, selection_score: 0.6, advisory_model_rank: 1, advisory_model_score: 0.9, is_top5: true, top_feature_contributions: [] },
+      { symbol: "000001.SZ", selection_effective_rank: 1, selection_score: 0.8, advisory_model_rank: 2, advisory_model_score: 0.8, is_top5: true, top_feature_contributions: [] },
+    ],
+    baselines: {},
+    hmm_unavailable: [],
+    outcome: {
+      status: "EXPERIMENTAL_SHADOW",
+      calibration_state: "UNCALIBRATED",
+      outcome_bundle_id: "outcome_forward",
+      parent_bundle_id: "bundle_forward",
+      model_version: "advoutreq_forward",
+      horizons: OUTCOME_HORIZONS,
+      candidates: [outcomeCandidate("000002.SZ"), outcomeCandidate("000001.SZ")],
+      reason_code: null,
+      message: null,
+    },
+    price_range: {
+      status: "EXPERIMENTAL_SHADOW",
+      calibration_state: "UNCALIBRATED",
+      price_range_bundle_id: "price_forward",
+      parent_bundle_id: "bundle_forward",
+      outcome_bundle_id: "outcome_forward",
+      model_version: "advprreq_forward",
+      price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+      candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
+      reason_code: null,
+      message: null,
+    },
+    reason_code: null,
+    message: null,
+  };
+}
 
 const program = {
   program_id: PROGRAM_ID,
@@ -436,6 +591,11 @@ async function mockAdvisoryApis(page: Page, options: {
   extraLeaderboardRows?: JsonObject[];
   listVersionsByProgramId?: Record<string, JsonObject[]>;
   bindingsByProgramId?: Record<string, JsonObject[]>;
+  modelShadowByProgramId?: Record<string, JsonObject>;
+  forwardRunsByProgramId?: Record<string, JsonObject[]>;
+  forwardDetailsById?: Record<string, JsonObject>;
+  forwardModelMetricsByProgramId?: Record<string, JsonObject>;
+  forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
 } = {}) {
@@ -553,7 +713,33 @@ async function mockAdvisoryApis(page: Page, options: {
         }, ...staticExtraLeaderboardRows],
       });
     }
+    if (path.includes("/api/v1/advisory/forward-runs/") && method === "GET") {
+      const forwardRunId = decodeURIComponent(path.split("/").pop() || "");
+      const detail = options.forwardDetailsById?.[forwardRunId];
+      return detail
+        ? json(route, { ok: true, ...detail })
+        : json(route, { detail: `unknown forward run: ${forwardRunId}` }, 404);
+    }
     const currentRouteProgramId = routeProgramId(path);
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/forward-runs`) && method === "GET") {
+      return json(route, { ok: true, forward_runs: options.forwardRunsByProgramId?.[currentRouteProgramId] || [] });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/forward-model-metrics`) && method === "GET") {
+      await wait(options.forwardModelMetricsDelayMs);
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_forward_model_metrics_response_v1",
+        program_id: currentRouteProgramId,
+        status: "EVIDENCE_IMMATURE",
+        observation_count: 0,
+        due_observation_count: 0,
+        next_maturity_trade_date: null,
+        reason_code: null,
+        error: null,
+        evaluation: null,
+        ...(options.forwardModelMetricsByProgramId?.[currentRouteProgramId] || {}),
+      });
+    }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/active-pool`) && method === "GET") {
       await wait(options.detailDelayMs);
       return json(route, { ok: true, active_pool: currentRouteProgramId === PROGRAM_ID ? activePool : [] });
@@ -565,6 +751,117 @@ async function mockAdvisoryApis(page: Page, options: {
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/active`) && method === "GET") {
       const binding = (bindingsByProgramId[currentRouteProgramId] || []).find((item) => item.activation_status === "ACTIVE") || { ...activeBinding, program_id: currentRouteProgramId };
       return json(route, { ok: true, binding });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/model-shadow`) && method === "GET") {
+      const configured = options.modelShadowByProgramId?.[currentRouteProgramId];
+      if (configured) return json(route, { ok: true, ...configured });
+      if (currentRouteProgramId !== PROGRAM_ID) {
+        return json(route, {
+          ok: true,
+          status: "MODEL_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          program_id: currentRouteProgramId,
+          target_trade_date: url.searchParams.get("target_trade_date"),
+          candidate_count: 0,
+          shortlist_count: 0,
+          candidates: [],
+          baselines: {},
+          hmm_unavailable: [],
+          outcome: {
+            status: "OUTCOME_UNAVAILABLE",
+            calibration_state: "UNCALIBRATED",
+            outcome_bundle_id: null,
+            parent_bundle_id: null,
+            model_version: null,
+            horizons: OUTCOME_HORIZONS,
+            candidates: [],
+            reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+            message: "parent model unavailable",
+          },
+          price_range: {
+            status: "PRICE_RANGE_UNAVAILABLE",
+            calibration_state: "UNCALIBRATED",
+            price_range_bundle_id: null,
+            parent_bundle_id: null,
+            outcome_bundle_id: null,
+            model_version: null,
+            price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+            candidates: [],
+            reason_code: "ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+            message: "parent model unavailable",
+          },
+          reason_code: "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+          message: "no exact bundle",
+        });
+      }
+      return json(route, {
+        ok: true,
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        binding_version_id: activeBinding.binding_version_id,
+        package_id: "pkg_codex_smoke",
+        manifest_sha256: "a".repeat(64),
+        decision_as_of_trade_date: "2026-06-04",
+        target_trade_date: url.searchParams.get("target_trade_date"),
+        selection_runtime_semantics_hash: "b".repeat(64),
+        model_version: "advmreq_ui",
+        bundle_id: "bundle_ui",
+        feature_schema_version: "advisory_feature_schema_v1",
+        candidate_count: 2,
+        shortlist_count: 2,
+        candidates: [
+          {
+            symbol: "000002.SZ",
+            selection_effective_rank: 2,
+            selection_score: 0.6,
+            advisory_model_rank: 1,
+            advisory_model_score: 0.9,
+            is_top5: true,
+            top_feature_contributions: [{ feature: "ret_5", contribution: 0.2 }],
+          },
+          {
+            symbol: "000001.SZ",
+            selection_effective_rank: 1,
+            selection_score: 0.8,
+            advisory_model_rank: 2,
+            advisory_model_score: 0.1,
+            is_top5: true,
+            top_feature_contributions: [{ feature: "parent_rank_pct", contribution: -0.1 }],
+          },
+        ],
+        baselines: {
+          model_top5: { mean_excess_return_5: -0.001 },
+          selection_rank_top5: { mean_excess_return_5: 0.008 },
+          random_top5: { mean_excess_return_5: 0.004 },
+        },
+        hmm_unavailable: [{ l2_code_id: 10, reason_code: "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE" }],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutreq_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [outcomeCandidate("000002.SZ"), outcomeCandidate("000001.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: "price_range_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_ui",
+          model_version: "advprreq_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        reason_code: null,
+        message: null,
+      });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/list-versions`) && method === "GET") {
       await wait(options.detailDelayMs);
@@ -792,6 +1089,25 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("退出样本");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("EXIT");
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("exit from list");
+  await expect(page.getByTestId("advisory-model-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-model-shadow")).toContainText("UNCALIBRATED");
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr").first()).toContainText("000002.SZ");
+  await expect(page.getByTestId("advisory-model-shadow-baselines")).toContainText("-0.1%");
+  await expect(page.getByTestId("advisory-outcome-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("0.5%");
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("3-10日（5日）");
+  await page.getByTestId("advisory-outcome-horizon-20").click();
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("2.0%");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("未复权 CNY");
+  await expect(page.getByTestId("advisory-price-range-source")).toContainText("price_range_bu...");
+  await expect(page.getByTestId("advisory-price-range-source")).toContainText("outcome_bundle...");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("9.90 - 10.10");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("9.20");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("MAIN_10PCT_V1");
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
@@ -892,6 +1208,282 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory calibrated outcome shows calibrated and raw values without hiding M4", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000002.SZ",
+          selection_effective_rank: 2,
+          selection_score: 0.6,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "PARTIAL",
+          calibration_policy_version: "advisory_outcome_calibration_policy_v1",
+          parent_outcome_bundle_id: "outcome_bundle_v1",
+          binary_calibration_state: "CALIBRATED",
+          return_interval_calibration_state: "CALIBRATED",
+          path_upper_calibration_state: "CALIBRATED",
+          holding_calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_v2",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutcal_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [calibratedOutcomeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: "price_range_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_v1",
+          model_version: "advprreq_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [priceRangeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+  const row = page.getByTestId("advisory-outcome-table").locator("tbody tr").first();
+  await expect(page.getByTestId("advisory-outcome-shadow")).toContainText("PARTIAL");
+  await expect(row).toContainText("校准");
+  await expect(row).toContainText("raw");
+  await expect(row).toContainText("64.0%");
+  await expect(row).toContainText("60.0%");
+  await expect(row).toContainText("UNCALIBRATED");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+});
+
+
+test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalibrated", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutreq_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [outcomeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "CALIBRATED_INTERVAL",
+          price_range_bundle_id: "price_range_bundle_v2_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_ui",
+          model_version: "advprcal_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [calibratedPriceRangeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+  const row = page.getByTestId("advisory-price-range-table").locator("tbody tr").first();
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText(
+    "CALIBRATED_INTERVAL",
+  );
+  await expect(row).toContainText("9.80 - 10.20");
+  await expect(row).toContainText("9.90 - 10.10");
+  await expect(row).toContainText("UNCALIBRATED");
+});
+
+
+test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
+  const badResponses: string[] = [];
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "MODEL_UNAVAILABLE",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 0,
+        shortlist_count: 0,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        reason_code: "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
+        message: "model root is not configured",
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-unavailable")).toContainText(
+    "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
+  );
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
+  await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory outcome unavailability preserves the M2 ranking table", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000001.SZ",
+          selection_effective_rank: 1,
+          selection_score: 0.8,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "OUTCOME_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: null,
+          parent_bundle_id: null,
+          model_version: null,
+          horizons: OUTCOME_HORIZONS,
+          candidates: [],
+          reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+          message: "no exact outcome binding",
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
+    "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+  );
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
+});
+
+test("Advisory missing outcome response is explicit and preserves M2 ranking", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000001.SZ",
+          selection_effective_rank: 1,
+          selection_score: 0.8,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
+    "ADVISORY_OUTCOME_RESPONSE_MISSING",
+  );
+});
+
+test("Advisory model shadow does not create page overflow across approved viewports", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+  await mockShellApis(page);
+  await mockAdvisoryApis(page);
+
+  for (const viewport of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/paper-v2/advisory");
+    await expect(page.getByTestId("advisory-model-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    );
+    expect(pageOverflow, `${viewport.width}x${viewport.height} page overflow`).toBe(false);
+    const bounds = await page.getByTestId("advisory-model-shadow").boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+  }
+  expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
 });
 
@@ -1475,6 +2067,18 @@ test("Advisory page exposes initial list generation when a new program has no li
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/returns`) && method === "GET") {
       return json(route, { ok: true, returns: [], metrics: {} });
     }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/forward-model-metrics`) && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_forward_model_metrics_response_v1",
+        program_id: newProgramId,
+        status: "EVIDENCE_IMMATURE",
+        observation_count: 0,
+        due_observation_count: 0,
+        next_maturity_trade_date: null,
+        evaluation: null,
+      });
+    }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
       reviewBodies.push(body);
@@ -1543,6 +2147,97 @@ test("Advisory page exposes initial list generation when a new program has no li
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("initial enter");
   await expect(page.getByTestId("advisory-list-versions-table").locator("tbody tr")).toHaveCount(1);
 
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory forward panel renders the frozen observation instead of the on-demand shadow", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+  const forwardRun = {
+    forward_run_id: "advfwd_ui_20260813",
+    program_id: PROGRAM_ID,
+    decision_as_of_trade_date: "2026-08-12",
+    target_trade_date: "2026-08-13",
+    publication_status: "PUBLISHED",
+    settlement_status: "SETTLED",
+    last_stage: "TARGET_OPEN_SETTLE",
+    last_reason_code: null,
+    published_at: "2026-08-12T16:31:00+08:00",
+    settled_at: "2026-08-13T09:31:00+08:00",
+  };
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    forwardModelMetricsDelayMs: 1500,
+    forwardRunsByProgramId: { [PROGRAM_ID]: [forwardRun] },
+    forwardDetailsById: {
+      advfwd_ui_20260813: {
+        forward_run: forwardRun,
+        model_observation: {
+          observation_id: "advobs_ui_20260813",
+          forward_run_id: forwardRun.forward_run_id,
+          status: "EXPERIMENTAL_SHADOW",
+          reason_code: null,
+          bundle_id: "bundle_forward",
+          outcome_bundle_id: "outcome_forward",
+          price_range_bundle_id: "price_forward",
+          maturity_trade_date: "2026-09-10",
+          candidate_count: 2,
+          shortlist_count: 2,
+          prediction_payload_json: forwardPredictionPayload(),
+        },
+      },
+    },
+    forwardModelMetricsByProgramId: {
+      [PROGRAM_ID]: {
+        status: "READY",
+        observation_count: 4,
+        due_observation_count: 2,
+        evaluation: {
+          evaluation_id: "adveval_ui",
+          model_descriptor_sha256: "d".repeat(64),
+          bundle_id: "e".repeat(64),
+          first_target_trade_date: "2026-08-13",
+          as_of_trade_date: "2026-09-10",
+          last_due_maturity_trade_date: "2026-09-10",
+          observation_count: 4,
+          due_observation_count: 2,
+          matured_outcome_count: 2,
+          metrics_json: {
+            exited_episode_count: 3,
+            completed_episode_hit_rate: 2 / 3,
+            mean_daily_net_return_bps: 12.5,
+            mean_daily_net_excess_return_bps: 5.5,
+            maximum_drawdown: -0.021,
+            mean_turnover_fraction: 0.2,
+            coverage: 1,
+          },
+        },
+      },
+    },
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/paper-v2/advisory");
+  await expect(page.getByTestId("advisory-forward-latest")).toContainText("目标日 2026-08-13");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("LOADING");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).not.toContainText("EVIDENCE_IMMATURE");
+  await expect(page.getByTestId("advisory-forward-model-identity")).toContainText("Top5 2/2");
+  await expect(page.getByTestId("advisory-forward-child-status")).toContainText("收益/周期 EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-forward-prediction-row")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("000002.SZ");
+  await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("3-10日");
+  await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("9.90 - 10.10");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("READY");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("成熟 observation 2/2");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
   expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
 });

@@ -58,7 +58,9 @@ def _metadata(*, coefficient_seed: str = "coefficient") -> dict:
     )
 
 
-def _program_and_plan() -> tuple[object, HistoricalRangeSourceRequirementPlanV1]:
+def _program_and_plan(
+    *, include_unnormalized_base_evidence: bool = False
+) -> tuple[object, HistoricalRangeSourceRequirementPlanV1]:
     spec = research_spec(package_id="pkg-hmm-binding")
     base = frozen_program(spec)
     runtime_config = {
@@ -71,6 +73,12 @@ def _program_and_plan() -> tuple[object, HistoricalRangeSourceRequirementPlanV1]
             },
         }
     }
+    if include_unnormalized_base_evidence:
+        base_evidence = _metadata()
+        base_evidence.pop("input_data_max_dates_hash")
+        runtime_config["phase0a_hmm_metadata_by_date"] = {
+            TRADE_DATE.isoformat(): base_evidence,
+        }
     payload = base.model_dump(mode="json")
     payload.update(
         {
@@ -327,3 +335,61 @@ def test_seal_materializes_binding_set_and_day_local_runtime_config(tmp_path: Pa
             artifact_store=_MissingBindingStore(),  # type: ignore[arg-type]
         )
     assert exc_info.value.context["reason_code"] == "ADVISORY_HR_HMM_INPUT_UNAVAILABLE"
+
+
+def test_day_runtime_normalizes_base_hmm_evidence_before_binding_comparison(
+    tmp_path: Path,
+) -> None:
+    program, plan = _program_and_plan(include_unnormalized_base_evidence=True)
+    event = _event_row(_metadata())
+    event["partition_key"] = build_hmm_frozen_evidence_partition(
+        selector=plan.requirements[0].parameter_template["selector"],
+        phase0a_hmm_metadata=_metadata(),
+    )
+    member = _PostgresRequirementResolver(
+        cur=_EventCursor(event),
+        observed_at=datetime(2026, 7, 20, tzinfo=UTC),
+    ).resolve(
+        requirement=plan.requirements[0],
+        dependency_members={},
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        expected_member=None,
+    )
+    catalog = HistoricalRangeSourceRevisionCatalogV1(
+        requirement_plan_hash=plan.requirement_plan_hash,
+        catalog_generation=1,
+        query_contract_hash=plan.query_contract_hash,
+        calendar_identity_hash=plan.calendar_identity_hash,
+        members=(member,),
+    )
+    store = HistoricalRangeArtifactStore(root=tmp_path / "phase1r-normalized-binding")
+    service = HistoricalRangePlanningService(
+        program_resolver=object(),
+        calendar_resolver=object(),
+        code_release_resolver=object(),
+        requirement_planner=object(),
+        catalog_executor=object(),
+        repository=object(),
+        artifact_store=store,
+        selection_semantics_version=program.selection_semantics_version,
+        selection_semantics_hash=program.selection_semantics_hash,
+        list_semantics_version=program.list_semantics_version,
+        list_semantics_hash=program.list_semantics_hash,
+    )
+    resolved_program = service._bind_resolved_hmm_evidence(  # noqa: SLF001
+        plan=plan,
+        catalog=catalog,
+        catalog_generation=1,
+    )[0]
+
+    runtime_config = _resolved_runtime_config_for_day(
+        program=resolved_program,
+        decision_trade_date=TRADE_DATE,
+        catalog=catalog,
+        source_refs=catalog.source_revision_refs(),
+        artifact_store=store,
+    )
+
+    assert runtime_config["phase0a_hmm_metadata_by_date"][TRADE_DATE.isoformat()][
+        "input_data_max_dates_hash"
+    ] == _metadata()["input_data_max_dates_hash"]

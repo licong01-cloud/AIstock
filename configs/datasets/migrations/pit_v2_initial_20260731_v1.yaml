@@ -1,0 +1,75 @@
+schema_version: pit_v2_initial_migration_plan_v1
+plan_id: pit_v2_initial_20260731_v1
+profile: qe_hmm_full_v2
+cutoff: 2026-07-31
+allowed_scopes:
+  - sample
+  - full
+sample_instruments:
+  - 000001.SZ
+  - 300379.SZ
+  - 300741.SZ
+  - 600462.SH
+  - 600930.SH
+  - 688981.SH
+event_windows:
+  - instrument: 600930.SH
+    start: 2026-07-27
+    end: 2026-07-31
+    oracle: ipo_251_252_exchange_trading_session_boundary
+  - instrument: 600930.SH
+    start: 2026-07-02
+    end: 2026-07-06
+    oracle: adjustment_factor_change
+  - instrument: 600462.SH
+    start: 2019-01-14
+    end: 2019-01-16
+    oracle: st_announcement_implementation_boundary
+  - instrument: 600462.SH
+    start: 2022-04-28
+    end: 2022-05-06
+    oracle: st_restore_boundary
+  - instrument: 600462.SH
+    start: 2025-06-17
+    end: 2025-06-24
+    oracle: termination_listing_risk_event
+  - instrument: 600462.SH
+    start: 2025-07-18
+    end: 2025-07-21
+    oracle: delisted_lifecycle_terminal_boundary
+  - instrument: 300379.SZ
+    start: 2026-01-21
+    end: 2026-01-23
+    oracle: adjustment_factor_during_long_suspension
+  - instrument: 300379.SZ
+    start: 2026-06-05
+    end: 2026-06-09
+    oracle: long_suspension_restore_chinext_boundary
+  - instrument: 000001.SZ
+    start: 2025-06-11
+    end: 2025-06-13
+    oracle: main_board_normal_adjustment_boundary
+  - instrument: 688981.SH
+    start: 2020-08-21
+    end: 2020-08-25
+    oracle: star_market_twenty_percent_limit_boundary
+  - instrument: 300741.SZ
+    start: 2021-07-30
+    end: 2021-08-02
+    oracle: p3a_classification_index_authority_alignment_boundary
+index_windows:
+  - selector: 000688.SH
+    start: 2019-12-31
+    end: 2020-01-03
+    oracle: required_from_excludes_2019_12_31
+  - selector: all_12_indices
+    start: 2026-07-30
+    end: 2026-07-31
+    oracle: exact_frozen_universe_terminal_coverage
+source_identity_policy: fresh_authority_readback_required
+safety:
+  candidate_only: true
+  production_dataset_writes: 0
+  production_database_writes: 0
+  activation_requests: 0
+  process_controls: 0

@@ -1,0 +1,550 @@
+{
+  "schema_version": "pit_v2_window_scope_receipt_v1",
+  "observed_at": "2026-08-21T13:30:24.2929185Z",
+  "source_head": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+  "single_writer_policy": true,
+  "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
+  "current_revision": {
+    "branch": "docs/qe-pit-v2-w3-sliced-delivery-design-20260813",
+    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3-sliced-delivery-design-20260813",
+    "base_head": "de10d1c0bdf15cdcd152523f0110e0e174c4a635",
+    "status": "merged_via_pr_3425",
+    "merge_commit": "0c1097cd968161c5c234d268959c4c01fcb06314",
+    "allowed_write_files": [
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+    ],
+    "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
+  },
+  "active_slice": {
+    "id": "W6",
+    "branch": "feature/qe-pit-v2-w6-integration-20260819",
+    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w6-integration-20260819",
+    "base_head": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
+    "status": "merged_via_pr_3622_source_ready",
+    "implementation_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "integration_head": "516b4a64823f98b02227cb62d3bb233e8b7801e0",
+    "main_sync_merge_commit": "a557ad2331ef4bdc1d53f86c2752360a3e666c10",
+    "pr_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "runtime_impact": "backend",
+    "runtime_targets": ["backend-main"],
+    "authority_pointer_readback": "not_run_missing_worktree_db_credentials_no_write_performed",
+    "validation": {
+      "direct_matrix": "20 passed",
+      "inference_adjacent_matrix": "53 passed",
+      "w3d_identity_matrix": "39 passed",
+      "w4_w5_adjacent_matrix": "91 passed",
+      "advisory_historical_range_backend": "378 passed, 5 skipped",
+      "qlib_data_backend": "15 passed",
+      "platform_api_backend": "13 passed",
+      "f2": "30/30 warnings=0",
+      "catalog_integrity": "7 passed",
+      "module_registry": "8 passed, 14/14 mapped",
+      "classifier": "targeted_ci_required, 7 changed, 0 unmapped",
+      "l0": "7 files, findings=0, blocking=0",
+      "ruff_compile_diff": "pass; format check advisory not applied to avoid whole-file churn",
+      "scope_readback": "7/7 exact match and ownership mapped",
+      "client_gate": "merge_aftercare ready, blocking=0, warnings=0",
+      "remote_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
+      "main_sync": "merged_without_conflict",
+      "remote_ci": "19 checks completed with success/neutral/skipped; failures=0",
+      "review_findings": "missing PIT identity regression, unreachable real W8 envelope path, and detached-universe date leakage fixed",
+      "production_gates": "ddl=noop; dml=noop; candidate_write=not_performed; activation=not_performed; process_control=not_performed"
+    },
+    "actual_write_files": [
+      "backend/inference_engine.py",
+      "backend/services/canonical_pit_inference_boundary.py",
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+    ],
+    "forbidden": ["production_or_full_candidate", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control", "cleanup"]
+  },
+  "windows": {
+    "W0": {
+      "branch": "feature/qe-pit-v2-phase0-inventory-20260813",
+      "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-phase0-inventory-20260813",
+      "status": "implemented_pending_review",
+      "allowed_write_files": [
+        "docs/analysis/qe_pit_v2_phase0_inventory_and_scope_20260813.md",
+        "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
+        "tests/aistock_validation/pit_v2/retention_inventory.json",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json",
+        "tests/aistock_validation/pit_v2/design_compliance_receipt.json"
+      ],
+      "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
+    },
+    "W1": {
+      "depends_on": ["W0_merged"],
+      "owner": "PIT Core/Registry",
+      "status": "source_merged_4e1f667e",
+      "planned_exact_write_files": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/stock_universe_pit_service.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.preflight.sql",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.sql",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.rollback.sql",
+        "backend/tests/test_canonical_equity_pit.py",
+        "backend/tests/test_canonical_equity_pit_authority_registry.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "entry_gate": ["fresh_worktree_from_latest_origin_main", "workflow_gate_ready", "w0_receipts_parse", "no_overlapping_writer"],
+      "exit_gate": ["dev_preflight_pass", "dev_forward_readback_pass", "dev_rollback_readback_pass", "resolver_contract_tests_pass", "builder_oracles_pass", "production_pointer_remains_v1_pending_migration"],
+      "forbidden": ["production_ddl_dml", "consumer_module_edits", "data_export", "activation"]
+    },
+    "W2": {
+      "depends_on": ["W1_merged"],
+      "owner": "Dataset Release",
+      "status": "source_merged_589678f3",
+      "planned_exact_write_files": [
+        "backend/services/dataset_release/profile.py",
+        "backend/services/dataset_release/pit.py",
+        "backend/services/dataset_release/dependency_graph.py",
+        "backend/services/dataset_release/source_authority.py",
+        "backend/services/dataset_release/daily_minute_materializer.py",
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/component_artifact_manifest.py",
+        "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/control_service.py",
+        "backend/services/dataset_release/resolution_processor.py",
+        "backend/services/dataset_release/candidate_validator.py",
+        "backend/services/dataset_release/retention.py",
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/mcp/modules/qlib_export.py",
+        "scripts/update_backtest_dataset_monthly.py",
+        "scripts/dataset_release_source_stage.py",
+        "configs/datasets/qe_backtest_monthly_v2.yaml",
+        "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+        ".codex/skills/update-backtest-dataset/references/index-hmm-contract.md",
+        ".codex/skills/update-backtest-dataset/references/release-receipt.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "backend/tests/dataset_release/test_profile.py",
+        "backend/tests/dataset_release/test_pit.py",
+        "backend/tests/dataset_release/test_dependency_graph.py",
+        "backend/tests/dataset_release/test_daily_minute_materializer.py",
+        "backend/tests/dataset_release/test_factor_materializer.py",
+        "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_build_stage.py",
+        "backend/tests/dataset_release/test_build_processor.py",
+        "backend/tests/dataset_release/test_control_service.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/dataset_release/test_source_authority.py",
+        "backend/tests/dataset_release/test_selective_clean_full_parity.py",
+        "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+      ],
+      "entry_gate": ["w1_public_binding_merged", "fresh_worktree_from_latest_origin_main", "no_overlapping_writer"],
+      "exit_gate": ["sample_only_tests_pass", "streaming_memory_bounds_pass", "selective_clean_full_parity_pass", "manifest_lineage_capacity_pass", "candidate_only_enforced", "production_runtime_remains_v1"],
+      "forbidden": ["real_full_candidate", "production_dataset_mutation", "consumer_default_change", "production_ddl_dml", "activation"]
+    },
+    "W3": {
+      "depends_on": ["W2_merged"],
+      "owner": "W3 contract and integration lead with short-lived per-slice writer",
+      "status": "w3a_w3b_merged_w3c_final_head_review_passed_ready_for_pr",
+      "coordination_model": "short_lived_exact_file_lease_v1",
+      "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
+      "lease_contract": {
+        "scope": "one atomic PR and exact changed files only",
+        "entry": [
+          "fresh_worktree_from_latest_origin_main",
+          "target_files_clean_and_committed_or_explicit_no_change_handoff",
+          "open_pr_branch_and_declared_dirty_intersection_clear",
+          "one_writer_per_target_file"
+        ],
+        "release": ["slice_pr_merged", "slice_explicitly_abandoned"],
+        "bug_preemption": "P0/P1 or experiment-blocking same-file BUG merges first at an atomic W3 checkpoint; W3 rebases or recreates from new main and invalidates old evidence",
+        "not_a_gate": "lease duration is telemetry and coordination, not user approval or monthly runtime gate",
+        "forbidden": ["stash_other_worktree", "reset_other_worktree", "copy_over_dirty_target", "parallel_same_file_write"]
+      },
+      "slices": {
+        "W3-A": {
+          "owner": "W3 Shared Dataset Consumer Contract",
+          "status": "source_merged_0a1487c9",
+          "planned_exact_write_files": [
+            "backend/services/canonical_pit_dataset_consumer.py",
+            "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py"
+          ],
+          "depends_on": ["W2_merged"],
+          "exit_gate": ["neutral_adapter_uses_w1_w2_public_api", "full_pass_sample_v1_tamper_rejected"],
+          "forbidden": ["modify_w1_w2_core", "qe_business_files", "hmm_business_files"]
+        },
+        "W3-B": {
+          "owner": "W3 QE Integration lease holder",
+          "status": "source_merged_pr_3527",
+          "branch": "feature/qe-pit-v2-w3b-integration-20260816",
+          "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3b-20260816",
+          "base_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
+          "merge_commit": "7d4120b1f3d583358783ca43eb20df6dcc11fb61",
+          "candidate_existing_files": [
+            "backend/services/quantevolver/qe_dataset_contract.py",
+            "backend/services/quantevolver/experiment_config.py",
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/factor_universe_mask_service.py",
+            "backend/services/quantevolver/long_trend_data_reader.py",
+            "scripts/backfill_factor_cache.py"
+          ],
+          "planned_direct_test": "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
+          "actual_write_files": [
+            "backend/services/quantevolver/qe_dataset_contract.py",
+            "backend/services/quantevolver/experiment_config.py",
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/factor_universe_mask_service.py",
+            "backend/services/quantevolver/long_trend_data_reader.py",
+            "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
+            "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+            "tests/aistock_validation/catalog/file_ownership.yaml",
+            "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+          ],
+          "released_candidate_files": ["scripts/backfill_factor_cache.py"],
+          "depends_on": ["W3-A_merged"],
+          "exit_gate": ["formal_qe_release_identity_persisted", "frozen_qe_has_zero_online_pit_db_fallback", "legacy_only_explicit_reproduction"],
+          "forbidden": ["hmm_files", "selection_paper_simulation", "strategy_package_advisory"]
+        },
+        "W3-C": {
+          "owner": "W3 HMM Integration lease holder",
+          "status": "implementation_review_passed_final_head_ready_for_pr",
+          "branch": "feature/qe-pit-v2-w3c-integration-20260816",
+          "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3c-20260816",
+          "base_head": "66bab73f83c9cf8067de705b3b3a6c5f2ff53eb8",
+          "candidate_existing_files": [
+            "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
+            "backend/services/hmm_evolution/universe.py",
+            "backend/services/hmm_risk/stock_fact_repository.py",
+            "scripts/hmm_risk/repair_b3_stock_fact_gaps.py"
+          ],
+          "planned_direct_tests": [
+            "backend/tests/hmm_data_source/test_isolation_constraints.py",
+            "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+          ],
+          "actual_write_files": [
+            "backend/services/hmm_evolution/universe.py",
+            "backend/services/hmm_risk/canonical_stock_fact_source.py",
+            "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+            "backend/tests/hmm_evolution/test_universe.py",
+            "backend/tests/hmm_data_source/test_isolation_constraints.py",
+            "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+            "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+            "backend/tests/test_qe_hmm_canonical_pit_integration.py",
+            "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+            "tests/aistock_validation/catalog/file_ownership.yaml",
+            "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+          ],
+          "released_candidate_files": [
+            "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
+            "backend/services/hmm_risk/stock_fact_repository.py"
+          ],
+          "overlap_resolution": "PR #2770 remains open/conflicting; stock_fact_repository.py is protected and the opt-in online generation contract is isolated in canonical_stock_fact_source.py",
+          "depends_on": ["W3-B_merged"],
+          "exit_gate": ["hmm_frozen_identity_matches_qe", "offline_hmm_has_zero_online_db_fallback", "online_stock_facts_bind_generation"],
+          "forbidden": ["qe_files", "selection_paper_simulation", "strategy_package_advisory"]
+        },
+        "W3-D": {
+          "owner": "W3 final validation",
+          "write_scope": "no business source writes",
+          "depends_on": ["W3-A_merged", "W3-B_merged", "W3-C_merged"],
+          "validation_command": "python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q",
+          "evidence_binding": "structured receipt and CI check rollup bound to the final origin/main commit containing PR-3A, PR-3B and PR-3C",
+          "exit_gate": ["final_main_identity_matrix_pass", "consumer_inventory_no_unknown", "v1_reproduction_and_formal_rejection_pass", "old_experiments_not_used_as_v2_evidence"],
+          "failure_route": "return to owning W3 slice, merge fix from latest main, rerun all W3-D evidence"
+        }
+      },
+      "forbidden": ["selection_paper_simulation", "strategy_package_advisory", "online_db_fallback_for_frozen_data"]
+    },
+    "W4": {
+      "depends_on": ["W2_merged"],
+      "owner": "Selection/Paper/Simulation",
+      "status": "w4a_merged_runtime_verified_w4b_in_progress",
+      "completed_slice_w4a": {
+        "id": "W4-A",
+        "branch": "feature/qe-pit-v2-w4a-runtime-binding-20260818",
+        "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4a-runtime-binding-20260818",
+        "base_head": "a7b91792a4ee630a7d18c01a3c03f6f0bda77bc0",
+        "latest_reviewed_origin_main": "0f7e41c7cae613ab5cb5205975495f875332fa58",
+        "origin_main_changed_file_overlap": [],
+        "status": "merged_runtime_verified",
+        "pr": "https://github.com/licong01-cloud/AIstock/pull/3596",
+        "merge_commit": "38ade7137a65a9386dafc5c0fe6a276e227548ae",
+        "post_restart_runtime_identity": "38ade7137a65a9386dafc5c0fe6a276e227548ae",
+        "post_restart_smoke": "backend health/runtime identity ready; canonical PIT and risk direct smoke 24 passed in production Python environment",
+        "scope": "selection canonical authority directive, immutable generation lease, risk-policy binding, and simulation selection admission",
+        "allowed_write_files": [
+          "backend/services/selection_center/canonical_pit_runtime.py",
+          "backend/services/selection_center/runtime_profile.py",
+          "backend/services/selection_center/risk_policy.py",
+          "backend/services/simulation_runtime/selection.py",
+          "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "backend/tests/selection_center/test_risk_policy.py",
+          "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/catalog/file_ownership.yaml",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "actual_write_files": [
+          "backend/services/selection_center/canonical_pit_runtime.py",
+          "backend/services/selection_center/runtime_profile.py",
+          "backend/services/selection_center/risk_policy.py",
+          "backend/services/simulation_runtime/selection.py",
+          "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "backend/tests/selection_center/test_risk_policy.py",
+          "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "validation": {
+          "direct_and_adjacent_matrix": "163 passed",
+          "f2": "30/30 warnings=0",
+          "ruff_compile_diff": "pass",
+          "l0": "skill findings=0; repository findings=1 baseline, blocking=0",
+          "catalog_integrity": "7 passed; findings=0",
+          "module_registry": "8 passed; 14/14 mapped",
+          "ownership": "9/9 changed files mapped; outside_scope=0"
+        },
+        "review_rounds": {
+          "authority_schema": "resolved; strict JSON identity, explicit inherit boundary, null/mixed profile rejection, pre-hash lease validation",
+          "evidence_integration": "resolved; DSE v1 projects the full canonical authority lease and binds it into artifact_hash; DSE v2 effective config chain already carries the lease",
+          "final_adjacent_regression": "163 passed"
+        },
+        "design_compliance": {
+          "no_simplified_completion": "pass; W4-A is explicitly not complete W4",
+          "no_silent_fallback": "pass; forged identity and generation drift fail typed",
+          "no_business_semantic_drift": "pass; PIT membership remains separate from orderable_now",
+          "no_private_gate": "pass; no new approval or production gate"
+        },
+        "forbidden": [
+          "paper_persistence_or_day_runner",
+          "strategy_package_or_advisory",
+          "orderability_semantic_change",
+          "in_place_legacy_profile_rewrite",
+          "database_write",
+          "dataset_export_or_mutation",
+          "activation",
+          "process_control"
+        ]
+      },
+      "active_slice": {
+        "id": "W4-B",
+        "branch": "feature/qe-pit-v2-w4b-paper-runtime-20260818",
+        "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4b-paper-runtime-20260818",
+        "base_head": "8c29ed5e956c24d49370c4f54f70b95b23aa1d5b",
+        "status": "source_committed_main_synced_ready_for_final_head_gate",
+        "implementation_commit": "d2969cba598992412d634c02d094fca6afa367cf",
+        "latest_origin_main": "c0a89782e50faf942066dacc195844b82d78a104",
+        "main_sync_head": "74b1019c978bdc1a147416a34f04ef342ee879ca",
+        "scope": "Paper runtime profile migration, session/day-run lease inheritance and drift checks, read-only shadow comparison, and activation readiness inventory",
+        "allowed_write_files": [
+          "backend/services/paper_trading_v2/canonical_pit_control.py",
+          "backend/services/paper_trading_v2/service.py",
+          "backend/services/paper_trading_v2/session.py",
+          "backend/services/paper_trading_v2/replay.py",
+          "backend/services/paper_trading_v2/day_runner.py",
+          "backend/services/paper_trading_v2/live_session.py",
+          "backend/services/paper_trading_v2/readiness.py",
+          "backend/routers/paper_trading_v2.py",
+          "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+          "backend/tests/paper_trading_v2/test_runtime_profile.py",
+          "backend/tests/paper_trading_v2/test_session.py",
+          "backend/tests/paper_trading_v2/test_day_runner.py",
+          "backend/tests/paper_trading_v2/test_live_session.py",
+          "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+          "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/catalog/file_ownership.yaml",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "forbidden": [
+          "database_ddl_or_dml",
+          "production_activation",
+          "process_control",
+          "dataset_export_or_mutation",
+          "orderability_or_execution_semantic_change",
+          "in_place_legacy_profile_rewrite",
+          "strategy_package_or_advisory_source_change"
+        ],
+        "actual_write_files": [
+          "backend/services/paper_trading_v2/canonical_pit_control.py",
+          "backend/services/paper_trading_v2/service.py",
+          "backend/services/paper_trading_v2/session.py",
+          "backend/services/paper_trading_v2/replay.py",
+          "backend/services/paper_trading_v2/day_runner.py",
+          "backend/services/paper_trading_v2/live_session.py",
+          "backend/services/paper_trading_v2/readiness.py",
+          "backend/routers/paper_trading_v2.py",
+          "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+          "backend/tests/paper_trading_v2/test_runtime_profile.py",
+          "backend/tests/paper_trading_v2/test_session.py",
+          "backend/tests/paper_trading_v2/test_day_runner.py",
+          "backend/tests/paper_trading_v2/test_live_session.py",
+          "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+          "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "validation": {
+          "direct_and_adjacent_matrix": "487 passed, 0 failed, 1 skipped, 2 expected xfail",
+          "f2": "30/30 warnings=0",
+          "ruff_compile_diff": "pass; only Git line-ending advisory",
+          "guardrail": "changed-only files=17 findings=0 blocking=0",
+          "catalog_and_ownership_tests": "15 passed; catalog integrity script findings=0",
+          "scope_readback": "17/17 actual files within allowed scope; ownership catalog unchanged because existing paper_v2 wildcard maps all source/test files",
+          "client_gate": "feature ready, blocking=0, warnings=0, restart_recommended=false",
+          "runtime_contract": "backend impact; target_ids=[backend-main]; restart remains separate user-owned post-merge action",
+          "origin_main_drift": "merged origin/main@c0a89782 without conflict after exact overlap=0; upstream BUG-1123 changed Selection result enrichment/watchlist and issue metadata only"
+        },
+        "review_rounds": {
+          "admission_and_trust_boundary": "resolved; normal tick owns generation check, external replay re-resolves live pointer, only frozen session/catch-up explicitly inherits",
+          "economic_write_boundary": "resolved; day/live order fill cash position and snapshot checkpoints fail typed before persistence; direct drift tests prove zero fill/cash",
+          "resource_and_shadow_boundary": "resolved; shadow max 500 and SELECT-only evidence; inventory has one 10000-row global metadata ceiling and fails typed instead of truncating or growing unbounded",
+          "legacy_immutability_and_activation": "resolved; legacy versions remain readable/immutable, migration always creates a new version, and new activation/live candidate requires canonical pointer profile"
+        }
+      },
+      "reserved_existing_files": [
+        "backend/services/selection_center/runtime_profile.py",
+        "backend/services/selection_center/risk_policy.py",
+        "backend/services/selection_center/service.py",
+        "backend/services/selection_center/hmm_risk_gate.py",
+        "backend/services/selection_center/prospective_evidence.py",
+        "backend/services/selection_center/prospective_evidence_assembler.py",
+        "backend/services/paper_trading_v2/models.py",
+        "backend/services/paper_trading_v2/repository.py",
+        "backend/services/paper_trading_v2/service.py",
+        "backend/services/paper_trading_v2/day_runner.py",
+        "backend/services/paper_trading_v2/live_session.py",
+        "backend/services/paper_trading_v2/readiness.py",
+        "backend/services/simulation_runtime/selection.py",
+        "backend/routers/paper_trading_v2.py"
+      ],
+      "new_test_reservations": [
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/paper_trading_v2/test_runtime_profile.py"
+      ],
+      "forbidden": ["qe_hmm_training", "strategy_package_advisory", "orderability_semantic_change", "in_place_legacy_profile_rewrite"]
+    },
+    "W5": {
+      "depends_on": ["W2_merged"],
+      "owner": "StrategyPackage/Advisory",
+      "reserved_existing_files": [
+        "backend/services/strategy_package/advisory_input_projection.py",
+        "backend/services/strategy_package/backtest_contract.py",
+        "backend/services/strategy_package/models.py",
+        "backend/services/strategy_package/package_asset.py",
+        "backend/services/strategy_package/runtime.py",
+        "backend/services/strategy_package/runtime_variant.py",
+        "backend/services/strategy_package/selection_computation.py",
+        "backend/services/advisory_dev_input_onboarding/contracts.py",
+        "backend/services/advisory_dev_input_onboarding/phase1e_orchestration.py",
+        "backend/services/advisory_historical_range/catalog_postgres.py",
+        "backend/services/advisory_historical_range/catalog_source_cache.py",
+        "backend/services/advisory_historical_range/decision_mark_provider.py",
+        "backend/services/advisory_historical_range/requirement_planner.py",
+        "backend/services/advisory_modeling/feature_sources.py"
+      ],
+      "new_test_reservations": ["backend/tests/strategy_package/test_canonical_pit_compatibility.py"],
+      "forbidden": ["qe_hmm_training", "selection_paper_simulation", "published_manifest_rewrite", "model_asset_rewrite"]
+    },
+    "W6": {
+      "depends_on": ["W3-D_passed", "W4_merged", "W5_merged"],
+      "owner": "Integration",
+      "status": "source_merged_pr_3622_509e12c2",
+      "final_pr_head": "516b4a64823f98b02227cb62d3bb233e8b7801e0",
+      "merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "planned_exact_write_files": [
+        "backend/inference_engine.py",
+        "backend/tests/test_canonical_pit_consumer_inventory.py",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json",
+        "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
+      ],
+      "actual_write_files": [
+        "backend/inference_engine.py",
+        "backend/services/canonical_pit_inference_boundary.py",
+        "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+        "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+        "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+      ],
+      "source_ready_receipt": {
+        "schema_version": "pit_v2_w6_source_ready_receipt_v1",
+        "source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+        "baseline_origin_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
+        "baseline_user_ancestor": "a6da5a35",
+        "consumer_inventory_unknown_count": 0,
+        "fallback_scan_count": 0,
+        "direct_tests": "20 passed; adjacent and classified matrices pass",
+        "f2": "30/30 pass",
+        "compileall": "pass",
+        "git_diff_check": "pass",
+        "ruff": "pass",
+        "production_gates": {
+          "production_ddl_gate": "noop",
+          "production_dml_gate": "noop",
+          "dataset_candidate_write": "not_performed",
+          "production_activation": "not_performed",
+          "authority_pointer_change": "none",
+          "backend_restart": "not_performed",
+          "QE_experiment_run": "not_performed",
+          "runtime_real_data_evidence": "not_run_not_authorized"
+        },
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit ddcf89a56d61f63d6eb96650de615c9fe5795976; this metadata-only receipt refresh is excluded from source_commit to avoid self-referential hashing."
+      },
+      "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
+      "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
+    },
+    "W7": {"owner": "Candidate Build", "write_boundary": "new candidate root plus control catalog and candidate-local CAS only", "forbidden": ["source_code", "production_db", "historical_candidate_overwrite"]},
+    "W8": {"owner": "Independent Validation", "write_boundary": "validation receipts only", "forbidden": ["dataset_mutation", "candidate_mutation", "activation"]},
+    "W9": {"owner": "Activation/Aftercare", "write_boundary": "separately authorized exact migration distribution activation receipts", "forbidden": ["source_change_after_w8", "inferred_restart", "inferred_cleanup"]}
+  },
+  "consumer_inventory": {
+    "schema_version": "canonical_pit_consumer_inventory_v1",
+    "source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
+    "consumers": [
+      {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
+      {"consumer_id": "qe_backtest_prediction", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
+      {"consumer_id": "hmm_training_prediction", "class": "canonical_v2_frozen_candidate", "path": "backend/services/hmm_evolution/universe.py"},
+      {"consumer_id": "selection_center", "class": "canonical_v2_rolling_runtime", "path": "backend/services/selection_center/canonical_pit_runtime.py"},
+      {"consumer_id": "simulation", "class": "canonical_v2_rolling_runtime", "path": "backend/services/simulation_runtime"},
+      {"consumer_id": "paper_trading_v2", "class": "canonical_v2_rolling_runtime", "path": "backend/services/paper_trading_v2"},
+      {"consumer_id": "strategy_package", "class": "canonical_v2_frozen_candidate", "path": "backend/services/strategy_package/models.py"},
+      {"consumer_id": "advisory_historical_range", "class": "canonical_v2_frozen_candidate", "path": "backend/services/advisory_historical_range"},
+      {"consumer_id": "advisory_model_first", "class": "canonical_v2_rolling_runtime", "path": "backend/services/advisory_model_first"},
+      {"consumer_id": "shared_inference_engine", "class": "canonical_v2_rolling_runtime", "path": "backend/inference_engine.py"},
+      {"consumer_id": "dataset_release_candidate_builder", "class": "canonical_v2_frozen_candidate", "path": "backend/services/dataset_release"},
+      {"consumer_id": "historical_reproduction", "class": "legacy_reproduction_only", "path": "backend/services/canonical_equity_pit.py"},
+      {"consumer_id": "test_fixture", "class": "test_fixture", "path": "backend/tests/dataset_release"},
+      {"consumer_id": "migration_tooling", "class": "migration_tool", "path": "scripts/build_stock_universe_pit_spans.py"}
+    ],
+    "classification_counts": {"canonical_v2_formal": 2, "canonical_v2_frozen_candidate": 4, "canonical_v2_rolling_runtime": 5, "legacy_reproduction_only": 1, "test_fixture": 1, "migration_tool": 1, "unknown": 0},
+    "unknown_count": 0,
+    "fallback_scan": {"status": "pass", "legacy_fallback_count": 0, "latest_guessing_count": 0, "mixed_identity_count": 0},
+    "file_digests": {
+      "backend/services/quantevolver/qe_dataset_contract.py": "e370720805155559f4e0b2103b01c86fde6cd296ffe79eb382e04964083c7983",
+      "backend/services/hmm_evolution/universe.py": "a04274909c7948ece33ec6bec7a3a024b1549c2b7d86c19212568302ae8a4735",
+      "backend/services/selection_center/canonical_pit_runtime.py": "0e5956d0afdaa5496b59da852e0a792afa83117582fafb28e40fd5b07c9d3060",
+      "backend/services/canonical_pit_inference_boundary.py": "13b400258e6183f898147f13c312d83906863bfc61700d6c87a4de2940254eff",
+      "backend/inference_engine.py": "3e99bbac5430c52e33efac06322792b67f6f8d153fea2446d968f2f993b52e33",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "86e4e523b18710c83bfeceb0362f53e2b8063225da9c5d922e9d844cef13af91",
+      "backend/services/dataset_release/pit.py": "09a85279099c2b4279762c6b139ac794e4c0155b9678a209e7e5bcd1add2ea9c",
+      "backend/services/canonical_equity_pit.py": "16963de5e17e40f2c7064ad053f3297bddaa41156766fb1a6ea107a2f4656373"
+    }
+  },
+  "overlap_review": {
+    "W1_W2": "serial_no_overlap",
+    "W3_internal": "W3-A_to_W3-B_to_W3-C_to_W3-D_serial_short_leases",
+    "W3_W4_W5": "parallel_only_when_exact_changed_files_are_disjoint",
+    "shared_core": "W6_single_writer_only",
+    "status": "PASS_W6_MERGED_SOURCE_READY"
+  }
+}

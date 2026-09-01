@@ -1,0 +1,374 @@
+{
+  "actual": "每次独立指标重算都在权威指标事务内写入 factor.recompute.completed 到 qe_archive.outbox_event, worker 不消费导致 2348 条 pending outbox 持续积压; 事件若被消费会向 write-only 的 qe_archive.factor_value 写入海量因子值; outbox 不可用会使权威指标事务整体回滚。",
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "backend/services/qe_archive/handlers/__init__.py",
+    "backend/services/qe_archive/handlers/contract.py",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+    "backend/tests/quantevolver/test_factor_emit_hook.py",
+    "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+    "backend/tests/qe_archive/test_round3_fixes.py",
+    "backend/tests/data_quality/test_jsonb_schema.py",
+    "backend/tests/test_factor_metrics_h20_contract.py",
+    "noxfile.py",
+    "docs/architecture/data_warehouse_extension_design_20260510.md",
+    "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1001",
+  "closed_at": "2026-08-09T14:08:07.193107Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-09T04:58:42.469041Z",
+  "description": "每次独立指标重算都在权威指标事务内写入 factor.recompute.completed 到 qe_archive.outbox_event, worker 不消费导致 2348 条 pending outbox 持续积压; 事件若被消费会向 write-only 的 qe_archive.factor_value 写入海量因子值; outbox 不可用会使权威指标事务整体回滚。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260809-d5cf7ff11cf5",
+      "timestamp": "2026-08-09T04:58:42.469037Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_archive_health pending_outbox_count=2348 (2026-08-09 只读)",
+    "backend/services/qe_archive/worker_service.py:20 SUPPORTED_WORKER_EVENT_TYPES",
+    "backend/services/quantevolver/factor_official_evaluation_service.py:1369 T15 emit hook"
+  ],
+  "expected": "独立指标保存成功后不再产生 factor.recompute.completed 归档事件; 不再向 qe_archive.factor_value 写入逐股票逐交易日因子值; 当前指标查询继续读取 aistock_factor_metrics / 月度 IC 权威表; 历史 run 查询继续读取冻结的 run_factor.independent_metrics_snapshot; run completion 阶段的合法指标快照写入保持闭合; QE archive 不可用不影响权威指标事务。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+      "backend/tests/quantevolver/test_factor_emit_hook.py",
+      "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/data_quality/test_jsonb_schema.py",
+      "docs/architecture/data_warehouse_extension_design_20260510.md",
+      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/factor_official_evaluation_service.py",
+        "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+        "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+        "backend/tests/qe_archive/test_round3_fixes.py",
+        "backend/tests/data_quality/test_jsonb_schema.py",
+        "docs/architecture/data_warehouse_extension_design_20260510.md",
+        "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.archive_handlers",
+        "qe.archive",
+        "paper_v2",
+        "tests.backend",
+        "validation.data_quality",
+        "market.regime_label",
+        "docs.architecture",
+        "validation.module_quality",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/factor_official_evaluation_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_factor_emit_hook.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_round3_fixes.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/data_quality/test_jsonb_schema.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.archive_handlers",
+            "paper_v2",
+            "market.regime_label"
+          ],
+          "primary_module": "validation.data_quality",
+          "risk_level": "high",
+          "rule_id": "validation_data_quality_deep"
+        },
+        {
+          "file": "docs/architecture/data_warehouse_extension_design_20260510.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/factor_official_evaluation_service.py",
+        "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+        "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+        "backend/tests/qe_archive/test_round3_fixes.py",
+        "backend/tests/data_quality/test_jsonb_schema.py",
+        "docs/architecture/data_warehouse_extension_design_20260510.md",
+        "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+      "backend/tests/quantevolver/test_factor_emit_hook.py",
+      "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/data_quality/test_jsonb_schema.py",
+      "docs/architecture/data_warehouse_extension_design_20260510.md",
+      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-08-09T04:58:42.469041Z",
+  "fix_branch": null,
+  "fix_commit": "52404e114eb44d480d06aec6012e89366ecdd844",
+  "fixed_at": "2026-08-09T08:34:34Z",
+  "github_issue_number": 3226,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3226",
+  "last_seen_at": "2026-08-09T04:58:42.469041Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3227",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/qe-archive/health -> pending_outbox_count=2348; 代码: backend/services/quantevolver/factor_official_evaluation_service.py:1369 (T15 emit hook); backend/services/qe_archive/worker_service.py:20 SUPPORTED_WORKER_EVENT_TYPES 不含 factor.recompute.completed",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity",
+    "qe_read_backend",
+    "qe_archive_backend",
+    "data_quality_deep"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python pytest process (pid 102020) ran backend/tests/quantevolver/test_factor_emit_hook.py + backend/tests/qe_archive/test_factor_value_archive_handler.py -> 12 passed; 全新进程加载修复后模块, 不依赖进程内缓存",
+      "fresh pytest process loaded production writer and handler retirement contracts: 27 passed including real DEV PostgreSQL independent commit rollback and readback"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1001/post-restart-verify.json",
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "因子独立指标重算错误触发 QE 数仓因子值归档并持续积压 outbox",
+  "trigger_condition": {
+    "fingerprint": "d5cf7ff11cf5553de7fa0347",
+    "source_event_id": "FE-20260809-d5cf7ff11cf5"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped",
+    "python -m nox -s validation_catalog_integrity -> 6 passed; catalog_integrity passed",
+    "python -m nox -s qe_archive_backend -> 161 passed",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m nox -s data_quality_deep -> 8 passed, 21 skipped",
+    "python -m nox -s l0 -> successful; blocking=0",
+    "python -m nox -s validation_catalog_integrity -> 6 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe_archive",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe_archive",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1305,6 +1305,38 @@ DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_dataset_refresh_audit_latest_success ON market.dataset_date_refresh_audit(dataset, status, trade_date DESC)",
 ]
 
+# The additive successor migration is also the bootstrap authority for these
+# tables. Keeping one SQL body prevents migration/bootstrap contract drift.
+LOCALSIM_SUCCESSOR_CORE_MIGRATION = (
+    Path(__file__).resolve().parents[1] / "migrations" / "localsim_successor_core_20260831.sql"
+)
+_localsim_successor_migration_sql = LOCALSIM_SUCCESSOR_CORE_MIGRATION.read_text(encoding="utf-8")
+_localsim_successor_apply_transaction = _localsim_successor_migration_sql.partition("BEGIN;")[2].partition("COMMIT;")[0]
+if not _localsim_successor_apply_transaction.strip():
+    raise RuntimeError("LocalSIM successor migration does not contain its authoritative apply transaction")
+DDL.append(
+    "\n".join(
+        line for line in _localsim_successor_apply_transaction.splitlines() if not line.strip().startswith("SET LOCAL ")
+    )
+)
+
+LOCALSIM_PRODUCT_CUTOVER_BRIDGE_MIGRATION = (
+    Path(__file__).resolve().parents[1] / "migrations" / "localsim_product_cutover_bridge_20260831.sql"
+)
+_localsim_cutover_bridge_sql = LOCALSIM_PRODUCT_CUTOVER_BRIDGE_MIGRATION.read_text(encoding="utf-8")
+_localsim_cutover_bridge_apply_transaction = _localsim_cutover_bridge_sql.partition("BEGIN;")[2].partition(
+    "COMMIT;"
+)[0]
+if not _localsim_cutover_bridge_apply_transaction.strip():
+    raise RuntimeError("LocalSIM product-cutover bridge migration lacks its authoritative apply transaction")
+DDL.append(
+    "\n".join(
+        line
+        for line in _localsim_cutover_bridge_apply_transaction.splitlines()
+        if not line.strip().startswith("SET LOCAL ")
+    )
+)
+
 
 def iter_ddl() -> Iterable[str]:
     return tuple(DDL)

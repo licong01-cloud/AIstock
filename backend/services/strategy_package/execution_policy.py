@@ -20,6 +20,8 @@ class ExecutionPolicyValidationStatus(str, Enum):
 
 
 BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
+LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID = "localsim_twap_only_v1"
+LOCALSIM_TWAP_ONLY_REASON_CODE = "LOCALSIM_TWAP_ONLY_POLICY"
 
 
 ALLOWED_POLICY_JSON_KEYS = {
@@ -127,6 +129,43 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
                 context={"max_participation_rate": normalized["algo_config"]["max_participation_rate"]},
             )
     return normalized
+
+
+def local_sim_twap_only_policy_snapshot() -> dict[str, Any]:
+    """Return the deterministic, fail-closed execution policy for LocalSIM."""
+
+    policy_json = normalize_execution_policy_json(
+        {
+            "execution_level": "minute",
+            "bar_freq": "1m",
+            "algo_code": "TWAP",
+            "algo_config": {
+                "allow_partial_fill": True,
+                "split_count": 3,
+            },
+            "fallback_algo_code": None,
+            "data_requirements": {
+                "requires_minute_bar": True,
+                "requires_limit_price": True,
+                "requires_trade_calendar": True,
+                "requires_suspend_status": True,
+            },
+            "fallback_policy": {
+                "on_missing_minute_bar": "fail",
+                "on_algo_error": "fail",
+            },
+            "quality_report": {
+                "record_slippage": True,
+                "record_participation_rate": True,
+                "record_unfilled_reason": True,
+            },
+        }
+    )
+    return {
+        "policy_version_id": LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID,
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
 
 
 FROZEN_EXECUTION_POLICY_ID_FIELDS = (
@@ -244,6 +283,52 @@ def validate_frozen_execution_policy_snapshot(
         id_field: policy_id,
         "policy_sha256": policy_sha256,
         "policy_json": normalized,
+    }
+
+
+def local_sim_twap_only_policy_context(requested_context: Mapping[str, Any]) -> dict[str, Any]:
+    """Compile one Paper v2 LocalSIM policy context to explicit TWAP-only mode."""
+
+    requested = dict(requested_context)
+    requested_snapshot = validate_frozen_execution_policy_snapshot(
+        {
+            "validated_execution_policy_id": requested.get("validated_execution_policy_id"),
+            "policy_sha256": requested.get("policy_sha256"),
+            "policy_json": requested.get("policy_json"),
+        },
+        context={
+            "stage": "PAPER_V2_LOCAL_SIM_POLICY_SELECTION",
+            "activation_id": requested.get("activation_id"),
+            "activation_source": requested.get("activation_source"),
+        },
+    )
+    effective = local_sim_twap_only_policy_snapshot()
+    return {
+        "validated_execution_policy_id": effective["policy_version_id"],
+        "policy_sha256": effective["policy_sha256"],
+        "policy_name": "LocalSIM TWAP-only runtime policy",
+        "activation_id": requested.get("activation_id"),
+        "activation_source": "localsim_runtime_mode_policy",
+        "activated_at": requested.get("activated_at"),
+        "activated_by": requested.get("activated_by"),
+        "activation_reason": requested.get("activation_reason"),
+        "algo_code": "TWAP",
+        "source_backtest_id": requested.get("source_backtest_id"),
+        "source_backtest_status": requested.get("source_backtest_status"),
+        "validation_status": "RUNTIME_MODE_POLICY",
+        "policy_json": effective["policy_json"],
+        "runtime_policy_selection": {
+            "schema_version": "localsim_runtime_policy_selection_v1",
+            "reason_code": LOCALSIM_TWAP_ONLY_REASON_CODE,
+            "requested_policy_id": requested_snapshot["validated_execution_policy_id"],
+            "requested_policy_sha256": requested_snapshot["policy_sha256"],
+            "requested_algo_code": requested_snapshot["policy_json"]["algo_code"],
+            "requested_activation_source": requested.get("activation_source"),
+            "effective_policy_id": effective["policy_version_id"],
+            "effective_policy_sha256": effective["policy_sha256"],
+            "effective_algo_code": "TWAP",
+            "fallback_used": False,
+        },
     }
 
 

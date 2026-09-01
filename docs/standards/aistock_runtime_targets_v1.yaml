@@ -1,21 +1,48 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-07-31"
+updated_at: "2026-08-30"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
+non_runtime_source_paths:
+  - scripts/aistock_runner_health.py
+  - scripts/build_industry_pit_candidates.py
+  - scripts/build_sector_data_candidate.py
+  - scripts/backfill_tushare_daily_basic_fields.py
+  - scripts/cleanup_simulation_history.py
+  - scripts/configure_aistock_github_runner.ps1
+  - scripts/ingest_tushare_daily_basic.py
+  - scripts/localsim_history_prune_core.py
+  - scripts/prune_localsim_history.py
+  - scripts/localsim_product_validation.py
+  - scripts/prepare_localsim_successor_cutover.py
+  - scripts/prepare_canonical_pit_monthly.py
+  - scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py
+  - scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py
+  - scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py
+  - scripts/qlib_authoritative_bin_export.py
+  - scripts/repair_announcement_event_signal_issuer_binding.py
+  - scripts/seed_dataset_refresh_audit.py
+  - scripts/simulation_history_cleanup_core.py
+  - scripts/stale_simulation_run_terminalization_core.py
+  - scripts/sync_stock_namechange.py
+  - scripts/terminalize_stale_simulation_runs.py
 targets:
   backend-main:
     runtime_kind: backend
     source_globs:
       - backend/**/*.py
       - scripts/qe_sector_risk_overlay_strategy.py
+      - scripts/score_weighted_strategy.py
+      - scripts/score_weighted_strategy_v2.py
+      - scripts/qe_sector_risk_overlay_artifacts.py
       - scripts/qe_build_frozen_risk_policy.py
       - scripts/qe_build_frozen_suspend_filter.py
       - scripts/qrun_limit.py
       - scripts/qrun_limit_minute.py
       - aistock_models/**/*.py
+      - start_all_ai_stock.bat
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
@@ -46,10 +73,40 @@ targets:
     startup_budget_seconds: 120
   worker-scheduler:
     runtime_kind: worker_scheduler
+    probe_mode: http
     source_globs:
+      - backend/services/dataset_release/a_share_limit_rule.py
+      - backend/services/dataset_release/artifact_ready_build_source.py
+      - backend/services/dataset_release/artifact_ready_source.py
+      - backend/services/dataset_release/build_processor.py
+      - backend/services/dataset_release/build_stage.py
+      - backend/services/dataset_release/canonical_stock_transformer.py
+      - backend/services/dataset_release/index_contract.py
+      - backend/services/dataset_release/index_sources.py
+      - backend/services/dataset_release/minute_overlay.py
+      - backend/services/dataset_release/process_liveness.py
+      - backend/services/dataset_release/profile.py
+      - backend/services/dataset_release/resolution_processor.py
+      - backend/services/dataset_release/resource_budget.py
+      - backend/services/dataset_release/resource_gate.py
+      - backend/services/dataset_release/resource_supervisor.py
+      - backend/services/dataset_release/sector_data_candidate_source.py
+      - backend/services/dataset_release/source_authority.py
+      - backend/services/dataset_release/source_pool.py
+      - backend/services/dataset_release/component_artifact_manifest.py
+      - backend/services/dataset_release/component_manifest_producer.py
+      - backend/services/dataset_release/mixed_planner.py
+      - backend/services/dataset_release/stk_limit_overlay.py
+      - backend/services/dataset_release/worker.py
+      - backend/services/dataset_release/windows_job.py
+      - backend/services/dataset_release/wsl_cgroup.py
+      - backend/services/dataset_release/wsl_resource_guardian.py
       - backend/services/rdagent_scheduler*.py
       - backend/services/**/*worker*.py
       - scripts/**/*scheduler*.py
+      - scripts/dataset_release_worker.py
+      - scripts/dataset_release_source_stage.py
+      - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
     probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit
@@ -58,4 +115,45 @@ targets:
       identity_ref: bug_record.runtime_contract.identity_ref
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
+    probe_routes:
+      - route_id: dataset_release_worker_heartbeat
+        source_globs:
+          - backend/services/dataset_release/a_share_limit_rule.py
+          - backend/services/dataset_release/artifact_ready_build_source.py
+          - backend/services/dataset_release/artifact_ready_source.py
+          - backend/services/dataset_release/build_processor.py
+          - backend/services/dataset_release/build_stage.py
+          - backend/services/dataset_release/canonical_stock_transformer.py
+          - backend/services/dataset_release/index_contract.py
+          - backend/services/dataset_release/index_sources.py
+          - backend/services/dataset_release/minute_overlay.py
+          - backend/services/dataset_release/process_liveness.py
+          - backend/services/dataset_release/profile.py
+          - backend/services/dataset_release/resolution_processor.py
+          - backend/services/dataset_release/resource_budget.py
+          - backend/services/dataset_release/resource_gate.py
+          - backend/services/dataset_release/resource_supervisor.py
+          - backend/services/dataset_release/sector_data_candidate_source.py
+          - backend/services/dataset_release/source_authority.py
+          - backend/services/dataset_release/source_pool.py
+          - backend/services/dataset_release/component_artifact_manifest.py
+          - backend/services/dataset_release/component_manifest_producer.py
+          - backend/services/dataset_release/mixed_planner.py
+          - backend/services/dataset_release/stk_limit_overlay.py
+          - backend/services/dataset_release/worker.py
+          - backend/services/dataset_release/windows_job.py
+          - backend/services/dataset_release/wsl_cgroup.py
+          - backend/services/dataset_release/wsl_resource_guardian.py
+          - scripts/dataset_release_worker.py
+          - scripts/dataset_release_source_stage.py
+          - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
+        probe_mode: dataset_release_worker_heartbeat
+        local_probe:
+          profile_path: configs/datasets/qe_backtest_monthly_v2.yaml
+          max_files: 200
+        probes:
+          health_ref: worker_heartbeat.health
+          identity_ref: worker_heartbeat.identity
+          business_smoke_ref: worker_heartbeat.business
+          database_readback_ref: not_required
     startup_budget_seconds: 180

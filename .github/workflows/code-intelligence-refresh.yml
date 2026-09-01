@@ -4,10 +4,6 @@ on:
   schedule:
     # Finish the daily graph refresh before Nightly starts at 19:07 UTC.
     - cron: '30 18 * * *'
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch:
     inputs:
       run_paid_ua_refresh:
@@ -39,7 +35,7 @@ env:
 jobs:
   refresh-after-main:
     name: Refresh and publish code intelligence graphs
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     defaults:
       run:
@@ -155,11 +151,3 @@ jobs:
             "| --- | --- | --- |"
           ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
-      - name: Upload refresh evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-intelligence-refresh-${{ github.run_id }}
-          path: tmp/validation/code-intelligence/${{ github.run_id }}/
-          if-no-files-found: warn
-          retention-days: 14

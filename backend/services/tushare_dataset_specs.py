@@ -45,6 +45,13 @@ class DatasetSpec:
     fetch_params: Dict[str, Any] = field(default_factory=dict)  # fixed request params such as Tushare limit/offset defaults
     trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
     create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
+    nullable_identity_columns: List[str] = field(default_factory=list)  # source identity fields that may be NULL
+    # Minimum plausible rows for one trading day. When set, a successful sync
+    # that persists 0 < rows < min_expected_rows is audited as
+    # quality_status="low_coverage" so the existing freshness-check ->
+    # retry-target -> 23:00 auto-retry chain re-fetches the day via upsert.
+    # None (default) keeps the historical behavior (any non-empty day is "ok").
+    min_expected_rows: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +201,8 @@ STOCK_ST_EVENTS = DatasetSpec(
         "st_reason": "text",
         "st_explain": "text",
     },
-    api_field_map={"st_type": "st_tpye"},
+    # BUG-994: Tushare fixed the "st_tpye" typo server-side and now returns
+    # "st_type"; do not re-add a stale api_field_map (silent column drop).
     date_column="pub_date",
     date_param_name="pub_date",
     batch_sleep=0.3,
@@ -260,6 +268,9 @@ MARGIN_DETAIL = DatasetSpec(
     batch_sleep=0.2,
     rate_per_minute=500,
     trading_day_only=True,
+    # Full days observed at ~4350+ rows (2026-08); an SSE-only partial publish
+    # (e.g. unpublished SZSE Friday detail) lands at ~2000 rows.
+    min_expected_rows=4000,
 )
 
 CYQ_PERF = DatasetSpec(
@@ -289,6 +300,9 @@ CYQ_PERF = DatasetSpec(
     fetch_params={"limit": 4900, "max_pages": 3},
     trading_day_only=True,
     create_table_script="scripts/create_cyq_tables.py",
+    # Full days observed at 5522-5543 rows (2026-08); partial same-day
+    # publishes before the evening window landed at 49-3886 rows.
+    min_expected_rows=5000,
 )
 
 STK_LIMIT = DatasetSpec(
@@ -324,6 +338,42 @@ SUSPEND_D = DatasetSpec(
     batch_sleep=0.3,
     rate_per_minute=200,
     replace_existing_dates=True,
+)
+
+DIVIDEND = DatasetSpec(
+    name="dividend",
+    tushare_api="dividend",
+    target_table="market.dividend",
+    primary_keys=["ts_code", "end_date", "ann_date", "div_proc"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "ts_code": "text",
+        "end_date": "date",
+        "ann_date": "date",
+        "div_proc": "text",
+        "stk_div": "numeric",
+        "stk_bo_rate": "numeric",
+        "stk_co_rate": "numeric",
+        "cash_div": "numeric",
+        "cash_div_tax": "numeric",
+        "record_date": "date",
+        "ex_date": "date",
+        "pay_date": "date",
+        "div_listdate": "date",
+        "imp_ann_date": "date",
+        "base_date": "date",
+        "base_share": "numeric",
+    },
+    date_column="ex_date",
+    date_param_name="ex_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    replace_existing_dates=True,
+    incremental_cursor_from_audit=True,
+    nullable_identity_columns=["ann_date"],
+    create_table_script=(
+        "backend/db/migrations/add_advisory_price_range_dividend_20260810.sql"
+    ),
 )
 
 
@@ -488,6 +538,9 @@ SW_DAILY = DatasetSpec(
     row_limit=4000,
     batch_sleep=0.2,
     rate_per_minute=300,
+    # SW L2 universe holds ~124-131 rows per day (2026); a partial publish
+    # (e.g. 2026-04-21) landed well below that.
+    min_expected_rows=100,
 )
 
 
@@ -507,6 +560,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         BAK_BASIC,
         STK_LIMIT,
         SUSPEND_D,
+        DIVIDEND,
         TUSHARE_FORECAST_RAW,
         TUSHARE_EXPRESS_RAW,
         TUSHARE_FINA_INDICATOR_RAW,

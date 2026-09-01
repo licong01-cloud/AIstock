@@ -22,7 +22,6 @@ from backend.services.miniqmt_execution_runtime.repository import InMemoryMiniQM
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -32,8 +31,11 @@ from backend.services.simulation_runtime import (
     SimulationRunContext,
     SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
-    StrategyPackageSelectionResult,
     StrategyRuntimeReleaseService,
+)
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
+    StrategyPackageSelectionResult,
 )
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
@@ -363,7 +365,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["read_only_status_api"] is True
     assert scheduler["read_only_ops_api"] is False
     assert scheduler["controlled_ops_api"] is True
-    assert scheduler["manual_tick_endpoint_enabled"] is True
+    assert scheduler["manual_tick_endpoint_enabled"] is False
     assert scheduler["scheduler_control_api_enabled"] is False
     assert scheduler["effective_runtime_health"] == "SCHEDULER_INACTIVE"
     assert scheduler["scheduler_loop_health"]["status"] == "NOT_APPLICABLE"
@@ -668,6 +670,192 @@ def test_scheduler_status_keeps_current_day_failed_runs_visible_after_noop_windo
     assert blockers["execution_gate"] is False
 
 
+def test_scheduler_verification_status_scopes_blockers_without_mutating_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+    repo, local_run_id, _plan_id = repo_with_plan
+    release_service = StrategyRuntimeReleaseService(repository=repo)
+    release = release_service.create_release(
+        package_id="pkg_scheduler_verification_qmt",
+        manifest_sha256="manifest_scheduler_verification_qmt",
+        runtime_profile_id="runtime_profile_scheduler_verification_qmt",
+        runtime_profile_version_id="runtime_profile_scheduler_verification_qmt_v1",
+        runtime_profile_sha256="runtime_profile_scheduler_verification_qmt_hash",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256=canonical_json_sha256(_b0_quote_policy()),
+        execution_policy_json=_b0_quote_policy(),
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        created_by="unit-test",
+        created_reason="scheduler verification status test",
+    )
+    binding = release_service.create_binding(
+        strategy_id="strategy_scheduler_verification_qmt",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_scheduler_verification_qmt",
+        strategy_slot_id="slot_scheduler_verification_qmt",
+        strategy_name="SchedulerVerificationQMT",
+        order_remark_prefix="scheduler-verification-qmt",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
+        approval_state=SimulationBindingApprovalState.SIM_PASSED,
+        created_by="unit-test",
+        created_reason="scheduler verification status test",
+    )
+    miniqmt_run_id = "simrun_0123456789abcdef"
+    repo.save_simulation_daily_run(
+        SimulationDailyRun(
+            run_id=miniqmt_run_id,
+            trade_date=TRADE_DATE,
+            strategy_id=binding.strategy_id,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+            release_id=release.release_id,
+            release_hash=release.release_hash,
+            binding_id=binding.binding_id,
+            binding_hash=binding.binding_hash,
+            account_group_id=binding.account_group_id,
+            strategy_slot_id=binding.strategy_slot_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            run_payload_json={
+                "last_stage": "FAILED_RETRYABLE",
+                "submit_failure": {"reason_code": "MINIQMT_KERNEL_V2_PLAN_START_FAILED"},
+            },
+        )
+    )
+    before = {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()}
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    local = service.scheduler_verification_status(
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+    miniqmt = service.scheduler_verification_status(
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+    )
+    exact = service.scheduler_verification_status(run_id=miniqmt_run_id)
+
+    assert local["schema_version"] == "simulation_scheduler_verification_status_v1"
+    assert local["current_trade_date_blockers"]["status"] == "CLEAR"
+    assert local["current_trade_date_blockers"]["blocker_count"] == 0
+    assert local["verification_scope"]["broker_backend"] == "local_sim"
+    assert miniqmt["current_trade_date_blockers"]["status"] == "BLOCKED"
+    assert miniqmt["current_trade_date_blockers"]["blockers"][0]["run_id"] == miniqmt_run_id
+    assert "subject_components" not in local
+    assert miniqmt["subject_components"]["miniqmt_sim_runtime"]["sim_runtime_kind"] == "KERNEL_V2"
+    assert exact["verification_scope"]["run_id"] == miniqmt_run_id
+    assert exact["verification_scope"]["broker_backend"] == "minqmt_sim"
+    assert exact["current_trade_date_blockers"]["blocker_count"] == 1
+    assert local_run_id in repo.daily_runs
+    assert {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()} == before
+
+
+def test_scheduler_verification_status_requires_a_valid_subject(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo = repo_with_plan[0]
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as missing:
+        service.scheduler_verification_status()
+    assert missing.value.context["reason_code"] == "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_REQUIRED"
+
+    with pytest.raises(RuntimeConfigInvalidError) as malformed:
+        service.scheduler_verification_status(run_id="not-a-run")
+    assert malformed.value.context["reason_code"] == "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_INVALID"
+    with pytest.raises(RuntimeConfigInvalidError):
+        service.scheduler_verification_status(run_id=" simrun_0123456789abcdef")
+
+
+def test_scheduler_verification_status_never_filters_global_loop_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+
+    class _BlockedLoopScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "scheduler_control_api_enabled": True,
+                "scheduler_loop_health": {
+                    "schema_version": "simulation_background_scheduler_loop_health_v1",
+                    "status": "BLOCKED",
+                    "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                    "active_failure": {
+                        "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                        "status": "BLOCKED",
+                        "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                        "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                        "exception_type": "DataUnavailableError",
+                        "exception_message": "dependency failed",
+                        "underlying_reason_code": "SIMULATION_DEPENDENCY_UNAVAILABLE",
+                        "underlying_stage": "DEPENDENCY_READ",
+                        "trade_date": TRADE_DATE.isoformat(),
+                        "first_failure_at": "2026-05-21T01:20:00+00:00",
+                        "failure_at": "2026-05-21T01:21:00+00:00",
+                        "context": {},
+                        "execution_gate": False,
+                        "auto_clears_on_success": True,
+                    },
+                    "last_failure": None,
+                    "last_successful_tick_at": "2026-05-21T01:19:00+00:00",
+                    "consecutive_failure_count": 1,
+                    "total_failure_count": 1,
+                    "total_success_count": 0,
+                    "execution_gate": False,
+                    "auto_clears_on_success": True,
+                },
+                "miniqmt_quote_ingress_activation": {"status": "RUNNING"},
+                "b0_quote_v2_controllers": {"status": "RUNNING", "controller_count": 1},
+                **_scheduler_component_status(),
+            }
+
+    projected = SimulationRuntimeOpsService(
+        repository=InMemorySimulationRuntimeRepository(),
+        scheduler=_BlockedLoopScheduler(),  # type: ignore[arg-type]
+    ).scheduler_verification_status(broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    assert projected["effective_runtime_health"] == "BLOCKED"
+    assert projected["current_trade_date_blockers"]["blocker_count"] == 1
+    assert projected["current_trade_date_blockers"]["blockers"][0]["component"] == (
+        "simulation_background_scheduler_run_loop"
+    )
+
+
+def test_scheduler_verification_status_route_is_scoped_and_fail_closed(client: TestClient) -> None:
+    missing = client.get("/api/v1/simulation-runtime/scheduler/verification-status")
+    invalid = client.get(
+        "/api/v1/simulation-runtime/scheduler/verification-status",
+        params={"broker_backend": "paper"},
+    )
+    scoped = client.get(
+        "/api/v1/simulation-runtime/scheduler/verification-status",
+        params={"broker_backend": "local_sim"},
+    )
+
+    assert missing.status_code == 400
+    assert invalid.status_code == 422
+    assert scoped.status_code == 200
+    payload = scoped.json()
+    assert payload["ok"] is True
+    assert payload["scheduler"]["read_only"] is True
+    assert payload["scheduler"]["verification_scope"]["broker_backend"] == "local_sim"
+    assert payload["scheduler"]["current_trade_date_blockers"]["status"] == "CLEAR"
+
+
 def test_scheduler_status_reads_current_day_blockers_before_first_scheduler_tick(
     monkeypatch: pytest.MonkeyPatch,
     repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
@@ -925,19 +1113,9 @@ def test_runs_api_surfaces_miniqmt_succeeded_with_capacity_residual(
     )
 
 
-def test_scheduler_tick_api_is_controlled_dry_run_by_default(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/simulation-runtime/scheduler/tick",
-        json="2026-05-21T09:22:00+00:00",
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "scheduler_tick"
-    assert payload["trade_date"] == "2026-05-21"
-    assert payload["submit"] is False
-    assert payload["total_bindings"] >= 0
-    assert "results" in payload
+def test_scheduler_mutation_api_is_not_public(client: TestClient) -> None:
+    for path in ("start", "stop", "tick"):
+        assert client.post(f"/api/v1/simulation-runtime/scheduler/{path}").status_code == 404
 
 
 def test_missing_run_maps_to_404(client: TestClient) -> None:
@@ -947,6 +1125,142 @@ def test_missing_run_maps_to_404(client: TestClient) -> None:
     detail = response.json()["detail"]
     assert detail["error_code"] == "DATA_UNAVAILABLE"
     assert detail["context"]["run_id"] == "missing"
+
+
+def _terminalization_carrier(run_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": "localsim_historical_legacy_plan_terminalization_v1",
+        "reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+        "run_id": run_id,
+        "previous_status": "FAILED_RETRYABLE",
+        "terminal_status": "FAILED_TERMINAL",
+        "authoritative_state_count": 492,
+        "authoritative_state_set_sha256": "a" * 64,
+        "parent_resubmitted": False,
+        "broker_replayed": False,
+        "verified_at": "2026-08-18T06:00:00+00:00",
+    }
+
+
+def test_run_terminal_evidence_projects_typed_terminalization_carrier(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={
+            "last_stage": "FAILED_TERMINAL",
+            "localsim_historical_legacy_plan_terminalization_v1": carrier,
+            "untyped_note": "not a carrier",
+            "mismatched_key": {"schema_version": "some_other_schema_v1", "reason_code": "IGNORED"},
+            "no_reason_carrier": {"schema_version": "no_reason_carrier"},
+            " whitespace_padded_key_v1": {
+                "schema_version": " whitespace_padded_key_v1",
+                "reason_code": "IGNORED",
+            },
+        },
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["schema_version"] == "simulation_run_terminal_evidence_v1"
+    assert payload["read_only"] is True
+    run = payload["run"]
+    assert run["run_id"] == run_id
+    assert run["status"] == "FAILED_TERMINAL"
+    assert run["last_stage"] == "FAILED_TERMINAL"
+    assert run["terminal_evidence"] == [carrier]
+
+
+def test_run_terminal_evidence_returns_empty_carriers_when_none_recorded(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    _, run_id, _plan_id = repo_with_plan
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "simulation_run_terminal_evidence_v1"
+    assert payload["run"]["run_id"] == run_id
+    assert payload["run"]["terminal_evidence"] == []
+
+
+def test_run_terminal_evidence_missing_run_maps_to_404(client: TestClient) -> None:
+    response = client.get("/api/v1/simulation-runtime/runs/missing/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "DATA_UNAVAILABLE"
+    assert detail["context"]["run_id"] == "missing"
+
+
+def test_run_terminal_evidence_fails_closed_on_carrier_count_bound(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    payload_patch = {
+        f"typed_carrier_{index:02d}_v1": {
+            "schema_version": f"typed_carrier_{index:02d}_v1",
+            "reason_code": f"REASON_{index:02d}",
+        }
+        for index in range(simulation_ops._TERMINAL_EVIDENCE_CARRIER_LIMIT + 1)
+    }
+    repo.update_simulation_daily_run(run_id, payload_patch=payload_patch)
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED"
+    assert detail["context"]["carrier_count"] == simulation_ops._TERMINAL_EVIDENCE_CARRIER_LIMIT + 1
+
+
+def test_run_terminal_evidence_fails_closed_on_serialized_size_bound(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    carrier["oversized_blob"] = "x" * (simulation_ops._TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT + 1)
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": carrier},
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED"
+    assert detail["context"]["carrier_bytes"] > simulation_ops._TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT
+
+
+def test_run_terminal_evidence_fails_closed_on_unserializable_carrier(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    carrier["raw_object"] = {"not_json_safe"}
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": carrier},
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE"
 
 
 def test_invalid_filter_values_are_rejected(client: TestClient) -> None:

@@ -1,0 +1,219 @@
+{
+  "actual": "qe_20260716_011004_21b2 Loop5 的 results_only 返回 results_only_retry_failed，agent_analysis error=invalid literal for int() with base 10: 'count'；RankIC 与 experiment_id 已写入但状态仍 failed。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_results_only_retry.py",
+    "tests/aistock_validation/bugs/20260715_BUG-666-qe-results-only-realdictrow-tuple.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-666",
+  "closed_at": "2026-08-13T18:23:10.814810Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-15T21:40:00.405620Z",
+  "description": "qe_20260716_011004_21b2 Loop5 的 results_only 返回 results_only_retry_failed，agent_analysis error=invalid literal for int() with base 10: 'count'；RankIC 与 experiment_id 已写入但状态仍 failed。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260715-502e594ab8be",
+      "timestamp": "2026-07-15T21:40:00.405617Z"
+    },
+    {
+      "action": "historical_equivalent_fix_reconciled",
+      "actor": "codex",
+      "note": "Current-blueprint audit found the same named-row status recomputation fix and direct RealDictRow regression test already merged in 423a60a7 via PR #2391; stale PR #2203 must not be rebased or merged.",
+      "timestamp": "2026-08-13T18:20:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/services/quantevolver/qe_evolution_service.py:6568",
+    "qe_20260716_011004_21b2_Loop5 agent_analysis"
+  ],
+  "expected": "results_only 对完整既有制品完成幂等注册，按字典字段读取 status/count，Loop 状态为 completed，父任务按全部 loop 的真实状态重算；不得重复训练或回测。",
+  "file_scope_contract": {
+    "changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py"
+    ]
+  },
+  "first_seen_at": "2026-07-15T21:40:00.405620Z",
+  "fix_branch": null,
+  "fix_commit": "423a60a7439f522a1ed8f3cb91cc43a823ea7548",
+  "fixed_at": "2026-07-17T19:31:40Z",
+  "github_issue_number": 2202,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2202",
+  "last_seen_at": "2026-07-15T21:40:00.405620Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2391",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "MCP qe_custom_evo_retry_loop_confirmed(task_id=qe_20260716_011004_21b2, loop_index=5, retry_mode=results_only)",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_status.py -q loads merged named-row status recomputation in a fresh pytest process"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-666-historical-reconcile-20260813\\tmp\\issue_workflow\\BUG-666\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-666",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "3bb7dfb5eefae24fe9cdf3a0b3b2f4e25f9580b5cb2d554ab2441e06773f9895",
+      "expected_identity": "423a60a7439f522a1ed8f3cb91cc43a823ea7548",
+      "generated_at": "2026-08-13T18:21:48.626363Z",
+      "mode": "read_only",
+      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "80ed714d5a78f67f24cd088317e907fd9c088751f7193efba0bc5de13620b38c",
+      "receipt_sha256": "6fd382014e0d27b72f5d0f539cbc76a5a17530e41d0083917a8ad64deeab75fb",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "44b9771c6be0afa79c609072622deb80d4f05cf5575e38e8880e09986d2e7e21",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE results_only 重算父任务状态时将 RealDictRow 错当 tuple",
+  "trigger_condition": {
+    "fingerprint": "502e594ab8beb80ca4c1caad",
+    "source_event_id": "FE-20260715-502e594ab8be"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_status.py -q -> 8 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

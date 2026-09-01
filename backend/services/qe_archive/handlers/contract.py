@@ -1,10 +1,10 @@
-"""Handler interface contract for paper_v2 / factor_value archive events.
+"""Handler interface contract for active QE archive events.
 
 Authoritative spec source:
 - D5 [DECISION] drawer 9cd6d6bb (Codex reply Q1-Q4 + T8-A) — interface boundary
 - paper-v2 T13 — `routing_class` discriminator on outbox payload
-- docs/architecture/data_warehouse_extension_design_20260510.md §3 routing + §7
-  factor_value layout
+- docs/architecture/data_warehouse_extension_design_20260510.md routing and
+  active archive layouts
 
 Design points encoded here (do NOT relax without re-running D5 review):
 
@@ -119,11 +119,11 @@ class UnsupportedEventError(ValueError):
 
 
 class ArchiveHandler(abc.ABC):
-    """Abstract base for paper_v2 / factor_value archive handlers.
+    """Abstract base for active QE archive handlers.
 
     Subclasses MUST set:
       - `event_type`: outbox event_type string this handler claims
-        (e.g. 'paper.portfolio_run.completed', 'factor.recompute.completed')
+        (e.g. 'paper.portfolio_run.completed', 'qe.multi_alpha.combine.completed')
       - `supported_schema_versions`: tuple of accepted payload schema_version
         strings. Anything else raises PayloadValidationError.
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from backend.services.advisory_historical_range import service as service_module
 from backend.services.advisory_historical_range.api_models import HistoricalRangeBuildBridgeRequest
 from backend.services.advisory_historical_range.dataset_bridge import (
     HistoricalRangeDatasetBridgeError,
@@ -22,8 +23,12 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeContractError,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationStatus,
+    HistoricalRangeOutcomeRefreshReceiptV1,
 )
-from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
+from backend.services.advisory_historical_range.service import (
+    ResponseBoundHistoricalRangeDispatcher,
+    _OutcomeParentLeaseHeartbeatSupervisor,
+)
 from backend.services.advisory_historical_range.planning_service import (
     _CatalogLeaseHeartbeatSupervisor,
 )
@@ -109,6 +114,190 @@ def test_catalog_heartbeat_surfaces_lost_durable_ownership() -> None:
 
     with pytest.raises(HistoricalRangeContractError, match="lost durable ownership"):
         heartbeat.stop()
+
+
+def test_outcome_parent_heartbeat_renews_same_durable_ownership() -> None:
+    renewed = Event()
+    calls = []
+    operation = {
+        "operation_id": "ahrop_outcome_parent",
+        "row_version": 2,
+        "attempt_no": 1,
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "fencing_token": 1,
+        "stable_keyset_cursor_json": None,
+    }
+
+    def transition_operation(**kwargs):
+        calls.append(kwargs)
+        renewed.set()
+        return {
+            **operation,
+            "row_version": kwargs["expected_row_version"] + 1,
+            "lease_expires_at": kwargs["lease_expires_at"],
+        }
+
+    heartbeat = _OutcomeParentLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation=operation,
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert renewed.wait(timeout=1)
+    current = heartbeat.stop()
+
+    assert current["row_version"] == 2 + len(calls)
+    assert all(call["target_status"].value == "RUNNING" for call in calls)
+    assert all(call["attempt_no"] == 1 for call in calls)
+    assert all(call["worker_id"] == "worker-1" for call in calls)
+    assert all(call["lease_token"] == "lease-1" for call in calls)
+    assert all(call["fencing_token"] == 1 for call in calls)
+    assert calls[-1]["lease_expires_at"] > datetime.now(UTC)
+
+
+def test_outcome_parent_heartbeat_surfaces_lost_durable_ownership() -> None:
+    attempted = Event()
+
+    def transition_operation(**_kwargs):
+        attempted.set()
+        raise HistoricalRangeContractError(
+            REASON_ROW_VERSION_CONFLICT,
+            "outcome parent heartbeat lost durable ownership",
+        )
+
+    heartbeat = _OutcomeParentLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation={
+            "operation_id": "ahrop_outcome_parent_lost",
+            "row_version": 2,
+            "attempt_no": 1,
+            "worker_id": "worker-1",
+            "lease_token": "lease-1",
+            "fencing_token": 1,
+            "stable_keyset_cursor_json": None,
+        },
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert attempted.wait(timeout=1)
+
+    with pytest.raises(
+        HistoricalRangeContractError,
+        match="outcome parent heartbeat lost durable ownership",
+    ):
+        heartbeat.stop()
+
+
+@pytest.mark.parametrize("publish_fails", [False, True])
+def test_outcome_dispatcher_keeps_heartbeat_through_final_receipt_publication(
+    monkeypatch,
+    publish_fails: bool,
+) -> None:
+    transitions = []
+    events = []
+    operation = {
+        "operation_id": "ahrop_outcome_parent",
+        "batch_id": "ahrb_1",
+        "status": "QUEUED",
+        "row_version": 1,
+        "attempt_no": 0,
+        "fencing_token": 0,
+        "lease_expired": False,
+    }
+
+    def transition_operation(**kwargs):
+        transitions.append(kwargs)
+        if len(transitions) == 1:
+            return {
+                **operation,
+                "status": "RUNNING",
+                "row_version": 2,
+                "attempt_no": 1,
+                "worker_id": kwargs["worker_id"],
+                "lease_token": kwargs["lease_token"],
+                "lease_expires_at": kwargs["lease_expires_at"],
+                "fencing_token": 1,
+                "started_at": kwargs["started_at"],
+            }
+        return {**operation, "status": kwargs["target_status"].value}
+
+    class _Heartbeat:
+        def __init__(self, *, operation, **_kwargs):
+            self.operation = dict(operation)
+
+        def start(self):
+            events.append("start")
+
+        def stop(self):
+            events.append("stop")
+            return {**self.operation, "row_version": 3}
+
+    receipt = HistoricalRangeOutcomeRefreshReceiptV1(
+        operation_id="ahrop_outcome_child",
+        request_hash="b" * 64,
+        status="COMPLETED",
+        processed_count=0,
+    )
+    receipt_ref = _artifact_ref(
+        HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+        "c",
+    )
+    child = SimpleNamespace(
+        refresh_until_stable_boundary=lambda **_kwargs: (receipt, receipt_ref)
+    )
+
+    def publish_payload(**_kwargs):
+        events.append("publish")
+        if publish_fails:
+            raise RuntimeError("receipt publication failed")
+        return SimpleNamespace(ref=receipt_ref)
+
+    runtime = SimpleNamespace(
+        query=SimpleNamespace(
+            get_operation_internal=lambda _operation_id: dict(operation),
+            resolved_request_hash=lambda _batch_id: "d" * 64,
+        ),
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        outcome=child,
+        outcome_service_factory=None,
+        artifact_store=SimpleNamespace(publish_payload=publish_payload),
+    )
+    plan = SimpleNamespace(
+        request_hash="a" * 64,
+        requests=(SimpleNamespace(range_run_ids=("ahrr_1",)),),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_OutcomeParentLeaseHeartbeatSupervisor",
+        _Heartbeat,
+    )
+    dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
+
+    if publish_fails:
+        with pytest.raises(RuntimeError, match="receipt publication failed"):
+            dispatcher._run_outcome_plan(
+                runtime=runtime,
+                plan=plan,
+                operation_id="ahrop_outcome_parent",
+                batch_id="ahrb_1",
+                worker_id="worker-1",
+            )
+    else:
+        dispatcher._run_outcome_plan(
+            runtime=runtime,
+            plan=plan,
+            operation_id="ahrop_outcome_parent",
+            batch_id="ahrb_1",
+            worker_id="worker-1",
+        )
+
+    assert events == ["start", "publish", "stop"]
+    if publish_fails:
+        assert len(transitions) == 1
+        return
+    assert transitions[-1]["expected_row_version"] == 3
+    assert transitions[-1]["target_status"] is HistoricalRangeOperationStatus.COMPLETED
 
 
 def test_catalog_dispatcher_defers_rollover_deadline_until_after_chunk_execution() -> None:

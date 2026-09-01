@@ -8,13 +8,71 @@ import psycopg2
 import psycopg2.extras
 
 from .kernel_repository_common import KernelRepositorySchemaError
+from .quote_event_schema import (
+    QuoteEventSchemaPreflightError,
+    _read_quote_event_schema_in_snapshot,
+)
 
 
-_K2_SCHEMA_CATALOG_SHA256_V1 = "2ae93a1e637f4232ea01fc80f7f7a4680679956cc428b12c56adb01f16efea6a"
-_K2_SCHEMA_CATALOG_SHA256_K6C0 = "673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e"
-_K2_SCHEMA_CATALOG_SHA256S = frozenset({_K2_SCHEMA_CATALOG_SHA256_V1, _K2_SCHEMA_CATALOG_SHA256_K6C0})
-_K2D_SCHEMA_CATALOG_SHA256 = "f9034e9e9680a12e335c5bdc0ac06e10dda73d34c8a65128df08c26b0f93725d"
+_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3 = "87725c53a3789c4ecf92d6f86de424d3b84c35cbfa6a9e85e47532ac4d978f54"
+_K2D_SCHEMA_CATALOG_SHA256 = "2d5fcbf0151d9e5d2a9d8537f834aabfd056a42cc0eeb8c079add68c8964f59f"
 _K2D_CATALOG_FUNCTION_BODY_SHA256 = "69bf9ce6268522052ca6ce97d9769f7377b69e130f25cb143159f7fe1109d708"
+
+_PREFLIGHT_LOCK_RELATIONS = (
+    "execution_runtime",
+    "execution_runtime_event",
+    "execution_algo_instance",
+    "execution_child_order",
+    "execution_kernel_worker_epoch",
+    "execution_kernel_worker_incarnation",
+    "execution_algo_event_delivery",
+    "execution_algo_transition",
+    "execution_algo_command_outbox",
+    "execution_algo_command_dispatch_attempt",
+    "execution_algo_timer_schedule",
+    "execution_algo_timer_occurrence",
+    "execution_exchange_session_authority",
+    "execution_algo_diagnostic_observation",
+    "execution_broker_reconciliation_attempt",
+)
+_PREFLIGHT_LOCK_SQL = (
+    "LOCK TABLE "
+    + ", ".join(f"qmt_strategy.{relation}" for relation in _PREFLIGHT_LOCK_RELATIONS)
+    + " IN ACCESS SHARE MODE"
+)
+
+KERNEL_SCHEMA_PREFLIGHT_RELATION_KEYS = (
+    "execution_algo_event_delivery",
+    "execution_algo_transition",
+    "execution_algo_command_outbox",
+    "execution_algo_command_dispatch_attempt",
+    "execution_algo_timer_schedule",
+    "execution_algo_timer_occurrence",
+    "execution_kernel_worker_epoch",
+    "execution_kernel_worker_incarnation",
+    "execution_exchange_session_authority",
+    "execution_algo_diagnostic_observation",
+    "execution_broker_reconciliation_attempt",
+)
+KERNEL_SCHEMA_PREFLIGHT_KEYS = frozenset(
+    {
+        *KERNEL_SCHEMA_PREFLIGHT_RELATION_KEYS,
+        "event_contract_schema",
+        "schema_catalog_fingerprint",
+        "k2d_schema_catalog_fingerprint",
+    }
+)
+
+
+def validate_kernel_schema_preflight_readback(readback: object) -> dict[str, bool]:
+    if (
+        type(readback) is not dict
+        or set(readback) != KERNEL_SCHEMA_PREFLIGHT_KEYS
+        or any(value is not True for value in readback.values())
+    ):
+        raise KernelRepositorySchemaError("K2 full schema preflight did not close its exact code-owned key set")
+    return readback
+
 
 _K2_CATALOG_QUERY = """
 WITH target_tables(relname) AS (
@@ -127,6 +185,7 @@ WITH target_tables(relname) AS (
       AND (
           table_class.relname IN (SELECT relname FROM target_tables)
           OR constraint_record.conname LIKE '%miniqmt_k2%'
+          OR (table_class.relname='execution_runtime_event' AND constraint_record.contype='c')
       )
 
     UNION ALL
@@ -159,7 +218,7 @@ WITH target_tables(relname) AS (
           OR index_class.relname LIKE '%miniqmt_k2%'
       )
 ), canonical_catalog AS (
-    SELECT coalesce(jsonb_agg(item ORDER BY sort_key), '[]'::jsonb)::TEXT AS payload
+    SELECT coalesce(jsonb_agg(item ORDER BY sort_key COLLATE "C"), '[]'::jsonb)::TEXT AS payload
     FROM catalog_items
 )
 SELECT encode(sha256(convert_to(payload, 'UTF8')), 'hex')
@@ -171,41 +230,52 @@ class KernelRepositorySchemaMixin:
     """Validate helper definition and independently recompute the catalog fingerprint."""
 
     def preflight_schema(self) -> dict[str, bool]:
-        required = (
-            "execution_algo_event_delivery",
-            "execution_algo_transition",
-            "execution_algo_command_outbox",
-            "execution_algo_command_dispatch_attempt",
-            "execution_algo_timer_schedule",
-            "execution_algo_timer_occurrence",
-            "execution_kernel_worker_epoch",
-            "execution_kernel_worker_incarnation",
-            "execution_exchange_session_authority",
-            "execution_algo_diagnostic_observation",
-            "execution_broker_reconciliation_attempt",
-        )
-        with self._connection(transaction=False) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT relname, to_regclass('qmt_strategy.' || relname) IS NOT NULL AS present
-                    FROM unnest(%s::text[]) AS relname
-                    ORDER BY relname
-                    """,
-                    (list(required),),
-                )
-                result = {str(row["relname"]): bool(row["present"]) for row in cur.fetchall()}
-        if not all(result.values()):
-            raise KernelRepositorySchemaError(f"K2 schema is incomplete: {result}")
-        with self._connection(transaction=False) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                try:
+        required = KERNEL_SCHEMA_PREFLIGHT_RELATION_KEYS
+        try:
+            with self._connection(transaction=True) as conn:
+                # Legacy connection factories may not accept the repository's
+                # transaction-management keywords and can yield an autocommit
+                # connection.  Establish the required transaction locally so
+                # the first SQL statement can set one snapshot for every
+                # catalog and durable-row assertion below.
+                if bool(getattr(conn, "autocommit", False)):
+                    conn.set_session(autocommit=False)
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                    cur.execute("SET LOCAL search_path = pg_catalog, qmt_strategy")
+                    cur.execute(_PREFLIGHT_LOCK_SQL)
                     cur.execute(
                         """
-                        SELECT schema_name,language_name,volatility,arguments,result_type,function_body
+                        SELECT relname, to_regclass('qmt_strategy.' || relname) IS NOT NULL AS present
+                        FROM unnest(%s::text[]) AS relname
+                        ORDER BY relname
+                        """,
+                        (list(required),),
+                    )
+                    result = {str(row["relname"]): bool(row["present"]) for row in cur.fetchall()}
+                    if not all(result.values()):
+                        raise KernelRepositorySchemaError(f"K2 schema is incomplete: {result}")
+                # This repository owns the encompassing RR/RO snapshot and
+                # acquired every relation lock before its first catalog read.
+                # Calling the public reader here would correctly reject this
+                # already-active transaction; use the private prelocked seam
+                # so every K2 catalog fact remains in the same snapshot.
+                event_contract_receipt = _read_quote_event_schema_in_snapshot(conn)
+                if event_contract_receipt.schema_state != "successor_verified":
+                    raise KernelRepositorySchemaError(
+                        "K2 runtime-event CHECK authority does not include the exact no-new-TICK successor: "
+                        f"state={event_contract_receipt.state}, schema_state={event_contract_receipt.schema_state}"
+                    )
+                result["event_contract_schema"] = True
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT schema_name,language_name,volatility,function_configuration,
+                               arguments,result_type,function_body
                         FROM (
                             SELECT namespace.nspname AS schema_name,language.lanname AS language_name,
                                    function_record.provolatile AS volatility,
+                                   function_record.proconfig AS function_configuration,
                                    pg_get_function_arguments(function_record.oid) AS arguments,
                                    pg_get_function_result(function_record.oid) AS result_type,
                                    function_record.prosrc AS function_body
@@ -225,9 +295,19 @@ class KernelRepositorySchemaMixin:
                         .strip()
                         .rstrip(";")
                     )
+                    function_configuration = function_row["function_configuration"]
+                    normalized_configuration = (
+                        [
+                            str(item).replace(str(function_row["schema_name"]), "qmt_strategy")
+                            for item in function_configuration
+                        ]
+                        if isinstance(function_configuration, list)
+                        else None
+                    )
                     if (
                         function_row["language_name"] != "sql"
                         or function_row["volatility"] != "s"
+                        or normalized_configuration != ["search_path=pg_catalog, qmt_strategy"]
                         or function_row["arguments"] != ""
                         or function_row["result_type"] != "text"
                         or normalized_body != _K2_CATALOG_QUERY.strip().rstrip(";")
@@ -235,10 +315,16 @@ class KernelRepositorySchemaMixin:
                         raise KernelRepositorySchemaError("K2 catalog function drift")
                     cur.execute(f"SELECT * FROM ({_K2_CATALOG_QUERY}) AS catalog(catalog_sha256)")
                     catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
+                    if catalog_sha256 != _K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3:
+                        raise KernelRepositorySchemaError(
+                            "K2 schema catalog drift: expected "
+                            f"{_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3}, got {catalog_sha256}"
+                        )
                     cur.execute(
                         """
                         SELECT namespace.nspname AS schema_name,language.lanname AS language_name,
                                function_record.provolatile AS volatility,
+                               function_record.proconfig AS function_configuration,
                                pg_get_function_arguments(function_record.oid) AS arguments,
                                pg_get_function_result(function_record.oid) AS result_type,
                                function_record.prosrc AS function_body
@@ -262,6 +348,7 @@ class KernelRepositorySchemaMixin:
                     if (
                         k2d_function_row["language_name"] != "sql"
                         or k2d_function_row["volatility"] != "s"
+                        or k2d_function_row["function_configuration"] is not None
                         or k2d_function_row["arguments"] != ""
                         or k2d_function_row["result_type"] != "text"
                         or hashlib.sha256(normalized_k2d_body.encode("utf-8")).hexdigest()
@@ -270,18 +357,21 @@ class KernelRepositorySchemaMixin:
                         raise KernelRepositorySchemaError("K2-D catalog function drift")
                     cur.execute("SELECT qmt_strategy.miniqmt_k2d_catalog_fingerprint() AS catalog_sha256")
                     k2d_catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
-                except KernelRepositorySchemaError:
-                    raise
-                except psycopg2.Error as exc:
-                    raise KernelRepositorySchemaError("K2 schema fingerprint authority is unavailable") from exc
-        if catalog_sha256 not in _K2_SCHEMA_CATALOG_SHA256S:
+                    if k2d_catalog_sha256 != _K2D_SCHEMA_CATALOG_SHA256:
+                        raise KernelRepositorySchemaError(
+                            f"K2-D schema catalog drift: expected {_K2D_SCHEMA_CATALOG_SHA256}, "
+                            f"got {k2d_catalog_sha256}"
+                        )
+                result["schema_catalog_fingerprint"] = True
+                result["k2d_schema_catalog_fingerprint"] = True
+                return validate_kernel_schema_preflight_readback(result)
+        except KernelRepositorySchemaError:
+            raise
+        except QuoteEventSchemaPreflightError as exc:
+            raise KernelRepositorySchemaError("K2 runtime-event CHECK authority is invalid") from exc
+        except psycopg2.errors.UndefinedTable as exc:
             raise KernelRepositorySchemaError(
-                f"K2 schema catalog drift: expected one of {sorted(_K2_SCHEMA_CATALOG_SHA256S)}, got {catalog_sha256}"
-            )
-        if k2d_catalog_sha256 != _K2D_SCHEMA_CATALOG_SHA256:
-            raise KernelRepositorySchemaError(
-                f"K2-D schema catalog drift: expected {_K2D_SCHEMA_CATALOG_SHA256}, got {k2d_catalog_sha256}"
-            )
-        result["schema_catalog_fingerprint"] = True
-        result["k2d_schema_catalog_fingerprint"] = True
-        return result
+                "K2 schema is incomplete: a required preflight lock relation is unavailable"
+            ) from exc
+        except psycopg2.Error as exc:
+            raise KernelRepositorySchemaError("K2 schema fingerprint authority is unavailable") from exc

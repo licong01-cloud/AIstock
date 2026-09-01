@@ -355,6 +355,13 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
         }
         for index in range(31)
     }
+    frozen_identity = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": "e" * 64,
+    }
     series = subject.build_l1_training_series(
         panel,
         feature_names=ALL_CORE_FEATURES,
@@ -363,12 +370,68 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
         validation_start=calendar[270],
         validation_end=calendar[329],
         constituent_manifest_by_l1=constituent,
+        frozen_input_identity=frozen_identity,
     )
 
     assert len(series) == 31
     assert series["L1-00"].train_observations.shape == (142, 20)
     assert series["L1-00"].validation_observations.shape == (60, 20)
-    assert np.isfinite(series["L1-00"].validation_future_utility).all()
+    carrier = series["L1-00"].validation_calendar_series
+    assert carrier is not None
+    assert len(carrier.calendar_dates) == 60
+    assert carrier.observation_available_positions == tuple(range(60))
+    assert carrier.utility_available_positions == tuple(range(60))
+    assert np.isfinite(carrier.combined_utility_values_f64).all()
+    assert series["L1-00"].validation_future_utility.shape == (0,)
+    assert series["L1-00"].validation_input_manifest["schema_version"] == "hmm_risk_d6_frozen_input_manifest_v2"
+    series["L1-00"].validate(20)
+
+    parallel_dense_utility = replace(series["L1-00"], validation_future_utility=np.asarray([0.0]))
+    with pytest.raises(StateModelSetError, match="legacy dense utility must be an empty one-dimensional sentinel"):
+        parallel_dense_utility.validate(20)
+
+    sparse_panel = panel.copy()
+    sparse_panel.loc[(pd.Timestamp(calendar[300]), "L1-00"), ALL_CORE_FEATURES[0]] = np.nan
+    sparse = subject.build_l1_training_series(
+        sparse_panel,
+        feature_names=ALL_CORE_FEATURES,
+        train_start=calendar[120],
+        train_end=calendar[269],
+        validation_start=calendar[270],
+        validation_end=calendar[329],
+        constituent_manifest_by_l1=constituent,
+        frozen_input_identity=frozen_identity,
+    )["L1-00"]
+    sparse_carrier = sparse.validation_calendar_series
+    assert sparse_carrier is not None
+    assert len(sparse_carrier.calendar_dates) == 60
+    missing_position = calendar[270:330].index(calendar[300])
+    assert sparse_carrier.observation_available_mask[missing_position] is False
+    assert sparse_carrier.utility_available_mask[missing_position] is True
+    assert sparse_carrier.availability_ledger[missing_position]["mode"] == "transition_only"
+    assert sparse_carrier.availability_ledger[missing_position]["evidence_included"] is False
+    assert sparse.validation_observations.shape == (59, 20)
+    sparse.validate(20)
+
+    legacy = subject.build_legacy_dense_diagnostic_series(
+        sparse_panel,
+        feature_names=ALL_CORE_FEATURES,
+        train_start=calendar[120],
+        train_end=calendar[269],
+        validation_start=calendar[270],
+        validation_end=calendar[329],
+        constituent_manifest_by_l1=constituent,
+        frozen_input_identity=frozen_identity,
+    )["L1-00"]
+    assert legacy.validation_calendar_series is None
+    assert legacy.validation_observations.shape == (59, 20)
+    assert legacy.validation_future_utility.shape == (59,)
+    assert set(legacy.validation_future_components) == {
+        "excess_return_5d",
+        "excess_return_10d",
+        "excess_return_20d",
+    }
+    legacy.validate(20)
 
 
 def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> None:

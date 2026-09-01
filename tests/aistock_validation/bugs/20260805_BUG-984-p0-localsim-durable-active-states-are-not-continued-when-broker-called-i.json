@@ -1,5 +1,5 @@
 {
-  "actual": "On 2026-08-05 run simrun_f318f4152b31c761 / binding simbind_3e17c6c15d9297e7 / plan plan_eeab8f7509e16b4b reached FAILED_TERMINAL with submitted_intents=0 and failed_intents=246, while platform diagnostics reported active_algo_count=246 and terminal/residual counts zero. Source continuation predicate requires broker_called=true.",
+  "actual": "After PR #3161 was merged and the user restarted backend-main, runtime identity included the first BUG-984 source fix but production run simrun_f318f4152b31c761 remained FAILED_TERMINAL with 246 authoritative non-terminal LocalSIM states and local_sim_persistence.terminal=false. The stale recovery scanner admits active statuses and FAILED_RETRYABLE, but excludes historical FAILED_TERMINAL active generations, so the contradictory durable state can never reach automatic EOD closure.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-984",
-  "closed_at": null,
+  "closed_at": "2026-08-13T14:38:34.781757Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -24,12 +24,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260805-dfdb96720c0d",
       "timestamp": "2026-08-05T09:41:16.812672Z"
+    },
+    {
+      "action": "reopen_after_post_restart_business_failure",
+      "actor": "codex",
+      "note": "Runtime identity contains merged PR #3161, but the exact production run remains FAILED_TERMINAL with 246 authoritative active durable states. Continue the same BUG/Issue with automatic strict-authority cross-day recovery; manual DML remains forbidden.",
+      "timestamp": "2026-08-08T07:28:35.7323534Z"
+    },
+    {
+      "action": "source_merge_pending_user_restart",
+      "actor": "codex",
+      "note": "Continuation PR #3213 merged at 446910d18751cb1eb8c827f4da8842ff63b5c883 with required CI green. Issue remains OPEN; runtime identity and exact target-run business recovery require the next user-owned backend-main restart.",
+      "timestamp": "2026-08-08T08:08:54Z"
     }
   ],
   "evidence_uris": [
     "runtime:2026-08-05:simrun_f318f4152b31c761:simbind_3e17c6c15d9297e7:plan_eeab8f7509e16b4b:FAILED_TERMINAL:submitted=0:failed=246:active_algo=246"
   ],
-  "expected": "LocalSIM continuation must be derived from exact durable plan/state/persistence/outbox and receipt closure, not broker_called. Restart/fresh-process continuation must resume from the durable causality cursor without parent resubmission or duplicate side effects. Before any run reaches a terminal EOD state, every LocalSIM algo state must be atomically and deterministically terminalized with exact residual/failure facts; a terminal run with active states must fail loud and remain diagnosable. No fallback, manual DML, approval gate, RBAC, broker call, or forced broker_called=true is allowed.",
+  "expected": "LocalSIM continuation must be derived from exact durable plan/state/persistence/outbox and receipt closure, not broker_called. A historical FAILED_TERMINAL run that still owns one strict PROJECTED non-terminal durable generation must automatically re-enter the existing LocalSIM minute loop at its original trade-date EOD, without parent resubmission or predecessor projection replay, and persist terminal state/persistence facts idempotently. Missing, malformed, duplicate or identity/hash-drift authority must fail loud per run. No fallback, manual DML, approval gate, RBAC, real broker call, forced broker_called=true or silent historical abandonment is allowed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -114,9 +126,10 @@
     ]
   },
   "first_seen_at": "2026-08-05T09:41:16.812676Z",
-  "fix_branch": null,
-  "fix_commit": "ab2ab67e8cd8b3ef06e5cd3ba64c5f0dd31a0169",
-  "fixed_at": "2026-08-05T16:20:06Z",
+  "fix_branch": "bug/BUG-984-historical-failed-terminal-active-state-recovery-20260808",
+  "fix_commit": "446910d18751cb1eb8c827f4da8842ff63b5c883",
+  "fix_summary": "The continuation admits only historical LocalSIM FAILED_TERMINAL runs that still own one strict PROJECTED non-terminal generation. It closes run/release/binding/plan, outbox, state, receipt and Paper authority, then uses the existing per-binding single-flight LocalSIM minute loop at the original trade-date EOD. It never resubmits the parent or replays the predecessor projection, preserves legitimate terminal history, writes bounded hash-closed recovery evidence, and leaves malformed or incomplete authority as an explicit per-run recovery failure.",
+  "fixed_at": "2026-08-08T08:08:54Z",
   "github_issue_number": 3158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3158",
   "last_seen_at": "2026-08-05T09:41:16.812676Z",
@@ -124,7 +137,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3161",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3213",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,19 +147,38 @@
     "simulation_core_l2"
   ],
   "risk_area": "regression",
+  "root_cause": "The first BUG-984 slice prevented new active runs from being summary-terminalized and removed broker_called ownership, but the old process had already stored the exact production run as FAILED_TERMINAL. Cross-day scans admitted active statuses and FAILED_RETRYABLE only, so a FAILED_TERMINAL row with strict non-terminal durable authority was permanently excluded from the only minute-loop continuation path.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100",
     "fresh_process_evidence": [
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once across a malformed historical FAILED_TERMINAL outbox, exact typed per-run failure, restored strict predecessor authority, original-trade-date EOD durable minute-loop advancement, terminal state/persistence closure, stable parent/order identity and repeated-cadence zero order/fill replay: 1 passed; changed-code line 85.00%, branch 77.27%",
       "Fresh Python pytest process exercised SimulationLifecycleScheduler.run_once through a production-equivalent LocalSIM durable restart with broker_called=false, exact plan/state/outbox/economic/projection/Paper readback, no parent resubmit, stable order identities, generation advance, explicit malformed-outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control or broker call",
-      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control"
+      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control",
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once through malformed outbox fail-loud, exact historical FAILED_TERMINAL active-generation recovery, original-trade-date EOD closure, stable parent/order identity and repeated-cadence zero order/fill replay -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp\\issue_workflow\\BUG-984\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-984",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "a1105d48bca88c88df382c53272310799b299b3e4c6746365f47700beacd51a3",
+      "expected_identity": "446910d18751cb1eb8c827f4da8842ff63b5c883",
+      "generated_at": "2026-08-13T14:32:24.621910Z",
+      "mode": "read_only",
+      "observed_identity": "ad24e15857fef09d70bf3125fbacc280ac1f44d6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1764a1b2efd5e245edec4f1ee58a381e337a0a9b5d24b416bd50fcfa12ade5ca",
+      "receipt_sha256": "65c9f97275f907ee111d7c5e1ed24333141193742fdef9f0f34ebf94cb340688",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "01cea2cd9a1a2a254cf197bb7fbca272c27537262eaf428b5fd3813d63132f42",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -156,7 +188,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -166,10 +198,22 @@
     "source_event_id": "FE-20260805-dfdb96720c0d"
   },
   "validation_evidence": [
+    "BUG-984 continuation exact and authority matrix -> 8 passed",
+    "changed-code coverage -> line 85.00%, branch 77.27%",
+    "python -m nox -s simulation_core_l2 -> 481 passed, 1 skipped",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14",
+    "F2 validator -> 112/112 passed, warnings=0",
     "python -m nox -s simulation_core_l2 -> 411 passed after rebase",
-    "GitHub required CI -> CI verdict passed at d9069f7b436810ba25d5bf6f820c7a4a69522266"
+    "GitHub required CI -> CI verdict passed at d9069f7b436810ba25d5bf6f820c7a4a69522266",
+    "post-restart runtime identity contains merge 446910d18751cb1eb8c827f4da8842ff63b5c883; target run simrun_f318f4152b31c761 FAILED_TERMINAL, 246/246 terminal authoritative states, active=0, parent_resubmitted=false, predecessor_projection_replayed=false"
   ],
   "validation_receipts": [
+    "validation-receipt: id=984c0a1d1e2f3001 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=pytest plan=direct status=passed command=`python -m coverage run --branch -m pytest <BUG-984 continuation authority nodeids> -q` result=`8 passed; changed-code line 85.00% branch 77.27%`",
+    "validation-receipt: id=984c0a1d1e2f3002 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`481 passed, 1 skipped`",
+    "validation-receipt: id=984c0a1d1e2f3003 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=984c0a1d1e2f3004 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14`",
+    "validation-receipt: id=984c0a1d1e2f3005 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed warnings=0`",
     "validation-receipt: id=b4e84f9b120eb5e7 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`411 passed after rebase`",
     "validation-receipt: id=091977cbba721175 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0 after rebase`",
     "validation-receipt: id=5997c5c581320a1e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14 after rebase`",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any, Callable, Mapping
@@ -37,6 +38,13 @@ TERMINAL_RUN_STATUSES = frozenset(
     }
 )
 MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER = 2
+SIMULATION_RUN_TERMINAL_EVIDENCE_SCHEMA = "simulation_run_terminal_evidence_v1"
+SIMULATION_SCHEDULER_VERIFICATION_STATUS_SCHEMA = "simulation_scheduler_verification_status_v1"
+SIMULATION_SCHEDULER_VERIFICATION_SCOPE_SCHEMA = "simulation_scheduler_verification_scope_v1"
+_TERMINAL_EVIDENCE_CARRIER_LIMIT = 8
+_TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT = 16384
+_TERMINAL_EVIDENCE_SCHEMA_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
+_SIMULATION_RUN_ID_RE = re.compile(r"^simrun_[0-9a-f]{16}$")
 
 
 def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
@@ -789,7 +797,12 @@ class SimulationRuntimeOpsService:
         )
         self.kernel_diagnostics_reader = kernel_diagnostics_reader
 
-    def scheduler_status(self) -> dict[str, Any]:
+    def scheduler_status(
+        self,
+        *,
+        verification_broker_backend: SimulationBrokerBackend | None = None,
+        verification_run_id: str | None = None,
+    ) -> dict[str, Any]:
         status = dict(self.scheduler.status())
         default_submit = _scheduler_bool(status, "default_submit")
         autostart = _scheduler_bool(status, "autostart")
@@ -813,6 +826,8 @@ class SimulationRuntimeOpsService:
             last_result=last_result,
             last_blocking_result=last_blocking_result,
             scheduler_loop_health=scheduler_loop_health,
+            verification_broker_backend=verification_broker_backend,
+            verification_run_id=verification_run_id,
         )
         return {
             "ok": True,
@@ -894,6 +909,59 @@ class SimulationRuntimeOpsService:
                 ),
             },
         }
+
+    def scheduler_verification_status(
+        self,
+        *,
+        broker_backend: SimulationBrokerBackend | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a minimal subject-scoped scheduler smoke without hiding loop failures."""
+
+        normalized_run_id = str(run_id or "").strip() or None
+        if broker_backend is None and normalized_run_id is None:
+            raise RuntimeConfigInvalidError(
+                "scheduler verification status requires a broker_backend or run_id subject",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_REQUIRED",
+                    "stage": "SCHEDULER_VERIFICATION_STATUS",
+                },
+            )
+        if normalized_run_id is not None and (
+            normalized_run_id != run_id or _SIMULATION_RUN_ID_RE.fullmatch(normalized_run_id) is None
+        ):
+            raise RuntimeConfigInvalidError(
+                "scheduler verification run_id must be a canonical simulation run id",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_INVALID",
+                    "stage": "SCHEDULER_VERIFICATION_STATUS",
+                    "field": "run_id",
+                },
+            )
+        status = self.scheduler_status(
+            verification_broker_backend=broker_backend,
+            verification_run_id=normalized_run_id,
+        )
+        blockers = dict(status["current_trade_date_blockers"])
+        projection = {
+            "schema_version": SIMULATION_SCHEDULER_VERIFICATION_STATUS_SCHEMA,
+            "scheduler": status["scheduler"],
+            "running": status["running"],
+            "thread_alive": status["thread_alive"],
+            "scheduler_loop_health": status["scheduler_loop_health"],
+            "current_trade_date_blockers": blockers,
+            "effective_runtime_health": status["effective_runtime_health"],
+            "verification_scope": dict(blockers["verification_scope"]),
+            "read_only": True,
+        }
+        if blockers["verification_scope"]["broker_backend"] == SimulationBrokerBackend.MINIQMT_SIM.value:
+            projection["subject_components"] = {
+                "miniqmt_sim_runtime": status["miniqmt_sim_runtime"],
+                "miniqmt_quote_context": status["miniqmt_quote_context"],
+                "miniqmt_quote_ingress_activation": status["miniqmt_quote_ingress_activation"],
+                "b0_quote_v2_controllers": status["b0_quote_v2_controllers"],
+            }
+        return projection
 
     def platform_diagnostics(
         self,
@@ -1128,6 +1196,8 @@ class SimulationRuntimeOpsService:
         last_result: dict[str, Any] | None,
         last_blocking_result: dict[str, Any] | None,
         scheduler_loop_health: dict[str, Any],
+        verification_broker_backend: SimulationBrokerBackend | None = None,
+        verification_run_id: str | None = None,
     ) -> dict[str, Any]:
         observed_trade_dates: list[str] = []
         for candidate in (last_result, last_blocking_result):
@@ -1150,15 +1220,53 @@ class SimulationRuntimeOpsService:
             SimulationDailyRunStatus.FAILED_RETRYABLE,
             SimulationDailyRunStatus.FAILED_TERMINAL,
         )
+        resolved_broker_backend = verification_broker_backend
         try:
-            runs_by_status = {
-                blocking_status: self.repository.list_simulation_daily_runs(
-                    trade_date=trade_date,
-                    status=blocking_status,
-                    limit=100,
-                )
-                for blocking_status in blocking_statuses
-            }
+            if verification_run_id is not None:
+                subject_run = self.repository.get_simulation_daily_run(verification_run_id)
+                resolved_broker_backend = subject_run.broker_backend
+                if subject_run.trade_date != trade_date:
+                    raise RuntimeConfigInvalidError(
+                        "scheduler verification run does not belong to the current trade date",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_DATE_MISMATCH",
+                            "stage": "SCHEDULER_VERIFICATION_STATUS",
+                            "run_id": verification_run_id,
+                            "run_trade_date": subject_run.trade_date.isoformat(),
+                            "current_trade_date": trade_date.isoformat(),
+                        },
+                    )
+                if (
+                    verification_broker_backend is not None
+                    and subject_run.broker_backend != verification_broker_backend
+                ):
+                    raise RuntimeConfigInvalidError(
+                        "scheduler verification run does not match broker_backend",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_CONFLICT",
+                            "stage": "SCHEDULER_VERIFICATION_STATUS",
+                            "run_id": verification_run_id,
+                            "broker_backend": verification_broker_backend.value,
+                        },
+                    )
+                runs_by_status = {
+                    blocking_status: (
+                        [subject_run] if subject_run.status == blocking_status else []
+                    )
+                    for blocking_status in blocking_statuses
+                }
+            else:
+                runs_by_status = {
+                    blocking_status: self.repository.list_simulation_daily_runs(
+                        trade_date=trade_date,
+                        broker_backend=verification_broker_backend,
+                        status=blocking_status,
+                        limit=100,
+                    )
+                    for blocking_status in blocking_statuses
+                }
+        except RuntimeConfigInvalidError:
+            raise
         except Exception as exc:  # noqa: BLE001 - diagnostics must fail loudly, never return false green.
             raise DataUnavailableError(
                 "failed to read current-trade-date simulation blockers",
@@ -1211,7 +1319,7 @@ class SimulationRuntimeOpsService:
         ]
         blockers = [*loop_blockers, *database_blockers]
         observed_blocker_count = len(loop_blockers) + len(all_blockers)
-        return {
+        projection = {
             "schema_version": "simulation_scheduler_current_day_blockers_v1",
             "trade_date": trade_date.isoformat(),
             "status": "BLOCKED" if blockers else "CLEAR",
@@ -1229,6 +1337,19 @@ class SimulationRuntimeOpsService:
             "scheduler_running": _scheduler_bool(status, "running"),
             "last_observed_trade_dates": list(dict.fromkeys(observed_trade_dates)),
         }
+        if verification_broker_backend is not None or verification_run_id is not None:
+            projection["verification_scope"] = {
+                "schema_version": SIMULATION_SCHEDULER_VERIFICATION_SCOPE_SCHEMA,
+                "active": True,
+                "broker_backend": (
+                    resolved_broker_backend.value if resolved_broker_backend is not None else None
+                ),
+                "run_id": verification_run_id,
+                "database_blocker_count": len(all_blockers),
+                "loop_blocker_count": len(loop_blockers),
+                "bounded_limit": 100,
+            }
+        return projection
 
     @staticmethod
     def _scheduler_loop_health(status: dict[str, Any]) -> dict[str, Any]:
@@ -1490,6 +1611,88 @@ class SimulationRuntimeOpsService:
         else:
             payload["selection_evidence"] = None
         return payload
+
+    def get_run_terminal_evidence(self, run_id: str) -> dict[str, Any]:
+        """Bounded read-only projection of typed terminal-evidence carriers.
+
+        Terminalization writers persist typed evidence carriers in the run
+        payload under a top-level key equal to the carrier ``schema_version``
+        with a non-empty string ``reason_code``. This projection exposes only
+        those typed carriers (never the whole run payload) so post-restart
+        verifiers can prove an exact expected terminal outcome — status,
+        previous status, reason code and carrier schema — without any write
+        side effect. The projection is fail-closed: more than
+        ``_TERMINAL_EVIDENCE_CARRIER_LIMIT`` carriers or a serialized carrier
+        section larger than ``_TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT`` raises
+        instead of truncating.
+        """
+        run = self.repository.get_simulation_daily_run(run_id)
+        carriers: list[dict[str, Any]] = []
+        for key, value in run.run_payload_json.items():
+            if not isinstance(value, dict):
+                continue
+            if not _TERMINAL_EVIDENCE_SCHEMA_KEY_RE.fullmatch(str(key)):
+                continue
+            if value.get("schema_version") != key:
+                continue
+            reason_code = value.get("reason_code")
+            if not isinstance(reason_code, str) or not reason_code.strip():
+                continue
+            carriers.append(dict(value))
+        carriers.sort(key=lambda item: str(item.get("schema_version") or ""))
+        if len(carriers) > _TERMINAL_EVIDENCE_CARRIER_LIMIT:
+            raise DataUnavailableError(
+                "simulation run terminal evidence exceeds the carrier count bound",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "carrier_count": len(carriers),
+                    "carrier_limit": _TERMINAL_EVIDENCE_CARRIER_LIMIT,
+                },
+            )
+        try:
+            encoded = json.dumps(
+                carriers,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "simulation run terminal evidence is not JSON serializable",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "error_type": exc.__class__.__name__,
+                },
+            ) from exc
+        if len(encoded) > _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT:
+            raise DataUnavailableError(
+                "simulation run terminal evidence exceeds the serialized size bound",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "carrier_bytes": len(encoded),
+                    "carrier_bytes_limit": _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT,
+                },
+            )
+        return {
+            "schema_version": SIMULATION_RUN_TERMINAL_EVIDENCE_SCHEMA,
+            "read_only": True,
+            "run": {
+                "run_id": run.run_id,
+                "trade_date": run.trade_date.isoformat(),
+                "strategy_id": run.strategy_id,
+                "broker_backend": run.broker_backend.value,
+                "status": run.status.value,
+                "last_stage": str(run.run_payload_json.get("last_stage") or run.status.value),
+                "terminal_evidence": carriers,
+            },
+        }
 
     def get_execution_plan_detail(self, plan_id: str) -> dict[str, Any]:
         plan = self.repository.get_execution_plan(plan_id)

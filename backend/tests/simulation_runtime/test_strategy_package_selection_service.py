@@ -1,10 +1,23 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
 
 import pytest
 
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    PitConsumerBinding,
+    canonical_rule_parameters_digest,
+)
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CanonicalPitGenerationDriftError,
+    migrate_runtime_config_to_canonical_pointer,
+)
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.prospective_evidence import (
     EvidenceCaptureMode,
@@ -12,7 +25,10 @@ from backend.services.selection_center.prospective_evidence import (
     REASON_HISTORICAL_RESEARCH_ONLY,
 )
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
-from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256, validate_runtime_profile_binding
+from backend.services.selection_center.runtime_profile import (
+    runtime_profile_config_sha256,
+    validate_runtime_profile_binding,
+)
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.simulation_runtime import (
@@ -20,7 +36,7 @@ from backend.services.simulation_runtime import (
     InMemorySimulationRuntimeRepository,
     StrategyRuntimeReleaseService,
 )
-from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
+from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
@@ -54,11 +70,7 @@ class FakeCalendar:
         return None
 
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
-        return [
-            item
-            for item in (date(2024, 1, 2), date(2024, 1, 3))
-            if start_date <= item <= end_date
-        ]
+        return [item for item in (date(2024, 1, 2), date(2024, 1, 3)) if start_date <= item <= end_date]
 
 
 def _runtime_config(*, top_k: int = 2) -> dict:
@@ -157,6 +169,7 @@ def _selection_service(
     repository: InMemorySimulationRuntimeRepository,
     *,
     selection_computation=None,
+    pit_authority_resolver=None,
 ) -> StrategyPackageSelectionService:
     return StrategyPackageSelectionService(
         package_repository=package_repo,
@@ -166,6 +179,7 @@ def _selection_service(
         calendar_provider=FakeCalendar(),
         repository=repository,
         selection_computation=selection_computation,
+        pit_authority_resolver=pit_authority_resolver,
     )
 
 
@@ -177,6 +191,98 @@ class RecordingSelectionComputation:
     def compute(self, **kwargs):
         self.calls.append(kwargs)
         return self.delegate.compute(**kwargs)
+
+
+class StaticPitAuthorityResolver:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def resolve_live_binding(self) -> PitConsumerBinding:
+        self.calls += 1
+        return _pit_binding(4)
+
+
+def _pit_binding(generation: int) -> PitConsumerBinding:
+    return PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        activation_generation=generation,
+        activation_envelope_digest="b" * 64,
+        expected_source_commit="source-commit",
+        state_source_digest="a" * 64,
+        coverage_start=date(2018, 8, 1),
+        coverage_end=date(2026, 7, 31),
+    )
+
+
+class DriftingPitAuthorityResolver(StaticPitAuthorityResolver):
+    def resolve_live_binding(self) -> PitConsumerBinding:
+        self.calls += 1
+        return _pit_binding(4 if self.calls == 1 else 5)
+
+
+def test_strategy_package_selection_freezes_canonical_pit_generation_once() -> None:
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    package_repo, artifact_repo, manifest, runtime = _package_with_artifact(rows)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    resolver = StaticPitAuthorityResolver()
+    recording = RecordingSelectionComputation()
+    config = migrate_runtime_config_to_canonical_pointer(_runtime_config(top_k=2))
+    _seed_artifact(artifact_repo, manifest, rows, runtime_config=config)
+
+    result = _selection_service(
+        package_repo,
+        runtime,
+        runtime_repo,
+        selection_computation=recording,
+        pit_authority_resolver=resolver,
+    ).run_selection(
+        package_ids=[manifest.package_id],
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=config,
+        created_by="unit_test",
+    )
+
+    assert resolver.calls == 2
+    lease = result.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    assert lease["activation_generation"] == 4
+    assert lease["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
+    request = recording.calls[0]["request"]
+    package_profile = request.package_runtime_profiles[manifest.package_id]
+    assert package_profile.risk_policy.canonical_pit_runtime_lease == lease
+    evidence = result.evidence_by_package[manifest.package_id]
+    assert evidence.evidence_payload_json[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease
+
+
+def test_strategy_package_selection_rejects_generation_drift_before_evidence_write() -> None:
+    rows = [{"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0}]
+    package_repo, artifact_repo, manifest, runtime = _package_with_artifact(rows)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    config = migrate_runtime_config_to_canonical_pointer(_runtime_config(top_k=1))
+    _seed_artifact(artifact_repo, manifest, rows, runtime_config=config)
+
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        _selection_service(
+            package_repo,
+            runtime,
+            runtime_repo,
+            pit_authority_resolver=DriftingPitAuthorityResolver(),
+        ).run_selection(
+            package_ids=[manifest.package_id],
+            mode=SelectionMode.SINGLE_PACKAGE,
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config=config,
+            created_by="unit_test",
+        )
 
 
 def test_strategy_package_selection_service_persists_release_backed_evidence() -> None:
@@ -207,7 +313,10 @@ def test_strategy_package_selection_service_persists_release_backed_evidence() -
     assert evidence.candidate_count == 2
     assert evidence.excluded_count == 0
     assert runtime_repo.get_daily_selection_evidence(evidence.evidence_id).artifact_hash == evidence.artifact_hash
-    assert result.runtime_config["daily_selection_evidence"]["evidence_ids_by_package"][manifest.package_id] == evidence.evidence_id
+    assert (
+        result.runtime_config["daily_selection_evidence"]["evidence_ids_by_package"][manifest.package_id]
+        == evidence.evidence_id
+    )
     assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
 
 
@@ -306,7 +415,9 @@ def test_strategy_package_selection_service_uses_release_selection_artifact_conf
     )
     evidence = result.evidence_by_package[manifest.package_id]
     assert evidence.release_id == release.release_id
-    assert evidence.evidence_payload_json["selection_artifact_config"]["artifact_reuse"] == "same_trade_date_config_hash"
+    assert (
+        evidence.evidence_payload_json["selection_artifact_config"]["artifact_reuse"] == "same_trade_date_config_hash"
+    )
 
 
 def test_strategy_package_selection_service_rolls_stale_release_cutoff_for_daily_pit() -> None:

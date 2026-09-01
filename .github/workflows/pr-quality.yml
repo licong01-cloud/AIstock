@@ -1,8 +1,6 @@
 name: AIstock PR Quality
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       base_ref:
@@ -13,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: pr-quality-${{ github.event.pull_request.number || github.run_id }}
@@ -26,25 +23,32 @@ defaults:
 jobs:
   pr-quality:
     name: Context, scope, and open-source tooling dry-run
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    if: ${{ github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+      - name: Verify prebuilt AIstock-CI tooling
+        shell: powershell
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect PR quality lane
         id: quality_lane
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          CHECKOUT_REF: ${{ github.ref || '' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          git fetch origin "${BASE_REF}" --no-tags || true
+          python scripts/ci_changed_files.py \
+            --prepare-pr-merge-base-only \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --checkout-ref "${CHECKOUT_REF}"
           BASE_COMMIT="origin/${BASE_REF}"
-          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
           python scripts/ci_change_classifier.py \
             --changed-files-file tmp/validation/pr_quality/changed_files.txt \
@@ -56,20 +60,6 @@ jobs:
           echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
           echo "classification=${CLASSIFICATION}" >> "${GITHUB_OUTPUT}"
 
-      - name: Set up Python 3.12
-        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: .github/requirements/pr-quality.txt
-
-      - name: Install quality tooling
-        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
-
       - name: Build AIstock PR quality summary
         if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
@@ -79,8 +69,10 @@ jobs:
           AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          # Keep base history available for three-dot diffs on branches that merge main.
-          git fetch origin "${BASE_REF}" --no-tags || true
+          # Reuse the base ref prepared by Detect PR quality lane; fetch only for manual runs.
+          if ! git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
+            git fetch origin "${BASE_REF}" --no-tags --depth=1
+          fi
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           ENFORCE_ARGS=()
@@ -169,50 +161,17 @@ jobs:
             echo "No changed Python files."
           fi
 
-      - name: Comment PR summary
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- aistock-pr-quality-summary -->';
-            const summaryPath = 'tmp/validation/pr_quality/summary.md';
-            const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
-            const docsLitePath = 'tmp/validation/pr_quality/docs-lite-version-record.md';
-            const classificationPath = 'tmp/validation/pr_quality/change-classification.json';
-            const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
-            const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
-            const docsLite = fs.existsSync(docsLitePath) ? fs.readFileSync(docsLitePath, 'utf8') : '';
-            const maxChars = 55000;
-            const classification = fs.existsSync(classificationPath)
-              ? JSON.parse(fs.readFileSync(classificationPath, 'utf8')).classification
-              : 'unknown';
-            const compactFooter = `Classification: ${classification}. Backend restart owner: user; this CI performs no user-backend process control. Code intelligence is report-only; Semgrep runs once in its dedicated workflow.`;
-            let body = `${marker}\n${summary}`;
-            if (docsLite) {
-              body = `${marker}\n${docsLite}\n\n${summary}`;
-            } else if (fs.existsSync(codeIntelPath)) {
-              body = `${marker}\n${summary}\n\n${codeIntel}`;
-            }
-            body = `${body}\n\n${compactFooter}`;
-            if (body.length > maxChars) {
-              body = `${marker}\n${summary}\n\nCode intelligence summary was omitted from the PR comment because the compact budget was exceeded. See the uploaded pr-quality artifact for details.\n\n${compactFooter}`;
-            }
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
-            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
-
-      - name: Upload PR quality artifacts
+      - name: Emit compact PR quality receipt
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-quality-${{ github.run_id }}
-          path: tmp/validation/pr_quality/
-          if-no-files-found: ignore
+        shell: bash
+        run: |
+          CLASSIFICATION=unknown
+          if [ -f tmp/validation/pr_quality/change-classification.json ]; then
+            CLASSIFICATION=$(python -c "import json; print(json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8')).get('classification', 'unknown'))")
+          fi
+          SUMMARY_STATUS=missing
+          [ -f tmp/validation/pr_quality/summary.json ] && SUMMARY_STATUS=present
+          CODE_INTELLIGENCE_STATUS=not_required
+          [ -f tmp/validation/pr_quality/code-intelligence-summary.json ] && CODE_INTELLIGENCE_STATUS=present
+          echo "gate=pr_quality_receipt classification=${CLASSIFICATION} summary=${SUMMARY_STATUS} code_intelligence=${CODE_INTELLIGENCE_STATUS} artifact_upload=disabled"
 

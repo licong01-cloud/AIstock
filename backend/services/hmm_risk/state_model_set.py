@@ -514,6 +514,311 @@ def parse_l2_artifact(
 
 
 @dataclass(frozen=True)
+class D6ValidationCalendarSeries:
+    """Immutable D6 validation carrier with compact finite values over a full calendar."""
+
+    calendar_dates: tuple[date, ...]
+    feature_names: tuple[str, ...]
+    observation_available_mask: tuple[bool, ...]
+    observation_available_positions: tuple[int, ...]
+    observation_values_f64: np.ndarray
+    component_available_masks: Mapping[str, tuple[bool, ...]]
+    component_available_positions: Mapping[str, tuple[int, ...]]
+    component_values_f64: Mapping[str, np.ndarray]
+    utility_available_mask: tuple[bool, ...]
+    utility_available_positions: tuple[int, ...]
+    combined_utility_values_f64: np.ndarray
+    availability_ledger: tuple[Mapping[str, Any], ...]
+    source_identities: Mapping[str, str]
+    schema_version: str = "hmm_risk_d6_validation_calendar_series_v1"
+
+    @staticmethod
+    def _positions(mask: Sequence[bool]) -> tuple[int, ...]:
+        return tuple(index for index, available in enumerate(mask) if available)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> D6ValidationCalendarSeries:
+        if not isinstance(payload, Mapping):
+            raise StateModelSetError("D6 validation calendar carrier payload is invalid")
+        try:
+            instance = cls(
+                schema_version=str(payload["schema_version"]),
+                calendar_dates=tuple(date.fromisoformat(str(value)) for value in payload["calendar_dates"]),
+                feature_names=tuple(str(value) for value in payload["feature_names"]),
+                observation_available_mask=tuple(payload["observation_available_mask"]),
+                observation_available_positions=tuple(payload["observation_available_positions"]),
+                observation_values_f64=np.asarray(payload["observation_values_f64"], dtype=np.float64),
+                component_available_masks={
+                    str(name): tuple(values) for name, values in payload["component_available_masks"].items()
+                },
+                component_available_positions={
+                    str(name): tuple(values) for name, values in payload["component_available_positions"].items()
+                },
+                component_values_f64={
+                    str(name): np.asarray(values, dtype=np.float64)
+                    for name, values in payload["component_values_f64"].items()
+                },
+                utility_available_mask=tuple(payload["utility_available_mask"]),
+                utility_available_positions=tuple(payload["utility_available_positions"]),
+                combined_utility_values_f64=np.asarray(payload["combined_utility_values_f64"], dtype=np.float64),
+                availability_ledger=tuple(dict(value) for value in payload["availability_ledger"]),
+                source_identities={str(name): str(value) for name, value in payload["source_identities"].items()},
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StateModelSetError(f"D6 validation calendar carrier payload is invalid: {exc}") from exc
+        instance.validate(len(instance.feature_names))
+        if instance.payload() != dict(payload):
+            raise StateModelSetError("D6 validation calendar carrier payload is not canonical")
+        return instance
+
+    def payload(self) -> dict[str, Any]:
+        component_names = tuple(sorted(self.component_values_f64))
+        return {
+            "schema_version": self.schema_version,
+            "calendar_dates": [value.isoformat() for value in self.calendar_dates],
+            "calendar_positions": list(range(len(self.calendar_dates))),
+            "feature_names": list(self.feature_names),
+            "observation_available_mask": list(self.observation_available_mask),
+            "observation_available_positions": list(self.observation_available_positions),
+            "observation_values_f64": np.asarray(self.observation_values_f64, dtype=np.float64).tolist(),
+            "component_available_masks": {name: list(self.component_available_masks[name]) for name in component_names},
+            "component_available_positions": {
+                name: list(self.component_available_positions[name]) for name in component_names
+            },
+            "component_values_f64": {
+                name: np.asarray(self.component_values_f64[name], dtype=np.float64).tolist() for name in component_names
+            },
+            "utility_available_mask": list(self.utility_available_mask),
+            "utility_available_positions": list(self.utility_available_positions),
+            "combined_utility_values_f64": np.asarray(self.combined_utility_values_f64, dtype=np.float64).tolist(),
+            "availability_ledger": [dict(entry) for entry in self.availability_ledger],
+            "source_identities": dict(sorted(self.source_identities.items())),
+        }
+
+    def validate(self, feature_count: int) -> None:
+        if self.schema_version != "hmm_risk_d6_validation_calendar_series_v1":
+            raise StateModelSetError("D6 validation calendar carrier schema is invalid")
+        dates = tuple(self.calendar_dates)
+        if not dates or any(not isinstance(value, date) for value in dates):
+            raise StateModelSetError("D6 validation calendar dates are missing or invalid")
+        if tuple(sorted(dates)) != dates or len(set(dates)) != len(dates):
+            raise StateModelSetError("D6 validation calendar dates must be strictly increasing")
+        if len(self.feature_names) != feature_count or len(set(self.feature_names)) != feature_count:
+            raise StateModelSetError("D6 full feature identity differs from family contract")
+        row_count = len(dates)
+        observation_mask = tuple(self.observation_available_mask)
+        observation_positions = tuple(self.observation_available_positions)
+        if (
+            len(observation_mask) != row_count
+            or any(not isinstance(value, (bool, np.bool_)) for value in observation_mask)
+            or any(
+                isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+                for value in observation_positions
+            )
+            or observation_positions != self._positions(observation_mask)
+        ):
+            raise StateModelSetError("D6 observation availability mask/positions differ")
+        observation_values = _finite_array(
+            self.observation_values_f64,
+            "D6 compact observation values",
+            ndim=2,
+        )
+        if observation_values.shape != (len(observation_positions), feature_count):
+            raise StateModelSetError("D6 compact observation rows differ from positions")
+        expected_components = {"excess_return_5d", "excess_return_10d", "excess_return_20d"}
+        if (
+            set(self.component_available_masks) != expected_components
+            or set(self.component_available_positions) != expected_components
+            or set(self.component_values_f64) != expected_components
+        ):
+            raise StateModelSetError("D6 utility component contract is incomplete")
+        component_values_by_position: dict[str, dict[int, float]] = {}
+        for name in sorted(expected_components):
+            mask = tuple(self.component_available_masks[name])
+            positions = tuple(self.component_available_positions[name])
+            if (
+                len(mask) != row_count
+                or any(not isinstance(value, (bool, np.bool_)) for value in mask)
+                or any(
+                    isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+                    for value in positions
+                )
+                or positions != self._positions(mask)
+            ):
+                raise StateModelSetError(f"D6 {name} availability mask/positions differ")
+            values = _finite_array(self.component_values_f64[name], f"D6 {name} compact values", ndim=1)
+            if values.shape != (len(positions),):
+                raise StateModelSetError(f"D6 {name} compact values differ from positions")
+            component_values_by_position[name] = {
+                position: float(value) for position, value in zip(positions, values, strict=True)
+            }
+        utility_mask = tuple(self.utility_available_mask)
+        utility_positions = tuple(self.utility_available_positions)
+        expected_utility_mask = tuple(
+            all(bool(self.component_available_masks[name][index]) for name in expected_components)
+            for index in range(row_count)
+        )
+        if (
+            len(utility_mask) != row_count
+            or any(not isinstance(value, (bool, np.bool_)) for value in utility_mask)
+            or any(
+                isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+                for value in utility_positions
+            )
+            or utility_mask != expected_utility_mask
+            or utility_positions != self._positions(utility_mask)
+        ):
+            raise StateModelSetError("D6 utility availability mask/positions differ")
+        combined = _finite_array(self.combined_utility_values_f64, "D6 compact combined utility", ndim=1)
+        if combined.shape != (len(utility_positions),):
+            raise StateModelSetError("D6 combined utility rows differ from positions")
+        expected_combined = np.asarray(
+            [
+                0.35 * component_values_by_position["excess_return_5d"][position]
+                + 0.35 * component_values_by_position["excess_return_10d"][position]
+                + 0.30 * component_values_by_position["excess_return_20d"][position]
+                for position in utility_positions
+            ],
+            dtype=np.float64,
+        )
+        if not np.array_equal(combined, expected_combined):
+            raise StateModelSetError("D6 combined utility differs from frozen components")
+        if len(self.availability_ledger) != row_count:
+            raise StateModelSetError("D6 availability ledger row count differs from calendar")
+        for index, entry in enumerate(self.availability_ledger):
+            if not isinstance(entry, Mapping):
+                raise StateModelSetError("D6 availability ledger entry is invalid")
+            expected_evidence = bool(observation_mask[index] and utility_mask[index])
+            missing_features = list(entry.get("missing_feature_names") or ())
+            missing_components = list(entry.get("missing_component_names") or ())
+            expected_observation_reasons = (
+                [] if observation_mask[index] else ["hmm_risk_semantic_validation_observation_unavailable"]
+            )
+            expected_utility_reasons = (
+                [] if utility_mask[index] else ["hmm_risk_semantic_validation_utility_unavailable"]
+            )
+            if (
+                entry.get("date") != dates[index].isoformat()
+                or entry.get("position") != index
+                or entry.get("observation_available") is not bool(observation_mask[index])
+                or entry.get("utility_available") is not bool(utility_mask[index])
+                or entry.get("evidence_included") is not expected_evidence
+                or entry.get("mode") != ("emission_update" if observation_mask[index] else "transition_only")
+                or entry.get("observation_unavailable_reason_codes") != expected_observation_reasons
+                or entry.get("utility_unavailable_reason_codes") != expected_utility_reasons
+                or (observation_mask[index] and missing_features)
+                or (not observation_mask[index] and not missing_features)
+                or (utility_mask[index] and missing_components)
+                or (not utility_mask[index] and not missing_components)
+            ):
+                raise StateModelSetError("D6 availability ledger identity differs from masks")
+            for field in ("observation_source_receipt_sha256", "utility_source_receipt_sha256"):
+                _require_sha256(str(entry.get(field) or ""), field)
+            for receipt_field, hash_field in (
+                ("observation_source_receipt", "observation_source_receipt_sha256"),
+                ("utility_source_receipt", "utility_source_receipt_sha256"),
+            ):
+                receipt = entry.get(receipt_field)
+                if not isinstance(receipt, Mapping) or canonical_sha256(dict(receipt)) != entry.get(hash_field):
+                    raise StateModelSetError("D6 availability source receipt hash differs")
+            observation_receipt = dict(entry["observation_source_receipt"])
+            utility_receipt = dict(entry["utility_source_receipt"])
+            observation_sector_code = str(observation_receipt.get("sector_code") or "")
+            utility_sector_code = str(utility_receipt.get("sector_code") or "")
+            if observation_receipt != {
+                "sector_code": observation_sector_code,
+                "date": dates[index].isoformat(),
+                "feature_names": list(self.feature_names),
+                "missing_feature_names": missing_features,
+                "available": bool(observation_mask[index]),
+                "source_identities": dict(self.source_identities),
+            } or utility_receipt != {
+                "sector_code": utility_sector_code,
+                "date": dates[index].isoformat(),
+                "component_names": sorted(expected_components),
+                "missing_component_names": missing_components,
+                "available": bool(utility_mask[index]),
+                "source_identities": dict(self.source_identities),
+            }:
+                raise StateModelSetError("D6 availability source receipt content differs")
+            if not observation_sector_code or utility_sector_code != observation_sector_code:
+                raise StateModelSetError("D6 availability source receipt sector identity differs")
+        expected_source_identities = {
+            "dataset_manifest_hash",
+            "mapping_manifest_hash",
+            "calendar_manifest_hash",
+            "l2_stock_fact_manifest_hash",
+            "feature_domain_policy_sha256",
+        }
+        if set(self.source_identities) != expected_source_identities:
+            raise StateModelSetError("D6 calendar carrier source identities are incomplete")
+        for field, value in self.source_identities.items():
+            _require_sha256(str(value or ""), field)
+        try:
+            canonical_json_bytes(self.payload())
+        except (TypeError, ValueError) as exc:
+            raise StateModelSetError(f"D6 calendar carrier is not canonical finite JSON: {exc}") from exc
+
+    @property
+    def carrier_sha256(self) -> str:
+        return canonical_sha256(self.payload())
+
+
+def validate_d6_frozen_input_manifest(
+    manifest: Mapping[str, Any],
+    carrier: D6ValidationCalendarSeries,
+    *,
+    sector_code: str,
+    direct_sector_level: str,
+) -> None:
+    """Validate manifest v2 using the same authority for writer, evaluator, and durable readback."""
+
+    carrier.validate(len(carrier.feature_names))
+    payload = carrier.payload()
+    component_names = tuple(sorted(carrier.component_values_f64))
+    expected = {
+        "validation_calendar_sha256": canonical_sha256(payload["calendar_dates"]),
+        "feature_names_sha256": canonical_sha256(payload["feature_names"]),
+        "observation_available_mask_sha256": canonical_sha256(payload["observation_available_mask"]),
+        "observation_available_positions_sha256": canonical_sha256(payload["observation_available_positions"]),
+        "observation_values_sha256": canonical_sha256(payload["observation_values_f64"]),
+        "utility_component_sha256": {
+            name: canonical_sha256(payload["component_values_f64"][name]) for name in component_names
+        },
+        "component_available_mask_sha256": {
+            name: canonical_sha256(payload["component_available_masks"][name]) for name in component_names
+        },
+        "component_available_positions_sha256": {
+            name: canonical_sha256(payload["component_available_positions"][name]) for name in component_names
+        },
+        "utility_available_mask_sha256": canonical_sha256(payload["utility_available_mask"]),
+        "utility_available_positions_sha256": canonical_sha256(payload["utility_available_positions"]),
+        "combined_utility_sha256": canonical_sha256(payload["combined_utility_values_f64"]),
+        "availability_ledger_sha256": canonical_sha256(payload["availability_ledger"]),
+    }
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("schema_version") != "hmm_risk_d6_frozen_input_manifest_v2"
+        or manifest.get("calendar_carrier_schema_version") != carrier.schema_version
+        or manifest.get("calendar_carrier_payload") != payload
+        or manifest.get("calendar_carrier_sha256") != carrier.carrier_sha256
+        or manifest.get("direct_sector_level") != direct_sector_level
+        or manifest.get("sector_code") != sector_code
+        or manifest.get("benchmark_identity") != "000300.SH"
+        or manifest.get("source_cutoff") != "2025-04-30"
+        or manifest.get("formula_version") != "hmm_risk_hard_future_excess_035_035_030_v1"
+        or any(manifest.get(field) != value for field, value in carrier.source_identities.items())
+        or any(manifest.get(field) != value for field, value in expected.items())
+        or any(
+            entry.get("observation_source_receipt", {}).get("sector_code") != sector_code
+            or entry.get("utility_source_receipt", {}).get("sector_code") != sector_code
+            for entry in carrier.availability_ledger
+        )
+    ):
+        raise StateModelSetError("D6 frozen input manifest v2 readback differs")
+
+
+@dataclass(frozen=True)
 class L1TrainingSeries:
     sector_code: str
     sector_name: str
@@ -529,20 +834,53 @@ class L1TrainingSeries:
     validation_utility_source_cutoff: date | None = None
     validation_utility_formula_version: str = ""
     validation_input_manifest: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    validation_calendar_series: D6ValidationCalendarSeries | None = None
 
     def validate(self, feature_count: int) -> None:
         if not self.sector_code.strip() or not self.sector_name.strip():
             raise StateModelSetError("L1 sector code/name must be non-empty")
         train = _finite_array(self.train_observations, f"{self.sector_code}.train", ndim=2)
         validation = _finite_array(self.validation_observations, f"{self.sector_code}.validation", ndim=2)
-        utility = _finite_array(self.validation_future_utility, f"{self.sector_code}.utility", ndim=1)
+        if self.validation_calendar_series is None:
+            utility = _finite_array(self.validation_future_utility, f"{self.sector_code}.utility", ndim=1)
+        else:
+            try:
+                utility = np.asarray(self.validation_future_utility, dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise StateModelSetError(f"{self.sector_code}.utility must be numeric") from exc
+            if utility.ndim != 1 or utility.size != 0:
+                raise StateModelSetError(
+                    f"{self.sector_code} legacy dense utility must be an empty one-dimensional sentinel "
+                    "when the D6 calendar carrier is authoritative"
+                )
         if train.shape[1] != feature_count or validation.shape[1] != feature_count:
             raise StateModelSetError(f"{self.sector_code} feature count differs from family contract")
-        if train.shape[0] < 120 or validation.shape[0] < 30 or utility.shape != (validation.shape[0],):
+        if train.shape[0] < 120:
             raise StateModelSetError(f"{self.sector_code} has insufficient train/validation evidence")
         if len(self.train_dates) != train.shape[0] or len(self.validation_dates) != validation.shape[0]:
             raise StateModelSetError(f"{self.sector_code} observation dates must align with train/validation rows")
-        if self.validation_future_components:
+        if self.validation_calendar_series is None and utility.shape != (validation.shape[0],):
+            raise StateModelSetError(f"{self.sector_code} dense validation utility rows differ")
+        if self.validation_calendar_series is not None:
+            self.validation_calendar_series.validate(feature_count)
+            if tuple(self.validation_dates) != tuple(
+                self.validation_calendar_series.calendar_dates[position]
+                for position in self.validation_calendar_series.observation_available_positions
+            ) or not np.array_equal(validation, self.validation_calendar_series.observation_values_f64):
+                raise StateModelSetError(f"{self.sector_code} compact validation rows differ from D6 carrier")
+            manifest = self.validation_input_manifest
+            direct_sector_level = str(manifest.get("direct_sector_level") or "")
+            if direct_sector_level not in {"L1", "L2"}:
+                raise StateModelSetError(f"{self.sector_code} D6 frozen input manifest v2 is missing")
+            validate_d6_frozen_input_manifest(
+                manifest,
+                self.validation_calendar_series,
+                sector_code=self.sector_code,
+                direct_sector_level=direct_sector_level,
+            )
+        elif validation.shape[0] < 30:
+            raise StateModelSetError(f"{self.sector_code} has insufficient train/validation evidence")
+        if self.validation_future_components and self.validation_calendar_series is None:
             expected_components = {"excess_return_5d", "excess_return_10d", "excess_return_20d"}
             if set(self.validation_future_components) != expected_components:
                 raise StateModelSetError(f"{self.sector_code} future utility component contract is incomplete")
@@ -668,15 +1006,92 @@ def causal_forward_posteriors(
     output = np.empty((values.shape[0], len(start)), dtype=np.float64)
     prior = start
     for index in range(values.shape[0]):
-        shifted = log_emission[index] - float(np.max(log_emission[index]))
-        likelihood = np.exp(shifted)
-        posterior = prior * likelihood
+        log_prior = np.full(prior.shape, -np.inf, dtype=np.float64)
+        positive_prior = prior > 0
+        log_prior[positive_prior] = np.log(prior[positive_prior])
+        log_posterior = log_prior + log_emission[index]
+        maximum = float(np.max(log_posterior))
+        if not math.isfinite(maximum):
+            raise StateModelSetError(f"causal posterior normalization failed at row {index}")
+        with np.errstate(under="ignore"):
+            posterior = np.exp(log_posterior - maximum)
         denominator = float(posterior.sum())
         if not math.isfinite(denominator) or denominator <= 0:
             raise StateModelSetError(f"causal posterior normalization failed at row {index}")
         posterior /= denominator
         output[index] = posterior
         prior = posterior @ transition
+    return output
+
+
+def causal_forward_posteriors_calendar(
+    compact_observations: np.ndarray,
+    observation_available_mask: Sequence[bool],
+    *,
+    startprob: np.ndarray,
+    transmat: np.ndarray,
+    means: np.ndarray,
+    covars: np.ndarray,
+) -> np.ndarray:
+    """Filter every calendar position; missing observations perform transition-only propagation."""
+
+    mask = tuple(observation_available_mask)
+    if not mask or any(not isinstance(value, (bool, np.bool_)) for value in mask):
+        raise StateModelSetError("calendar observation availability mask is invalid")
+    values = _finite_array(compact_observations, "compact causal observations", ndim=2)
+    if values.shape[0] != sum(bool(value) for value in mask):
+        raise StateModelSetError("compact causal observation rows differ from availability mask")
+    start = _probability_vector(startprob, "startprob", len(startprob))
+    transition = _transition_matrix(transmat, "transmat", len(start))
+    mean_array = _finite_array(means, "means", ndim=2)
+    covariance = _finite_array(covars, "covars", ndim=2)
+    if (
+        mean_array.shape != covariance.shape
+        or mean_array.shape[0] != len(start)
+        or values.shape[1] != mean_array.shape[1]
+    ):
+        raise StateModelSetError("calendar causal filter parameter shapes do not match")
+    if np.any(covariance <= 0):
+        raise StateModelSetError("calendar causal filter covariance must be positive")
+    log_emission = -0.5 * (
+        np.log(2.0 * np.pi * covariance)[None, :, :]
+        + ((values[:, None, :] - mean_array[None, :, :]) ** 2) / covariance[None, :, :]
+    ).sum(axis=2)
+    output = np.empty((len(mask), len(start)), dtype=np.float64)
+    prior = start
+    compact_index = 0
+    for calendar_position, available in enumerate(mask):
+        if available:
+            log_prior = np.full(prior.shape, -np.inf, dtype=np.float64)
+            positive_prior = prior > 0
+            log_prior[positive_prior] = np.log(prior[positive_prior])
+            log_posterior = log_prior + log_emission[compact_index]
+            maximum = float(np.max(log_posterior))
+            if not math.isfinite(maximum):
+                raise StateModelSetError(
+                    f"calendar causal posterior normalization failed at position {calendar_position}"
+                )
+            with np.errstate(under="ignore"):
+                posterior = np.exp(log_posterior - maximum)
+            denominator = float(posterior.sum())
+            if not math.isfinite(denominator) or denominator <= 0:
+                raise StateModelSetError(
+                    f"calendar causal posterior normalization failed at position {calendar_position}"
+                )
+            posterior /= denominator
+            compact_index += 1
+        else:
+            posterior = prior.copy()
+        output[calendar_position] = posterior
+        prior = posterior @ transition
+    if compact_index != values.shape[0]:
+        raise StateModelSetError("calendar causal filter did not consume compact observations exactly")
+    if (
+        not np.isfinite(output).all()
+        or np.any(output < 0.0)
+        or not np.allclose(output.sum(axis=1), 1.0, atol=1e-12, rtol=0)
+    ):
+        raise StateModelSetError("calendar causal posterior output is invalid")
     return output
 
 

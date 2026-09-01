@@ -39,6 +39,7 @@ from backend.services.multi_alpha.durable_runtime_health import (
     DurableOrchestratorUnavailableError,
     require_durable_orchestrator_ready,
 )
+from backend.services.multi_alpha.durable_wakeup import notify_durable_orchestrator
 from backend.services.quantevolver.qe_execution_reservation import (
     QEExecutionReservationError,
     QEExecutionReservationRepository,
@@ -164,6 +165,10 @@ class DurableCombineSubmissionService:
                 idempotency_key=normalized_idempotency_key,
             )
             run = self._repository.create_run(run_spec)
+            # The repository transaction has committed before this point.
+            # Multiple submissions coalesce on the process-local wake Event;
+            # PostgreSQL remains the durable cross-process authority.
+            notify_durable_orchestrator()
         except DurableCombineSubmissionError:
             raise
         except MultiAlphaDurableRepositoryError as exc:

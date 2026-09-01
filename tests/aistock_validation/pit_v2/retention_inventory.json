@@ -1,0 +1,196 @@
+{
+  "schema_version": "pit_v2_retention_inventory_v1",
+  "observed_at": "2026-08-12T17:52:37.1355038Z",
+  "mode": "read_only",
+  "policy": {
+    "implementation": "backend.services.dataset_release.retention.classify_dataset_retention",
+    "automatic_deletion_allowed": false,
+    "unknown_or_unsettled_retains_complete_dataset": true,
+    "cleanup_authorized": false
+  },
+  "authority_scan": {
+    "dataset_release_catalog": {"status": "PASS", "result": "initialized_empty", "release_count": 0, "candidate_registration_count": 0},
+    "qe_experiment_archive_evaluation": {"status": "PASS", "explicit_20260630_experiment_count": 244, "explicit_20260630_loop_count": 263},
+    "training_model_registry": {"status": "PARTIAL", "reason": "dataset identity is not uniformly explicit in all legacy records"},
+    "strategy_package": {"status": "PASS", "active_package_count": 7, "explicit_legacy_v1_count": 4},
+    "production_runtime_profiles_sessions": {"status": "PASS", "running_paper_count": 16, "pending_qe_loop_count": 1},
+    "validation_audit_history": {"status": "PASS", "pit_v1_history_preserved": true},
+    "compute_node_manifests": {"status": "PARTIAL", "reason": "wsl2-5080 and rdagent-node1 both report qe_dataset_manifest_missing"}
+  },
+  "roots": [
+    {
+      "root_id": "wsl-ubuntu-home-data-unregistered-v1",
+      "path": "/home/lc999/data",
+      "volume_identity": "st_dev:2128",
+      "catalog_registered": false
+    },
+    {
+      "root_id": "aistock-x-candidate-v1",
+      "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates",
+      "volume_identity": "windows-volume-serial:5a161213",
+      "catalog_registered": false
+    }
+  ],
+  "releases": [
+    {
+      "release_or_candidate_id": "qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
+      "cutoff": "2026-06-30",
+      "kind": "production_legacy_release",
+      "paths": [
+        {"path": "/home/lc999/data/qlib_bin", "root_id": "wsl-ubuntu-home-data-unregistered-v1", "volume_identity": "st_dev:2128", "size_bytes": 405619378},
+        {"path": "/home/lc999/data/factor_data_versions/qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2", "root_id": "wsl-ubuntu-home-data-unregistered-v1", "volume_identity": "st_dev:2128", "size_bytes": 5558977337}
+      ],
+      "marker_or_manifest_digest": "f281a206bb90421fe97e8850b3155e846213d0bc386e728bd0256450639d6838",
+      "file_graph": {
+        "status": "PARTIAL_EXISTING_EVIDENCE",
+        "qlib_bin_pins": {
+          "instruments_sha256": "94c9d82de1ba60446d7d6114b39b1066fa3bda3f2a7b9787bb7f0ad4a2a05ca4",
+          "calendar_sha256": "6ab71db126fd8c0173831162d5413691c33bfecbbc81db687d8a2de7cc776031",
+          "meta_export_sha256": "66c5c070b368ec1352ce4031dce4be982d44894e58968bb3ead0cdc5b65eefb3"
+        },
+        "reason": "existing long-trend manifest covers selected H5 files; a complete release-wide Merkle is not present and W0 did not hash 5.5 GiB of production files"
+      },
+      "reference_state": {
+        "experiment_referenced": true,
+        "training_referenced": true,
+        "production_activated": true,
+        "audit_hold": true,
+        "published": true,
+        "terminal_failure": false,
+        "reference_absence_proven": false
+      },
+      "reference_evidence_refs": [
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "market.stock_universe_pit_state:shsz_st_pit_qe_dataset_qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
+        "qe_experiments.custom_params:244 matches",
+        "qe_evolution_loops.config_json:263 matches",
+        "wsl2-5080:long_trend_snapshot",
+        "rdagent-node1:long_trend_snapshot"
+      ],
+      "retention": {"class": "FULL_IMMUTABLE", "retain_complete_dataset": true, "retain_all_txt": true, "retain_pit_snapshot": true, "retain_manifests_and_receipts": true, "automatic_deletion_allowed": false, "reason_codes": ["experiment_referenced", "training_referenced", "production_activated", "audit_hold", "published"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-edcfec4b-20260810T212744Z-candidate",
+      "cutoff": "2026-07-31",
+      "kind": "validated_full_candidate",
+      "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-edcfec4b-20260810T212744Z-candidate",
+      "root_id": "aistock-x-candidate-v1",
+      "volume_identity": "windows-volume-serial:5a161213",
+      "declared_component_size_bytes": 43468364866,
+      "receipt_sha256": "7c4de132b0d67df84be17cd6aeb4aca374ff182f514e46e4d9bfb01f8111c1bb",
+      "producer_provenance_state": "DIRTY_SOURCE_TREE",
+      "source_commit": "41504a205b9372a4e709587dc2310fd8143c6c6d",
+      "source_tree_digest": "6be14ac112800937969b7bc5a342bbb40e19ca10f416fb99ac2045925d389155",
+      "source_profile_config_sha256": "edcfec4bf76845a21f2f35f28cce232464d65ecf462c87ea97cfc2e8ab147c8a",
+      "file_graph_digest": "8b431fbcfd0ee60f49ce307740dffa24d10bc56e907bd6fe1dc14309a77d1893",
+      "file_graph_encoding": "sha256(canonical_json(sorted(component,path,size,sha256)))",
+      "file_graph_entry_count": 125032,
+      "run_state": "final_validation_validated",
+      "activation_status": "not_requested",
+      "reference_state": {"experiment_referenced": false, "training_referenced": false, "production_activated": false, "audit_hold": true, "published": false, "terminal_failure": false, "reference_absence_proven": false},
+      "reference_evidence_refs": ["user_hold:preserve_20260731_candidate", "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md", "dataset_release_receipt.json"],
+      "retention": {"class": "FULL_IMMUTABLE", "retain_complete_dataset": true, "retain_all_txt": true, "retain_pit_snapshot": true, "retain_manifests_and_receipts": true, "automatic_deletion_allowed": false, "reason_codes": ["audit_hold"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-edcfec4b-20260810T190930Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_full_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-edcfec4b-20260810T190930Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 43468364867, "receipt_sha256": "c44e6cea339103cf5537101aae51786b7891cb4a04131ba7b4a0a08d8519901f", "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-c5258768-20260811T053718Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_full_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-c5258768-20260811T053718Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-dbd3d94b-20260811T050446Z-candidate",
+      "cutoff": "2026-07-31", "kind": "incomplete_full_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-dbd3d94b-20260811T050446Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "fetching_source_overlays", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-edcfec4b-20260810T072438Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_full_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-edcfec4b-20260810T072438Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-full-edcfec4b-20260810T183935Z-candidate",
+      "cutoff": "2026-07-31", "kind": "planned_full_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-full-edcfec4b-20260810T183935Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "planned", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-43c42219-20260811T042615Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-43c42219-20260811T042615Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49841989, "receipt_sha256": "cd330f0a4f83f048b9cf0093c6f5fd111c37094fd1acda1cd2f53597a37bb179", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-ad7bc6df-20260811T034253Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-ad7bc6df-20260811T034253Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49808484, "receipt_sha256": "df8026be079935ed6fb95ae7205262ca5a2e6d1314c29144d1cf44686b599603", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-c5258768-20260811T053042Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-c5258768-20260811T053042Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49832923, "receipt_sha256": "23125485eed722ad74260b7f7c648fffee9b4a68ccb6bd752de0f673d849baa3", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T044722Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T044722Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49830581, "receipt_sha256": "a0a6a4afddb5d9b9a5563dbd4ba35f2d58110889cbae878e322794f515d2d8b7", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T045441Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T045441Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49830580, "receipt_sha256": "4bf5af8deaf5477526f0fdd6d02b348dbaea8e23bc051ba30b05b330185fbca9", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T050000Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-dbd3d94b-20260811T050000Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 49830580, "receipt_sha256": "4d131c98b6d783a87cd8b1d0a64342de768971ddf71fc4c88fb981d54add7dcc", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T065627Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T065627Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 47210950, "receipt_sha256": "844b815bbcfd9283cbf3d3a387c77fd5810d248b0cef5b4ea956936b5d9d8047", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T182326Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T182326Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 47216052, "receipt_sha256": "9cb150e9984b825f35514caec601d35cda31332198c1d23f2987f58ed865fe29", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T210353Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T210353Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 47216052, "receipt_sha256": "301f733034a3ebe7ab8f6b4488c1da1555aea6d199b0454495b6a103593e011a", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T212018Z-candidate",
+      "cutoff": "2026-07-31", "kind": "validated_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T212018Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": 47216052, "receipt_sha256": "992d9ee935fc6a500a326415ddac8dd9163b9b9689e7178c42f046a2b5afb5fb", "run_state": "final_validation_validated", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-43c42219-20260811T041718Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-43c42219-20260811T041718Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-ad7bc6df-20260811T040905Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-ad7bc6df-20260811T040905Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    },
+    {
+      "release_or_candidate_id": "20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T205852Z-candidate",
+      "cutoff": "2026-07-31", "kind": "invalid_sample_candidate", "path": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260731-qe_hmm_full_v1-sample-edcfec4b-20260810T205852Z-candidate", "root_id": "aistock-x-candidate-v1", "volume_identity": "windows-volume-serial:5a161213", "declared_component_size_bytes": null, "size_status": "not_measured_to_avoid_recursive_io", "receipt_sha256": null, "run_state": "candidate_invalid", "reference_absence_proven": false,
+      "retention": {"class": "FULL_IMMUTABLE", "automatic_deletion_allowed": false, "reason_codes": ["reference_state_unsettled"]}
+    }
+  ],
+  "summary": {
+    "release_or_candidate_count": 20,
+    "production_release_count": 1,
+    "x_candidate_directory_count": 19,
+    "full_candidate_count": 6,
+    "sample_candidate_count": 13,
+    "metadata_only_cleanup_candidate_count": 0,
+    "full_immutable_count": 20,
+    "reference_absence_proven_count": 0,
+    "cleanup_targets": []
+  }
+}

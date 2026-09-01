@@ -199,6 +199,7 @@ class _Repository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> Mapping[str, Any]:
         assert attempt_id == self.attempt["attempt_id"]
         assert phase in {
@@ -657,7 +658,9 @@ def test_worker_retries_transient_initialization_instead_of_exiting(tmp_path: Pa
         heartbeat_seconds=5,
         items_per_pass=1,
         archive_batch_size=1,
+        safety_sweep_seconds=0.01,
     )
+    repository.has_due_orchestrator_work = lambda **_kwargs: True  # type: ignore[attr-defined]
     stop_event = asyncio.Event()
     initialize_calls = 0
 
@@ -716,6 +719,9 @@ def test_pre_p0_2_schema_keeps_p0_1b_orchestrator_cycle_available() -> None:
     async def attempt_pass(_operation: Any) -> int:
         return 1
 
+    async def dispatch_pass() -> int:
+        return 1
+
     async def finalizer_pass() -> int:
         return 1
 
@@ -727,6 +733,7 @@ def test_pre_p0_2_schema_keeps_p0_1b_orchestrator_cycle_available() -> None:
     orchestrator._run_cancel_delivery_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
     orchestrator._run_pause_drain_pass = forbidden_p0_2_pass  # type: ignore[method-assign]
     orchestrator._run_bounded_pass = bounded_pass  # type: ignore[method-assign]
+    orchestrator._run_dispatch_pass = dispatch_pass  # type: ignore[method-assign]
     orchestrator._run_attempt_pass = attempt_pass  # type: ignore[method-assign]
     orchestrator._run_finalizer_pass = finalizer_pass  # type: ignore[method-assign]
     orchestrator.archive_pass = archive_pass  # type: ignore[method-assign]

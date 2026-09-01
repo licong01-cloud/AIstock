@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,31 @@ def test_every_validation_plan_is_reachable_from_module_registry() -> None:
 
     orphaned = sorted(str(plan["plan_key"]) for plan in plans if plan["plan_key"] not in referenced)
     assert orphaned == []
+
+
+def test_enabled_validation_plans_have_unambiguous_execution_modes() -> None:
+    catalog_path = Path("tests/aistock_validation/catalog/test_plans.yaml")
+    plans = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))["plans"]
+    counts: Counter[str] = Counter()
+
+    for plan in plans:
+        if not plan.get("enabled", True):
+            continue
+        runner_enabled = bool(plan.get("runner_enabled"))
+        explicit_mode = str(plan.get("execution_mode") or "").strip()
+        effective_mode = explicit_mode or ("controlled_runner" if runner_enabled else "")
+        assert effective_mode in {"controlled_runner", "ci", "delegated", "operator"}, plan["plan_key"]
+        if runner_enabled:
+            assert effective_mode == "controlled_runner", plan["plan_key"]
+        else:
+            assert explicit_mode in {"ci", "delegated", "operator"}, plan["plan_key"]
+        if effective_mode == "ci":
+            assert plan.get("ci_lane"), plan["plan_key"]
+        if effective_mode == "operator":
+            assert plan.get("requires_confirmation") or plan.get("writes_business_state"), plan["plan_key"]
+        counts[effective_mode] += 1
+
+    assert counts == Counter({"controlled_runner": 58, "delegated": 15, "ci": 2, "operator": 1})
 
 
 def _write_pass_repo(repo_root: Path) -> None:

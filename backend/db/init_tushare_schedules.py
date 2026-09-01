@@ -18,6 +18,8 @@ from .pg_pool import get_conn
 _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     # ── Phase 1 — 盘前 ──────────────────────────────────────────────
     {"dataset": "stk_limit",             "mode": "incremental", "frequency": "daily", "at": "09:01"},
+    {"dataset": "dividend",              "mode": "incremental", "frequency": "daily", "at": "07:20",
+     "date_strategy": "current_and_next_trading_day", "skip_auto_range": True},
     {"dataset": "suspend_d",             "mode": "incremental", "frequency": "1h",
      "date_strategy": "current_and_next_trading_day", "skip_auto_range": True},
     {"dataset": "_suspend_d_tminus1_1730", "mode": "incremental", "frequency": "daily", "at": "17:30",
@@ -74,8 +76,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v1"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "5b5e3aec97d4c833a67b7351b3f0d5284e80aaef4f102c9101f314e48c33dfc3"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v2"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a151d176ad6a6aa4a72d1fe11a590142ece7d7d0e3581f0b0773d64e706e443d"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 
