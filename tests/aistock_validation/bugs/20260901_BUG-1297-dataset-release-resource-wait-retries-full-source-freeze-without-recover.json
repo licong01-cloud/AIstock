@@ -15,6 +15,7 @@
     "backend/services/dataset_release/wsl_cgroup.py",
     "backend/services/dataset_release/wsl_resource_guardian.py",
     "backend/tests/dataset_release/test_build_processor.py",
+    "backend/tests/dataset_release/test_build_stage.py",
     "backend/tests/dataset_release/test_resolution_processor.py",
     "backend/tests/dataset_release/test_resource_gate.py",
     "backend/tests/dataset_release/test_resource_supervisor.py",
