@@ -106,6 +106,68 @@ test("historical range view separates batch and failed operation state without l
   await page.screenshot({ path: testInfo.outputPath("historical-range-1440x900.png"), fullPage: true });
 });
 
+test("research specs carry explicit selection top_k for single and native multi-alpha packages", async ({ page }) => {
+  await mockPage(page);
+  const createPayloads: Record<string, unknown>[] = [];
+  await page.route("**/api/v1/advisory/historical-range-batches", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    createPayloads.push(route.request().postDataJSON() as Record<string, unknown>);
+    return json(route, {
+      ok: true,
+      data: {
+        batch: { batch_id: "ahrb_new", status: "PLANNING", row_version: 1 },
+        operation: { operation_id: "ahrop_catalog", operation_type: "BUILD_SOURCE_CATALOG", status: "QUEUED", row_version: 1 },
+        operation_id: "ahrop_catalog",
+        exact_retry: false,
+        dispatch_state: "SCHEDULED",
+        links: { operation: "/api/v1/advisory/historical-range-operations/ahrop_catalog" },
+      },
+    }, 202);
+  });
+
+  await page.goto("/paper-v2/advisory?view=historical-range");
+  const researchFieldset = page.locator(".ahr-fieldset").filter({ hasText: "Research-only Program" });
+  const dateInputs = page.locator('.ahr-date-row input[type="date"]');
+  await dateInputs.nth(0).fill("2026-07-01");
+  await dateInputs.nth(1).fill("2026-07-21");
+
+  for (const [packageId, name, targetCount] of [
+    ["pkg_single", "Single Alpha history", "20"],
+    ["pkg_native_parent", "Native Multi Alpha history", "5"],
+  ]) {
+    await researchFieldset.getByRole("button").last().click();
+    const row = researchFieldset.locator(".ahr-research-row").last();
+    await row.locator("input").first().fill(name);
+    await row.locator("select").selectOption(packageId);
+    await row.locator('input[type="number"]').fill(targetCount);
+  }
+
+  await page.locator(".ahr-create .pv2-button-primary").click();
+  await expect.poll(() => createPayloads.length).toBe(1);
+  const specs = createPayloads[0].program_specs as Record<string, unknown>[];
+  expect(specs).toHaveLength(2);
+  expect(specs[0]).toMatchObject({
+    source_kind: "RESEARCH_PROGRAM_SPEC",
+    package_id: "pkg_single",
+    target_count: 20,
+    runtime_config: {
+      top_k: 20,
+      display_top_n: 20,
+      runtime_profile: { selection: { top_k: 20 } },
+    },
+  });
+  expect(specs[1]).toMatchObject({
+    source_kind: "RESEARCH_PROGRAM_SPEC",
+    package_id: "pkg_native_parent",
+    target_count: 5,
+    runtime_config: {
+      top_k: 5,
+      display_top_n: 5,
+      runtime_profile: { selection: { top_k: 5 } },
+    },
+  });
+});
+
 test("historical range view distinguishes finished partial and retryable facts", async ({ page }) => {
   await mockPage(page, { batchStatus: "PARTIAL", runStatus: "RETRYABLE_FAILED", recoverableProgramCount: 0 });
   await page.goto("/paper-v2/advisory?view=historical-range");
