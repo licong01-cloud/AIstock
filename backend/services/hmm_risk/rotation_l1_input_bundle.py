@@ -20,6 +20,7 @@ import tempfile
 import time
 import unicodedata
 import uuid
+from bisect import bisect_right
 from collections import defaultdict, deque
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, timedelta
@@ -226,7 +227,11 @@ _SOURCE_STATUS_VALUES = frozenset(
 )
 _SOURCE_STATUS_PROVIDERS = frozenset({"frozen_release", "suspend_d", "c013", "tushare", "moneyflow_h5"})
 _SOURCE_INVALID_REASONS = frozenset(
-    {"hmm_risk_rotation_l1_moneyflow_invalid", "hmm_risk_rotation_l1_daily_basic_invalid"}
+    {
+        "hmm_risk_rotation_l1_moneyflow_invalid",
+        "hmm_risk_rotation_l1_daily_basic_invalid",
+        "hmm_risk_c010_price_unavailable_for_opportunity",
+    }
 )
 
 
@@ -369,6 +374,36 @@ def _iter_fixed_h5_frames(
             yield frame
 
 
+def _fixed_h5_label_lower_bound(label_node: Any, value: int) -> int:
+    lower = 0
+    upper = int(label_node.shape[0])
+    while lower < upper:
+        middle = (lower + upper) // 2
+        if int(label_node[middle]) < value:
+            lower = middle + 1
+        else:
+            upper = middle
+    return lower
+
+
+def _validate_fixed_h5_date_labels(label_node: Any, *, level_count: int, max_rows: int = 100_000) -> None:
+    if max_rows <= 0 or level_count <= 0:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "fixed H5 date label validation contract differs")
+    previous: int | None = None
+    row_count = int(label_node.shape[0])
+    for start in range(0, row_count, max_rows):
+        labels = np.asarray(label_node.read(start, min(row_count, start + max_rows)), dtype=np.int64)
+        if (
+            np.any(labels < 0)
+            or np.any(labels >= level_count)
+            or np.any(labels[1:] < labels[:-1])
+            or (previous is not None and len(labels) and int(labels[0]) < previous)
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "fixed H5 date labels are not sorted within levels")
+        if len(labels):
+            previous = int(labels[-1])
+
+
 def _load_fixed_h5_window(
     path: Path,
     *,
@@ -377,6 +412,7 @@ def _load_fixed_h5_window(
     start: date,
     end: date,
     max_rows: int = 100_000,
+    labels_prevalidated: bool = False,
 ) -> pd.DataFrame:
     parts: list[pd.DataFrame] = []
     lower_ns = int(pd.Timestamp(start).value)
@@ -387,7 +423,7 @@ def _load_fixed_h5_window(
             columns = tuple(bytes(value).rstrip(b"\x00").decode("utf-8") for value in group.axis0.read())
             date_levels = np.asarray(group.axis1_level0.read(), dtype=np.int64)
             code_levels = np.asarray(group.axis1_level1.read())
-            date_labels = np.asarray(group.axis1_label0.read(), dtype=np.int64)
+            date_label_node = group.axis1_label0
             code_labels = group.axis1_label1
             values = group.block0_values
         except tables.NoSuchNodeError as exc:
@@ -398,20 +434,38 @@ def _load_fixed_h5_window(
             or values.dtype != dtype
             or values.ndim != 2
             or int(values.shape[1]) != len(columns)
-            or len(date_labels) != int(values.shape[0])
+            or int(date_label_node.shape[0]) != int(values.shape[0])
             or int(code_labels.shape[0]) != int(values.shape[0])
             or date_levels.ndim != 1
             or np.any(date_levels[1:] <= date_levels[:-1])
-            or np.any(date_labels[1:] < date_labels[:-1])
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 layout differs")
+        date_labels: np.ndarray | None
+        if labels_prevalidated:
+            date_labels = None
+        else:
+            date_labels = np.asarray(date_label_node.read(), dtype=np.int64)
+            if (
+                np.any(date_labels < 0)
+                or np.any(date_labels >= len(date_levels))
+                or np.any(date_labels[1:] < date_labels[:-1])
+            ):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 date labels differ")
         first_level = int(np.searchsorted(date_levels, lower_ns, side="left"))
         after_level = int(np.searchsorted(date_levels, upper_ns, side="right"))
-        row_start = int(np.searchsorted(date_labels, first_level, side="left"))
-        row_stop = int(np.searchsorted(date_labels, after_level, side="left"))
+        if date_labels is None:
+            row_start = _fixed_h5_label_lower_bound(date_label_node, first_level)
+            row_stop = _fixed_h5_label_lower_bound(date_label_node, after_level)
+        else:
+            row_start = int(np.searchsorted(date_labels, first_level, side="left"))
+            row_stop = int(np.searchsorted(date_labels, after_level, side="left"))
         for chunk_start in range(row_start, row_stop, max_rows):
             chunk_stop = min(row_stop, chunk_start + max_rows)
-            date_index = date_labels[chunk_start:chunk_stop]
+            date_index = (
+                np.asarray(date_label_node.read(chunk_start, chunk_stop), dtype=np.int64)
+                if date_labels is None
+                else date_labels[chunk_start:chunk_stop]
+            )
             code_index = np.asarray(code_labels.read(chunk_start, chunk_stop), dtype=np.int64)
             if np.any(code_index < 0) or np.any(code_index >= len(code_levels)):
                 raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 code labels escape levels")
@@ -446,7 +500,8 @@ def _fixed_h5_inventory(
             dates = np.asarray(group.axis1_level0.read(), dtype=np.int64)
             codes = np.asarray(group.axis1_level1.read())
             values = group.block0_values
-            rows = int(group.axis1_label0.shape[0])
+            date_labels = group.axis1_label0
+            rows = int(date_labels.shape[0])
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory nodes differ") from exc
         dtype = np.dtype(expected_dtype)
@@ -458,8 +513,10 @@ def _fixed_h5_inventory(
             or int(values.shape[1]) != len(columns)
             or len(dates) == 0
             or len(codes) == 0
+            or np.any(dates[1:] <= dates[:-1])
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory contract differs")
+        _validate_fixed_h5_date_labels(date_labels, level_count=len(dates))
         return {
             "columns": list(columns),
             "dtype": dtype.name,
@@ -553,13 +610,20 @@ def _read_qlib_stock_rows(
     positions = [index for index in expected_positions if start_index <= index < start_index + length]
     if positions != expected_positions:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    result = np.zeros(len(positions), dtype=_QLIB_SOURCE_DTYPE)
-    for output_index, calendar_index in enumerate(positions):
-        result[output_index]["trade_date"] = int(calendar[calendar_index].strftime("%Y%m%d"))
-        result[output_index]["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
-        local = calendar_index - start_index
-        for field in QLIB_STOCK_FIELDS:
-            result[output_index][field] = arrays[field][1][local]
+    calendar_positions = np.asarray(positions, dtype=np.int64)
+    local_positions = calendar_positions - start_index
+    result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
+    result["trade_date"] = np.fromiter(
+        (
+            calendar[index].year * 10_000 + calendar[index].month * 100 + calendar[index].day
+            for index in calendar_positions
+        ),
+        dtype="<i4",
+        count=len(calendar_positions),
+    )
+    result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
+    for field in QLIB_STOCK_FIELDS:
+        result[field] = arrays[field][1][local_positions]
     return result
 
 
@@ -653,6 +717,16 @@ def _raw_qlib_values(raw: np.void) -> dict[str, float]:
     if values["limit_up"] not in (0.0, 1.0) or values["limit_down"] not in (0.0, 1.0):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib limit flags must be exact 0/1")
     return values
+
+
+def _qlib_row_is_fully_missing(raw: np.void) -> bool:
+    values = np.asarray([float(raw[field]) for field in QLIB_STOCK_FIELDS], dtype=np.float64)
+    if bool(np.isnan(values).all()):
+        return True
+    finite = np.isfinite(values)
+    if not bool(finite.all()):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib stock row is only partially finite")
+    return False
 
 
 def load_rotation_l1_source_assets(manifest_path: Path) -> dict[str, Any]:
@@ -969,6 +1043,100 @@ def _load_benchmark_returns(path: Path, *, calendar: Sequence[date]) -> dict[dat
     return output
 
 
+class _SecurityResolutionIndex:
+    def __init__(self, manifest: Any) -> None:
+        self._manifest = manifest
+        self.rows = manifest.rows
+        grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
+        for row in self.rows:
+            grouped[(row.source_dataset, row.canonical_ts_code)].append(row)
+        self._rows_by_key: dict[tuple[str, str], tuple[Any, ...]] = {}
+        for key, rows in grouped.items():
+            ordered = tuple(sorted(rows, key=lambda row: (row.effective_start, row.effective_end)))
+            for previous, current in zip(ordered, ordered[1:]):
+                if current.effective_start <= previous.effective_end:
+                    raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"security source intervals overlap: {key}")
+            self._rows_by_key[key] = ordered
+        self._default_cache: dict[tuple[str, str], Any] = {}
+
+    def resolve(self, canonical_ts_code: str, trade_date: date, source_dataset: str) -> Any:
+        key = (source_dataset, canonical_ts_code)
+        for row in self._rows_by_key.get(key, ()):
+            if row.effective_start <= trade_date <= row.effective_end:
+                return row
+        cached = self._default_cache.get(key)
+        if cached is None:
+            cached = self._manifest.resolve(canonical_ts_code, trade_date, source_dataset)
+            self._default_cache[key] = cached
+        return cached
+
+    def evidence(self) -> dict[str, Any]:
+        return self._manifest.evidence()
+
+
+def _industry_projection_identity(value: Any) -> tuple[Any, ...]:
+    return (
+        value.status,
+        value.l1_code,
+        value.l1_name,
+        value.l2_code,
+        value.l2_name,
+        value.reason_code,
+        value.classification_receipt_hash,
+        value.index_membership_receipt_hash,
+        tuple(value.classification_row_hashes),
+        tuple(value.index_membership_row_hashes),
+        value.alignment_state,
+        value.classification_research_basis,
+        value.non_as_known_taxonomy,
+    )
+
+
+class _IndustryProjectionIndex:
+    def __init__(self, adapter: HMMIndustryPitAdapter, *, calendar: Sequence[date]) -> None:
+        self._adapter = adapter
+        if not calendar or tuple(calendar) != tuple(sorted(set(calendar))):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection calendar is not sorted and unique")
+        self._start = calendar[0]
+        self._end = calendar[-1]
+        self._intervals: dict[str, tuple[tuple[date, date, Any], ...]] = {}
+        self._starts: dict[str, tuple[date, ...]] = {}
+
+    def _build(self, symbol: str) -> None:
+        boundaries = {self._start, self._end + timedelta(days=1)}
+        for resolver in (self._adapter.classification_resolver, self._adapter.index_membership_resolver):
+            boundaries.update(day for day in resolver.transition_dates(symbol) if self._start < day <= self._end)
+        ordered = sorted(boundaries)
+        intervals: list[tuple[date, date, Any]] = []
+        identities: list[tuple[Any, ...]] = []
+        for start, after_end in zip(ordered, ordered[1:]):
+            projection = self._adapter.resolve(symbol, start)
+            identity = _industry_projection_identity(projection)
+            end = after_end - timedelta(days=1)
+            if intervals and identities[-1] == identity and intervals[-1][1] + timedelta(days=1) == start:
+                previous_start, _previous_end, previous = intervals[-1]
+                intervals[-1] = (previous_start, end, previous)
+            else:
+                intervals.append((start, end, projection))
+                identities.append(identity)
+        self._intervals[symbol] = tuple(intervals)
+        self._starts[symbol] = tuple(start for start, _end, _projection in intervals)
+
+    def resolve(self, symbol: str, trade_date: date) -> Any:
+        if trade_date < self._start or trade_date > self._end:
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection date escapes source calendar")
+        if symbol not in self._intervals:
+            self._build(symbol)
+        starts = self._starts[symbol]
+        position = bisect_right(starts, trade_date) - 1
+        if position < 0:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "industry projection interval is unavailable")
+        start, end, projection = self._intervals[symbol][position]
+        if not start <= trade_date <= end:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "industry projection interval does not cover date")
+        return projection
+
+
 def _spool_qlib_months(
     qlib_root: Path,
     *,
@@ -995,17 +1163,19 @@ def _spool_qlib_months(
                 calendar=calendar,
                 active_spans=active_spans,
             )
-            months: dict[str, list[int]] = defaultdict(list)
-            for index, value in enumerate(rows["trade_date"]):
-                months[str(int(value))[:6]].append(index)
-            for month, indices in months.items():
+            if not len(rows):
+                continue
+            month_codes = rows["trade_date"] // 100
+            boundaries = np.flatnonzero(month_codes[1:] != month_codes[:-1]) + 1
+            for month_rows in np.split(rows, boundaries):
+                month = str(int(month_rows["trade_date"][0]) // 100)
                 path = spool_root / f"{month}.bin"
                 handle = handles.get(month)
                 if handle is None:
                     handle = path.open("xb")
                     handles[month] = handle
                     paths[month] = path
-                rows[np.asarray(indices, dtype=np.int64)].tofile(handle)
+                month_rows.tofile(handle)
     finally:
         for handle in handles.values():
             handle.flush()
@@ -1100,6 +1270,41 @@ def _append_feature_domain_aggregate(
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{level} stock fact aggregation failed") from exc
         return
     aggregates.append(aggregate)
+
+
+def _append_day_level_aggregates(
+    day_rows: Sequence[dict[str, Any]],
+    *,
+    l1_aggregates: list[Any],
+    l2_aggregates: list[Any],
+    unavailable: dict[tuple[date, str, str], str],
+    contributor_eligibility: Mapping[str, bool],
+) -> None:
+    l1_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    l2_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in day_rows:
+        l1_groups[str(row["l1_code"])].append(row)
+        l2_groups[str(row["l2_code"])].append(row)
+    for code in sorted(l1_groups):
+        _append_feature_domain_aggregate(
+            l1_groups[code],
+            level="L1",
+            aggregates=l1_aggregates,
+            unavailable=unavailable,
+            contributor_eligibility=contributor_eligibility,
+        )
+    for code in sorted(l2_groups):
+        rows = l2_groups[code]
+        for row in rows:
+            row["l1_code"] = row["l2_code"]
+            row["l1_name"] = row["l2_name"]
+        _append_feature_domain_aggregate(
+            rows,
+            level="L2",
+            aggregates=l2_aggregates,
+            unavailable=unavailable,
+            contributor_eligibility=contributor_eligibility,
+        )
 
 
 def _build_train_only_contributor_eligibility(
@@ -1204,6 +1409,7 @@ def _build_stock_fact_aggregates(
                 expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
+                labels_prevalidated=True,
             )
         )
         moneyflow = _h5_lookup(
@@ -1213,6 +1419,7 @@ def _build_stock_fact_aggregates(
                 expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
+                labels_prevalidated=True,
             )
         )
         source_rows = _read_spooled_month(month_path)
@@ -1235,11 +1442,12 @@ def _build_stock_fact_aggregates(
                 flow_resolution = security.resolve(symbol, day, "market.moneyflow_ts")
                 basic_row = basic.get((day, daily_resolution.source_ts_code))
                 flow_row = moneyflow.get((day, flow_resolution.source_ts_code))
+                qlib_missing = _qlib_row_is_fully_missing(raw)
                 if basic_row is not None and math.isfinite(float(basic_row[15])) and float(basic_row[15]) > 0:
                     current_basic_updates.append((symbol, float(basic_row[15]) * 10_000.0))
                 projection = adapter.resolve(symbol, day)
                 if projection.status != "resolved":
-                    if not suspended:
+                    if not suspended and not qlib_missing:
                         history[symbol].append(_raw_qlib_values(raw)["close"])
                     _advance_interval(
                         status_active,
@@ -1281,7 +1489,6 @@ def _build_stock_fact_aggregates(
                         }
                     )
                     continue
-                qlib = _raw_qlib_values(raw)
                 prior = circ_state.get(symbol)
                 prior_circ = prior[1] if prior is not None and prior[0] >= eligible_start else None
                 prices = history[symbol]
@@ -1289,7 +1496,9 @@ def _build_stock_fact_aggregates(
                 previous_10 = prices[-10] if len(prices) >= 10 else None
                 moneyflow_status = "available"
                 provider_evidence = None
-                if flow_row is None:
+                if qlib_missing:
+                    moneyflow_status = "not_applicable_price_unavailable"
+                elif flow_row is None:
                     try:
                         provider_evidence = provider_absence.resolve(
                             canonical_ts_code=symbol,
@@ -1306,7 +1515,13 @@ def _build_stock_fact_aggregates(
                         moneyflow_status = "provider_absence"
                 elif any(not math.isfinite(float(flow_row[index])) for index in (1, 3, 13, 15, 17)):
                     moneyflow_status = "required_fields_invalid"
-                if basic_row is None or any(not math.isfinite(float(basic_row[index])) for index in (14, 15)):
+                if qlib_missing:
+                    source_status = (
+                        "source_invalid",
+                        "hmm_risk_c010_price_unavailable_for_opportunity",
+                        "frozen_release",
+                    )
+                elif basic_row is None or any(not math.isfinite(float(basic_row[index])) for index in (14, 15)):
                     source_status = (
                         "source_invalid",
                         "hmm_risk_rotation_l1_daily_basic_invalid",
@@ -1334,6 +1549,42 @@ def _build_stock_fact_aggregates(
                     payload=source_status,
                     previous_trading_day=previous_day,
                 )
+                if qlib_missing:
+                    day_rows.append(
+                        {
+                            "trade_date": day,
+                            "symbol": symbol,
+                            "l1_code": projection.l1_code,
+                            "l1_name": projection.l1_name,
+                            "l2_code": projection.l2_code,
+                            "l2_name": projection.l2_name,
+                            "is_suspended": False,
+                            "open_yuan": None,
+                            "high_yuan": None,
+                            "low_yuan": None,
+                            "close_yuan": None,
+                            "volume_shares": None,
+                            "amount_cny": None,
+                            "prev_close_yuan": None,
+                            "prev_close_5_yuan": previous_5,
+                            "prev_close_10_yuan": previous_10,
+                            "total_mv_cny": None if basic_row is None else float(basic_row[14]) * 10_000.0,
+                            "prev_circ_mv_cny": prior_circ,
+                            "up_limit_yuan": None,
+                            "buy_sm_amount_cny": None,
+                            "sell_sm_amount_cny": None,
+                            "buy_elg_amount_cny": None,
+                            "sell_elg_amount_cny": None,
+                            "net_mf_amount_cny": None,
+                            "moneyflow_fact_status": moneyflow_status,
+                            "moneyflow_source_identity": flow_resolution.evidence(),
+                            "moneyflow_provider_absence": (
+                                None if provider_evidence is None else provider_evidence.evidence()
+                            ),
+                        }
+                    )
+                    continue
+                qlib = _raw_qlib_values(raw)
                 row = {
                     "trade_date": day,
                     "symbol": symbol,
@@ -1367,29 +1618,13 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
             for symbol, value in current_basic_updates:
                 circ_state[symbol] = (day, value)
-            l1_sorted = sorted(day_rows, key=lambda row: (str(row["l1_code"]), str(row["symbol"]), str(row["l2_code"])))
-            for _, group in itertools.groupby(l1_sorted, key=lambda row: str(row["l1_code"])):
-                _append_feature_domain_aggregate(
-                    list(group),
-                    level="L1",
-                    aggregates=l1_aggregates,
-                    unavailable=unavailable,
-                    contributor_eligibility=contributor_eligibility,
-                )
-            l2_rows: list[dict[str, Any]] = []
-            for row in sorted(day_rows, key=lambda item: (str(item["l2_code"]), str(item["symbol"]))):
-                projected = dict(row)
-                projected["l1_code"] = row["l2_code"]
-                projected["l1_name"] = row["l2_name"]
-                l2_rows.append(projected)
-            for _, group in itertools.groupby(l2_rows, key=lambda row: str(row["l1_code"])):
-                _append_feature_domain_aggregate(
-                    list(group),
-                    level="L2",
-                    aggregates=l2_aggregates,
-                    unavailable=unavailable,
-                    contributor_eligibility=contributor_eligibility,
-                )
+            _append_day_level_aggregates(
+                day_rows,
+                l1_aggregates=l1_aggregates,
+                l2_aggregates=l2_aggregates,
+                unavailable=unavailable,
+                contributor_eligibility=contributor_eligibility,
+            )
     interval_evidence = {
         "industry": [
             {
@@ -1460,6 +1695,21 @@ def _security_intervals(security: Any, spans: Mapping[str, Sequence[tuple[date, 
             row["source_code"],
         ),
     )
+
+
+def _canonical_sector_codes(adapter: HMMIndustryPitAdapter) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    l1_codes = tuple(sorted(adapter.constituents))
+    l2_codes = tuple(
+        sorted(
+            {
+                str(code)
+                for l1_code, value in adapter.constituents.items()
+                if str(value.get("l1_code") or "") == l1_code
+                for code in value.get("l2_codes", [])
+            }
+        )
+    )
+    return l1_codes, l2_codes
 
 
 def _unavailable_rows(
@@ -1544,16 +1794,18 @@ def build_rotation_l1_inputs_from_assets(
         )
     except Exception as exc:
         raise _fail(REASON_AUTHORITY_AMBIGUOUS, "security/provider authority cannot be bound") from exc
+    security = _SecurityResolutionIndex(security)
     suspension_keys = _load_suspend_keys(
         assets["files"]["suspend_data"],
         assets["files"]["suspend_manifest"],
         calendar=calendar,
     )
     benchmark = _load_benchmark_returns(assets["files"]["index_context"], calendar=calendar)
+    projection_index = _IndustryProjectionIndex(adapter, calendar=calendar)
     contributor_eligibility, eligibility_receipt = _build_train_only_contributor_eligibility(
         spans=spans,
         calendar=calendar,
-        adapter=adapter,
+        adapter=projection_index,
         security=security,
         provider_absence=provider_absence,
         suspension_keys=suspension_keys,
@@ -1581,7 +1833,7 @@ def build_rotation_l1_inputs_from_assets(
             assets=assets,
             calendar=calendar,
             spans=spans,
-            adapter=adapter,
+            adapter=projection_index,
             security=security,
             provider_absence=provider_absence,
             suspension_keys=suspension_keys,
@@ -1590,16 +1842,7 @@ def build_rotation_l1_inputs_from_assets(
         )
         observed_l1 = {(item.trade_date, item.l1_code) for item in l1_aggregates}
         observed_l2 = {(item.trade_date, item.l1_code) for item in l2_aggregates}
-        l1_codes = tuple(sorted(adapter.constituents))
-        l2_codes = tuple(
-            sorted(
-                {
-                    str(value["index_code"])
-                    for (level, _alias), value in adapter.classification_lookup.items()
-                    if level == "L2"
-                }
-            )
-        )
+        l1_codes, l2_codes = _canonical_sector_codes(adapter)
         if len(l1_codes) != 31 or len(l2_codes) != 131:
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "C-013 canonical 31/131 sector set differs")
         for day in calendar:
