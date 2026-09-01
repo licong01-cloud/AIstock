@@ -1,12 +1,18 @@
 {
   "actual": "The authoritative config defaults to github_models/deepseek-r1 and hard-codes deepseek-v4-pro; live Nightly run 33449504361 recorded deepseek_api 402 followed by github_models 410.",
   "allowed_write_scope": [
+    "configs/validation/llm_triage.yaml",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/llm_provider_adapter.py",
+    "scripts/ci_failure_issue_summary.py",
+    "noxfile.py",
     ".github/workflows/nightly.yml",
     ".github/workflows/test.yml",
     "backend/tests/scripts/test_llm_provider_adapter.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+    "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
     "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json"
   ],
   "assigned_agent": null,
@@ -25,6 +31,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260901-674437e19721",
       "timestamp": "2026-09-01T02:00:18.367942Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Expanded scope to the previously unowned authoritative LLM config, Nightly summary provider contract, focused tests, and the directly conflicting architecture/runbook text.",
+      "timestamp": "2026-09-01T02:06:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added noxfile.py after workflow-automation execution exposed one remaining active github_models smoke invocation.",
+      "timestamp": "2026-09-01T02:22:00Z"
     }
   ],
   "evidence_uris": [
