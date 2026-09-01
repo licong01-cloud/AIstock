@@ -49,14 +49,22 @@
   ],
   "expected": "Soft-disable the old factor with causal-quarantine metadata, retire every non-retired direct or indirect StrategyPackage dependency, publish a new PIT-v2 factor identity after append-invariance validation, and make all supported factor lifecycle writes match the live catalog schema.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/factor_library.py",
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/factor_cleanup_service.py",
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1302-pit-invalid-factor-remains-selectable-because-factor-lifecycle-writes-ta.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/routers/quantevolver.py",
       "backend/routers/factor_library.py",
+      "backend/routers/quantevolver.py",
       "backend/services/quantevolver/factor_cleanup_service.py",
-      "backend/tests/strategy_package/test_factor_library_protection_batch4.py"
+      "backend/tests/strategy_package/test_factor_library_protection_batch4.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1302-pit-invalid-factor-remains-selectable-because-factor-lifecycle-writes-ta.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/quantevolver.py",
@@ -179,14 +187,19 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum?source=manual",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/neg_vol_adjusted_momentum_pit_v2?source=manual",
     "fresh_process_evidence": [
-      "Fresh Python process imported branch router/service code and exercised existing DEV schema: quarantine availability and register returned 409; missing disable paths executed current SQL and returned 404/failed with zero writes; quarantine rollback reported rehab_count=0 and blocked_quarantine_count=1; DB readback retained catalog id 1235 disabled and pkg_b668f8a633c44b72a5d557a2cb8970e3 RETIRED."
+      "Fresh Python process imported branch router/service code and exercised existing DEV schema: quarantine availability and register returned 409; missing disable paths executed current SQL and returned 404/failed with zero writes; quarantine rollback reported rehab_count=0 and blocked_quarantine_count=1; DB readback retained catalog id 1235 disabled and pkg_b668f8a633c44b72a5d557a2cb8970e3 RETIRED.",
+      "Fresh branch process against existing DEV: quarantined old identity returned 409 for enable/register; missing factor paths made zero writes; cleanup rollback blocked quarantine; readback old factor disabled and direct package RETIRED."
     ],
-    "inference_basis": "planned_scope",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
