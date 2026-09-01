@@ -142,9 +142,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported the BUG-1309 branch HMM adapter, verified L2 projection v1, mapping manifest v3 and preflight v2 identities, and printed BUG1309_FRESH_PROCESS_IMPORT_OK."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "backend",

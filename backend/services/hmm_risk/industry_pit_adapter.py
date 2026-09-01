@@ -41,16 +41,20 @@ from .state_model_set import StateModelSetError
 
 
 HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA = "hmm_risk_industry_pit_authority_v1"
-HMM_INDUSTRY_PIT_PREFLIGHT_SCHEMA = "hmm_risk_industry_pit_601d_preflight_v1"
-HMM_MAPPING_MANIFEST_SCHEMA = "hmm_risk_pit_mapping_manifest_v2"
+HMM_INDUSTRY_PIT_PREFLIGHT_SCHEMA = "hmm_risk_industry_pit_601d_preflight_v2"
+HMM_MAPPING_MANIFEST_SCHEMA = "hmm_risk_pit_mapping_manifest_v3"
 HMM_L1_CODE_PROJECTION_SCHEMA = "hmm_risk_industry_l1_code_projection_v1"
 HMM_L1_CODE_PROJECTION_ROW_SCHEMA = "hmm_risk_industry_l1_code_projection_row_v1"
+HMM_L2_CODE_PROJECTION_SCHEMA = "hmm_risk_industry_l2_code_projection_v1"
+HMM_L2_CODE_PROJECTION_ROW_SCHEMA = "hmm_risk_industry_l2_code_projection_row_v1"
 HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA = "hmm_risk_industry_pit_research_basis_v1"
 HMM_STABLE_BACKCAST_CANDIDATE_SCHEMA = "hmm_risk_stable_taxonomy_backcast_candidate_v1"
 HMM_G2A_DATA_A_CONTRACT_VERSION = "c013_g2a_data_a_v1"
 HMM_L1_CODE_PROJECTION_VERSION = "sw2021_taxonomy_to_published_l1_v1"
+HMM_L2_CODE_PROJECTION_VERSION = "sw2021_taxonomy_to_published_member_backed_l2_v1"
 EXPECTED_PREFLIGHT_TRADING_DAYS = 601
 _CANONICAL_SW_L1_CODE = re.compile(r"^801[0-9]{3}[.]SI$")
+_CANONICAL_SW_L2_CODE = re.compile(r"^801[0-9]{3}[.]SI$")
 _TAXONOMY_CODE = re.compile(r"^[0-9]{6}$")
 
 
@@ -175,6 +179,212 @@ def build_l1_code_projection_authority(
     }
 
 
+def build_l2_code_projection_authority(
+    *,
+    taxonomy_contract_id: str,
+    taxonomy_version: str,
+    projection_version: str,
+    taxonomy_rows: Sequence[Mapping[str, Any]],
+    published_index_rows: Sequence[Mapping[str, Any]],
+    member_index_rows: Sequence[Mapping[str, Any]],
+    l1_projection_authority: Mapping[str, Any],
+    source_ids: Sequence[str],
+    source_hashes: Sequence[str],
+) -> Mapping[str, Any]:
+    """Freeze the full 131-member-backed published SW2021 L2 catalog.
+
+    Historical stock classification remains owned by C-013.  This authority
+    only projects an already-resolved taxonomy L2 identity onto its published
+    index code.  The 131 denominator is supplied by the frozen member catalog,
+    never inferred from L2 identities observed in a training window.
+    """
+
+    expected_l1_keys = {
+        "schema_version",
+        "projection_version",
+        "taxonomy_contract_id",
+        "taxonomy_version",
+        "source_ids",
+        "source_hashes",
+        "rows",
+        "canonical_hash",
+    }
+    if (
+        projection_version != HMM_L2_CODE_PROJECTION_VERSION
+        or not str(taxonomy_contract_id).strip()
+        or not str(taxonomy_version).strip()
+        or not isinstance(l1_projection_authority, Mapping)
+        or set(l1_projection_authority) != expected_l1_keys
+        or l1_projection_authority.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+        or l1_projection_authority.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
+        or l1_projection_authority.get("taxonomy_contract_id") != taxonomy_contract_id
+        or l1_projection_authority.get("taxonomy_version") != taxonomy_version
+    ):
+        raise StateModelSetError("HMM industry PIT L2 projection requires the matching frozen L1 projection")
+    l1_body = {key: value for key, value in l1_projection_authority.items() if key != "canonical_hash"}
+    if digest_named_fields(HMM_L1_CODE_PROJECTION_SCHEMA, l1_body) != _require_sha256(
+        l1_projection_authority.get("canonical_hash"), "industry_pit.l2_projection.l1_projection_hash"
+    ):
+        raise StateModelSetError("HMM industry PIT L2 projection L1 authority hash is invalid")
+    raw_l1_rows = l1_projection_authority.get("rows")
+    if not isinstance(raw_l1_rows, list) or len(raw_l1_rows) != 31:
+        raise StateModelSetError("HMM industry PIT L2 projection L1 authority must contain exactly 31 rows")
+    l1_source_ids = l1_projection_authority.get("source_ids")
+    l1_source_hashes = l1_projection_authority.get("source_hashes")
+    if (
+        not isinstance(l1_source_ids, list)
+        or not l1_source_ids
+        or l1_source_ids != sorted({str(value).strip() for value in l1_source_ids if str(value).strip()})
+        or not isinstance(l1_source_hashes, list)
+        or not l1_source_hashes
+        or l1_source_hashes
+        != sorted({_require_sha256(value, "industry_pit.l2_projection.l1_source_hash") for value in l1_source_hashes})
+    ):
+        raise StateModelSetError("HMM industry PIT L2 projection L1 provenance is invalid")
+    l1_by_taxonomy: dict[str, tuple[str, str]] = {}
+    for raw in raw_l1_rows:
+        expected_l1_row_keys = {
+            "taxonomy_l1_code",
+            "taxonomy_l1_name",
+            "canonical_l1_code",
+            "canonical_l1_name",
+            "row_hash",
+        }
+        if not isinstance(raw, Mapping) or set(raw) != expected_l1_row_keys:
+            raise StateModelSetError("HMM industry PIT L2 projection L1 row is invalid")
+        taxonomy_l1_code = str(raw.get("taxonomy_l1_code") or "").strip()
+        taxonomy_l1_name = str(raw.get("taxonomy_l1_name") or "").strip()
+        canonical_l1_code = str(raw.get("canonical_l1_code") or "").strip()
+        canonical_l1_name = str(raw.get("canonical_l1_name") or "").strip()
+        row_body = {key: raw[key] for key in expected_l1_row_keys if key != "row_hash"}
+        if (
+            _TAXONOMY_CODE.fullmatch(taxonomy_l1_code) is None
+            or _CANONICAL_SW_L1_CODE.fullmatch(canonical_l1_code) is None
+            or taxonomy_l1_name != canonical_l1_name
+            or taxonomy_l1_code in l1_by_taxonomy
+            or digest_named_fields(HMM_L1_CODE_PROJECTION_ROW_SCHEMA, row_body)
+            != _require_sha256(raw.get("row_hash"), "industry_pit.l2_projection.l1_row_hash")
+        ):
+            raise StateModelSetError("HMM industry PIT L2 projection L1 row identity is invalid")
+        l1_by_taxonomy[taxonomy_l1_code] = (canonical_l1_code, canonical_l1_name)
+    if len(l1_by_taxonomy) != 31 or len({value[0] for value in l1_by_taxonomy.values()}) != 31:
+        raise StateModelSetError("HMM industry PIT L2 projection L1 authority does not close 31 sectors")
+
+    taxonomy: dict[str, tuple[str, str, str]] = {}
+    for raw in taxonomy_rows:
+        if not isinstance(raw, Mapping):
+            raise StateModelSetError("HMM industry PIT taxonomy L2 projection source row is invalid")
+        taxonomy_l1_code = str(raw.get("taxonomy_l1_code") or "").strip()
+        taxonomy_l1_name = str(raw.get("taxonomy_l1_name") or "").strip()
+        taxonomy_l2_code = str(raw.get("taxonomy_l2_code") or "").strip()
+        taxonomy_l2_name = str(raw.get("taxonomy_l2_name") or "").strip()
+        if (
+            _TAXONOMY_CODE.fullmatch(taxonomy_l1_code) is None
+            or _TAXONOMY_CODE.fullmatch(taxonomy_l2_code) is None
+            or not taxonomy_l1_name
+            or not taxonomy_l2_name
+            or l1_by_taxonomy.get(taxonomy_l1_code, (None, None))[1] != taxonomy_l1_name
+            or taxonomy_l2_code in taxonomy
+        ):
+            raise StateModelSetError("HMM industry PIT taxonomy L2 projection source row is invalid")
+        taxonomy[taxonomy_l2_code] = (taxonomy_l1_code, taxonomy_l1_name, taxonomy_l2_name)
+
+    published: dict[str, tuple[str, str, str]] = {}
+    for raw in published_index_rows:
+        if not isinstance(raw, Mapping):
+            raise StateModelSetError("HMM industry PIT published-index L2 projection source row is invalid")
+        taxonomy_l2_code = str(raw.get("industry_code") or "").strip()
+        canonical_l2_code = str(raw.get("index_code") or "").strip()
+        canonical_l2_name = str(raw.get("industry_name") or "").strip()
+        canonical_l1_code = str(raw.get("parent_code") or "").strip()
+        if (
+            str(raw.get("level") or "").strip().upper() != "L2"
+            or _TAXONOMY_CODE.fullmatch(taxonomy_l2_code) is None
+            or _CANONICAL_SW_L2_CODE.fullmatch(canonical_l2_code) is None
+            or _CANONICAL_SW_L1_CODE.fullmatch(canonical_l1_code) is None
+            or not canonical_l2_name
+            or taxonomy_l2_code in published
+        ):
+            raise StateModelSetError("HMM industry PIT published-index L2 projection source row is invalid")
+        published[taxonomy_l2_code] = (canonical_l2_code, canonical_l2_name, canonical_l1_code)
+    if len(taxonomy) != 134 or len(published) != 134 or set(taxonomy) != set(published):
+        raise StateModelSetError("HMM industry PIT L2 projection sources do not close the same 134 taxonomy codes")
+    if len({value[0] for value in published.values()}) != 134:
+        raise StateModelSetError("HMM industry PIT published-index L2 projection source has duplicate index codes")
+
+    member_owners: dict[str, set[str]] = defaultdict(set)
+    for raw in member_index_rows:
+        if not isinstance(raw, Mapping):
+            raise StateModelSetError("HMM industry PIT member-backed L2 source row is invalid")
+        source_l1_code = str(raw.get("l1_code") or "").strip()
+        canonical_l2_code = str(raw.get("l2_code") or "").strip()
+        if _CANONICAL_SW_L1_CODE.fullmatch(source_l1_code) is not None:
+            canonical_l1_code = source_l1_code
+        elif _TAXONOMY_CODE.fullmatch(source_l1_code) is not None:
+            projected_l1 = l1_by_taxonomy.get(source_l1_code)
+            canonical_l1_code = projected_l1[0] if projected_l1 is not None else ""
+        else:
+            canonical_l1_code = ""
+        if not canonical_l1_code or _CANONICAL_SW_L2_CODE.fullmatch(canonical_l2_code) is None:
+            raise StateModelSetError("HMM industry PIT member-backed L2 source row is invalid")
+        member_owners[canonical_l2_code].add(canonical_l1_code)
+    published_by_index = {value[0]: value for value in published.values()}
+    if len(member_owners) != 131 or not set(member_owners).issubset(published_by_index):
+        raise StateModelSetError("HMM industry PIT member-backed L2 catalog must contain exactly 131 published codes")
+    for canonical_l2_code, owners in member_owners.items():
+        if len(owners) != 1 or next(iter(owners)) != published_by_index[canonical_l2_code][2]:
+            raise StateModelSetError("HMM industry PIT member-backed L2 parent ownership differs")
+
+    member_backed_set = set(member_owners)
+    rows: list[dict[str, str]] = []
+    for taxonomy_l2_code, (canonical_l2_code, canonical_l2_name, canonical_l1_code) in sorted(published.items()):
+        if canonical_l2_code not in member_backed_set:
+            continue
+        taxonomy_l1_code, taxonomy_l1_name, taxonomy_l2_name = taxonomy[taxonomy_l2_code]
+        projected_l1_code, projected_l1_name = l1_by_taxonomy[taxonomy_l1_code]
+        if (
+            canonical_l1_code != projected_l1_code
+            or canonical_l2_name != taxonomy_l2_name
+            or projected_l1_name != taxonomy_l1_name
+        ):
+            raise StateModelSetError("HMM industry PIT L2 projection parent or name authority differs")
+        row_body = {
+            "taxonomy_l1_code": taxonomy_l1_code,
+            "taxonomy_l1_name": taxonomy_l1_name,
+            "taxonomy_l2_code": taxonomy_l2_code,
+            "taxonomy_l2_name": taxonomy_l2_name,
+            "canonical_l1_code": projected_l1_code,
+            "canonical_l1_name": projected_l1_name,
+            "canonical_l2_code": canonical_l2_code,
+            "canonical_l2_name": canonical_l2_name,
+        }
+        rows.append({**row_body, "row_hash": digest_named_fields(HMM_L2_CODE_PROJECTION_ROW_SCHEMA, row_body)})
+    if len(rows) != 131:
+        raise StateModelSetError("HMM industry PIT L2 projection output does not close 131 member-backed sectors")
+
+    normalized_ids = sorted(_require_nonempty_provenance_sequence(source_ids, "industry_pit.l2_projection.source_ids"))
+    normalized_hashes = sorted(
+        _require_nonempty_provenance_sequence(
+            source_hashes,
+            "industry_pit.l2_projection.source_hashes",
+            sha256=True,
+        )
+    )
+    body = {
+        "schema_version": HMM_L2_CODE_PROJECTION_SCHEMA,
+        "projection_version": str(projection_version).strip(),
+        "taxonomy_contract_id": str(taxonomy_contract_id).strip(),
+        "taxonomy_version": str(taxonomy_version).strip(),
+        "l1_projection_sha256": str(l1_projection_authority["canonical_hash"]),
+        "source_ids": normalized_ids,
+        "source_hashes": normalized_hashes,
+        "rows": rows,
+    }
+    if not body["projection_version"] or not body["taxonomy_contract_id"] or not body["taxonomy_version"]:
+        raise StateModelSetError("HMM industry PIT L2 projection version identity is incomplete")
+    return {**body, "canonical_hash": digest_named_fields(HMM_L2_CODE_PROJECTION_SCHEMA, body)}
+
+
 @dataclass(frozen=True, slots=True)
 class HMMIndustryProjection:
     status: str
@@ -241,7 +451,10 @@ class HMMIndustryPitAdapter:
         self._taxonomy_l1, self._taxonomy_l2_by_l1 = self._build_taxonomy_projection()
         self._classification_lookup: dict[tuple[str, str], dict[str, str]] | None = None
         self._constituents: dict[str, dict[str, Any]] | None = None
+        self._l1_projection_by_taxonomy: dict[str, str] | None = None
         self._l1_projection_sha256: str | None = None
+        self._l2_projection_by_taxonomy: dict[str, tuple[str, str, str]] | None = None
+        self._l2_projection_sha256: str | None = None
         self._source_classification_receipt_hash = classification_receipt.receipt_hash
         self._research_basis_contract_sha256: str | None = None
         self._active_classification_basis = classification_receipt.research_basis.value
@@ -373,7 +586,6 @@ class HMMIndustryPitAdapter:
         if set(projection_by_taxonomy) != set(self._taxonomy_l1) or len(set(projection_by_taxonomy.values())) != 31:
             raise StateModelSetError("HMM industry PIT L1 code projection does not close the frozen 31-sector catalog")
         rows: list[dict[str, str]] = []
-        constituents: dict[str, dict[str, Any]] = {}
         for taxonomy_code, name in sorted(self._taxonomy_l1.items()):
             l1_code = projection_by_taxonomy[taxonomy_code]
             rows.append(
@@ -384,13 +596,6 @@ class HMMIndustryPitAdapter:
                     "industry_name": name,
                 }
             )
-            constituents[l1_code] = {
-                "schema_version": "hmm_risk_l1_pit_l2_constituents_v2",
-                "l1_code": l1_code,
-                "l2_codes": sorted(code for code, _ in self._taxonomy_l2_by_l1[taxonomy_code]),
-                "classification_authority_receipt_hash": self.classification_resolver.receipt.receipt_hash,
-                "l1_projection_authority": HMM_L1_CODE_PROJECTION_SCHEMA,
-            }
         lookup: dict[tuple[str, str], dict[str, str]] = {}
         for row in rows:
             value = {
@@ -410,8 +615,149 @@ class HMMIndustryPitAdapter:
                 raise StateModelSetError("HMM industry PIT L1 code projection cannot be rebound")
             return
         self._classification_lookup = lookup
-        self._constituents = constituents
+        self._l1_projection_by_taxonomy = projection_by_taxonomy
         self._l1_projection_sha256 = canonical_hash
+
+    def bind_l2_code_projection(self, authority: Mapping[str, Any]) -> None:
+        if self._l1_projection_by_taxonomy is None or self._classification_lookup is None:
+            raise StateModelSetError("HMM industry PIT L1 code projection must be bound before L2")
+        expected_keys = {
+            "schema_version",
+            "projection_version",
+            "taxonomy_contract_id",
+            "taxonomy_version",
+            "l1_projection_sha256",
+            "source_ids",
+            "source_hashes",
+            "rows",
+            "canonical_hash",
+        }
+        if (
+            not isinstance(authority, Mapping)
+            or set(authority) != expected_keys
+            or authority.get("schema_version") != HMM_L2_CODE_PROJECTION_SCHEMA
+            or authority.get("projection_version") != HMM_L2_CODE_PROJECTION_VERSION
+            or authority.get("taxonomy_contract_id") != self.classification_resolver.receipt.taxonomy_contract_id
+            or authority.get("taxonomy_version") != self.classification_resolver.receipt.taxonomy_version
+            or authority.get("l1_projection_sha256") != self._l1_projection_sha256
+        ):
+            raise StateModelSetError("HMM industry PIT L2 code projection authority is invalid")
+        body = {key: value for key, value in authority.items() if key != "canonical_hash"}
+        canonical_hash = _require_sha256(authority.get("canonical_hash"), "industry_pit.l2_projection.canonical_hash")
+        if digest_named_fields(HMM_L2_CODE_PROJECTION_SCHEMA, body) != canonical_hash:
+            raise StateModelSetError("HMM industry PIT L2 code projection hash is invalid")
+        source_ids = authority.get("source_ids")
+        source_hashes = authority.get("source_hashes")
+        if (
+            not isinstance(source_ids, list)
+            or not source_ids
+            or source_ids != sorted({str(value).strip() for value in source_ids if str(value).strip()})
+            or not isinstance(source_hashes, list)
+            or not source_hashes
+            or source_hashes
+            != sorted({_require_sha256(value, "industry_pit.l2_projection.source_hash") for value in source_hashes})
+        ):
+            raise StateModelSetError("HMM industry PIT L2 code projection provenance is invalid")
+        raw_rows = authority.get("rows")
+        if not isinstance(raw_rows, list) or len(raw_rows) != 131:
+            raise StateModelSetError("HMM industry PIT L2 code projection must contain exactly 131 rows")
+
+        observed: dict[str, tuple[str, str]] = {}
+        for taxonomy_l1_code, values in self._taxonomy_l2_by_l1.items():
+            for taxonomy_l2_code, taxonomy_l2_name in values:
+                previous = observed.setdefault(taxonomy_l2_code, (taxonomy_l1_code, taxonomy_l2_name))
+                if previous != (taxonomy_l1_code, taxonomy_l2_name):
+                    raise StateModelSetError("HMM industry PIT observed taxonomy L2 identity conflicts")
+
+        l2_projection: dict[str, tuple[str, str, str]] = {}
+        canonical_l2_codes: set[str] = set()
+        constituents: dict[str, dict[str, Any]] = {
+            canonical_l1_code: {
+                "schema_version": "hmm_risk_l1_pit_l2_constituents_v3",
+                "l1_code": canonical_l1_code,
+                "l2_codes": [],
+                "classification_authority_receipt_hash": self.classification_resolver.receipt.receipt_hash,
+                "l1_projection_authority": HMM_L1_CODE_PROJECTION_SCHEMA,
+                "l2_projection_authority": HMM_L2_CODE_PROJECTION_SCHEMA,
+                "l2_projection_sha256": canonical_hash,
+            }
+            for canonical_l1_code in self._l1_projection_by_taxonomy.values()
+        }
+        l2_lookup: dict[tuple[str, str], dict[str, str]] = {}
+        expected_row_keys = {
+            "taxonomy_l1_code",
+            "taxonomy_l1_name",
+            "taxonomy_l2_code",
+            "taxonomy_l2_name",
+            "canonical_l1_code",
+            "canonical_l1_name",
+            "canonical_l2_code",
+            "canonical_l2_name",
+            "row_hash",
+        }
+        for raw in raw_rows:
+            if not isinstance(raw, Mapping) or set(raw) != expected_row_keys:
+                raise StateModelSetError("HMM industry PIT L2 code projection row is invalid")
+            row_body = {key: raw[key] for key in expected_row_keys if key != "row_hash"}
+            taxonomy_l1_code = str(raw["taxonomy_l1_code"]).strip()
+            taxonomy_l1_name = str(raw["taxonomy_l1_name"]).strip()
+            taxonomy_l2_code = str(raw["taxonomy_l2_code"]).strip()
+            taxonomy_l2_name = str(raw["taxonomy_l2_name"]).strip()
+            canonical_l1_code = str(raw["canonical_l1_code"]).strip()
+            canonical_l1_name = str(raw["canonical_l1_name"]).strip()
+            canonical_l2_code = str(raw["canonical_l2_code"]).strip()
+            canonical_l2_name = str(raw["canonical_l2_name"]).strip()
+            if (
+                _TAXONOMY_CODE.fullmatch(taxonomy_l1_code) is None
+                or _TAXONOMY_CODE.fullmatch(taxonomy_l2_code) is None
+                or _CANONICAL_SW_L1_CODE.fullmatch(canonical_l1_code) is None
+                or _CANONICAL_SW_L2_CODE.fullmatch(canonical_l2_code) is None
+                or self._taxonomy_l1.get(taxonomy_l1_code) != taxonomy_l1_name
+                or self._l1_projection_by_taxonomy.get(taxonomy_l1_code) != canonical_l1_code
+                or taxonomy_l1_name != canonical_l1_name
+                or taxonomy_l2_name != canonical_l2_name
+                or taxonomy_l2_code in l2_projection
+                or canonical_l2_code in canonical_l2_codes
+                or digest_named_fields(HMM_L2_CODE_PROJECTION_ROW_SCHEMA, row_body)
+                != _require_sha256(raw.get("row_hash"), "industry_pit.l2_projection.row_hash")
+            ):
+                raise StateModelSetError("HMM industry PIT L2 code projection row identity is invalid")
+            l2_projection[taxonomy_l2_code] = (canonical_l2_code, canonical_l2_name, canonical_l1_code)
+            canonical_l2_codes.add(canonical_l2_code)
+            constituents[canonical_l1_code]["l2_codes"].append(canonical_l2_code)
+            value = {
+                "level": "L2",
+                "index_code": canonical_l2_code,
+                "industry_code": taxonomy_l2_code,
+                "name": canonical_l2_name,
+            }
+            for alias in (canonical_l2_code, taxonomy_l2_code):
+                key = ("L2", alias)
+                if key in l2_lookup and l2_lookup[key] != value:
+                    raise StateModelSetError(f"HMM industry PIT L2 projection alias conflicts: {key}")
+                l2_lookup[key] = value
+        for taxonomy_l2_code, (taxonomy_l1_code, taxonomy_l2_name) in observed.items():
+            projected = l2_projection.get(taxonomy_l2_code)
+            if (
+                projected is None
+                or projected[1] != taxonomy_l2_name
+                or projected[2] != self._l1_projection_by_taxonomy[taxonomy_l1_code]
+            ):
+                raise StateModelSetError("HMM industry PIT observed taxonomy L2 escapes the frozen 131 projection")
+        if len(l2_projection) != 131 or len(canonical_l2_codes) != 131:
+            raise StateModelSetError("HMM industry PIT L2 code projection does not close the frozen 131-sector catalog")
+        if any(not value["l2_codes"] for value in constituents.values()):
+            raise StateModelSetError("HMM industry PIT L2 code projection leaves an L1 sector without constituents")
+        for value in constituents.values():
+            value["l2_codes"] = sorted(value["l2_codes"])
+        if self._l2_projection_sha256 is not None:
+            if self._l2_projection_sha256 != canonical_hash:
+                raise StateModelSetError("HMM industry PIT L2 code projection cannot be rebound")
+            return
+        self._classification_lookup = {**self._classification_lookup, **l2_lookup}
+        self._constituents = constituents
+        self._l2_projection_by_taxonomy = l2_projection
+        self._l2_projection_sha256 = canonical_hash
 
     def bind_research_basis_contract(self, authority: Mapping[str, Any]) -> None:
         expected_keys = {
@@ -604,12 +950,14 @@ class HMMIndustryPitAdapter:
     @property
     def constituents(self) -> dict[str, dict[str, Any]]:
         if self._constituents is None:
-            raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
+            raise StateModelSetError("HMM industry PIT L2 code projection has not been bound")
         return self._constituents
 
     def resolve(self, symbol: str, trade_date: date) -> HMMIndustryProjection:
         if self._research_basis_contract_sha256 is None:
             raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
+        if self._classification_lookup is None or self._l2_projection_by_taxonomy is None:
+            raise StateModelSetError("HMM industry PIT L1/L2 code projections have not been bound")
         dual = resolve_dual_authority(
             classification_resolver=self.classification_resolver,
             index_membership_resolver=self.index_membership_resolver,
@@ -625,19 +973,20 @@ class HMMIndustryPitAdapter:
         if isinstance(classification, UnavailableIndustryIdentity):
             reason = f"classification:{classification.reason.value}"
         else:
-            if self._classification_lookup is None:
-                raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
             l1 = self._classification_lookup.get(("L1", classification.identity.l1_code))
+            l2 = self._l2_projection_by_taxonomy.get(classification.identity.l2_code)
             if l1 is None:
                 raise StateModelSetError("HMM industry PIT resolved identity escapes the 31 L1 projection")
+            if l2 is None or l2[2] != l1["index_code"]:
+                raise StateModelSetError("HMM industry PIT resolved identity escapes the 131 L2 projection")
             return HMMIndustryProjection(
                 status="resolved",
                 canonical_symbol=symbol,
                 trade_date=trade_date,
                 l1_code=str(l1["index_code"]),
                 l1_name=str(l1["name"]),
-                l2_code=classification.identity.l2_code,
-                l2_name=classification.identity.l2_name,
+                l2_code=l2[0],
+                l2_name=l2[1],
                 reason_code=None,
                 classification_receipt_hash=classification.authority_receipt_hash,
                 index_membership_receipt_hash=index_membership.authority_receipt_hash,
@@ -666,8 +1015,13 @@ class HMMIndustryPitAdapter:
         )
 
     def mapping_manifest(self, *, universe_key: str, source_start: date, source_end: date) -> Mapping[str, Any]:
-        if self._constituents is None or self._l1_projection_sha256 is None:
-            raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
+        if (
+            self._constituents is None
+            or self._l1_projection_sha256 is None
+            or self._l2_projection_sha256 is None
+            or self._l2_projection_by_taxonomy is None
+        ):
+            raise StateModelSetError("HMM industry PIT L1/L2 code projections have not been bound")
         if self._research_basis_contract_sha256 is None:
             raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
         constituents_hash = hashlib.sha256(canonical_json_bytes(self._constituents)).hexdigest()
@@ -677,9 +1031,7 @@ class HMMIndustryPitAdapter:
             "source_window_start": source_start.isoformat(),
             "source_window_end": source_end.isoformat(),
             "canonical_l1_count": 31,
-            "canonical_l2_count": len(
-                {l2_code for values in self._taxonomy_l2_by_l1.values() for l2_code, _ in values}
-            ),
+            "canonical_l2_count": len(self._l2_projection_by_taxonomy),
             "source_classification_authority_receipt_hash": self._source_classification_receipt_hash,
             "classification_authority_receipt_hash": self.classification_resolver.receipt.receipt_hash,
             "index_membership_authority_receipt_hash": self.index_membership_resolver.receipt.receipt_hash,
@@ -692,6 +1044,7 @@ class HMMIndustryPitAdapter:
             "active_classification_basis": self._active_classification_basis,
             "non_as_known_taxonomy": self._active_non_as_known_taxonomy,
             "l1_code_projection_sha256": self._l1_projection_sha256,
+            "l2_code_projection_sha256": self._l2_projection_sha256,
             "constituent_manifest_hash": constituents_hash,
         }
 
@@ -705,6 +1058,8 @@ class HMMIndustryPitAdapter:
             raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
         if self._l1_projection_sha256 is None:
             raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
+        if self._l2_projection_sha256 is None:
+            raise StateModelSetError("HMM industry PIT L2 code projection has not been bound")
         if len(denominator.trading_dates) != expected_trading_days:
             raise StateModelSetError(
                 "HMM industry PIT preflight trading-day count differs from the approved contract: "
@@ -797,6 +1152,8 @@ class HMMIndustryPitAdapter:
                 "bound" if self._l1_projection_sha256 is not None else "unavailable_pending_versioned_crosswalk"
             ),
             "l1_code_projection_sha256": self._l1_projection_sha256,
+            "l2_code_projection_status": "bound",
+            "l2_code_projection_sha256": self._l2_projection_sha256,
             "candidate_bundle_hash": self.authority_bundle.manifest["bundle_hash"],
             "source_classification_authority_receipt_hash": self._source_classification_receipt_hash,
             "classification_authority_receipt_hash": self.classification_resolver.receipt.receipt_hash,
@@ -828,10 +1185,14 @@ __all__ = [
     "HMM_L1_CODE_PROJECTION_SCHEMA",
     "HMM_L1_CODE_PROJECTION_VERSION",
     "HMM_L1_CODE_PROJECTION_ROW_SCHEMA",
+    "HMM_L2_CODE_PROJECTION_SCHEMA",
+    "HMM_L2_CODE_PROJECTION_VERSION",
+    "HMM_L2_CODE_PROJECTION_ROW_SCHEMA",
     "HMM_MAPPING_MANIFEST_SCHEMA",
     "HMM_STABLE_BACKCAST_CANDIDATE_SCHEMA",
     "HMMIndustryPitAdapter",
     "HMMIndustryProjection",
     "IndustryPitContractError",
     "build_l1_code_projection_authority",
+    "build_l2_code_projection_authority",
 ]
