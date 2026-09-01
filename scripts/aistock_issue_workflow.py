@@ -3331,6 +3331,122 @@ def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", f"correlation status payload reports unknown status: {normalized}", {}
 
 
+def _validate_factor_lifecycle_detail(
+    payload: Any,
+    *,
+    url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bind factor-library detail readback to an explicit lifecycle expectation."""
+
+    if not isinstance(payload, dict):
+        return "failed", "factor detail payload must be a JSON object", {}
+    if payload.get("ok") is not True or payload.get("domain") != "factor_library":
+        return "failed", "factor detail payload must report ok=true and domain=factor_library", {}
+    factor = payload.get("factor")
+    if not isinstance(factor, dict):
+        return "failed", "factor detail payload is missing factor", {}
+
+    parsed = urllib.parse.urlsplit(url)
+    path_match = re.fullmatch(r"/api/v1/factor-library/factors/([^/]+)", parsed.path)
+    if path_match is None:
+        return "failed", "factor detail probe path is invalid", {}
+    requested_name = urllib.parse.unquote(path_match.group(1)).strip()
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+    def required_query_value(name: str) -> tuple[str | None, str | None]:
+        values = query.get(name) or []
+        if len(values) != 1 or not str(values[0]).strip():
+            return None, f"factor detail probe requires exactly one non-empty {name} query value"
+        return str(values[0]).strip(), None
+
+    requested_source, query_error = required_query_value("source")
+    if query_error:
+        return "failed", query_error, {}
+    expected_available_text, query_error = required_query_value("expected_is_available")
+    if query_error:
+        return "failed", query_error, {}
+    expected_available_normalized = str(expected_available_text).lower()
+    if expected_available_normalized not in {"true", "false"}:
+        return "failed", "factor detail expected_is_available must be true or false", {}
+    expected_available = expected_available_normalized == "true"
+
+    factor_id = factor.get("id")
+    factor_name = factor.get("factor_name")
+    source = factor.get("source")
+    available = factor.get("is_available")
+    if type(factor_id) is not int or factor_id <= 0:
+        return "failed", "factor detail id must be a positive integer", {}
+    if not isinstance(factor_name, str) or factor_name.strip() != requested_name:
+        return "failed", "factor detail factor_name does not match the requested factor", {}
+    if not isinstance(source, str) or source.strip() != requested_source:
+        return "failed", "factor detail source does not match the requested source", {}
+    if type(available) is not bool:
+        return "failed", "factor detail is_available must be boolean", {}
+    if available is not expected_available:
+        return (
+            "failed",
+            f"factor detail availability mismatch: expected={expected_available} observed={available}",
+            {},
+        )
+
+    facts: dict[str, Any] = {
+        "factor_id": factor_id,
+        "factor_name": factor_name.strip(),
+        "source": source.strip(),
+        "is_available": available,
+    }
+    expected_reason_code_values = query.get("expected_disable_reason_code") or []
+    expected_batch_id_values = query.get("expected_disable_batch_id") or []
+    if expected_available:
+        if expected_reason_code_values or expected_batch_id_values:
+            return "failed", "available factor detail must not declare disable expectations", facts
+        return "passed", None, facts
+
+    expected_reason_code, query_error = required_query_value("expected_disable_reason_code")
+    if query_error:
+        return "failed", query_error, facts
+    expected_batch_id, query_error = required_query_value("expected_disable_batch_id")
+    if query_error:
+        return "failed", query_error, facts
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,127}", str(expected_reason_code)):
+        return "failed", "factor detail expected_disable_reason_code is invalid", facts
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{2,127}", str(expected_batch_id)):
+        return "failed", "factor detail expected_disable_batch_id is invalid", facts
+
+    disable_reason = factor.get("disable_reason")
+    disable_batch_id = factor.get("disable_batch_id")
+    disable_at = factor.get("disable_at")
+    rehab_candidate = factor.get("rehab_candidate")
+    if not isinstance(disable_reason, str) or not disable_reason.strip():
+        return "failed", "disabled factor detail is missing disable_reason", facts
+    reason_prefix = f"{expected_reason_code}:"
+    if not disable_reason.strip().startswith(reason_prefix):
+        return "failed", "factor detail disable reason code does not match the declared expectation", facts
+    observed_reason_code = expected_reason_code
+    if not isinstance(disable_batch_id, str) or disable_batch_id.strip() != expected_batch_id:
+        return "failed", "factor detail disable_batch_id does not match the declared expectation", facts
+    if not isinstance(disable_at, str) or not disable_at.strip():
+        return "failed", "disabled factor detail is missing disable_at", facts
+    try:
+        parsed_disable_at = datetime.fromisoformat(disable_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
+    if parsed_disable_at.tzinfo is None or parsed_disable_at.utcoffset() is None:
+        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
+    if rehab_candidate is not False:
+        return "failed", "quarantined factor detail must report rehab_candidate=false", facts
+
+    facts.update(
+        {
+            "disable_reason_code": observed_reason_code,
+            "disable_batch_id": disable_batch_id.strip(),
+            "disable_at": parsed_disable_at.isoformat(),
+            "rehab_candidate": rehab_candidate,
+        }
+    )
+    return "passed", None, facts
+
+
 _LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
     "paper_v2.simulation_account_v1",
     "paper_v2.legacy_localsim_account_lineage_v1",
@@ -3463,6 +3579,11 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (
+        re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
+        "factor_lifecycle_detail",
+        _validate_factor_lifecycle_detail,
+    ),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+/terminal-evidence$"), "run_terminal_evidence", _validate_run_terminal_evidence),
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
@@ -3581,7 +3702,7 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
-    elif contract_id == "scheduler_verification_status":
+    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail"}:
         verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)
