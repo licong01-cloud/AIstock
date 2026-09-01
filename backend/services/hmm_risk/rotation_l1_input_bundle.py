@@ -555,7 +555,10 @@ def _read_qlib_stock_rows(
     local_positions = calendar_positions - start_index
     result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
     result["trade_date"] = np.fromiter(
-        (int(calendar[index].strftime("%Y%m%d")) for index in calendar_positions),
+        (
+            calendar[index].year * 10_000 + calendar[index].month * 100 + calendar[index].day
+            for index in calendar_positions
+        ),
         dtype="<i4",
         count=len(calendar_positions),
     )
@@ -995,17 +998,17 @@ def _spool_qlib_months(
                 calendar=calendar,
                 active_spans=active_spans,
             )
-            months: dict[str, list[int]] = defaultdict(list)
-            for index, value in enumerate(rows["trade_date"]):
-                months[str(int(value))[:6]].append(index)
-            for month, indices in months.items():
+            month_codes = rows["trade_date"] // 100
+            boundaries = np.flatnonzero(month_codes[1:] != month_codes[:-1]) + 1
+            for month_rows in np.split(rows, boundaries):
+                month = str(int(month_rows["trade_date"][0]) // 100)
                 path = spool_root / f"{month}.bin"
                 handle = handles.get(month)
                 if handle is None:
                     handle = path.open("xb")
                     handles[month] = handle
                     paths[month] = path
-                rows[np.asarray(indices, dtype=np.int64)].tofile(handle)
+                month_rows.tofile(handle)
     finally:
         for handle in handles.values():
             handle.flush()

@@ -601,6 +601,48 @@ def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_a
     assert rows.tobytes() == expected.tobytes()
 
 
+def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = (
+        date(2022, 1, 30),
+        date(2022, 1, 31),
+        date(2022, 2, 1),
+        date(2022, 2, 2),
+    )
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220130, 20220131, 20220201, 20220202]
+        rows["symbol"] = symbol.encode("ascii")
+        rows["close"] = np.arange(len(dates), dtype=np.float32)
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=dates,
+        spans={"000002.SZ": ((dates[0], dates[-1]),), "000001.SZ": ((dates[0], dates[-1]),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin", "202202.bin"]
+    january = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    february = np.fromfile(paths[1], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert january[["trade_date", "symbol"]].tolist() == [
+        (20220130, b"000001.SZ"),
+        (20220131, b"000001.SZ"),
+        (20220130, b"000002.SZ"),
+        (20220131, b"000002.SZ"),
+    ]
+    assert february[["trade_date", "symbol"]].tolist() == [
+        (20220201, b"000001.SZ"),
+        (20220202, b"000001.SZ"),
+        (20220201, b"000002.SZ"),
+        (20220202, b"000002.SZ"),
+    ]
+
+
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
