@@ -789,6 +789,83 @@ def test_source_asset_binding_verifies_tree_files_and_excludes_locator_from_iden
     assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
 
 
+def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observations(tmp_path: Path) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    rows = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": None,
+            },
+            {
+                "ts_code": "000002.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": "09:30-10:00",
+            },
+        ]
+    )
+    rows.to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keys = subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+
+    assert keys == frozenset({(subject.SOURCE_START, "000001.SZ")})
+
+
+@pytest.mark.parametrize(
+    ("suspend_type", "suspend_timing"),
+    (("R", None), ("S", "")),
+)
+def test_suspend_sidecar_rejects_unknown_type_or_empty_intraday_timing(
+    tmp_path: Path,
+    suspend_type: str,
+    suspend_timing: str | None,
+) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": suspend_type,
+                "suspend_timing": suspend_timing,
+            }
+        ]
+    ).to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
 def test_builder_cli_persists_typed_failure_without_final_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
