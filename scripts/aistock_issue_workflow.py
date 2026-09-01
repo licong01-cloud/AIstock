@@ -1430,7 +1430,11 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 compact["postmortem_preview"] = _pick(preview, "bug_id", "timing_summary", "stale_pr_check")
     elif schema.endswith("_postmortem_v1"):
         compact.update(_compact_postmortem(payload) or {})
-    elif schema.endswith("_close_sync_v1") or schema.endswith("_close_sync_batch_v1"):
+    elif (
+        schema.endswith("_close_sync_v1")
+        or schema.endswith("_close_sync_batch_v1")
+        or schema.endswith("_close_sync_aggregate_v1")
+    ):
         compact.update(
             _pick(
                 payload,
@@ -5901,6 +5905,16 @@ def _close_sync_batch_worktree_names(*, bug_ids: list[str]) -> tuple[str, Path]:
     return branch, _default_worktree_root() / name
 
 
+def _close_sync_aggregate_worktree_names(*, bug_ids: list[str]) -> tuple[str, Path]:
+    normalized = [item.strip().upper() for item in bug_ids if item.strip()]
+    label = _delimited_text(normalized[:3], "-")
+    if len(normalized) > 3:
+        label = f"{label}-plus-{len(normalized) - 3}"
+    name = f"{label}-close-sync-aggregate-{_today_compact()}".strip("-")
+    branch = f"chore/{name}"
+    return branch, _default_worktree_root() / name
+
+
 def _maybe_create_registry_worktree(
     *,
     title: str,
@@ -6039,13 +6053,20 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
     return plan
 
 
-def _maybe_create_close_sync_batch_worktree(
+def _maybe_create_close_sync_group_worktree(
     *,
     bug_ids: list[str],
     create: bool,
     dry_run: bool,
+    mode: str,
 ) -> dict[str, Any]:
-    branch, worktree = _close_sync_batch_worktree_names(bug_ids=bug_ids)
+    if mode == "batch":
+        branch, worktree = _close_sync_batch_worktree_names(bug_ids=bug_ids)
+    elif mode == "aggregate":
+        branch, worktree = _close_sync_aggregate_worktree_names(bug_ids=bug_ids)
+    else:
+        raise WorkflowError(f"unsupported close-sync group worktree mode: {mode}")
+    label = f"close-sync {mode}"
     plan = {
         "create_worktree": create,
         "dry_run": dry_run,
@@ -6053,6 +6074,7 @@ def _maybe_create_close_sync_batch_worktree(
         "worktree": str(worktree),
         "base": "origin/main",
         "bug_ids": bug_ids,
+        "mode": mode,
     }
     if not create or dry_run:
         return plan
@@ -6061,7 +6083,7 @@ def _maybe_create_close_sync_batch_worktree(
         git, relation = _refresh_reused_close_sync_worktree(
             worktree=worktree,
             branch=branch,
-            label="close-sync batch",
+            label=label,
         )
         if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
@@ -6075,7 +6097,7 @@ def _maybe_create_close_sync_batch_worktree(
         _git_state, relation = _refresh_reused_close_sync_worktree(
             worktree=worktree,
             branch=branch,
-            label="close-sync batch",
+            label=label,
         )
         plan[relation] = True
         plan["reused_branch"] = True
@@ -6083,6 +6105,34 @@ def _maybe_create_close_sync_batch_worktree(
         _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
+
+
+def _maybe_create_close_sync_batch_worktree(
+    *,
+    bug_ids: list[str],
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    return _maybe_create_close_sync_group_worktree(
+        bug_ids=bug_ids,
+        create=create,
+        dry_run=dry_run,
+        mode="batch",
+    )
+
+
+def _maybe_create_close_sync_aggregate_worktree(
+    *,
+    bug_ids: list[str],
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    return _maybe_create_close_sync_group_worktree(
+        bug_ids=bug_ids,
+        create=create,
+        dry_run=dry_run,
+        mode="aggregate",
+    )
 
 
 def _validate_registry_apply_target(target_root: Path) -> dict[str, Any]:
@@ -7193,6 +7243,14 @@ def _csv_arg(items: Iterable[str]) -> str:
         if not item:
             continue
         result = item if not result else f"{result},{item}"
+    return result
+
+
+def _delimited_text(items: Iterable[Any], separator: str) -> str:
+    result = ""
+    for item in items:
+        value = str(item)
+        result = value if not result else f"{result}{separator}{value}"
     return result
 
 
@@ -16530,11 +16588,26 @@ def _write_close_sync_pr_body(
                 f"{changed_record.get('bug_id') or candidate.stem}={changed_record.get('status') or 'unknown'}"
             )
     status_summary = ", ".join(status_rows) or "unknown"
+    per_issue_sources = [
+        item
+        for item in close_sync.get("per_issue") or []
+        if isinstance(item, dict) and item.get("source_pr_url")
+    ]
+    source_summary = (
+        "multiple independently verified source PRs"
+        if close_sync.get("schema_version") == "aistock_issue_workflow_close_sync_aggregate_v1"
+        else (close_sync.get("merged_pr") or "n/a")
+    )
+    merge_summary = (
+        "per-BUG identities below"
+        if close_sync.get("schema_version") == "aistock_issue_workflow_close_sync_aggregate_v1"
+        else f"`{close_sync.get('merge_commit') or 'unknown'}`"
+    )
     body_lines = [
         f"## {title_label} close-sync",
         "",
-        f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
-        f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
+        f"- Source PR: {source_summary}",
+        f"- Merge commit: {merge_summary}",
         f"- BUG IDs: `{', '.join(bug_ids)}`",
         f"- BUG JSON status: `{status_summary}`",
         "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
@@ -16542,6 +16615,12 @@ def _write_close_sync_pr_body(
         "## Validation",
         *[f"- {item}" for item in validation_evidence or close_sync.get("validation_evidence") or ["n/a"]],
     ]
+    if close_sync.get("schema_version") == "aistock_issue_workflow_close_sync_aggregate_v1":
+        body_lines.extend(["", "## Per-BUG source identities"])
+        body_lines.extend(
+            f"- {item.get('bug_id')}: {item.get('source_pr_url')} @ `{item.get('source_merge_commit') or 'unknown'}`"
+            for item in per_issue_sources
+        )
     source_receipt = close_sync.get("source_merge_receipt")
     if isinstance(source_receipt, dict):
         body_lines.extend(
@@ -16576,7 +16655,7 @@ def _maybe_commit_and_pr_close_sync(
     if not root.exists() or not branch:
         return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
     bug_ids = flow._unique_strings(flow._as_list(close_sync.get("bug_ids")) or [bug_id])
-    label = str(close_sync.get("batch_id") or bug_id)
+    label = str(close_sync.get("aggregate_id") or close_sync.get("batch_id") or bug_id)
     title_label = label if len(bug_ids) > 1 else bug_id
     changed_files = _close_sync_changed_files(close_sync)
     dirty = _dirty_files(root)
@@ -18802,6 +18881,300 @@ def build_close_sync_batch_plan(
     return evidence_payload
 
 
+def build_close_sync_aggregate_plan(
+    *,
+    bug_ids: list[str],
+    apply: bool,
+    skip_github_check: bool = False,
+    create_registry_worktree: bool = False,
+    allow_current_worktree: bool = False,
+) -> dict[str, Any]:
+    """Close independently merged, non-runtime BUGs in one metadata-only PR.
+
+    Unlike close-sync-batch, this mode never projects one source PR identity or
+    one validation receipt onto every BUG. Each record must already carry its
+    own source PR and durable validation evidence, and every source PR is
+    verified before any BUG JSON is changed.
+    """
+    canonical_bug_ids = flow._unique_strings([item.strip().upper() for item in bug_ids if item.strip()])
+    if len(canonical_bug_ids) < 2:
+        raise WorkflowError("close-sync-aggregate requires at least two unique --bug-id values")
+
+    records: list[dict[str, Any]] = []
+    for item in canonical_bug_ids:
+        record, source_path = find_bug_record(bug_id=item, issue_json=None)
+        missing = _require_github_linkage(record, allow_missing=False)
+        status = str(record.get("status") or "").strip()
+        if status not in flow.VALID_BUG_STATUSES:
+            raise WorkflowError(f"{item} has invalid status for close/sync: {status!r}")
+        source_pr_url = str(record.get("pr_url") or "").strip()
+        if not source_pr_url:
+            raise WorkflowError(f"close-sync-aggregate requires {item} to record its own source pr_url")
+        durable_evidence = flow._unique_strings(flow._as_list(record.get("validation_evidence")))
+        if not durable_evidence:
+            raise WorkflowError(
+                f"close-sync-aggregate requires durable validation_evidence in {item}; "
+                "do not use one aggregate-wide receipt"
+            )
+        records.append(
+            {
+                "bug_id": item,
+                "record": record,
+                "source_path": source_path,
+                "missing_github_linkage": missing,
+                "source_pr_url": source_pr_url,
+                "validation_evidence": durable_evidence,
+                "source_record_fingerprint": _short_hash(record, length=16),
+            }
+        )
+
+    source_pr_urls = [row["source_pr_url"] for row in records]
+    if len(set(source_pr_urls)) != len(source_pr_urls):
+        raise WorkflowError(
+            "close-sync-aggregate requires independent source PRs; shared source PR records belong in close-sync-batch"
+        )
+
+    runtime_contracts = {
+        row["bug_id"]: build_runtime_contract(
+            record=row["record"],
+            changed_files=resolve_record_runtime_changed_files(row["record"]),
+            root=REPO_ROOT,
+            fresh_process_evidence=flow._as_list((row["record"].get("runtime_contract") or {}).get("fresh_process_evidence"))
+            if isinstance(row["record"].get("runtime_contract"), dict)
+            else [],
+        )
+        for row in records
+    }
+    runtime_contract_errors = {
+        bug_id: list(contract.get("blocking") or [])
+        for bug_id, contract in runtime_contracts.items()
+        if contract.get("blocking")
+    }
+    if runtime_contract_errors:
+        detail = _delimited_text(
+            (
+                f"{bug_id}: {_delimited_text(errors, ', ')}"
+                for bug_id, errors in sorted(runtime_contract_errors.items())
+            ),
+            "; ",
+        )
+        raise WorkflowError("runtime contracts block close-sync-aggregate: " + detail)
+    runtime_pending = sorted(
+        bug_id for bug_id, contract in runtime_contracts.items() if contract.get("backend_restart_required")
+    )
+    if runtime_pending:
+        raise WorkflowError(
+            "close-sync-aggregate excludes runtime/restart-pending BUGs; complete them individually: "
+            + _delimited_text(runtime_pending, ", ")
+        )
+
+    apply_guard = (
+        _validate_close_sync_apply_target(REPO_ROOT)
+        if apply and not create_registry_worktree
+        else None
+    )
+    if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError(_delimited_text(apply_guard["blocking"], "; "))
+
+    verified_sources: dict[str, dict[str, Any]] = {}
+    if apply:
+        for row in records:
+            pr_check = _verify_pr_merged(row["source_pr_url"], skip_github_check=skip_github_check)
+            source_merge_commit = _merge_commit_from_pr_check(pr_check)
+            if not source_merge_commit:
+                raise WorkflowError(f"cannot resolve merged commit for {row['bug_id']} source PR")
+            verified_sources[row["bug_id"]] = {
+                "pr_check": pr_check,
+                "source_merge_commit": source_merge_commit,
+                "closed_at": _closed_at_from_pr_check(pr_check),
+            }
+
+    registry_worktree_plan = _maybe_create_close_sync_aggregate_worktree(
+        bug_ids=canonical_bug_ids,
+        create=create_registry_worktree,
+        dry_run=not apply,
+    )
+    close_sync_root = (
+        Path(registry_worktree_plan["worktree"])
+        if create_registry_worktree and apply
+        else REPO_ROOT
+    )
+    target_rows: list[dict[str, Any]] = []
+    if create_registry_worktree and apply:
+        for row in records:
+            rel_source = row["source_path"].resolve().relative_to(REPO_ROOT.resolve())
+            target_source = close_sync_root / rel_source
+            if not target_source.exists():
+                raise WorkflowError(f"BUG JSON does not exist in close-sync aggregate worktree: {target_source}")
+            target_record = _load_json(target_source)
+            if (
+                str(target_record.get("bug_id") or "").strip().upper() != row["bug_id"]
+                or _short_hash(target_record, length=16) != row["source_record_fingerprint"]
+            ):
+                raise WorkflowError(
+                    f"{row['bug_id']} changed while the aggregate worktree was created; rebuild the plan from current main"
+                )
+            target_rows.append(
+                {
+                    **row,
+                    "record": target_record,
+                    "source_path": target_source,
+                    "source_pr_url": str(target_record.get("pr_url") or "").strip(),
+                    "validation_evidence": flow._unique_strings(
+                        flow._as_list(target_record.get("validation_evidence"))
+                    ),
+                }
+            )
+    else:
+        target_rows = records
+
+    source_pr_urls = [row["source_pr_url"] for row in target_rows]
+
+    if apply and create_registry_worktree:
+        apply_guard = _validate_close_sync_apply_target(close_sync_root)
+    if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError(_delimited_text(apply_guard["blocking"], "; "))
+
+    aggregate_id = _delimited_text(canonical_bug_ids, "-")
+    aggregate_key = f"close-sync-aggregate:{_short_hash([(row['bug_id'], row['source_pr_url']) for row in target_rows], length=12)}"
+    output_dir = close_sync_root / WORKFLOW_ROOT / aggregate_id
+    per_issue = [
+        {
+            "bug_id": row["bug_id"],
+            "github_issue_number": row["record"].get("github_issue_number"),
+            "github_issue_url": row["record"].get("github_issue_url"),
+            "source_bug_json": _repo_rel(row["source_path"], close_sync_root),
+            "missing_github_linkage": row["missing_github_linkage"],
+            "source_pr_url": row["source_pr_url"],
+            "source_merge_commit": str(row["record"].get("fix_commit") or "") or None,
+            "validation_evidence": row["validation_evidence"],
+            "runtime_contract": runtime_contracts[row["bug_id"]],
+        }
+        for row in target_rows
+    ]
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_issue_workflow_close_sync_aggregate_v1",
+        "generated_at": _utc_now(),
+        "aggregate_id": aggregate_id,
+        "aggregate_key": aggregate_key,
+        "bug_ids": canonical_bug_ids,
+        "source_bug_jsons": [row["source_bug_json"] for row in per_issue],
+        "source_prs": source_pr_urls,
+        "registry_root": str(close_sync_root),
+        "registry_worktree_plan": registry_worktree_plan,
+        "apply_guard": apply_guard,
+        "merged_pr": None,
+        "merge_commit": None,
+        "validation_evidence": [],
+        "production_gates": {},
+        "per_issue": per_issue,
+        "dry_run": not apply,
+        "workflow_gate": "ready_for_apply",
+        "next_agent_steps": [
+            "verify_each_source_pr_and_receipt_independently",
+            "run_close_sync_aggregate_apply_from_clean_registry_worktree",
+            "sync_each_github_issue_status",
+            "persist_one_metadata_only_close_sync_pr",
+        ],
+    }
+    _write_json(output_dir / "close-sync-aggregate-plan.json", payload)
+    if not apply:
+        return payload
+
+    started = time.monotonic()
+    verified_rows = [
+        {**row, **verified_sources[row["bug_id"]]}
+        for row in target_rows
+    ]
+
+    updated_paths: list[str] = []
+    github_syncs: dict[str, Any] = {}
+    verified_per_issue: list[dict[str, Any]] = []
+    for row in verified_rows:
+        item = row["bug_id"]
+        record = row["record"]
+        closed_at = row["closed_at"]
+        updated = dict(record)
+        updated.update(
+            {
+                "status": "fixed",
+                "closed_at": closed_at,
+                "fixed_at": record.get("fixed_at") or closed_at or _utc_now(),
+                "fix_commit": row["source_merge_commit"],
+                "pr_url": row["source_pr_url"],
+                "validation_evidence": row["validation_evidence"],
+            }
+        )
+        _write_json(row["source_path"], updated)
+        updated_path = _repo_rel(row["source_path"], close_sync_root)
+        updated_paths.append(updated_path)
+        per_issue_gates = {
+            key: str(updated.get(key) or "noop") for key in _CLOSE_SYNC_PRODUCTION_GATE_KEYS
+        }
+        issue_evidence = {
+            "schema_version": payload["schema_version"],
+            "workflow_gate": "close_synced",
+            "aggregate_id": aggregate_id,
+            "aggregate_key": aggregate_key,
+            "bug_id": item,
+            "merged_pr": row["source_pr_url"],
+            "merge_commit": row["source_merge_commit"],
+            "source_pr_url": row["source_pr_url"],
+            "source_merge_commit": row["source_merge_commit"],
+            "validation_evidence": row["validation_evidence"],
+            "production_gates": per_issue_gates,
+            "updated_bug_json": updated_path,
+        }
+        github_syncs[item] = _sync_github_issue_after_close(updated, issue_evidence, root=close_sync_root)
+        if github_syncs[item].get("status") != "synced":
+            raise WorkflowError(
+                f"close-sync-aggregate GitHub Issue synchronization is incomplete for {item}: "
+                f"status={github_syncs[item].get('status') or 'unknown'}"
+            )
+        _write_state(
+            item,
+            state="close_synced",
+            root=close_sync_root,
+            pr_url=row["source_pr_url"],
+            commit=row["source_merge_commit"],
+            validation_evidence=row["validation_evidence"],
+            production_gates=per_issue_gates,
+            github_issue_sync=github_syncs[item],
+            next_actions=["persist_aggregate_close_sync_pr", "sync_local_main", "cleanup_after_merge"],
+        )
+        _append_event(
+            item,
+            event="close_sync_aggregate_apply",
+            state="close_synced",
+            root=close_sync_root,
+            duration_seconds=0.0,
+            evidence={
+                "aggregate_id": aggregate_id,
+                "source_pr_url": row["source_pr_url"],
+                "source_merge_commit": row["source_merge_commit"],
+            },
+        )
+        verified_per_issue.append(
+            {
+                **next(value for value in per_issue if value["bug_id"] == item),
+                "source_merge_commit": row["source_merge_commit"],
+                "pr_check": row["pr_check"],
+            }
+        )
+
+    evidence_payload = {
+        **payload,
+        "workflow_gate": "close_synced",
+        "dry_run": False,
+        "per_issue": verified_per_issue,
+        "updated_bug_jsons": updated_paths,
+        "github_issue_sync": github_syncs,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+    _write_json(output_dir / "close-sync-aggregate-evidence.json", evidence_payload)
+    return evidence_payload
+
+
 def build_cleanup_after_merge_plan(
     *,
     branch: str,
@@ -19668,6 +20041,31 @@ def cmd_close_sync_batch(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
 
 
+def cmd_close_sync_aggregate(args: argparse.Namespace) -> int:
+    if args.create_pr and not args.apply:
+        raise WorkflowError("close-sync-aggregate --create-pr requires --apply")
+    payload = build_close_sync_aggregate_plan(
+        bug_ids=list(args.bug_id or []),
+        apply=args.apply,
+        skip_github_check=args.skip_github_check,
+        create_registry_worktree=args.create_registry_worktree,
+        allow_current_worktree=args.allow_current_worktree,
+    )
+    if args.apply and args.create_pr:
+        receipt_summary = [
+            f"{item.get('bug_id')}: {len(item.get('validation_evidence') or [])} durable validation receipt(s)"
+            for item in payload.get("per_issue") or []
+            if isinstance(item, dict)
+        ]
+        payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
+            bug_id=payload["bug_ids"][0],
+            close_sync=payload,
+            validation_evidence=receipt_summary,
+        )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
+
+
 def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_plan(
         branch=args.branch,
@@ -20141,6 +20539,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_options(close_batch)
     close_batch.set_defaults(func=cmd_close_sync_batch)
+
+    close_aggregate = sub.add_parser(
+        "close-sync-aggregate",
+        help="Close-sync independently merged non-runtime BUGs in one metadata-only registry PR.",
+    )
+    close_aggregate.add_argument("--bug-id", action="append", required=True)
+    close_aggregate.add_argument("--apply", action="store_true")
+    close_aggregate.add_argument(
+        "--skip-github-check",
+        action="store_true",
+        help="Use exact GitHub REST merged-PR verification instead of GraphQL for every source PR.",
+    )
+    close_aggregate.add_argument("--create-registry-worktree", action="store_true")
+    close_aggregate.add_argument(
+        "--create-pr",
+        action="store_true",
+        help="Commit, push, and open one metadata-only close-sync PR after every source identity is verified.",
+    )
+    close_aggregate.add_argument(
+        "--allow-current-worktree",
+        action="store_true",
+        help="Override close-sync root/main guard for tests or audited recovery only.",
+    )
+    add_output_options(close_aggregate)
+    close_aggregate.set_defaults(func=cmd_close_sync_aggregate)
 
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
     cleanup.add_argument("--branch", required=True)
