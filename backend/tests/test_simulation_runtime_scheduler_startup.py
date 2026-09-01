@@ -29,6 +29,7 @@ def _run_lifespan(
     *,
     enable_sim_runtime: bool,
     enable_legacy_paper_scheduler: bool = False,
+    miniqmt_enabled: bool = True,
     qe_store_error: Exception | None = None,
 ) -> list[tuple[str, tuple, dict]]:
     calls: list[tuple[str, tuple, dict]] = []
@@ -47,6 +48,7 @@ def _run_lifespan(
         "1" if enable_legacy_paper_scheduler else "0",
     )
     monkeypatch.setenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER", "1" if enable_sim_runtime else "0")
+    monkeypatch.setenv("MINIQMT_ENABLED", "1" if miniqmt_enabled else "0")
 
     monkeypatch.setattr(backend_main, "init_db_pool", lambda *args, **kwargs: calls.append(("init_db_pool", args, kwargs)))
     def _get_qe_live_log_store():
@@ -99,6 +101,14 @@ def test_main_lifespan_opt_in_starts_and_stops_simulation_scheduler(monkeypatch)
     calls = _run_lifespan(monkeypatch, enable_sim_runtime=True)
     assert ("simulation_scheduler_start", tuple(), {}) in calls
     assert ("simulation_scheduler_shutdown", tuple(), {"wait": False}) in calls
+
+
+def test_main_lifespan_keeps_qmt_client_inert_when_miniqmt_is_disabled(monkeypatch) -> None:
+    calls = _run_lifespan(monkeypatch, enable_sim_runtime=True, miniqmt_enabled=False)
+
+    assert ("qmt_connect", tuple(), {}) not in calls
+    assert ("qmt_disconnect", tuple(), {}) not in calls
+    assert ("simulation_scheduler_start", tuple(), {}) in calls
 
 
 def test_main_lifespan_ignores_legacy_paper_scheduler_env(monkeypatch) -> None:
