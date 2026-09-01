@@ -23,6 +23,9 @@
 
 - `AISTOCK_LLM_TRIAGE_MODE=off|warning_only|opt_in_auto_file`
 - `AISTOCK_LLM_AUTO_FILE=true|false`
+- `AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env`：self-hosted Nightly 从该既有文件解析 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`；不得复制或输出 key。
+
+当前 GitHub Actions provider 合同：`deepseek_api` + `deepseek-v4-flash`。GitHub Models 旧 `deepseek-r1` 入口已因 HTTP 410 退役并禁用，不参与 fallback。
 
 CI/Nightly issue intake 的显式参数：
 
@@ -56,9 +59,9 @@ GitHub Actions manual dispatch 输入：
 ## 5. 验证命令
 
 ```powershell
-python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode warning_only --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
-python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode opt_in_auto_file --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
-python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider github_models --mode off --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
+python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider deepseek_api --mode warning_only --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
+python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider deepseek_api --mode opt_in_auto_file --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
+python scripts/llm_provider_adapter.py --json guarded-rollout-gate --provider deepseek_api --mode off --opt-in --module validation.runner --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates"
 python -m pytest backend\tests\scripts\test_llm_provider_adapter.py backend\tests\scripts\test_ci_failure_issue_summary.py -q
 ```
 

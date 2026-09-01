@@ -47,7 +47,7 @@ def _disk(_predicted: int | None = None, *, free: int = 128 * GIB) -> DiskSpaceS
     )
 
 
-def test_gate_requires_two_host_ready_samples_before_data_child_admission(
+def test_gate_collects_one_nonblocking_start_sample(
     dataset_profile,
 ) -> None:
     samples = []
@@ -61,9 +61,9 @@ def test_gate_requires_two_host_ready_samples_before_data_child_admission(
     admitted = gate.admit("source-stage", wsl_required=False, pressure_rung=0)
 
     assert admitted.decision.status == "READY"
-    assert len(samples) == 2
+    assert len(samples) == 1
     receipt = gate.receipt()
-    assert receipt["sample_count"] == 2
+    assert receipt["sample_count"] == 1
     assert receipt["data_scope_changed"] is False
 
 
@@ -109,11 +109,9 @@ def test_disk_guard_uses_only_one_point_two_five_times_remaining_bytes(tmp_path,
     assert unknown.required_free_bytes == 0
     assert small.required_free_bytes == math.ceil(1.25 * GIB)
     assert ready.required_free_bytes == 50 * GIB
-    with pytest.raises(ResourceCheckpointRequested) as exc:
-        guard.checkpoint(60 * GIB)
-    assert exc.value.context["reason_code"] == "RESOURCE_DISK_RESERVE"
-    assert exc.value.context["disk_required_free_bytes"] == 75 * GIB
-    assert exc.value.context["data_scope_changed"] is False
+    observed = guard.checkpoint(60 * GIB)
+    assert observed.required_free_bytes == 75 * GIB
+    assert observed.effective_free_bytes == 60 * GIB
 
 
 def test_system_pressure_is_receipt_warning_not_admission_block(dataset_profile) -> None:
@@ -136,7 +134,7 @@ def test_system_pressure_is_receipt_warning_not_admission_block(dataset_profile)
     assert receipt["fixed_disk_floor_blocking"] is False
 
 
-def test_parent_disk_pressure_is_waiting_before_child_admission(dataset_profile) -> None:
+def test_predicted_disk_pressure_is_telemetry_not_admission(dataset_profile) -> None:
     low_disk = DiskSpaceSnapshot(
         control_free_bytes=31 * GIB,
         candidate_free_bytes=31 * GIB,
@@ -154,11 +152,28 @@ def test_parent_disk_pressure_is_waiting_before_child_admission(dataset_profile)
 
     admitted = gate.admit("source-stage", wsl_required=False, pressure_rung=0)
 
-    assert admitted.decision.status == "WAITING_RESOURCE"
-    assert admitted.decision.reason_code == "RESOURCE_DISK_RESERVE"
+    assert admitted.decision.status == "READY"
+    assert admitted.decision.reason_code == "RESOURCE_TELEMETRY_ONLY"
+    assert "DISK_RESERVE_BELOW_PREDICTION_OBSERVED" in admitted.decision.warning_codes
 
 
-def test_runtime_gate_combines_owned_job_and_wsl_commit_and_requests_pressure_rung(
+def test_missing_host_and_disk_telemetry_do_not_block_monthly_execution(dataset_profile) -> None:
+    gate = ResourceGate(
+        dataset_profile,
+        host_probe=lambda: (_ for _ in ()).throw(OSError("host telemetry unavailable")),
+        disk_probe=lambda _predicted: (_ for _ in ()).throw(OSError("disk telemetry unavailable")),
+        sleep=lambda _seconds: None,
+    )
+
+    admitted = gate.admit("source-stage", wsl_required=False, pressure_rung=0)
+
+    assert admitted.decision.status == "READY"
+    assert admitted.snapshot.host.available_bytes == 0
+    assert "DISK_TELEMETRY_UNAVAILABLE" in admitted.decision.warning_codes
+    assert gate.receipt()["checkpoint_requested"] is False
+
+
+def test_runtime_pressure_is_telemetry_and_never_requests_checkpoint(
     dataset_profile,
 ) -> None:
     gate = ResourceGate(
@@ -193,11 +208,13 @@ def test_runtime_gate_combines_owned_job_and_wsl_commit_and_requests_pressure_ru
     second = gate.sample("build-stage", wsl_required=True, pressure_rung=0)
 
     assert first.decision.status == "READY"
-    assert second.decision.status == "CHECKPOINT_PRESSURE"
-    assert second.decision.pressure_rung == 1
+    assert second.decision.status == "READY"
+    assert second.decision.pressure_rung == 0
     receipt = gate.receipt()
     assert receipt["aggregate_owned_peak_commit_bytes"] == 11 * GIB
     assert receipt["wsl_required"] is True
+    assert receipt["checkpoint_requested"] is False
+    assert "RESOURCE_OWNED_COMMIT_PRESSURE_LADDER" in receipt["system_warning_codes"]
 
 
 def test_child_chunk_checkpoint_is_identity_bound_and_never_changes_scope(tmp_path) -> None:

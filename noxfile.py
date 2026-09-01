@@ -2766,7 +2766,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "scripts/nightly_adaptive_scheduler.py",
         "--json",
         "--provider",
-        "github_models",
+        "deepseek_api",
         "--status",
         "nightly_l3=failure",
         "--codegraph-freshness",

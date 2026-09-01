@@ -124,7 +124,7 @@ def test_monthly_control_request_is_accepted_by_resolution_processor(tmp_path) -
     assert request.logical_request_key == submitted["logical_request_key"]
 
 
-def test_resolution_resource_spec_restores_waiting_pressure_rung(
+def test_resolution_resource_spec_ignores_legacy_waiting_pressure_rung(
     dataset_profile,
     tmp_path,
 ) -> None:
@@ -165,7 +165,7 @@ def test_resolution_resource_spec_restores_waiting_pressure_rung(
     )
     processor._predicted_new_bytes = lambda _submission: 0
     processor._read_request = lambda _submission: SimpleNamespace(scope=Scope.FULL)
-    assert processor.resource_spec(submission).pressure_rung == 1
+    assert processor.resource_spec(submission).pressure_rung == 0
 
 
 def test_supervised_source_stage_uses_versioned_timeout_and_rung(

@@ -1154,7 +1154,8 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
     assert context_pack["failure_event"]["source"] == "github_actions"
     assert context_pack["failure_event"]["failure_kind"] == "real_github_actions"
-    assert context_pack["llm_triage_advice"]["provider"] == "github_models"
+    assert context_pack["llm_triage_advice"]["provider"] == "deepseek_api"
+    assert context_pack["llm_triage_advice"]["model"] == "deepseek-v4-flash"
     assert "reason: `schema_quality_smoke_no_network`" in issue_payload["body"]
     assert "triage_advice_mode: `schema_smoke_no_network`" in issue_payload["body"]
 

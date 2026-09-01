@@ -443,6 +443,7 @@ def test_fixed_h5_reader_is_bounded_and_rejects_column_drift(tmp_path: Path, mon
         subject._iter_fixed_h5_frames(
             path,
             expected_columns=subject._DAILY_BASIC_COLUMNS,
+            expected_dtype="<f4",
             max_rows=1,
         )
     )
@@ -450,7 +451,13 @@ def test_fixed_h5_reader_is_bounded_and_rejects_column_drift(tmp_path: Path, mon
     assert [len(item) for item in chunks] == [1, 1]
     assert chunks[0].dtypes.tolist() == [np.dtype("float32")] * len(subject._DAILY_BASIC_COLUMNS)
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
-        list(subject._iter_fixed_h5_frames(path, expected_columns=tuple(reversed(subject._DAILY_BASIC_COLUMNS))))
+        list(
+            subject._iter_fixed_h5_frames(
+                path,
+                expected_columns=tuple(reversed(subject._DAILY_BASIC_COLUMNS)),
+                expected_dtype="<f4",
+            )
+        )
     assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
     monkeypatch.setattr(
         subject,
@@ -460,11 +467,49 @@ def test_fixed_h5_reader_is_bounded_and_rejects_column_drift(tmp_path: Path, mon
     window = subject._load_fixed_h5_window(
         path,
         expected_columns=subject._DAILY_BASIC_COLUMNS,
+        expected_dtype="<f4",
         start=date(2020, 7, 31),
         end=date(2020, 7, 31),
         max_rows=1,
     )
     assert window.index.tolist() == [(pd.Timestamp("2020-07-31"), "000001.SZ")]
+
+
+def test_fixed_h5_reader_preserves_index_float64_and_rejects_component_dtype_drift(tmp_path: Path) -> None:
+    columns = (
+        "idx_open_point",
+        "idx_high_point",
+        "idx_low_point",
+        "idx_close_point",
+        "idx_pre_close_point",
+        "idx_return_1d",
+        "idx_volume_hand_source",
+        "idx_volume_share_equiv",
+        "idx_amount_cny",
+    )
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-07-30"), "000300.SH")],
+        names=["datetime", "instrument"],
+    )
+    path = tmp_path / "index_daily.h5"
+    pd.DataFrame(np.ones((1, len(columns)), dtype=np.float64), index=index, columns=columns).to_hdf(
+        path, key="data", format="fixed"
+    )
+
+    inventory = subject._fixed_h5_inventory(path, expected_columns=columns, expected_dtype="<f8")
+    frame = subject._load_fixed_h5_window(
+        path,
+        expected_columns=columns,
+        expected_dtype="<f8",
+        start=date(2020, 7, 30),
+        end=date(2020, 7, 30),
+    )
+
+    assert inventory["dtype"] == "float64"
+    assert frame.dtypes.tolist() == [np.dtype("float64")] * len(columns)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._fixed_h5_inventory(path, expected_columns=columns, expected_dtype="<f4")
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
 
 
 def test_qlib_qfq_values_are_reconstructed_to_raw_units_and_invalid_factor_fails() -> None:
@@ -627,10 +672,10 @@ def test_csi300_benchmark_return_is_recomputed_from_frozen_close_and_preclose(tm
         ],
         names=["datetime", "instrument"],
     )
-    frame = pd.DataFrame(np.ones((2, len(columns)), dtype=np.float32), index=index, columns=columns)
-    frame["idx_close_point"] = np.asarray([110.0, 90.0], dtype=np.float32)
-    frame["idx_pre_close_point"] = np.asarray([100.0, 100.0], dtype=np.float32)
-    frame["idx_return_1d"] = np.asarray([9.0, 9.0], dtype=np.float32)
+    frame = pd.DataFrame(np.ones((2, len(columns)), dtype=np.float64), index=index, columns=columns)
+    frame["idx_close_point"] = np.asarray([110.0, 90.0], dtype=np.float64)
+    frame["idx_pre_close_point"] = np.asarray([100.0, 100.0], dtype=np.float64)
+    frame["idx_return_1d"] = np.asarray([9.0, 9.0], dtype=np.float64)
     path = tmp_path / "index.h5"
     frame.to_hdf(path, key="data", format="fixed")
 
@@ -692,7 +737,7 @@ def _asset_binding(tmp_path: Path) -> tuple[Path, Path]:
     ):
         path = release / f"{name}.asset"
         pd.DataFrame(
-            np.ones((2, len(columns)), dtype=np.float32),
+            np.ones((2, len(columns)), dtype=np.float64 if name == "index_context" else np.float32),
             index=frame_index,
             columns=columns,
         ).to_hdf(path, key="data", format="fixed")
@@ -742,6 +787,83 @@ def test_source_asset_binding_verifies_tree_files_and_excludes_locator_from_iden
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
         subject.load_rotation_l1_source_assets(manifest_path)
     assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observations(tmp_path: Path) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    rows = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": None,
+            },
+            {
+                "ts_code": "000002.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": "09:30-10:00",
+            },
+        ]
+    )
+    rows.to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keys = subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+
+    assert keys == frozenset({(subject.SOURCE_START, "000001.SZ")})
+
+
+@pytest.mark.parametrize(
+    ("suspend_type", "suspend_timing"),
+    (("R", None), ("S", "")),
+)
+def test_suspend_sidecar_rejects_unknown_type_or_empty_intraday_timing(
+    tmp_path: Path,
+    suspend_type: str,
+    suspend_timing: str | None,
+) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": suspend_type,
+                "suspend_timing": suspend_timing,
+            }
+        ]
+    ).to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
 
 
 def test_builder_cli_persists_typed_failure_without_final_bundle(

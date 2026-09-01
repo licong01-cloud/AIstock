@@ -7,6 +7,18 @@ description: Operate the durable, candidate-only AIstock monthly QE backtest dat
 
 把 Skill 当作薄编排层。durable authority 是版本化 profile、SQLite control catalog、immutable CAS、release/attestation receipt 和独立 Worker；聊天、Skill 文本、日志摘要都不是运行状态 authority。
 
+## 当前交付优先合同
+
+- 目标 cutoff authority 准备完成后直接提交一次 `monthly --candidate-only`；不再要求真实五股/六股 sample，
+  也不要求先生成旧 cutoff 的 v2 full。
+- planner 必须复用既有有效 candidate 组件，只追加新月份、补充 v2 新增历史证券，并选择性重建真实失效分区；
+  不得为流程验收全量重导八年数据。
+- AIstock 不设置资源 admission、checkpoint、`WAITING_RESOURCE`、pressure ladder 或性能阻断。资源指标只写 telemetry；
+  只有 OS/Docker/WSL、数据库或文件系统实际失败可以结束 attempt，且不自动重试。
+- 分批 SQL、流式处理、按股票/月切片和有界日志是实现方式，不是门禁。禁止新增任何门禁、审批点或重复小样本。
+- 完成目标 cutoff candidate 的一次全量结构验收、分层数值抽样和 QE/HMM producer smoke 后立即停止；
+  消费者迁移、训练和 production activation 均不属于月更前置。
+
 ## 先选动作
 
 | 用户目标 | 动作 |
@@ -17,14 +29,13 @@ description: Operate the durable, candidate-only AIstock monthly QE backtest dat
 | 复核旧的不可变 candidate | 先 catalog，再走 `reattest-existing`；只写独立 attestation |
 | 查看复用、增量或失效原因 | 读取 decision/component actions、fingerprints 和 receipt |
 | 修代码、做 fixture 验证 | 使用 feature/BUG lane；不得把测试变成真实导出 |
-| 首次 PIT v2 迁移 | 只使用仓库白名单 `initial-migration` plan；先 sample、验收后再由独立授权运行 full |
+| 首次 PIT v2 candidate | 目标 cutoff authority 完成后直接运行一次 `monthly --candidate-only`；不执行真实 sample 前置 |
 | 激活生产、同步 node1、启动/注册 Worker 或 scheduler | 这是独立授权，不由本 Skill 推导 |
 
 普通 operator 入口：
 
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
@@ -37,9 +48,8 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 r
 不一致时 source freeze fail closed；不得回退 `market.sector_data`、默认行业或手工复制临时文件。具体顺序见
 `references/monthly-workflow.md`。
 源码交付不等于 runtime activation，未完成 v2 全量验证和独立激活授权前不得把 production 默认值切到 v2。
-`initial-migration` 不是普通月更参数化捷径：plan id、canonical plan digest、固定 `2026-07-31` cutoff、
-sample instruments/event windows 和 candidate-only safety 必须同时由 control service、Worker resolution reader 与
-build receipt 复验。`sample` binding 不得进入 QE/训练；源码或 fixture 验证不得执行该真实提交命令。
+历史 `initial-migration` plan 只用于复现旧 receipt，不再作为当前或未来月更前置。源码 smoke 可以使用 fixture，
+但不得创建真实 sample submission。
 
 `monthly` 成功响应返回随机 `idempotency_key`；只在重试同一次调用时显式复用。未显式给 key 的下一次人工
 调用必须形成新 submission/fresh probe，resolution 再按 source identity 复用既有 run/release。
@@ -58,7 +68,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
    - `NO_OP_VERIFIED`：fresh probe 证明 source/PIT/validation 未变；没有重导。
    - `REATTESTED`：旧 candidate 未改写；新 attestation 位于 control catalog/CAS。
    - `CANDIDATE_VALIDATED`：读取逐组件 `REUSE/INCREMENTAL/SELECTIVE_REBUILD/FULL_REBUILD`，不得笼统称全量或增量。
-   - `WAITING_*`：保留任务、lease 和 checkpoint，等待条件恢复。
+   - `WAITING_SOURCE`：仅用于 provider 尚未发布、网络限流等真实 source 暂态；保留 intent，禁止缩小范围。
    - `BLOCKED_*`/`FAILED_*`：按 error code 报告；不要换 provider、补零、减范围或调用旧 exporter 绕过。
 6. 只有 terminal receipt 与 catalog readback 一致、全部 required validation PASS，才报告 candidate signoff。production/node1/runtime 状态始终另列。
 
@@ -73,7 +83,8 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
 - DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
 - static 固定 121 数据列、`l2_code_id int16`、unknown=`-1`。12 指数和 HMM `000300.SH` benchmark 不得运行时扩张或替换。
-- 不提高任务自身 hard cap、不扩大并发。全局 available/commit headroom、paging/pagefile、WSL host available 与性能退化只写 warning，不阻断月更；pressure ladder 只能由本任务 aggregate owned commit 触发，且不能减少股票、日期、字段、指数或验证。
+- host available、commit headroom、paging/pagefile、WSL available、预测磁盘、aggregate commit、任务自定义 Job/cgroup
+  内存值和性能退化全部只写 telemetry，不参与 admission、checkpoint、等待、自动取消或终态判断。
 - mixed/COW 只承诺候选物化按失效范围重写。在没有可信 DB revision ledger 时，初次 source freeze 与
   publish 前 DB-only recheck 仍可能各做一次 cutoff 内全值扫描；不得把它表述为整条链只读新增月。
 - MVCC/provenance watermark 不作为内容复用证明。未来 revision ledger 需要独立 F2、DEV 验证和明确的
@@ -88,15 +99,16 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 
 - 自动处理：登记的合法 sparse 空日（含 `bak_basic`）、精确指数候选补齐、`stk_limit` 规则补全、合规 terminal daily 尾段。
 - 可重试：provider 限流/网络/尚未发布；保留 durable intent/checkpoint，不把暂态失败升级为永久合同阻断。
-- 仅以下类别可硬阻断：权威值冲突；PIT/日期/identity 损坏；内部 required gap；必要推导输入缺失；越权覆盖/激活；无依据扩大重建范围；资源或安全合同违反。
-- 不得自行新增或扩大硬阻断。任何新阻断设计必须先向用户报告触发条件、发生概率、误阻代价、准确性风险与替代方案，获得明确批准后才实施。
+- 只有既有数据正确性失败或实际外部错误可使 candidate 失败：权威值冲突、PIT/日期/identity 损坏、内部 required gap、
+  必要推导输入缺失、越权覆盖/激活，以及 OS/数据库/文件系统实际错误。
+- 禁止新增或扩大任何门禁，包括资源、性能、等待、审批、sample 和流程门禁。
 - DEV 只验证 DML 机制：`validate-dml` 单行 upsert/readback 后强制 rollback；不得要求 DEV 复制八年生产历史。生产仍需全范围只读 plan、目标明确的 DML 授权及 readback。
 
 ## 按需读取 references
 
 - 普通月更、catalog、NO_OP、re-attest、status/resume：读 [monthly-workflow.md](references/monthly-workflow.md)。
 - fingerprint、source revision、component reuse/invalidation、COW：读 [fingerprint-and-reuse.md](references/fingerprint-and-reuse.md)。
-- Worker、lease、hard caps、pressure ladder、WAITING/orphan recovery：读 [resource-and-worker.md](references/resource-and-worker.md)。
+- Worker、lease、OS-managed execution、orphan recovery：读 [resource-and-worker.md](references/resource-and-worker.md)。
 - terminal outcome、receipt、attestation、signoff 和 production gates：读 [release-receipt.md](references/release-receipt.md)。
 - 12 指数、单位、provider parity 与 HMM consumer 边界：读 [index-hmm-contract.md](references/index-hmm-contract.md)。
 - `stk_limit` 规则派生、missing-only 身份和选择性失效：读 [fingerprint-and-reuse.md](references/fingerprint-and-reuse.md) 及 `docs/architecture/qe_stk_limit_rule_derived_overlay_f2_design_20260823.md`。

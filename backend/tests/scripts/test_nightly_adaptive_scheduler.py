@@ -478,6 +478,8 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     dispatch = parsed.get("on", parsed.get(True))["workflow_dispatch"]["inputs"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
+    assert "--provider github_models" not in workflow
+    assert workflow.count("--provider deepseek_api") >= 10
     assert "Build compact code intelligence refs for LLM advice" in workflow
     assert "validate-config `\n            --provider deepseek_api `\n            --require-api-key" in workflow
     assert "Build LLM nightly discovery hypotheses" in workflow
@@ -535,6 +537,11 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "dependency installation is prohibited in Nightly" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_session_runner.py" in workflow
+    ci_workflow = (scheduler.ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    assert "--provider github_models" not in ci_workflow
+    assert "--provider deepseek_api" in ci_workflow
+    noxfile = (scheduler.ROOT / "noxfile.py").read_text(encoding="utf-8")
+    assert '"scripts/nightly_adaptive_scheduler.py",\n        "--json",\n        "--provider",\n        "deepseek_api"' in noxfile
     assert "Select prior durable Nightly L3 receipt" in workflow
     assert "retry_run_id: ${{ steps.select_nightly_receipt.outputs.run_id }}" in workflow
     assert "retry_source_head: ${{ steps.select_nightly_receipt.outputs.head_sha }}" in workflow

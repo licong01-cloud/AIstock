@@ -2054,6 +2054,7 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/artifact_ready_build_source.py",
         "backend/services/dataset_release/artifact_ready_source.py",
         "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/build_stage.py",
         "backend/services/dataset_release/canonical_stock_transformer.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
@@ -2063,9 +2064,13 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/resolution_processor.py",
         "backend/services/dataset_release/resource_budget.py",
         "backend/services/dataset_release/resource_gate.py",
+        "backend/services/dataset_release/resource_supervisor.py",
         "backend/services/dataset_release/source_authority.py",
         "backend/services/dataset_release/stk_limit_overlay.py",
         "backend/services/dataset_release/worker.py",
+        "backend/services/dataset_release/windows_job.py",
+        "backend/services/dataset_release/wsl_cgroup.py",
+        "backend/services/dataset_release/wsl_resource_guardian.py",
     ]
 
     inference = workflow._classify_runtime_impact(changed_files)
@@ -2073,7 +2078,7 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
     assert inference == {
         "runtime_impact": "worker_scheduler",
         "observed_impacts": ["worker_scheduler"],
-        "runtime_files": changed_files,
+        "runtime_files": sorted(changed_files),
         "target_ids": ["worker-scheduler"],
     }
 
@@ -2987,6 +2992,9 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
+)
 _BUSINESS_SMOKE_SCOPED_SCHEDULER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
 )
@@ -3133,6 +3141,117 @@ def test_post_restart_verify_verifies_run_payload_reaching_terminal_success(
     assert receipt["business_smoke_semantic"]["verdict"] == "passed"
     assert receipt["business_smoke_semantic"]["contract_id"] == "run_terminal_success"
     assert receipt["business_smoke_semantic"]["response_sha256"] == smoke["response_sha256"]
+
+
+def _localsim_cutover_readiness_payload(**overrides: Any) -> dict[str, Any]:
+    readiness: dict[str, Any] = {
+        "schema_version": "localsim_cutover_readiness_v1",
+        "ready": True,
+        "checked_at": "2026-09-01T05:00:00Z",
+        "blockers": [],
+        "relation_presence": {
+            "paper_v2.simulation_account_v1": True,
+            "paper_v2.legacy_localsim_account_lineage_v1": True,
+            "paper_v2.localsim_replay_job_v1": True,
+            "paper_v2.localsim_runtime_profile_v1": True,
+            "paper_v2.localsim_runtime_profile_version_v1": True,
+            "paper_v2.simulation_ledger_scope_v1": True,
+            "strategy_pkg.strategy_runtime_release": True,
+            "paper_v2.simulation_release_binding": True,
+            "paper_v2.simulation_daily_run": True,
+            "paper_v2.run": True,
+            "paper_v2.intraday_snapshots": True,
+        },
+        "runtime_fk_count": 2,
+        "orphan_ledger_scope_count": 0,
+        "invalid_ledger_scope_count": 0,
+        "retained_legacy_account_ids": ["paper_retained"],
+        "missing_lineage_account_ids": [],
+        "legacy_active_session_count": 0,
+        "legacy_auto_run_count": 0,
+        "legacy_sentinel_count": 0,
+        "in_flight_economic_run_count": 0,
+    }
+    readiness.update(overrides)
+    return {"ok": True, "readiness": readiness}
+
+
+def test_post_restart_verify_accepts_ready_localsim_cutover_authority(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_localsim_cutover_readiness_payload()).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "localsim_cutover_readiness"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"]["runtime_fk_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_fragment"),
+    [
+        (
+            {
+                "ready": False,
+                "blockers": ["in_flight_economic_run_count:1"],
+                "in_flight_economic_run_count": 1,
+            },
+            "in_flight_economic_run_count=1",
+        ),
+        ({"ready": True, "blockers": ["retained_lineage_missing:1"]}, "inconsistent"),
+        ({"runtime_fk_count": True}, "runtime_fk_count must be a non-negative integer"),
+        ({"checked_at": "2026-09-01T05:00:00"}, "timezone-aware timestamp"),
+        (
+            {"relation_presence": {"paper_v2.simulation_account_v1": True}},
+            "relation_presence keys are invalid",
+        ),
+    ],
+)
+def test_post_restart_verify_blocks_invalid_or_unready_localsim_cutover_authority(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    reason_fragment: str,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(_localsim_cutover_readiness_payload(**overrides)).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "localsim_cutover_readiness"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert reason_fragment in smoke["semantic"]["reason"]
 
 
 def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_http_200(

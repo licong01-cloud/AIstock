@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-835",
-  "closed_at": null,
+  "closed_at": "2026-07-23T03:25:27Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-07-22T20:26:36.916444Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3f77aa16bed0129e182849a7c57fdf87c20dc264",
+  "fixed_at": "2026-07-23T03:27:13.027486Z",
   "github_issue_number": 2646,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2646",
   "last_seen_at": "2026-07-22T20:26:36.916444Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2647",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,7 +119,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -127,6 +128,11 @@
     "fingerprint": "d1c5689eb5faeb97225e8372",
     "source_event_id": "FE-20260722-d1c5689eb5fa"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

@@ -79,6 +79,7 @@ targets:
       - backend/services/dataset_release/artifact_ready_build_source.py
       - backend/services/dataset_release/artifact_ready_source.py
       - backend/services/dataset_release/build_processor.py
+      - backend/services/dataset_release/build_stage.py
       - backend/services/dataset_release/canonical_stock_transformer.py
       - backend/services/dataset_release/index_contract.py
       - backend/services/dataset_release/index_sources.py
@@ -88,6 +89,7 @@ targets:
       - backend/services/dataset_release/resolution_processor.py
       - backend/services/dataset_release/resource_budget.py
       - backend/services/dataset_release/resource_gate.py
+      - backend/services/dataset_release/resource_supervisor.py
       - backend/services/dataset_release/sector_data_candidate_source.py
       - backend/services/dataset_release/source_authority.py
       - backend/services/dataset_release/source_pool.py
@@ -96,6 +98,9 @@ targets:
       - backend/services/dataset_release/mixed_planner.py
       - backend/services/dataset_release/stk_limit_overlay.py
       - backend/services/dataset_release/worker.py
+      - backend/services/dataset_release/windows_job.py
+      - backend/services/dataset_release/wsl_cgroup.py
+      - backend/services/dataset_release/wsl_resource_guardian.py
       - backend/services/rdagent_scheduler*.py
       - backend/services/**/*worker*.py
       - scripts/**/*scheduler*.py
@@ -117,6 +122,7 @@ targets:
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
+          - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
@@ -126,6 +132,7 @@ targets:
           - backend/services/dataset_release/resolution_processor.py
           - backend/services/dataset_release/resource_budget.py
           - backend/services/dataset_release/resource_gate.py
+          - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/sector_data_candidate_source.py
           - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/source_pool.py
@@ -134,6 +141,9 @@ targets:
           - backend/services/dataset_release/mixed_planner.py
           - backend/services/dataset_release/stk_limit_overlay.py
           - backend/services/dataset_release/worker.py
+          - backend/services/dataset_release/windows_job.py
+          - backend/services/dataset_release/wsl_cgroup.py
+          - backend/services/dataset_release/wsl_resource_guardian.py
           - scripts/dataset_release_worker.py
           - scripts/dataset_release_source_stage.py
           - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
