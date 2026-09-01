@@ -542,6 +542,23 @@ def test_qlib_qfq_values_are_reconstructed_to_raw_units_and_invalid_factor_fails
     assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
 
 
+def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
+    missing = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        missing[field] = np.nan
+    assert subject._qlib_row_is_fully_missing(missing) is True
+
+    partial = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        partial[field] = 1.0
+    partial["factor"] = np.nan
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(partial)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+    assert subject._qlib_row_is_fully_missing(np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]) is False
+
+
 def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: Path) -> None:
     qlib = tmp_path / "qlib"
     feature_root = qlib / "features" / "000001.sz"

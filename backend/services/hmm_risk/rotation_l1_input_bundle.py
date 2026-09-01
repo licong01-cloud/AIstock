@@ -225,7 +225,11 @@ _SOURCE_STATUS_VALUES = frozenset(
 )
 _SOURCE_STATUS_PROVIDERS = frozenset({"frozen_release", "suspend_d", "c013", "tushare", "moneyflow_h5"})
 _SOURCE_INVALID_REASONS = frozenset(
-    {"hmm_risk_rotation_l1_moneyflow_invalid", "hmm_risk_rotation_l1_daily_basic_invalid"}
+    {
+        "hmm_risk_rotation_l1_moneyflow_invalid",
+        "hmm_risk_rotation_l1_daily_basic_invalid",
+        "hmm_risk_c010_price_unavailable_for_opportunity",
+    }
 )
 
 
@@ -711,6 +715,16 @@ def _raw_qlib_values(raw: np.void) -> dict[str, float]:
     if values["limit_up"] not in (0.0, 1.0) or values["limit_down"] not in (0.0, 1.0):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib limit flags must be exact 0/1")
     return values
+
+
+def _qlib_row_is_fully_missing(raw: np.void) -> bool:
+    values = np.asarray([float(raw[field]) for field in QLIB_STOCK_FIELDS], dtype=np.float64)
+    finite = np.isfinite(values)
+    if not bool(finite.any()):
+        return True
+    if not bool(finite.all()):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib stock row is only partially finite")
+    return False
 
 
 def load_rotation_l1_source_assets(manifest_path: Path) -> dict[str, Any]:
@@ -1470,7 +1484,7 @@ def _build_stock_fact_aggregates(
                         }
                     )
                     continue
-                qlib = _raw_qlib_values(raw)
+                qlib_missing = _qlib_row_is_fully_missing(raw)
                 prior = circ_state.get(symbol)
                 prior_circ = prior[1] if prior is not None and prior[0] >= eligible_start else None
                 prices = history[symbol]
@@ -1495,7 +1509,13 @@ def _build_stock_fact_aggregates(
                         moneyflow_status = "provider_absence"
                 elif any(not math.isfinite(float(flow_row[index])) for index in (1, 3, 13, 15, 17)):
                     moneyflow_status = "required_fields_invalid"
-                if basic_row is None or any(not math.isfinite(float(basic_row[index])) for index in (14, 15)):
+                if qlib_missing:
+                    source_status = (
+                        "source_invalid",
+                        "hmm_risk_c010_price_unavailable_for_opportunity",
+                        "frozen_release",
+                    )
+                elif basic_row is None or any(not math.isfinite(float(basic_row[index])) for index in (14, 15)):
                     source_status = (
                         "source_invalid",
                         "hmm_risk_rotation_l1_daily_basic_invalid",
@@ -1523,6 +1543,42 @@ def _build_stock_fact_aggregates(
                     payload=source_status,
                     previous_trading_day=previous_day,
                 )
+                if qlib_missing:
+                    day_rows.append(
+                        {
+                            "trade_date": day,
+                            "symbol": symbol,
+                            "l1_code": projection.l1_code,
+                            "l1_name": projection.l1_name,
+                            "l2_code": projection.l2_code,
+                            "l2_name": projection.l2_name,
+                            "is_suspended": False,
+                            "open_yuan": None,
+                            "high_yuan": None,
+                            "low_yuan": None,
+                            "close_yuan": None,
+                            "volume_shares": None,
+                            "amount_cny": None,
+                            "prev_close_yuan": None,
+                            "prev_close_5_yuan": previous_5,
+                            "prev_close_10_yuan": previous_10,
+                            "total_mv_cny": None if basic_row is None else float(basic_row[14]) * 10_000.0,
+                            "prev_circ_mv_cny": prior_circ,
+                            "up_limit_yuan": None,
+                            "buy_sm_amount_cny": None if flow_row is None else float(flow_row[1]),
+                            "sell_sm_amount_cny": None if flow_row is None else float(flow_row[3]),
+                            "buy_elg_amount_cny": None if flow_row is None else float(flow_row[13]),
+                            "sell_elg_amount_cny": None if flow_row is None else float(flow_row[15]),
+                            "net_mf_amount_cny": None if flow_row is None else float(flow_row[17]),
+                            "moneyflow_fact_status": moneyflow_status,
+                            "moneyflow_source_identity": flow_resolution.evidence(),
+                            "moneyflow_provider_absence": (
+                                None if provider_evidence is None else provider_evidence.evidence()
+                            ),
+                        }
+                    )
+                    continue
+                qlib = _raw_qlib_values(raw)
                 row = {
                     "trade_date": day,
                     "symbol": symbol,
