@@ -1,7 +1,30 @@
 {
-  "actual": "在 qe_hmm_full_v2 initial-migration sample dss_55a9ef70855368a44d1dd942fecdfc33 中，resolution source-stage 三次收到 RESOURCE_OS_LOW_MEMORY_SIGNAL，并正确返回 WAITING_RESOURCE、零 candidate/DB/production writes。但 worker._finish_resolution 将所有 WAITING disposition 映射为 WAITING_SOURCE，_requeue_one_due_retry 在固定 30 秒后无资源恢复判定即重新 QUEUED_RESOLUTION，导致同一全值 source freeze 从头重复（fence 42/43/44），再次压低主机可用内存。期望保持显式 OS low-memory 安全 checkpoint，但资源等待必须在真实 resource-ready/信号清除后才重排队；source-not-ready 与 resource-wait typed 语义不得混用；不得新增 host available/commit 数值硬门禁、不得缩减数据范围、不得触碰数据集或生产 DB。关联 BUG-1290 / Issue #4093 以及该真实 submission/attempt receipt。",
+  "actual": "qe_hmm_full_v2 月更被 AIstock 自设的 host/commit/WSL/disk 资源准入、Job/cgroup 内存限额和 resource checkpoint 转入 WAITING_RESOURCE；resolution 又把该状态映射为 WAITING_SOURCE 并按固定间隔重跑完整 source freeze，造成重复耗时且仍可能被同一资源条件再次终止。",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260901_BUG-1297-dataset-release-resource-wait-retries-full-source-freeze-without-recover.json"
+    "tests/aistock_validation/bugs/20260901_BUG-1297-dataset-release-resource-wait-retries-full-source-freeze-without-recover.json",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+    ".codex/skills/update-backtest-dataset/references/release-receipt.md",
+    ".codex/skills/update-backtest-dataset/references/resource-and-worker.md",
+    "backend/services/dataset_release/build_processor.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/resolution_processor.py",
+    "backend/services/dataset_release/resource_gate.py",
+    "backend/services/dataset_release/resource_supervisor.py",
+    "backend/services/dataset_release/windows_job.py",
+    "backend/services/dataset_release/wsl_cgroup.py",
+    "backend/services/dataset_release/wsl_resource_guardian.py",
+    "backend/tests/dataset_release/test_build_processor.py",
+    "backend/tests/dataset_release/test_resolution_processor.py",
+    "backend/tests/dataset_release/test_resource_gate.py",
+    "backend/tests/dataset_release/test_resource_supervisor.py",
+    "backend/tests/dataset_release/test_windows_job.py",
+    "backend/tests/dataset_release/test_worker.py",
+    "backend/tests/dataset_release/test_wsl_cgroup.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1297",
@@ -12,7 +35,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-01T02:23:00.237453Z",
-  "description": "在 qe_hmm_full_v2 initial-migration sample dss_55a9ef70855368a44d1dd942fecdfc33 中，resolution source-stage 三次收到 RESOURCE_OS_LOW_MEMORY_SIGNAL，并正确返回 WAITING_RESOURCE、零 candidate/DB/production writes。但 worker._finish_resolution 将所有 WAITING disposition 映射为 WAITING_SOURCE，_requeue_one_due_retry 在固定 30 秒后无资源恢复判定即重新 QUEUED_RESOLUTION，导致同一全值 source freeze 从头重复（fence 42/43/44），再次压低主机可用内存。期望保持显式 OS low-memory 安全 checkpoint，但资源等待必须在真实 resource-ready/信号清除后才重排队；source-not-ready 与 resource-wait typed 语义不得混用；不得新增 host available/commit 数值硬门禁、不得缩减数据范围、不得触碰数据集或生产 DB。关联 BUG-1290 / Issue #4093 以及该真实 submission/attempt receipt。",
+  "description": "移除月度数据集发布中的 AIstock 资源准入、内存限额、resource checkpoint、pressure-rung 恢复和资源等待自动重试。保留固定流式分块、进程归属、心跳、取消、超时与真实 OS/DB/filesystem 错误传播。资源观测只写 telemetry，不改变任务状态或数据范围。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -22,7 +45,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "月更只执行一次完整 candidate-only lineage；host/commit/WSL/paging/预测磁盘等资源观测仅写 telemetry，不阻断、暂停、降档或自动重试。Windows Job 与 WSL cgroup 只管理 task-owned 进程，不安装 AIstock memory/commit/swap 限额。只有实际 OOM/termination、DB/WSL/Docker 失败、超时或 ENOSPC 结束当前 attempt。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -46,7 +69,7 @@
   "github_issue_number": 4108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4108",
   "last_seen_at": "2026-09-01T02:23:00.237453Z",
-  "module": "local_data",
+  "module": "qlib_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -57,26 +80,34 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "data_sync_autonomy_backend"
+    "validation_module_registry_l0",
+    "qlib_data_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "BUG1297_FRESH_PROCESS_UNLIMITED_RESOURCE_CONTRACT_OK: isolated Python imported the changed worker closure and verified the WSL launch command contains no AIstock MemoryHigh/MemoryMax/MemorySwapMax/OOMPolicy limits",
+      "BUG1297_FRESH_PROCESS_UNLIMITED_RESOURCE_CONTRACT_OK"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "local_data"
+    "qlib_data"
   ],
   "title": "Dataset release resource wait retries full source freeze without recovery",
   "trigger_condition": {

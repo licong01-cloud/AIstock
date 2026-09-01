@@ -5,7 +5,52 @@
 详细设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`。
 低层数据公式与历史 exporter 兼容说明：`docs/analysis/qlib_backtest_dataset_export_guide_20260712.md`。
 
-## 0. 2026-09-01最高优先级执行窗
+## 0. 2026-09-01 最短交付路径（唯一有效）
+
+目标是生成 cutoff=`2026-08-31` 的独立 `qe_hmm_full_v2` candidate。禁止覆盖现有 2026-07-31 candidate、
+禁止 production activation、禁止重复真实 sample，禁止在本任务中新增门禁或平台能力。
+
+执行顺序：
+
+1. 只读确认 production canonical PIT v2 是否覆盖到 `2026-08-31`。当前若仍为 `2026-07-31`，使用 Appendix A
+   “8月31日收盘后：准备目标cutoff authority”中的 canonical PIT operator 命令执行 DEV apply/readback；取得
+   production target DML 明确授权后再执行 production apply/readback。Appendix A 的 sample/7月v2 full 步骤仍禁止执行。
+2. 直接构建 `2026-08-31` industry full 和 P3A full。不得先构建五股/六股 sample。
+3. 只提交一次：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+```
+
+4. 只读取同一 submission/run 的 bounded status/events/log/receipt，直至 terminal。
+5. terminal candidate 只执行一次完整结构验收、分层数值抽样和 QE/HMM producer smoke；通过后停止。
+
+planner 必须优先复用现有 2026-07-31 v1 candidate 中 identity 一致的 daily/minute/H5/static/index 分区；
+只追加 8 月尾部、补充 v2 新增历史退市证券，并选择性重建 PIT/复权/行业实际失效的证券或月份。
+不得为了流程证明重新导出八年全市场。
+
+### 0.1 资源规则
+
+- host available、commit headroom、pagefile/paging、WSL available、预测磁盘余量、aggregate commit、pressure rung、
+  性能退化和其他模块训练/回测负载全部只记录 telemetry，不参与 admission、checkpoint、等待或终态判断。
+- 月更不再产生 AIstock `WAITING_RESOURCE`。只有 OS/Docker/WSL、数据库或文件系统实际返回 OOM、进程终止、
+  连接失败、超时或 ENOSPC 才结束当前 attempt；不自动重试。
+- 分批查询、流式处理、按股票/月切片和有界日志继续使用，但它们不是门禁，不能缩减数据或验证范围。
+- 禁止新增任何资源或流程门禁。发现性能问题只记录并在本次 candidate 完成后另行优化。
+
+### 0.2 完成条件
+
+- canonical PIT v2、industry/P3A 均覆盖 `2026-08-31`；
+- daily/minute/PIT/ST/stk_limit/QFQ/static/H5/12-index/sector required validation 全部 PASS；
+- QE/HMM producer smoke PASS；
+- candidate marker、catalog、receipt 与 artifact identity 一致；
+- production writes、pointer changes、node1、backend restart 和 cleanup 均为 0/not_requested。
+
+满足后立即停止，不继续消费者迁移、模型训练、生产激活或平台产品化。
+
+## Appendix A. 已废弃的旧 P0 执行窗
+
+以下步骤只保留历史解释，不得执行；特别是六股 sample、2026-07-31 v2 full 前置和重复 source-freeze 已被 §0 取代。
 
 本执行窗的目标是在2026-09-01凌晨开始，把独立candidate-only数据集更新到2026-08-31并形成terminal receipt。
 它不授权production activation、DB DDL/DML、node1、后端重启或cleanup。QE/HMM训练、Selection/Paper/Advisory
@@ -152,7 +197,7 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 
 第一条命令只执行一次。后续仅使用同一submission/run的`status/events/receipt/log`有界读取。provider尚未发布或网络
 限流属于同一durable intent的retryable waiting；不得新建submission追赶时间。目标是在9月1日开盘前得到
-`SUCCEEDED/CANDIDATE_VALIDATED`及完整terminal receipt；时间目标不放宽数据、PIT、行业、指数、资源或验证合同。
+`SUCCEEDED/CANDIDATE_VALIDATED`及完整terminal receipt；时间目标不放宽数据、PIT、行业、指数或验证合同。
 
 ### 0.4 P0完成与停止条件
 
@@ -361,8 +406,8 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 | `submission_state=QUEUED_RESOLUTION` + `worker_health.state=unavailable|stale|blocked` | durable request 已保存，兼容 Worker 不可用 | 不重提、不代跑；通知 runtime owner |
 | `submission_state=RESOLVING_SOURCE` | 冻结 source/PIT/provider content | 等待；不启动 exporter |
 | `run_state=QUEUED|EXECUTING|VALIDATING|PREPARING_PUBLISH|PUBLISHING` | run 受 attempt/lease/fence/resource supervisor 管理 | 用 status/events 观察 |
-| `WAITING_RESOURCE` | OS 明确 LowMemory 信号、任务自身 hard cap 或按预测所需的 X 空间不足 | 不提高 cap；保留 durable task，条件恢复后继续；等待 deadline 只告警、不终止 |
-| 性能 warning | 可比 workload 吞吐退化 | 记录 telemetry；不暂停、不阻断、不改变 pressure rung |
+| `WAITING_RESOURCE` | 历史状态；当前月更不得产生 | 按 BUG-1297 处理，不自动重试或重复 source freeze |
+| 性能 warning | 可比 workload 吞吐退化 | 只记录 telemetry；不暂停、不阻断、不改变执行范围 |
 | `WAITING_SOURCE` | required source 尚未完成，或 resolution source freeze 期间检测到 writer/snapshot drift | 保留同一 submission 等待自动重试；禁止重提、补零、减范围或放宽一致性检查 |
 | `WAITING_ORPHAN_QUIESCENCE` | 旧 owned process tree 仍 alive/unknown | 只观察；不得 kill/delete lock |
 | `BLOCKED_PROVIDER_TERMINAL` | 40203、overlap conflict、无完整 240 bars等 | 报告 code/date/pending scope，不循环重试 |
@@ -435,25 +480,18 @@ terminal-failed 临时候选可被标记为 cleanup candidate；流程永不自�
 
 backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authority。Worker owner 丢失时，只有 lease expiry 且 Windows/WSL 全部 descendants 已证明 quiescent 才能 reclaim。不要删除 lock、改 SQLite、重置 fence 或杀 orphan。
 
-## 8. 资源边界
+## Appendix B. 已废弃的资源边界历史
 
-关键 hard contract：
+本节只用于解释旧 profile/receipt 字段。当前执行严格使用 §0.1：所有 AIstock 资源数值只作 telemetry，
+不得执行 admission、checkpoint、`WAITING_RESOURCE`、pressure ladder 或性能阻断。
 
-- 同 host heavy full concurrency=1；
-- aggregate owned private commit≤12 GiB；
-- Windows-only Job≤8 GiB，hybrid Windows side≤4 GiB；
-- WSL memory high/max/swap=6/8/0 GiB；
-- host available、system commit headroom、paging/pagefile 与 WSL host available 继续采集并写 receipt，但所有数值阈值仅为 warning telemetry，不参与 admission、checkpoint 或 terminal 判定；OS 明确 `LowMemoryResourceNotification` 仍可安全暂停；
-- DB pool=4、row-producing query=1、provider request=1；
-- minute batch/date chunk=20 stocks/3 months；factor H5/static 由单日切片与 Parquet row-group 控制；profile 中 `h5_batch=100` 仅为 v1 兼容遥测，不是生效的降压旋钮；
-- Parquet row group/validation chunk≤100,000 rows；
-- start free space=1.25×predicted remaining new bytes；没有预测值时不应用固定 32 GiB 保留，实际写盘失败仍 typed fail/wait。
+当前资源合同：
 
-允许的降压只有 profile pressure ladder：batch/chunk/row-group/workers逐级降低。不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能。
-workload 分级仍由已校验的 durable scope 决定并写入 receipt，但历史 start reserve 字段只作兼容遥测。12 GiB
-aggregate、Job/cgroup、WSL zero-swap、DB/provider 并发和 bounded batch 仍是任务自身 hard contract。全局持续换页、
-available/commit/WSL host available、固定磁盘 floor 和性能退化不得阻断；receipt 必须披露 warning 与
-`system_admission_thresholds_blocking=false`。
+- Windows Job 和 WSL transient cgroup 只承担 task-owned 进程归属、取消、owner-death fail-stop 与 quiescence readback；不得安装 AIstock memory/commit/swap 上限；
+- host available、commit headroom、paging/pagefile、WSL available、OS low-memory signal、aggregate commit 与预测磁盘余量只写 telemetry；
+- 上述资源观测不得触发 admission、checkpoint、暂停、`WAITING_RESOURCE`、pressure rung、自动重试或 terminal 判定；
+- batch/chunk/row-group/workers 是固定的流式实现参数，不是门禁；不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能；
+- 只有子进程实际 OOM/termination、Docker/WSL/DB 实际失败、超时或文件系统实际 ENOSPC 才结束当前 attempt，且不自动重试。
 
 性能边界必须如实区分：
 

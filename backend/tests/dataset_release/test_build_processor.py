@@ -1230,7 +1230,7 @@ def test_successor_attempt_uses_new_fenced_staging_and_never_adopts_crash_bytes(
     assert final.is_dir() and not (final / relative).exists()
 
 
-def test_build_processor_restores_monotonic_pressure_rung_from_waiting_attempt(tmp_path, dataset_profile) -> None:
+def test_build_processor_ignores_legacy_waiting_pressure_rung(tmp_path, dataset_profile) -> None:
     profile, store, cas, run, release, context, candidate_root = _setup(tmp_path, dataset_profile)
     error_ref = cas.put_json(
         {
@@ -1279,7 +1279,7 @@ def test_build_processor_restores_monotonic_pressure_rung_from_waiting_attempt(t
         stage_commands=FakeStageCommands(),
     )
 
-    assert processor.resource_spec(store.get_run(run["run_id"])).pressure_rung == 1
+    assert processor.resource_spec(store.get_run(run["run_id"])).pressure_rung == 0
 
 
 def test_build_processor_starts_no_qlib_writer_for_reused_bin_components(tmp_path, dataset_profile) -> None:
@@ -1383,6 +1383,21 @@ def test_build_rejects_stage_without_matching_authoritative_resource_gate(tmp_pa
             pressure_rung=0,
             timeout_seconds=profile.stage_timeouts_seconds["full_build"],
         )
+
+
+def test_build_accepts_large_resource_telemetry_without_runtime_cap(tmp_path, dataset_profile) -> None:
+    profile, _store, _cas, _run, _release, context, _candidate_root = _setup(tmp_path, dataset_profile)
+    receipt = context._child("build-prepare", runtime="windows")
+    receipt["resource_gate_receipt"]["aggregate_owned_peak_commit_bytes"] = 64 * 1024**3
+
+    _validate_supervised_resource_receipt(
+        receipt,
+        profile=profile,
+        execution_id="build-prepare",
+        runtime="windows",
+        pressure_rung=0,
+        timeout_seconds=profile.stage_timeouts_seconds["full_build"],
+    )
 
 
 def test_build_revalidates_initial_migration_plan_before_candidate_write() -> None:

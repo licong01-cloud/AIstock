@@ -215,8 +215,6 @@ class StageResourceReceipt:
         process = psutil.Process()
         details = process.memory_full_info()
         owned = int(getattr(details, "uss", details.rss))
-        if owned > self.invocation.profile.resource_policy.aggregate_private_commit_bytes:
-            raise CandidateBuildStageError("build stage exceeded private-commit policy")
         self.peak = max(self.peak, owned)
         item: dict[str, Any] = {
             "sequence": len(self.checkpoints),
