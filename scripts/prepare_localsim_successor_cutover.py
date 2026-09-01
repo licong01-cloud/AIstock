@@ -25,6 +25,7 @@ from backend.services.simulation_runtime.localsim_cutover_inventory import (  # 
     LocalSimLegacyInventoryReader,
 )
 from backend.services.simulation_runtime.successor_repository import LocalSimSuccessorRepository  # noqa: E402
+from backend.services.trading_core.errors import DataUnavailableError  # noqa: E402
 
 
 class CutoverPreparationError(RuntimeError):
@@ -33,7 +34,11 @@ class CutoverPreparationError(RuntimeError):
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--mode", choices=("inventory", "preflight", "apply", "readback"), default="inventory")
+    result.add_argument(
+        "--mode",
+        choices=("inventory", "preflight", "apply", "readback", "repair-partial"),
+        default="inventory",
+    )
     result.add_argument("--target", choices=("dev", "production"), required=True)
     result.add_argument("--retained-account-id", action="append", required=True)
     result.add_argument("--authority-trade-date", type=date.fromisoformat, required=True)
@@ -45,6 +50,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--authorization")
     result.add_argument("--confirm-production", action="store_true")
     result.add_argument("--created-by", default="localsim_successor_cutover")
+    result.add_argument("--expected-partial-account-id")
+    result.add_argument("--expected-partial-account-hash")
+    result.add_argument("--expected-partial-lineage-id")
+    result.add_argument("--expected-partial-lineage-hash")
+    result.add_argument("--expected-partial-economic-facts-sha256")
+    result.add_argument("--expected-partial-created-by")
     result.add_argument("--receipt", type=Path)
     return result
 
@@ -140,6 +151,31 @@ def _authorization(args: argparse.Namespace, account_ids: tuple[str, ...]) -> No
         raise CutoverPreparationError("production apply requires --confirm-production")
 
 
+def _partial_repair_authorization(args: argparse.Namespace, account_ids: tuple[str, ...]) -> None:
+    required = {
+        "expected_partial_account_id": args.expected_partial_account_id,
+        "expected_partial_account_hash": args.expected_partial_account_hash,
+        "expected_partial_lineage_id": args.expected_partial_lineage_id,
+        "expected_partial_lineage_hash": args.expected_partial_lineage_hash,
+        "expected_partial_economic_facts_sha256": args.expected_partial_economic_facts_sha256,
+        "expected_partial_created_by": args.expected_partial_created_by,
+    }
+    missing = sorted(key for key, value in required.items() if not str(value or "").strip())
+    if len(account_ids) != 1 or missing:
+        raise CutoverPreparationError(
+            f"partial lineage repair requires one retained account and every exact partial identity: missing={missing}"
+        )
+    exact = (
+        "AUTHORIZE_LOCALSIM_LINEAGE_REPAIR:"
+        f"{args.target}:{args.expected_database_name}:{args.authority_trade_date.isoformat()}:"
+        f"{account_ids[0]}:{args.expected_partial_lineage_id}:{args.expected_partial_account_id}"
+    )
+    if args.authorization != exact:
+        raise CutoverPreparationError(f"exact partial lineage repair authorization is required: {exact}")
+    if args.target == "production" and not args.confirm_production:
+        raise CutoverPreparationError("production partial lineage repair requires --confirm-production")
+
+
 def _inventory(
     settings: dict[str, Any],
     account_ids: tuple[str, ...],
@@ -153,71 +189,179 @@ def _inventory(
         )
 
 
+def _inventory_payload(inventory: tuple[Any, ...]) -> list[dict[str, Any]]:
+    return [item.model_dump(mode="json") for item in inventory]
+
+
+def _lineage_readback(
+    settings: dict[str, Any],
+    account_ids: tuple[str, ...],
+    *,
+    authority_trade_date: date,
+    repository: LocalSimSuccessorRepository,
+) -> list[dict[str, str]]:
+    current = _inventory(
+        settings,
+        account_ids,
+        authority_trade_date=authority_trade_date,
+    )
+    result: list[dict[str, str]] = []
+    for candidate in current:
+        lineage = repository.get_lineage_by_legacy_account(candidate.legacy_account_id)
+        if (
+            lineage is None
+            or lineage.release_id != candidate.release_id
+            or lineage.binding_id != candidate.binding_id
+            or lineage.ledger_scope_id != candidate.ledger_scope_id
+            or lineage.economic_facts_sha256 != candidate.economic_facts_sha256
+        ):
+            raise CutoverPreparationError(
+                f"lineage readback missing or authority/economic hash drifted: {candidate.legacy_account_id}"
+            )
+        account = repository.get_account(lineage.account_id)
+        if account.package_id != candidate.package_id or account.manifest_sha256 != candidate.manifest_sha256:
+            raise CutoverPreparationError(f"lineage account package authority drifted: {candidate.legacy_account_id}")
+        result.append(
+            {
+                "legacy_account_id": candidate.legacy_account_id,
+                "account_id": lineage.account_id,
+                "lineage_id": lineage.lineage_id,
+                "lineage_hash": lineage.lineage_hash,
+                "economic_facts_sha256": lineage.economic_facts_sha256,
+            }
+        )
+    return result
+
+
 def execute(args: argparse.Namespace) -> dict[str, Any]:
     account_ids = tuple(dict.fromkeys(str(item).strip() for item in args.retained_account_id))
     if any(not item for item in account_ids):
         raise CutoverPreparationError("retained account identities must be non-empty")
     settings = _settings(args.target, args.env_file)
-    source_commit = _source_commit(args.expected_source_commit, required=args.mode in {"preflight", "apply", "readback"})
-    inventory = _inventory(
-        settings,
-        account_ids,
-        authority_trade_date=args.authority_trade_date,
+    source_commit = _source_commit(
+        args.expected_source_commit,
+        required=args.mode in {"preflight", "apply", "readback", "repair-partial"},
+    )
+    inventory = (
+        ()
+        if args.mode == "repair-partial"
+        else _inventory(
+            settings,
+            account_ids,
+            authority_trade_date=args.authority_trade_date,
+        )
     )
     preflight = None
     if args.mode != "inventory":
         with _connection(settings) as conn:
             preflight = _database_preflight(conn, args, settings)
     applied: list[dict[str, str]] = []
-    if args.mode == "apply":
-        _authorization(args, account_ids)
-        repository = LocalSimSuccessorRepository(conn_factory=lambda: _connection(settings))
-        control = LocalSimControlPlaneService(repository=repository)
-        for candidate in inventory:
-            account, lineage = control.prepare_legacy_lineage(candidate, created_by=args.created_by)
-            applied.append(
-                {
-                    "legacy_account_id": candidate.legacy_account_id,
-                    "account_id": account.account_id,
-                    "lineage_id": lineage.lineage_id,
-                    "lineage_hash": lineage.lineage_hash,
-                }
-            )
+    repaired: list[dict[str, str]] = []
     readback: list[dict[str, str]] = []
-    if args.mode in {"apply", "readback"}:
-        repository = LocalSimSuccessorRepository(conn_factory=lambda: _connection(settings))
-        current = _inventory(
+    repository = (
+        LocalSimSuccessorRepository(conn_factory=lambda: _connection(settings))
+        if args.mode in {"apply", "readback", "repair-partial"}
+        else None
+    )
+    if args.mode == "repair-partial":
+        assert repository is not None
+        _partial_repair_authorization(args, account_ids)
+        repository.delete_prepared_lineage_bundle(
+            legacy_account_id=account_ids[0],
+            expected_lineage_id=args.expected_partial_lineage_id,
+            expected_lineage_hash=args.expected_partial_lineage_hash,
+            expected_account_id=args.expected_partial_account_id,
+            expected_account_hash=args.expected_partial_account_hash,
+            expected_economic_facts_sha256=args.expected_partial_economic_facts_sha256,
+            expected_created_by=args.expected_partial_created_by,
+        )
+        if repository.get_lineage_by_legacy_account(account_ids[0]) is not None:
+            raise CutoverPreparationError("partial lineage repair independent readback still finds the lineage")
+        try:
+            repository.get_account(args.expected_partial_account_id)
+        except DataUnavailableError:
+            pass
+        else:
+            raise CutoverPreparationError("partial lineage repair independent readback still finds the account")
+        repaired.append(
+            {
+                "legacy_account_id": account_ids[0],
+                "account_id": args.expected_partial_account_id,
+                "lineage_id": args.expected_partial_lineage_id,
+            }
+        )
+    if args.mode == "apply":
+        assert repository is not None
+        _authorization(args, account_ids)
+        frozen_inventory = _inventory(
             settings,
             account_ids,
             authority_trade_date=args.authority_trade_date,
         )
-        for candidate in current:
-            lineage = repository.get_lineage_by_legacy_account(candidate.legacy_account_id)
-            if (
-                lineage is None
-                or lineage.release_id != candidate.release_id
-                or lineage.binding_id != candidate.binding_id
-                or lineage.ledger_scope_id != candidate.ledger_scope_id
-                or lineage.economic_facts_sha256 != candidate.economic_facts_sha256
-            ):
-                raise CutoverPreparationError(
-                    "lineage readback missing or authority/economic hash drifted: "
-                    f"{candidate.legacy_account_id}"
+        if _inventory_payload(frozen_inventory) != _inventory_payload(inventory):
+            raise CutoverPreparationError("cutover inventory drifted before DML; no lineage rows were written")
+        control = LocalSimControlPlaneService(repository=repository)
+        created: list[tuple[Any, Any, Any]] = []
+        try:
+            for candidate in frozen_inventory:
+                existing = repository.get_lineage_by_legacy_account(candidate.legacy_account_id)
+                account, lineage = control.prepare_legacy_lineage(candidate, created_by=args.created_by)
+                if existing is None:
+                    created.append((candidate, account, lineage))
+                applied.append(
+                    {
+                        "legacy_account_id": candidate.legacy_account_id,
+                        "account_id": account.account_id,
+                        "lineage_id": lineage.lineage_id,
+                        "lineage_hash": lineage.lineage_hash,
+                    }
                 )
-            account = repository.get_account(lineage.account_id)
-            if account.package_id != candidate.package_id or account.manifest_sha256 != candidate.manifest_sha256:
-                raise CutoverPreparationError(
-                    f"lineage account package authority drifted: {candidate.legacy_account_id}"
-                )
-            readback.append(
-                {
-                    "legacy_account_id": candidate.legacy_account_id,
-                    "account_id": lineage.account_id,
-                    "lineage_id": lineage.lineage_id,
-                    "lineage_hash": lineage.lineage_hash,
-                    "economic_facts_sha256": lineage.economic_facts_sha256,
-                }
+            readback = _lineage_readback(
+                settings,
+                account_ids,
+                authority_trade_date=args.authority_trade_date,
+                repository=repository,
             )
+        except Exception as apply_exc:
+            repair_errors: list[str] = []
+            for candidate, account, lineage in reversed(created):
+                try:
+                    repository.delete_prepared_lineage_bundle(
+                        legacy_account_id=candidate.legacy_account_id,
+                        expected_lineage_id=lineage.lineage_id,
+                        expected_lineage_hash=lineage.lineage_hash,
+                        expected_account_id=account.account_id,
+                        expected_account_hash=account.account_hash,
+                        expected_economic_facts_sha256=candidate.economic_facts_sha256,
+                        expected_created_by=args.created_by,
+                    )
+                    if repository.get_lineage_by_legacy_account(candidate.legacy_account_id) is not None:
+                        raise CutoverPreparationError(
+                            f"automatic partial repair still finds lineage: {candidate.legacy_account_id}"
+                        )
+                    try:
+                        repository.get_account(account.account_id)
+                    except DataUnavailableError:
+                        pass
+                    else:
+                        raise CutoverPreparationError(
+                            f"automatic partial repair still finds account: {account.account_id}"
+                        )
+                except Exception as repair_exc:
+                    repair_errors.append(f"{candidate.legacy_account_id}: {repair_exc}")
+            if repair_errors:
+                raise CutoverPreparationError(
+                    f"{apply_exc}; automatic partial repair failed: {repair_errors}"
+                ) from apply_exc
+            raise
+    if args.mode == "readback":
+        assert repository is not None
+        readback = _lineage_readback(
+            settings,
+            account_ids,
+            authority_trade_date=args.authority_trade_date,
+            repository=repository,
+        )
     return {
         "schema_version": "localsim_successor_cutover_preparation_receipt_v1",
         "mode": args.mode,
@@ -229,6 +373,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "inventory": [item.model_dump(mode="json") for item in inventory],
         "preflight": preflight,
         "applied": applied,
+        "repaired": repaired,
         "readback": readback,
     }
 

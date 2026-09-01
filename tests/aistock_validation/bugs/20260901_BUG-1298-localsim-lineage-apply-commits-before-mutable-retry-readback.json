@@ -5,12 +5,13 @@
     "backend/services/simulation_runtime/successor_repository.py",
     "scripts/prepare_localsim_successor_cutover.py",
     "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+    "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
     "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
     "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260901_BUG-1298-localsim-lineage-apply-commits-before-mutable-retry-readback.json"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex",
   "bug_id": "BUG-1298",
   "closed_at": null,
   "closure_requirements": [
@@ -26,10 +27,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260901-430360f052dd",
       "timestamp": "2026-09-01T02:43:42.635764Z"
+    },
+    {
+      "action": "fix_root_cause_and_validate_dev",
+      "actor": "codex",
+      "note": "Canonicalized daily-run economic facts, stabilized fallback admission identity, added pre-write drift detection, exact automatic compensation and separately authorized partial repair; direct=15 passed, guarded DEV PostgreSQL=1 passed, production read-only canonical hash stable across retry refreshes.",
+      "timestamp": "2026-09-01T03:14:52.528748Z"
     }
   ],
   "evidence_uris": [
-    "production 127.0.0.1:5432/aistock read-only evidence 2026-09-01; account paper_b26d...; simulation_daily_run simrun_2385f1f228c57134 and simrun_658848302de6f372"
+    "production 127.0.0.1:5432/aistock read-only evidence 2026-09-01; account paper_b26d...; simulation_daily_run simrun_2385f1f228c57134 and simrun_658848302de6f372",
+    "production read-only canonical inventory snapshots at 2026-09-01T02:55Z and 02:59Z both economic_facts_sha256=34cc601ccfa266b7981e7c2797857754e7b3e5bffecec96c1bec060447b7bd5d while retry observations continued refreshing",
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_cutover_inventory.py backend/tests/scripts/test_prepare_localsim_successor_cutover.py -q -> 15 passed",
+    "python -m nox -s localsim_successor_core_dev_db -> 1 passed"
   ],
   "expected": "Cutover preparation must fail before DML while any legacy writer can mutate scoped facts, use a canonical economic projection that excludes non-economic retry-observation churn, and provide an explicitly authorized fail-closed repair for a partial PREPARED bundle before exact readback.",
   "file_scope_contract": {
@@ -39,6 +49,7 @@
       "backend/services/simulation_runtime/successor_repository.py",
       "scripts/prepare_localsim_successor_cutover.py",
       "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
       "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
       "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
@@ -50,6 +61,7 @@
         "backend/services/simulation_runtime/successor_repository.py",
         "scripts/prepare_localsim_successor_cutover.py",
         "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
         "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
         "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
@@ -112,6 +124,18 @@
           "rule_id": "simulation_runtime_core"
         },
         {
+          "file": "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
           "file": "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
           "impact_modules": [
             "simulation_runtime",
@@ -151,6 +175,7 @@
         "backend/services/simulation_runtime/successor_repository.py",
         "scripts/prepare_localsim_successor_cutover.py",
         "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
         "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
         "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
@@ -162,6 +187,7 @@
       "backend/services/simulation_runtime/successor_repository.py",
       "scripts/prepare_localsim_successor_cutover.py",
       "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
       "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
       "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
@@ -172,18 +198,19 @@
       "backend/services/simulation_runtime/successor_repository.py",
       "scripts/prepare_localsim_successor_cutover.py",
       "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
       "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
       "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ]
   },
   "first_seen_at": "2026-09-01T02:43:42.635781Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1298-localsim-lineage-apply-commits-before-mutable-re-20260901",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 4110,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4110",
-  "last_seen_at": "2026-09-01T02:43:42.635781Z",
+  "last_seen_at": "2026-09-01T03:14:52.528748Z",
   "module": "Simulation Runtime",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -215,7 +242,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "Simulation Runtime"
   ],

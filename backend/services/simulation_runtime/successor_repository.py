@@ -132,6 +132,18 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
         lineage: LegacyLocalSimAccountLineageV1,
     ) -> tuple[SimulationAccountV1, LegacyLocalSimAccountLineageV1]: ...
 
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None: ...
+
     def get_lineage_by_legacy_account(self, legacy_account_id: str) -> LegacyLocalSimAccountLineageV1 | None: ...
 
     def transition_lineage(
@@ -235,9 +247,7 @@ class LocalSimSuccessorRepository:
                     persisted_release = self._select_release(cur, release.release_id)
                     persisted_binding = self._select_binding(cur, binding.binding_id)
                     self._require_same_identity(account, persisted_account, object_name="account")
-                    self._require_same_identity(
-                        ledger_scope, persisted_ledger_scope, object_name="ledger_scope"
-                    )
+                    self._require_same_identity(ledger_scope, persisted_ledger_scope, object_name="ledger_scope")
                     self._require_same_identity(release, persisted_release, object_name="release")
                     self._require_same_identity(binding, persisted_binding, object_name="binding")
         except psycopg2.IntegrityError as exc:
@@ -684,6 +694,124 @@ class LocalSimSuccessorRepository:
                 row = cur.fetchone()
                 return self._lineage_from_row(dict(row)) if row is not None else None
 
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None:
+        """Delete only one exact, unconsumed PREPARED bundle after a failed cutover readback."""
+
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT * FROM paper_v2.legacy_localsim_account_lineage_v1 "
+                        "WHERE legacy_account_id = %s FOR UPDATE",
+                        (legacy_account_id,),
+                    )
+                    lineage_row = cur.fetchone()
+                    if lineage_row is None:
+                        raise DataUnavailableError(
+                            "partial LocalSIM lineage does not exist",
+                            context={"legacy_account_id": legacy_account_id},
+                        )
+                    lineage = dict(lineage_row)
+                    if (
+                        str(lineage["lineage_id"]) != expected_lineage_id
+                        or str(lineage["lineage_hash"]) != expected_lineage_hash
+                        or str(lineage["account_id"]) != expected_account_id
+                        or str(lineage["economic_facts_sha256"]) != expected_economic_facts_sha256
+                        or str(lineage["status"]) != LegacyLocalSimLineageStatus.PREPARED.value
+                        or int(lineage["version"]) != 1
+                        or str(lineage["created_by"]) != expected_created_by
+                    ):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage identity is not repairable",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                        )
+                    cur.execute(
+                        "SELECT * FROM paper_v2.simulation_account_v1 WHERE account_id = %s FOR UPDATE",
+                        (expected_account_id,),
+                    )
+                    account_row = cur.fetchone()
+                    if account_row is None:
+                        raise DataUnavailableError(
+                            "partial LocalSIM successor account does not exist",
+                            context={"account_id": expected_account_id},
+                        )
+                    account = dict(account_row)
+                    if (
+                        str(account["account_hash"]) != expected_account_hash
+                        or int(account["version"]) != 1
+                        or str(account["created_by"]) != expected_created_by
+                        or account["created_at"] != lineage["created_at"]
+                        or account["updated_at"] != account["created_at"]
+                        or lineage["updated_at"] != lineage["created_at"]
+                    ):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM successor account identity is not repairable",
+                            context={"reason_code": "LOCALSIM_ACCOUNT_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                        )
+                    cur.execute(
+                        """
+                        SELECT EXISTS (
+                                   SELECT 1 FROM paper_v2.localsim_replay_job_v1
+                                   WHERE simulation_account_id = %s
+                               )
+                            OR EXISTS (
+                                   SELECT 1 FROM paper_v2.simulation_ledger_scope_v1
+                                   WHERE native_account_id = %s
+                               )
+                            OR EXISTS (
+                                   SELECT 1 FROM paper_v2.simulation_release_binding
+                                   WHERE binding_config_json->'metadata'->>'localsim_account_id' = %s
+                               ) AS consumed
+                        """,
+                        (expected_account_id, expected_account_id, expected_account_id),
+                    )
+                    if bool(cur.fetchone()["consumed"]):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage bundle is already consumed",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CONSUMED"},
+                        )
+                    cur.execute(
+                        "DELETE FROM paper_v2.legacy_localsim_account_lineage_v1 "
+                        "WHERE lineage_id = %s AND lineage_hash = %s AND version = 1 "
+                        "AND status = %s AND created_by = %s",
+                        (
+                            expected_lineage_id,
+                            expected_lineage_hash,
+                            LegacyLocalSimLineageStatus.PREPARED.value,
+                            expected_created_by,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage repair lost its CAS",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CAS_CONFLICT"},
+                        )
+                    cur.execute(
+                        "DELETE FROM paper_v2.simulation_account_v1 "
+                        "WHERE account_id = %s AND account_hash = %s AND version = 1 AND created_by = %s",
+                        (expected_account_id, expected_account_hash, expected_created_by),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM account repair lost its CAS",
+                            context={"reason_code": "LOCALSIM_ACCOUNT_PARTIAL_REPAIR_CAS_CONFLICT"},
+                        )
+        except psycopg2.IntegrityError as exc:
+            raise InvalidStateTransitionError(
+                "partial LocalSIM lineage bundle has dependent facts",
+                context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_DEPENDENCY_CONFLICT"},
+            ) from exc
+
     def transition_lineage(
         self,
         *,
@@ -905,9 +1033,7 @@ class LocalSimSuccessorRepository:
             )
 
     @staticmethod
-    def _validate_native_ledger_scope(
-        *, account: SimulationAccountV1, ledger_scope: SimulationLedgerScopeV1
-    ) -> None:
+    def _validate_native_ledger_scope(*, account: SimulationAccountV1, ledger_scope: SimulationLedgerScopeV1) -> None:
         if (
             ledger_scope.scope_kind is not SimulationLedgerScopeKind.SUCCESSOR_NATIVE
             or ledger_scope.ledger_scope_id != account.account_id
@@ -1435,7 +1561,6 @@ class LocalSimSuccessorRepository:
                 context={"reason_code": f"LOCALSIM_{object_name.upper()}_IDENTITY_READBACK_MISMATCH"},
             )
 
-
     def create_and_activate_replay_live_successor(
         self,
         *,
@@ -1899,6 +2024,66 @@ class InMemoryLocalSimSuccessorRepository:
     def get_lineage_by_legacy_account(self, legacy_account_id: str) -> LegacyLocalSimAccountLineageV1 | None:
         lineage_id = self.legacy_lineage_index.get(legacy_account_id)
         return self.lineages.get(lineage_id) if lineage_id is not None else None
+
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None:
+        snapshot = deepcopy(self.__dict__)
+        try:
+            lineage = self.get_lineage_by_legacy_account(legacy_account_id)
+            if lineage is None:
+                raise DataUnavailableError(
+                    "partial LocalSIM lineage does not exist",
+                    context={"legacy_account_id": legacy_account_id},
+                )
+            account = self.get_account(expected_account_id)
+            if (
+                lineage.lineage_id != expected_lineage_id
+                or lineage.lineage_hash != expected_lineage_hash
+                or lineage.account_id != expected_account_id
+                or lineage.economic_facts_sha256 != expected_economic_facts_sha256
+                or lineage.status is not LegacyLocalSimLineageStatus.PREPARED
+                or lineage.version != 1
+                or lineage.created_by != expected_created_by
+                or account.account_hash != expected_account_hash
+                or account.version != 1
+                or account.created_by != expected_created_by
+                or account.created_at != lineage.created_at
+                or account.updated_at != account.created_at
+                or lineage.updated_at != lineage.created_at
+            ):
+                raise InvalidStateTransitionError(
+                    "partial LocalSIM lineage bundle identity is not repairable",
+                    context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                )
+            if (
+                any(job.simulation_account_id == expected_account_id for job in self.replay_jobs.values())
+                or any(scope.native_account_id == expected_account_id for scope in self.ledger_scopes.values())
+                or any(
+                    isinstance(binding.binding_config_json.get("metadata"), dict)
+                    and binding.binding_config_json["metadata"].get("localsim_account_id") == expected_account_id
+                    for binding in self.bindings.values()
+                )
+            ):
+                raise InvalidStateTransitionError(
+                    "partial LocalSIM lineage bundle is already consumed",
+                    context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CONSUMED"},
+                )
+            del self.lineages[expected_lineage_id]
+            del self.legacy_lineage_index[legacy_account_id]
+            del self.accounts[expected_account_id]
+            del self.account_hash_index[expected_account_hash]
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
 
     def transition_lineage(
         self,
