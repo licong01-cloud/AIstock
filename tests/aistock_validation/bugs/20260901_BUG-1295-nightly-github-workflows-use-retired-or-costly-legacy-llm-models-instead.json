@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1295",
-  "closed_at": null,
+  "closed_at": "2026-09-01T04:18:50Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -190,8 +190,8 @@
   },
   "first_seen_at": "2026-09-01T02:00:18.367959Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c9084fff06d041154ee046558f988f62be01a939",
+  "fixed_at": "2026-09-01T04:18:50Z",
   "github_issue_number": 4106,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4106",
   "last_seen_at": "2026-09-01T02:00:18.367959Z",
@@ -199,6 +199,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4109",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -217,6 +218,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -226,7 +228,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1295",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "903f1d5a6b243727",
+    "recorded_at": "2026-09-01T04:21:53.818205Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "551cefabd1dbe7e805f9b7b240d16d0a950b9b2b",
+    "source_merge_commit": "c9084fff06d041154ee046558f988f62be01a939",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4109",
+    "validation_evidence": [
+      "validation-receipt: id=d1c3335c41bf8228 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=8_tests_14_of_14_mapped",
+      "validation-receipt: id=521ce54688142685 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_catalog_integrity status=passed command=python_-m_nox_-s_validation_catalog_integrity result=7_tests_findings_0",
+      "validation-receipt: id=5d7f7f6fe3c3a52b commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files_--_--changed-only result=blocking_0_13_of_13_mapped"
+    ],
+    "validation_evidence_digest": "db317bc1c83b27a6734ddfb9136c6fe43002249d629dc817456839750117b9d0"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -235,6 +260,11 @@
     "fingerprint": "674437e19721c190fcabca10",
     "source_event_id": "FE-20260901-674437e19721"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d1c3335c41bf8228 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=8_tests_14_of_14_mapped",
+    "validation-receipt: id=521ce54688142685 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_catalog_integrity status=passed command=python_-m_nox_-s_validation_catalog_integrity result=7_tests_findings_0",
+    "validation-receipt: id=5d7f7f6fe3c3a52b commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files_--_--changed-only result=blocking_0_13_of_13_mapped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
