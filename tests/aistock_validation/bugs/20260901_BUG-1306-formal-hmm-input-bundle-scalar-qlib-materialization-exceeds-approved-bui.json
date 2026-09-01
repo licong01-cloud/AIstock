@@ -29,13 +29,18 @@
   "evidence_uris": [],
   "expected": "On the same frozen dataset and mapping authority, the immutable bundle build completes within 1200 seconds and 4 GiB, emits deterministic canonical output for the approved 31-L1/131-L2 domain, preserves all-NA provider absence without treating Inf or partially non-finite rows as missing, and advances price, circ_mv, moneyflow and industry evidence only from their own causal observations. No default sector, neutral value, hidden source substitution, model-contract change, seed selection or READY artifact is permitted.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
       "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -80,10 +85,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
