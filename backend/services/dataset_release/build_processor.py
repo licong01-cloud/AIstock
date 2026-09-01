@@ -71,7 +71,6 @@ from .resource_supervisor import WslSupervisedOptions
 from .state_machine import DatasetReleaseStateMachine
 from .stock_schema import QLIB_STOCK_FIELDS
 from .worker import (
-    WORKER_ERROR_RECEIPT_SCHEMA,
     ProcessorResult,
     WorkResourceSpec,
     WorkerAttemptContext,
@@ -259,7 +258,7 @@ class ProductionBuildProcessor:
             # admission and claim.  ``process`` binds the exact isolated path
             # before the first child or candidate write.
             staging_ref=None,
-            pressure_rung=self._resume_pressure_rung(str(run["run_id"])),
+            pressure_rung=0,
             predicted_new_bytes=int(build_inputs["predicted_new_bytes"]),
             admission_class=(
                 ResourceAdmissionClass.SAMPLE
@@ -267,58 +266,6 @@ class ProductionBuildProcessor:
                 else ResourceAdmissionClass.FULL
             ),
         )
-
-    def _resume_pressure_rung(self, run_id: str) -> int:
-        """Restore the monotonic durable pressure rung across released attempts."""
-
-        rows = self.store._many(
-            """
-            SELECT ordinal,error_ref FROM attempts
-            WHERE run_id=? AND state='RELEASED_WAITING' AND error_ref IS NOT NULL
-            ORDER BY ordinal
-            """,
-            (run_id,),
-        )
-        event_rows = self.store._many(
-            """
-            SELECT event_id,payload_ref FROM events
-            WHERE run_id=? AND type='RESOURCE_WAITING_RESOURCE'
-              AND payload_ref IS NOT NULL
-            ORDER BY event_id
-            """,
-            (run_id,),
-        )
-        sequences: list[list[int]] = [[], []]
-        for sequence, collection in zip(sequences, (event_rows, rows)):
-            for row in collection:
-                sequence.append(self._pressure_rung_from_receipt(run_id, row))
-        if any(later < earlier for sequence in sequences for earlier, later in zip(sequence, sequence[1:])):
-            raise BuildResourceEvidenceInvalid("durable pressure rung moved backwards")
-        latest = [sequence[-1] for sequence in sequences if sequence]
-        return max(latest) if latest else 0
-
-    def _pressure_rung_from_receipt(self, run_id: str, row: Mapping[str, Any]) -> int:
-        reference = str(row.get("payload_ref") or row.get("error_ref") or "")
-        receipt = self.cas.get_json_bounded(reference, max_bytes=1024 * 1024)
-        if (
-            not isinstance(receipt, Mapping)
-            or receipt.get("schema_version") != WORKER_ERROR_RECEIPT_SCHEMA
-            or receipt.get("target_id") != run_id
-            or receipt.get("disposition") != "WAITING"
-            or receipt.get("kind") not in {"build", "build_resource_admission"}
-        ):
-            raise BuildResourceEvidenceInvalid("durable pressure-rung receipt identity is invalid")
-        context = receipt.get("context")
-        if (
-            not isinstance(context, Mapping)
-            or context.get("data_scope_changed") is not False
-            or type(context.get("pressure_rung")) is not int
-        ):
-            raise BuildResourceEvidenceInvalid("durable pressure-rung receipt context is invalid")
-        rung = int(context["pressure_rung"])
-        if not 0 <= rung < len(self.profile.pressure_ladder["h5_batch"]):
-            raise BuildResourceEvidenceInvalid("durable pressure rung exceeds the profile ladder")
-        return rung
 
     def process(self, context: WorkerAttemptContext) -> ProcessorResult:
         run = self._active_run(context)
@@ -1656,8 +1603,8 @@ def _validate_resource_receipt(
     if int(value.get("chunks_completed", -1)) != len(chunk_ids):
         raise BuildResourceEvidenceInvalid(f"resource chunk count differs: {stage}")
     peak = int(value.get("peak_owned_private_commit_bytes", -1))
-    if not 0 <= peak <= profile.resource_policy.aggregate_private_commit_bytes:
-        raise BuildResourceEvidenceInvalid(f"resource peak exceeds policy: {stage}")
+    if peak < 0:
+        raise BuildResourceEvidenceInvalid(f"resource peak telemetry is invalid: {stage}")
     effective = value.get("effective_rung")
     if not isinstance(effective, Mapping):
         raise BuildResourceEvidenceInvalid(f"effective pressure rung is missing: {stage}")
@@ -1716,8 +1663,6 @@ def _validate_supervised_resource_receipt(
         or gate.get("wsl_required") is not (runtime == "wsl")
         or gate.get("data_scope_changed") is not False
         or int(gate.get("aggregate_owned_peak_commit_bytes", -1)) < 0
-        or int(gate.get("aggregate_owned_peak_commit_bytes", -1))
-        > profile.resource_policy.aggregate_private_commit_bytes
     ):
         raise BuildResourceEvidenceInvalid(f"authoritative supervised resource receipt differs: {execution_id}")
 

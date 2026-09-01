@@ -39,7 +39,7 @@ class JobChild:
 class JobBackend(Protocol):
     def create_job(self, name: str) -> object: ...
 
-    def configure_job(self, handle: object, *, memory_limit_bytes: int) -> None: ...
+    def configure_job(self, handle: object) -> None: ...
 
     def create_suspended(
         self,
@@ -80,7 +80,7 @@ class _PyWin32Backend:
         except Exception as exc:  # pragma: no cover - OS error
             raise WindowsJobError(f"CreateJobObject failed: {exc}") from exc
 
-    def configure_job(self, handle: object, *, memory_limit_bytes: int) -> None:
+    def configure_job(self, handle: object) -> None:
         _api, _con, win32job, _process = self._modules()
         try:
             info = win32job.QueryInformationJobObject(
@@ -88,11 +88,9 @@ class _PyWin32Backend:
                 win32job.JobObjectExtendedLimitInformation,
             )
             flags = int(info["BasicLimitInformation"].get("LimitFlags", 0))
-            flags |= int(win32job.JOB_OBJECT_LIMIT_JOB_MEMORY)
             flags |= int(win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
             flags |= int(win32job.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
             info["BasicLimitInformation"]["LimitFlags"] = flags
-            info["JobMemoryLimit"] = int(memory_limit_bytes)
             win32job.SetInformationJobObject(
                 handle,
                 win32job.JobObjectExtendedLimitInformation,
@@ -104,12 +102,9 @@ class _PyWin32Backend:
             )
         except Exception as exc:  # pragma: no cover - OS error
             raise WindowsJobError(f"SetInformationJobObject failed: {exc}") from exc
-        if int(readback.get("JobMemoryLimit", 0)) != int(memory_limit_bytes):
-            raise WindowsJobError("Windows Job memory limit readback mismatch")
         readback_flags = int(readback["BasicLimitInformation"].get("LimitFlags", 0))
         required = (
-            int(win32job.JOB_OBJECT_LIMIT_JOB_MEMORY)
-            | int(win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+            int(win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
             | int(win32job.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
         )
         if readback_flags & required != required:
@@ -288,11 +283,14 @@ class WindowsJob:
         self.name = name
         self.policy = policy
         self.hybrid_wsl = hybrid_wsl
-        self.memory_limit_bytes = int(policy.hybrid_job_commit_bytes if hybrid_wsl else policy.windows_job_commit_bytes)
+        # The Job remains the exact process-ownership boundary. Monthly dataset
+        # releases intentionally rely on the host OS for memory management and
+        # do not install an AIstock-specific commit limit.
+        self.memory_limit_bytes: int | None = None
         self._backend = backend or _PyWin32Backend()
         self._handle = self._backend.create_job(name)
         try:
-            self._backend.configure_job(self._handle, memory_limit_bytes=self.memory_limit_bytes)
+            self._backend.configure_job(self._handle)
         except Exception:
             self._backend.close(self._handle)
             raise
