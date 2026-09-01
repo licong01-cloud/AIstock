@@ -168,6 +168,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-896",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "36b619a0886c7677",
+    "recorded_at": "2026-09-01T06:28:01.824375Z",
+    "runtime_contract_digest": "0733eddaf2395804c293a15848bcfddd045fc6c81141d0efa0fe5cc30dc1ad9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1aec1f0c4f496c73446c887f57be3b46bb72cf99",
+    "source_merge_commit": "89a361adf995ab33adeb8870771ce2b544dedfce",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/2834",
+    "validation_evidence": [
+      "pytest targeted BUG-896 Advisory normalization -> 2 passed",
+      "source PR CI verdict and CodeQL verdict -> success"
+    ],
+    "validation_evidence_digest": "21f25dc6ffabe83dccea4fc2002ffdb7e3457d699ce84dcd7c8b447dbb09396e"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_historical_range"
