@@ -601,6 +601,26 @@ def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_a
     assert rows.tobytes() == expected.tobytes()
 
 
+def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
+    class Labels:
+        shape = (8,)
+        values = (0, 0, 1, 1, 1, 3, 4, 4)
+
+        def __init__(self) -> None:
+            self.reads: list[int] = []
+
+        def __getitem__(self, index: int) -> int:
+            self.reads.append(index)
+            return self.values[index]
+
+    labels = Labels()
+
+    assert subject._fixed_h5_label_lower_bound(labels, 1) == 2
+    assert subject._fixed_h5_label_lower_bound(labels, 2) == 5
+    assert subject._fixed_h5_label_lower_bound(labels, 5) == 8
+    assert len(labels.reads) <= 12
+
+
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

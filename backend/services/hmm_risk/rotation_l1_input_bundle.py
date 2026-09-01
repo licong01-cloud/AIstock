@@ -367,6 +367,36 @@ def _iter_fixed_h5_frames(
             yield frame
 
 
+def _fixed_h5_label_lower_bound(label_node: Any, value: int) -> int:
+    lower = 0
+    upper = int(label_node.shape[0])
+    while lower < upper:
+        middle = (lower + upper) // 2
+        if int(label_node[middle]) < value:
+            lower = middle + 1
+        else:
+            upper = middle
+    return lower
+
+
+def _validate_fixed_h5_date_labels(label_node: Any, *, level_count: int, max_rows: int = 100_000) -> None:
+    if max_rows <= 0 or level_count <= 0:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "fixed H5 date label validation contract differs")
+    previous: int | None = None
+    row_count = int(label_node.shape[0])
+    for start in range(0, row_count, max_rows):
+        labels = np.asarray(label_node.read(start, min(row_count, start + max_rows)), dtype=np.int64)
+        if (
+            np.any(labels < 0)
+            or np.any(labels >= level_count)
+            or np.any(labels[1:] < labels[:-1])
+            or (previous is not None and len(labels) and int(labels[0]) < previous)
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "fixed H5 date labels are not sorted within levels")
+        if len(labels):
+            previous = int(labels[-1])
+
+
 def _load_fixed_h5_window(
     path: Path,
     *,
@@ -375,6 +405,7 @@ def _load_fixed_h5_window(
     start: date,
     end: date,
     max_rows: int = 100_000,
+    labels_prevalidated: bool = False,
 ) -> pd.DataFrame:
     parts: list[pd.DataFrame] = []
     lower_ns = int(pd.Timestamp(start).value)
@@ -385,7 +416,7 @@ def _load_fixed_h5_window(
             columns = tuple(bytes(value).rstrip(b"\x00").decode("utf-8") for value in group.axis0.read())
             date_levels = np.asarray(group.axis1_level0.read(), dtype=np.int64)
             code_levels = np.asarray(group.axis1_level1.read())
-            date_labels = np.asarray(group.axis1_label0.read(), dtype=np.int64)
+            date_label_node = group.axis1_label0
             code_labels = group.axis1_label1
             values = group.block0_values
         except tables.NoSuchNodeError as exc:
@@ -396,20 +427,38 @@ def _load_fixed_h5_window(
             or values.dtype != dtype
             or values.ndim != 2
             or int(values.shape[1]) != len(columns)
-            or len(date_labels) != int(values.shape[0])
+            or int(date_label_node.shape[0]) != int(values.shape[0])
             or int(code_labels.shape[0]) != int(values.shape[0])
             or date_levels.ndim != 1
             or np.any(date_levels[1:] <= date_levels[:-1])
-            or np.any(date_labels[1:] < date_labels[:-1])
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 layout differs")
+        date_labels: np.ndarray | None
+        if labels_prevalidated:
+            date_labels = None
+        else:
+            date_labels = np.asarray(date_label_node.read(), dtype=np.int64)
+            if (
+                np.any(date_labels < 0)
+                or np.any(date_labels >= len(date_levels))
+                or np.any(date_labels[1:] < date_labels[:-1])
+            ):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 date labels differ")
         first_level = int(np.searchsorted(date_levels, lower_ns, side="left"))
         after_level = int(np.searchsorted(date_levels, upper_ns, side="right"))
-        row_start = int(np.searchsorted(date_labels, first_level, side="left"))
-        row_stop = int(np.searchsorted(date_labels, after_level, side="left"))
+        if date_labels is None:
+            row_start = _fixed_h5_label_lower_bound(date_label_node, first_level)
+            row_stop = _fixed_h5_label_lower_bound(date_label_node, after_level)
+        else:
+            row_start = int(np.searchsorted(date_labels, first_level, side="left"))
+            row_stop = int(np.searchsorted(date_labels, after_level, side="left"))
         for chunk_start in range(row_start, row_stop, max_rows):
             chunk_stop = min(row_stop, chunk_start + max_rows)
-            date_index = date_labels[chunk_start:chunk_stop]
+            date_index = (
+                np.asarray(date_label_node.read(chunk_start, chunk_stop), dtype=np.int64)
+                if date_labels is None
+                else date_labels[chunk_start:chunk_stop]
+            )
             code_index = np.asarray(code_labels.read(chunk_start, chunk_stop), dtype=np.int64)
             if np.any(code_index < 0) or np.any(code_index >= len(code_levels)):
                 raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 code labels escape levels")
@@ -444,7 +493,8 @@ def _fixed_h5_inventory(
             dates = np.asarray(group.axis1_level0.read(), dtype=np.int64)
             codes = np.asarray(group.axis1_level1.read())
             values = group.block0_values
-            rows = int(group.axis1_label0.shape[0])
+            date_labels = group.axis1_label0
+            rows = int(date_labels.shape[0])
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory nodes differ") from exc
         dtype = np.dtype(expected_dtype)
@@ -456,8 +506,10 @@ def _fixed_h5_inventory(
             or int(values.shape[1]) != len(columns)
             or len(dates) == 0
             or len(codes) == 0
+            or np.any(dates[1:] <= dates[:-1])
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory contract differs")
+        _validate_fixed_h5_date_labels(date_labels, level_count=len(dates))
         return {
             "columns": list(columns),
             "dtype": dtype.name,
@@ -1209,6 +1261,7 @@ def _build_stock_fact_aggregates(
                 expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
+                labels_prevalidated=True,
             )
         )
         moneyflow = _h5_lookup(
@@ -1218,6 +1271,7 @@ def _build_stock_fact_aggregates(
                 expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
+                labels_prevalidated=True,
             )
         )
         source_rows = _read_spooled_month(month_path)
