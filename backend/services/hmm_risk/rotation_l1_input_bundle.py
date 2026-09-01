@@ -298,13 +298,15 @@ def _iter_fixed_h5_frames(
     path: Path,
     *,
     expected_columns: Sequence[str],
+    expected_dtype: str | np.dtype[Any],
     max_rows: int = 100_000,
 ) -> Iterator[pd.DataFrame]:
     """Yield bounded frames from the frozen pandas fixed H5 physical schema.
 
     This is intentionally a narrow reader for the release's one-block,
-    float32, two-level canonical frame.  Any other fixed-H5 layout fails
-    instead of falling back to ``pd.read_hdf`` and loading the file in full.
+    component-declared numeric dtype and two-level canonical frame.  Any other
+    fixed-H5 layout fails instead of falling back to ``pd.read_hdf`` and
+    loading the file in full.
     """
 
     if max_rows <= 0:
@@ -328,8 +330,9 @@ def _iter_fixed_h5_frames(
                 expected=list(expected_columns),
                 actual=list(columns),
             )
+        dtype = np.dtype(expected_dtype)
         if (
-            values.dtype != np.dtype("<f4")
+            values.dtype != dtype
             or values.ndim != 2
             or int(values.shape[1]) != len(columns)
             or int(date_labels.shape[0]) != int(values.shape[0])
@@ -352,7 +355,7 @@ def _iter_fixed_h5_frames(
                 raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 labels escape levels")
             dates = pd.to_datetime(np.asarray(date_levels)[date_index], unit="ns")
             codes = [bytes(value).rstrip(b"\x00").decode("ascii") for value in np.asarray(code_levels)[code_index]]
-            frame = pd.DataFrame(np.asarray(values.read(start, stop), dtype=np.float32), columns=columns)
+            frame = pd.DataFrame(np.asarray(values.read(start, stop), dtype=dtype), columns=columns)
             frame.index = pd.MultiIndex.from_arrays([dates, codes], names=["datetime", "instrument"])
             if frame.index.has_duplicates or not frame.index.is_monotonic_increasing:
                 raise _fail(REASON_DUPLICATE_KEY, f"{path.name} fixed H5 keys are not sorted and unique")
@@ -368,6 +371,7 @@ def _load_fixed_h5_window(
     path: Path,
     *,
     expected_columns: Sequence[str],
+    expected_dtype: str | np.dtype[Any],
     start: date,
     end: date,
     max_rows: int = 100_000,
@@ -386,9 +390,10 @@ def _load_fixed_h5_window(
             values = group.block0_values
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 nodes differ") from exc
+        dtype = np.dtype(expected_dtype)
         if (
             columns != tuple(expected_columns)
-            or values.dtype != np.dtype("<f4")
+            or values.dtype != dtype
             or values.ndim != 2
             or int(values.shape[1]) != len(columns)
             or len(date_labels) != int(values.shape[0])
@@ -411,7 +416,7 @@ def _load_fixed_h5_window(
             dates = pd.to_datetime(date_levels[date_index], unit="ns")
             codes = [bytes(value).rstrip(b"\x00").decode("ascii") for value in code_levels[code_index]]
             frame = pd.DataFrame(
-                np.asarray(values.read(chunk_start, chunk_stop), dtype=np.float32),
+                np.asarray(values.read(chunk_start, chunk_stop), dtype=dtype),
                 columns=columns,
             )
             frame.index = pd.MultiIndex.from_arrays([dates, codes], names=["datetime", "instrument"])
@@ -426,7 +431,12 @@ def _load_fixed_h5_window(
     return result
 
 
-def _fixed_h5_inventory(path: Path, *, expected_columns: Sequence[str]) -> dict[str, Any]:
+def _fixed_h5_inventory(
+    path: Path,
+    *,
+    expected_columns: Sequence[str],
+    expected_dtype: str | np.dtype[Any],
+) -> dict[str, Any]:
     with tables.open_file(path, mode="r") as handle:
         try:
             group = handle.root.data
@@ -437,9 +447,10 @@ def _fixed_h5_inventory(path: Path, *, expected_columns: Sequence[str]) -> dict[
             rows = int(group.axis1_label0.shape[0])
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory nodes differ") from exc
+        dtype = np.dtype(expected_dtype)
         if (
             columns != tuple(expected_columns)
-            or values.dtype != np.dtype("<f4")
+            or values.dtype != dtype
             or values.ndim != 2
             or int(values.shape[0]) != rows
             or int(values.shape[1]) != len(columns)
@@ -449,7 +460,7 @@ def _fixed_h5_inventory(path: Path, *, expected_columns: Sequence[str]) -> dict[
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory contract differs")
         return {
             "columns": list(columns),
-            "dtype": "float32",
+            "dtype": dtype.name,
             "date_min": pd.Timestamp(int(dates.min()), unit="ns").date().isoformat(),
             "date_max": pd.Timestamp(int(dates.max()), unit="ns").date().isoformat(),
             "code_count": len(codes),
@@ -726,8 +737,12 @@ def load_rotation_l1_source_assets(manifest_path: Path) -> dict[str, Any]:
     calendar = _load_qlib_calendar(qlib_root / "calendars" / "day.txt")
     spans = _parse_instrument_spans(qlib_root / "instruments" / "all.txt")
     qlib_preflight = _preflight_qlib_feature_inventory(qlib_root, calendar=calendar, spans=spans)
-    daily_basic_inventory = _fixed_h5_inventory(resolved["daily_basic"], expected_columns=_DAILY_BASIC_COLUMNS)
-    moneyflow_inventory = _fixed_h5_inventory(resolved["moneyflow"], expected_columns=_MONEYFLOW_COLUMNS)
+    daily_basic_inventory = _fixed_h5_inventory(
+        resolved["daily_basic"], expected_columns=_DAILY_BASIC_COLUMNS, expected_dtype="<f4"
+    )
+    moneyflow_inventory = _fixed_h5_inventory(
+        resolved["moneyflow"], expected_columns=_MONEYFLOW_COLUMNS, expected_dtype="<f4"
+    )
     index_inventory = _fixed_h5_inventory(
         resolved["index_context"],
         expected_columns=(
@@ -741,6 +756,7 @@ def load_rotation_l1_source_assets(manifest_path: Path) -> dict[str, Any]:
             "idx_volume_share_equiv",
             "idx_amount_cny",
         ),
+        expected_dtype="<f8",
     )
     for component, inventory in (
         ("daily_basic", daily_basic_inventory),
@@ -920,6 +936,7 @@ def _load_benchmark_returns(path: Path, *, calendar: Sequence[date]) -> dict[dat
             "idx_volume_share_equiv",
             "idx_amount_cny",
         ),
+        expected_dtype="<f8",
         start=SOURCE_START,
         end=SOURCE_END,
     )
@@ -1177,6 +1194,7 @@ def _build_stock_fact_aggregates(
             _load_fixed_h5_window(
                 assets["files"]["daily_basic"],
                 expected_columns=_DAILY_BASIC_COLUMNS,
+                expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
             )
@@ -1185,6 +1203,7 @@ def _build_stock_fact_aggregates(
             _load_fixed_h5_window(
                 assets["files"]["moneyflow"],
                 expected_columns=_MONEYFLOW_COLUMNS,
+                expected_dtype="<f4",
                 start=month_start,
                 end=month_end,
             )
