@@ -127,8 +127,8 @@
   },
   "first_seen_at": "2026-07-28T10:28:26.160061Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "89a361adf995ab33adeb8870771ce2b544dedfce",
+  "fixed_at": "2026-09-01T06:04:04Z",
   "github_issue_number": 2833,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2833",
   "last_seen_at": "2026-07-28T10:28:26.160061Z",
@@ -136,6 +136,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2834",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -146,9 +147,28 @@
     "watchlist_backend"
   ],
   "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "Fresh Python process imported merged BUG-896 source at 89a361adf995ab33adeb8870771ce2b544dedfce and verified empty and partial review-policy normalization plus HistoricalRangeProgramResolver loading; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -157,6 +177,10 @@
     "fingerprint": "0bf5efc6c0bbca97723798bd",
     "source_event_id": "FE-20260728-0bf5efc6c0bb"
   },
+  "validation_evidence": [
+    "pytest targeted BUG-896 Advisory normalization -> 2 passed",
+    "source PR CI verdict and CodeQL verdict -> success"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
