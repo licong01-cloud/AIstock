@@ -50,16 +50,38 @@
   ],
   "expected": "All GitHub validation workflows use deepseek-v4-flash through the existing DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL env contract, with retired GitHub Models fallback disabled, config ownership explicit, and no secret copied into repository files.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "scripts/llm_provider_adapter.py",
+    "actual_changed_files": [
       ".github/workflows/nightly.yml",
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
       "backend/tests/scripts/test_llm_provider_adapter.py",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "configs/validation/llm_triage.yaml",
+      "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+      "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/llm_provider_adapter.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_llm_provider_adapter.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "configs/validation/llm_triage.yaml",
+      "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+      "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/llm_provider_adapter.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -191,10 +213,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
