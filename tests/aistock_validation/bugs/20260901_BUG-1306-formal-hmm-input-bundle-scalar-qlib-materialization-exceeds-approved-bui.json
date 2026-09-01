@@ -1,5 +1,5 @@
 {
-  "actual": "C-012-RL1 immutable bundle build on frozen full universe fails closed at qlib_month_spool after 1342.84s versus approved 1200s while RSS is only 243945472 bytes. _read_qlib_stock_rows performs Python per-row per-field structured-array assignment across the full Qlib panel. Preserve the exact source, schema, universe, 20-minute budget and output bytes; vectorize the equivalent assignments, add deterministic/fail-closed tests, and prove the frozen build can complete without changing model contracts.",
+  "actual": "C-012-RL1 immutable bundle build on the frozen full universe first exceeded the approved 1200-second qlib_month_spool budget because _read_qlib_stock_rows used scalar Python materialization. After removing that bottleneck, the same frozen build exposed independent fail-closed contract defects: repeated scalar security/industry resolution, loss of provider-absence all-NA price rows, an incorrect moneyflow requirement when no price observation exists, and comparison of the published 131-L2 authority against the unprojected 134-code taxonomy. The build must preserve source identity, causal state, provider absence and the approved 31/131 domain without changing any model, seed, selection or validation contract.",
   "allowed_write_scope": [
     "backend/services/hmm_risk/rotation_l1_input_bundle.py",
     "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
@@ -9,12 +9,15 @@
   "bug_id": "BUG-1306",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Complete the frozen full-universe immutable bundle build within the approved 1200-second and 4-GiB build budget without changing output semantics.",
+    "Preserve all-NA Qlib rows as explicit provider-absence evidence while rejecting partial non-finite or infinite source rows.",
+    "Keep price, circ_mv, moneyflow and industry availability as independent causal evidence and never synthesize a neutral/default observation.",
+    "Use the frozen C-013 published 31-L1/131-L2 projection authority rather than the unprojected 134-code taxonomy.",
+    "Run the routed HMM verification plans and a fresh-process frozen build readback.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-01T06:31:12.264426Z",
-  "description": "C-012-RL1 immutable bundle build on frozen full universe fails closed at qlib_month_spool after 1342.84s versus approved 1200s while RSS is only 243945472 bytes. _read_qlib_stock_rows performs Python per-row per-field structured-array assignment across the full Qlib panel. Preserve the exact source, schema, universe, 20-minute budget and output bytes; vectorize the equivalent assignments, add deterministic/fail-closed tests, and prove the frozen build can complete without changing model contracts.",
+  "description": "Repair the frozen full-universe C-012-RL1 immutable bundle builder without weakening its causal or fail-closed contracts: vectorize Qlib materialization, index immutable security and industry authorities, preserve provider-absence NA evidence, keep independent feature-source availability, and close the published 31/131 C-013 projection authority. The fix must not change HMM parameters, seeds, D4/D5/D6 acceptance, hard semantic authority, model selection or READY semantics.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,7 +27,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "On the same frozen dataset and mapping authority, the immutable bundle build completes within 1200 seconds and 4 GiB, emits deterministic canonical output for the approved 31-L1/131-L2 domain, preserves all-NA provider absence without treating Inf or partially non-finite rows as missing, and advances price, circ_mv, moneyflow and industry evidence only from their own causal observations. No default sector, neutral value, hidden source substitution, model-contract change, seed selection or READY artifact is permitted.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [

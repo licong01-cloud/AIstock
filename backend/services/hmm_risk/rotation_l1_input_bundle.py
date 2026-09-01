@@ -719,9 +719,9 @@ def _raw_qlib_values(raw: np.void) -> dict[str, float]:
 
 def _qlib_row_is_fully_missing(raw: np.void) -> bool:
     values = np.asarray([float(raw[field]) for field in QLIB_STOCK_FIELDS], dtype=np.float64)
-    finite = np.isfinite(values)
-    if not bool(finite.any()):
+    if bool(np.isnan(values).all()):
         return True
+    finite = np.isfinite(values)
     if not bool(finite.all()):
         raise _fail(REASON_SOURCE_UNIT_INVALID, "Qlib stock row is only partially finite")
     return False
@@ -1440,11 +1440,12 @@ def _build_stock_fact_aggregates(
                 flow_resolution = security.resolve(symbol, day, "market.moneyflow_ts")
                 basic_row = basic.get((day, daily_resolution.source_ts_code))
                 flow_row = moneyflow.get((day, flow_resolution.source_ts_code))
+                qlib_missing = _qlib_row_is_fully_missing(raw)
                 if basic_row is not None and math.isfinite(float(basic_row[15])) and float(basic_row[15]) > 0:
                     current_basic_updates.append((symbol, float(basic_row[15]) * 10_000.0))
                 projection = adapter.resolve(symbol, day)
                 if projection.status != "resolved":
-                    if not suspended:
+                    if not suspended and not qlib_missing:
                         history[symbol].append(_raw_qlib_values(raw)["close"])
                     _advance_interval(
                         status_active,
@@ -1486,7 +1487,6 @@ def _build_stock_fact_aggregates(
                         }
                     )
                     continue
-                qlib_missing = _qlib_row_is_fully_missing(raw)
                 prior = circ_state.get(symbol)
                 prior_circ = prior[1] if prior is not None and prior[0] >= eligible_start else None
                 prices = history[symbol]

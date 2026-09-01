@@ -549,6 +549,13 @@ def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
         missing[field] = np.nan
     assert subject._qlib_row_is_fully_missing(missing) is True
 
+    non_finite = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        non_finite[field] = np.inf
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(non_finite)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
     partial = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
     for field in subject.QLIB_STOCK_FIELDS:
         partial[field] = 1.0
@@ -863,7 +870,7 @@ def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(6))
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(7))
     symbol = "000001.SZ"
     source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
     for index, day in enumerate(dates):
@@ -879,13 +886,15 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
         source_rows[index]["prev_close"] = 9.0 + index
         source_rows[index]["up_limit_price"] = 20.0 + index
         source_rows[index]["down_limit_price"] = 5.0 + index
+    for field in subject.QLIB_STOCK_FIELDS:
+        source_rows[-2][field] = np.nan
     month_path = tmp_path / "202201.bin"
     source_rows.tofile(month_path)
 
     index = pd.MultiIndex.from_arrays([pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"])
     basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
-    basic["db_total_mv"] = np.arange(200.0, 206.0, dtype=np.float32)
-    basic["db_circ_mv"] = np.arange(100.0, 106.0, dtype=np.float32)
+    basic["db_total_mv"] = np.arange(200.0, 207.0, dtype=np.float32)
+    basic["db_circ_mv"] = np.arange(100.0, 107.0, dtype=np.float32)
     moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
 
     def load_window(_path, *, expected_columns, **_kwargs):
@@ -896,7 +905,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
     class Adapter:
         @staticmethod
         def resolve(_symbol, day):
-            if day == dates[-2]:
+            if day in {dates[-3], dates[-2]}:
                 return SimpleNamespace(status="unavailable", reason_code="classification:missing")
             return SimpleNamespace(
                 status="resolved",
@@ -940,7 +949,7 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
 
     final = next(row for row in captured if row["trade_date"] == dates[-1])
     assert final["prev_close_5_yuan"] == 10.0
-    assert final["prev_circ_mv_cny"] == 104.0 * 10_000.0
+    assert final["prev_circ_mv_cny"] == 105.0 * 10_000.0
 
 
 def test_csi300_benchmark_return_is_recomputed_from_frozen_close_and_preclose(tmp_path: Path) -> None:
