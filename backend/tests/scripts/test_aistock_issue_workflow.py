@@ -15418,6 +15418,20 @@ def test_cleanup_evidence_finalization_requires_structured_receipt(
     assert legacy["status"] == "finalized_legacy_closed_bug"
     assert legacy["legacy_closure_present"] is True
 
+    mismatch = workflow._cleanup_evidence_finalization_from_record(
+        {
+            "bug_id": "BUG-200",
+            "status": "fixed",
+            "fix_commit": "abc1234",
+            "pr_url": "https://github.example/pull/200",
+            "validation_evidence": ["pytest -> passed"],
+        },
+        source="origin/main:tests/aistock_validation/bugs/bug200.json",
+        expected_bug_id="BUG-199",
+    )
+    assert mismatch["status"] == "bug_record_identity_mismatch"
+    assert mismatch["durable_receipt_present"] is False
+
 
 def test_merged_pr_validation_receipt_profile_is_compact(
     isolated_workflow_root: Path,
@@ -15790,6 +15804,124 @@ def test_cleanup_uses_merged_pr_receipt_before_close_sync(
     assert payload["workflow_gate"] == "ready_for_cleanup"
     assert payload["evidence_finalization"]["status"] == "finalized_merged_pr_receipt"
     assert payload["evidence_finalization"]["durable_receipt_present"] is True
+
+
+@pytest.mark.parametrize(
+    ("record_source", "expected_evidence_source", "expected_gate"),
+    [
+        ("worktree", "explicit_tracked_bug_record", "ready_for_cleanup"),
+        ("origin_main", "origin_main_bug_record", "ready_for_cleanup"),
+        ("untracked_worktree", None, "blocked"),
+    ],
+)
+def test_cleanup_uses_merged_bug_record_before_root_fast_forward(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_source: str,
+    expected_evidence_source: str | None,
+    expected_gate: str,
+) -> None:
+    branch = "chore/BUG-199-close-sync"
+    relative_bug_path = Path("tests/aistock_validation/bugs/bug199.json")
+    _write_json(isolated_workflow_root / relative_bug_path, _bug(bug_id="BUG-199", status="open"))
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    merged_record = {
+        **_bug(bug_id="BUG-199", status="fixed"),
+        "fix_commit": "a" * 40,
+        "pr_url": "https://github.example/pull/199",
+        "validation_evidence": ["pytest focused -q -> 1 passed"],
+    }
+    if record_source != "origin_main":
+        _write_json(worktree / relative_bug_path, merged_record)
+    artifact = worktree / "tmp" / "issue_workflow" / "BUG-199" / "state.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("{}", encoding="utf-8")
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        if args[:3] == ["ls-files", "--error-unmatch", "--"]:
+            return "" if record_source == "untracked_worktree" else relative_bug_path.as_posix()
+        return ""
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "status"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "tmp/issue_workflow/BUG-199/state.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:2] == ["git", "show"] and record_source == "origin_main":
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(merged_record),
+                "stderr": "",
+            }
+        if args[:2] == ["git", "show"] and record_source == "untracked_worktree":
+            return {"ok": False, "returncode": 128, "stdout": "", "stderr": "missing"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "b"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_evidence_finalization",
+        lambda bug_id: {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "missing_durable_receipt",
+            "durable_receipt_present": False,
+        },
+    )
+    monkeypatch.setattr(workflow, "_cleanup_protected_receipt_paths", lambda bug_id: set())
+    monkeypatch.setattr(
+        workflow,
+        "_merged_pr_validation_receipt_profile",
+        lambda _pr_url: (
+            {
+                "schema_version": "aistock_merged_pr_validation_receipt_v1",
+                "durable_receipt_present": False,
+                "status": "missing_structured_receipt",
+            }
+            if record_source == "untracked_worktree"
+            else pytest.fail("tracked merged BUG record should avoid PR-body fallback")
+        ),
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        bug_id="BUG-199",
+        worktree=str(worktree),
+        source_receipt_path=relative_bug_path.as_posix(),
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == expected_gate
+    if expected_evidence_source:
+        assert payload["evidence_finalization"]["status"] == "finalized_legacy_closed_bug"
+        assert payload["evidence_finalization"]["evidence_source"] == expected_evidence_source
+        assert payload["evidence_finalization"]["durable_receipt_present"] is True
+    else:
+        assert payload["evidence_finalization"]["status"] == "missing_durable_receipt"
+        assert payload["evidence_finalization"]["durable_receipt_present"] is False
 
 
 def test_cleanup_protects_absolute_runtime_receipt_until_durable_summary(
