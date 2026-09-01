@@ -29,7 +29,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1297",
-  "closed_at": null,
+  "closed_at": "2026-09-01T04:56:26.419106Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -95,10 +95,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1297\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1297",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-01T04:54:52.934851Z",
+      "mode": "read_only",
+      "observed_identity": "61b5d4a47794853efff20e5fdfd41e0fde81dae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6edfaf26f301e0751272a97cf2fc947575c6ea3ca7e19a04bc369e70173c6fef",
+      "receipt_sha256": "582a5d5ada6d04e2ae863f8072349c1d516a81b882cb44e1c08fa0cbd083d1b7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "dd09c0466449a1c0efcb220b5e4f0b4bd0b89332953ffe0bf96a3e9f07d43369",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -107,32 +129,32 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
   "source_merge_receipt": {
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "receipt_id": "2ab5ed36f57d219a",
     "bug_id": "BUG-1297",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2ab5ed36f57d219a",
+    "recorded_at": "2026-09-01T04:48:47.762802Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
     "source_head_oid": "b8b113194c13179b3619b11fa81ca64a4694ce9e",
     "source_merge_commit": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
     "validation_evidence": [
       "python -m nox -s l0 -> passed",
       "python -m nox -s validation_module_registry_l0 -> passed",
       "python -m nox -s qlib_data_backend -> passed",
       "BUG-1297 targeted matrix -> 109 passed"
     ],
-    "validation_evidence_digest": "e908cb76f40d53f5fd9be2ec02c103e6ed383ae251c5aad74a516accc63d3c8f",
-    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
-    "runtime_verification": "pending_user_restart",
-    "runtime_identity_match": "pending",
-    "production_gates": {
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop",
-      "production_backend_dependency_gate": "noop"
-    },
-    "recorded_at": "2026-09-01T04:48:47.762802Z"
+    "validation_evidence_digest": "e908cb76f40d53f5fd9be2ec02c103e6ed383ae251c5aad74a516accc63d3c8f"
   },
-  "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
