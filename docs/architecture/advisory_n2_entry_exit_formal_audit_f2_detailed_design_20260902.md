@@ -2,7 +2,7 @@
 
 - 日期：2026-09-02
 - Feature tier：F2
-- 当前状态：`IMPLEMENTED_LOCAL_TARGETED_VERIFIED_FORMAL_RUN_PENDING`
+- 当前状态：`IMPLEMENTED_LOCAL_FULL_VERIFIED_REAL_ENTRY_PREFLIGHT_PASS_FORMAL_RUN_PENDING`
 - 业务归属：Selection Center / Advisory / Model-first Research
 - 目标合同：`RISK_MANAGED_ADVISORY`
 - 研究类型：`ORACLE_DIAGNOSTIC`
@@ -215,15 +215,15 @@ registry 原子追加两条：
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-801 | `backend/services/advisory_model_first/entry_exit_formal_contracts.py`; `backend/services/advisory_model_first/entry_exit_formal_pipeline.py` | `backend/tests/advisory_model_first/test_entry_exit_formal_contracts.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-802 | `entry_exit_formal_pipeline.py::_entry_overlap/_run_entry_audit` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; real spike: 60d/1200 exact | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-803 | `entry_exit_formal_pipeline.py::_build_entry_daily` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-804 | `entry_exit_formal_pipeline.py::_build_entry_daily` oracle arms | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-805 | `entry_exit_formal_pipeline.py::_run_exit_audit/_verify_exit_baseline_parity` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-806 | `entry_exit_formal_pipeline.py::_exit_episode_best/_exit_summary` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-807 | `ActionSupportSpecV1`; Entry/Exit `build_intervention_support_from_labels` | `backend/tests/advisory_model_first/test_incremental_value_labels.py`; `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-808 | `_publish_bundle/_read_bundle/_deliver_bundle`; `scripts/advisory_entry_exit_formal_audit.py` | `backend/tests/advisory_model_first/test_entry_exit_formal_delivery.py` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
-| F-809 | strict offline schemas and delivery gates | `backend/tests/advisory_model_first/test_entry_exit_formal_delivery.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n2_entry_exit_formal_audit_f2_detailed_design_20260902.md --tier F2` | IMPLEMENTED_LOCAL_TARGETED_VERIFIED | none |
+| F-801 | `backend/services/advisory_model_first/entry_exit_formal_contracts.py`; `backend/services/advisory_model_first/entry_exit_formal_pipeline.py` | `backend/tests/advisory_model_first/test_entry_exit_formal_contracts.py` | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-802 | `entry_exit_formal_pipeline.py::_entry_overlap/_run_entry_audit` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; real pipeline preflight: 60d/1200 exact gap parity | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-803 | `entry_exit_formal_pipeline.py::_build_entry_daily` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; real Entry preflight | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-804 | `entry_exit_formal_pipeline.py::_build_entry_daily` oracle arms | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; real Entry preflight | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-805 | `entry_exit_formal_pipeline.py::_run_exit_audit/_verify_exit_baseline_parity` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; full Advisory nox | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-806 | `entry_exit_formal_pipeline.py::_exit_episode_best/_exit_summary` | `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py`; full Advisory nox | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-807 | `ActionSupportSpecV1`; Entry/Exit `build_intervention_support_from_labels` | `backend/tests/advisory_model_first/test_incremental_value_labels.py`; `backend/tests/advisory_model_first/test_entry_exit_formal_pipeline.py` | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-808 | `_publish_bundle/_read_bundle/_deliver_bundle`; `scripts/advisory_entry_exit_formal_audit.py` | `backend/tests/advisory_model_first/test_entry_exit_formal_delivery.py` | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
+| F-809 | strict offline schemas and delivery gates | `python -m nox -s advisory_modeling_backend` = 673 passed/16 skipped；L0；F2 9/9 | IMPLEMENTED_LOCAL_FULL_VERIFIED | none |
 
 ## 15. Risks and controls
 
