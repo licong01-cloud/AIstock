@@ -29,13 +29,20 @@
   ],
   "expected": "Each frozen (canonical_security_id, source_dataset, valid interval) row preserves its exact source_code. Dataset-specific aliases coexist without conflict, remain sorted/hash-bound/readback-validated, and no alias is copied across datasets.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "tests/aistock_validation/bugs/20260901_BUG-1316-immutable-hmm-bundle-collapses-dataset-specific-security-aliases.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
-      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "tests/aistock_validation/bugs/20260901_BUG-1316-immutable-hmm-bundle-collapses-dataset-specific-security-aliases.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -119,10 +126,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
