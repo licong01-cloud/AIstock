@@ -1080,6 +1080,181 @@ def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_histor
     assert final["prev_circ_mv_cny"] == 105.0 * 10_000.0
 
 
+def test_pit_entry_uses_prior_authoritative_circ_mv_without_future_fill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(3))
+    symbol = "000001.SZ"
+    active_dates = dates[1:]
+    source_rows = np.zeros(len(active_dates), dtype=subject._QLIB_SOURCE_DTYPE)
+    for index, day in enumerate(active_dates):
+        source_rows[index]["trade_date"] = int(day.strftime("%Y%m%d"))
+        source_rows[index]["symbol"] = symbol.encode("ascii")
+        for field in subject.QLIB_STOCK_FIELDS:
+            source_rows[index][field] = 1.0
+        source_rows[index]["factor"] = 1.0
+        source_rows[index]["open"] = 10.0 + index
+        source_rows[index]["high"] = 11.0 + index
+        source_rows[index]["low"] = 9.0 + index
+        source_rows[index]["close"] = 10.0 + index
+        source_rows[index]["prev_close"] = 9.0 + index
+        source_rows[index]["up_limit_price"] = 20.0 + index
+        source_rows[index]["down_limit_price"] = 5.0 + index
+    month_path = tmp_path / "202201.bin"
+    source_rows.tofile(month_path)
+
+    basic_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(dates), ["000001.OLD", symbol, symbol]], names=["datetime", "instrument"]
+    )
+    moneyflow_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"]
+    )
+    basic = pd.DataFrame(1.0, index=basic_index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    basic["db_total_mv"] = np.asarray([200.0, 201.0, 202.0], dtype=np.float32)
+    basic["db_circ_mv"] = np.asarray([100.0, 101.0, 102.0], dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=moneyflow_index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        def __init__(self, source_ts_code: str) -> None:
+            self.source_ts_code = source_ts_code
+
+        def evidence(self):
+            return {"source_ts_code": self.source_ts_code}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, day, dataset):
+            if dataset == "market.daily_basic" and day == dates[0]:
+                return Resolution("000001.OLD")
+            return Resolution(symbol)
+
+    captured: list[dict[str, object]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        if level == "L1":
+            captured.extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((active_dates[0], active_dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=SimpleNamespace(rows=()),
+        suspension_keys=frozenset(),
+        contributor_eligibility={symbol: True},
+    )
+
+    entry = next(row for row in captured if row["trade_date"] == active_dates[0])
+    assert entry["prev_circ_mv_cny"] == 100.0 * 10_000.0
+    assert entry["circ_mv_source_date"] == dates[0]
+    assert entry["circ_mv_staleness_trading_days"] == 1
+    assert entry["circ_mv_crossed_pit_entry_boundary"] is True
+    assert entry["circ_mv_fact_status"] == "available"
+    assert entry["circ_mv_reason_code"] is None
+
+
+def test_latest_invalid_circ_mv_is_not_silently_replaced_by_older_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(3))
+    symbol = "000001.SZ"
+    source_rows = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)
+    source_rows[0]["trade_date"] = int(dates[-1].strftime("%Y%m%d"))
+    source_rows[0]["symbol"] = symbol.encode("ascii")
+    for field in subject.QLIB_STOCK_FIELDS:
+        source_rows[0][field] = 1.0
+    source_rows[0]["factor"] = 1.0
+    source_rows[0]["open"] = 10.0
+    source_rows[0]["high"] = 11.0
+    source_rows[0]["low"] = 9.0
+    source_rows[0]["close"] = 10.0
+    source_rows[0]["prev_close"] = 9.0
+    source_rows[0]["up_limit_price"] = 20.0
+    source_rows[0]["down_limit_price"] = 5.0
+    month_path = tmp_path / "202201.bin"
+    source_rows.tofile(month_path)
+
+    index = pd.MultiIndex.from_arrays([pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"])
+    basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    basic["db_total_mv"] = np.asarray([200.0, 201.0, 202.0], dtype=np.float32)
+    basic["db_circ_mv"] = np.asarray([100.0, np.nan, 102.0], dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        source_ts_code = symbol
+
+        @staticmethod
+        def evidence():
+            return {"source_ts_code": symbol}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, _day, _dataset):
+            return Resolution()
+
+    captured: list[dict[str, object]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        if level == "L1":
+            captured.extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((dates[-1], dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=SimpleNamespace(rows=()),
+        suspension_keys=frozenset(),
+        contributor_eligibility={symbol: True},
+    )
+
+    entry = captured[0]
+    assert entry["prev_circ_mv_cny"] is None
+    assert entry["circ_mv_source_date"] == dates[1]
+    assert entry["circ_mv_fact_status"] == "latest_value_non_finite"
+    assert entry["circ_mv_reason_code"] == "hmm_risk_stock_fact_circ_mv_latest_value_non_finite"
+
+
 def test_csi300_benchmark_return_is_recomputed_from_frozen_close_and_preclose(tmp_path: Path) -> None:
     columns = (
         "idx_open_point",

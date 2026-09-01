@@ -28,6 +28,7 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     RL1_ALGORITHM_VERSION,
     RL1_DEVELOPMENT_END,
     RL1_DEVELOPMENT_START,
+    RL1_PROCESS_FIT_COUNT,
     RL1_REQUEST_SCHEMA_VERSION,
     RL1_REPORT_SCHEMA_VERSION,
     RL1_SOURCE_REVISION,
@@ -496,6 +497,7 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
     acceptance_core_written = False
     model_written = False
     bundle_written = False
+    completed_fit_count = 0
     try:
         output = preflight_output_path(output, repository_root=ROOT)
         request = _load_request(args.request.resolve())
@@ -599,11 +601,13 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
                     evidence={
                         "process_index": index,
                         "returncode": completed.returncode,
+                        "completed_fit_count": completed_fit_count + int(child_failure.get("completed_fit_count") or 0),
                         "child_failure_receipt": str(failure_path),
                         "child_failure_report_sha256": child_failure.get("report_sha256"),
                         "child_failure_evidence": dict(child_failure.get("failure_evidence") or {}),
                     },
                 )
+            completed_fit_count += RL1_PROCESS_FIT_COUNT
         first, second = (_load_request(path) for path in child_paths)
         acceptance_core = close_c012_rl1_candidate_children(
             first,
@@ -636,7 +640,9 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
         )
         return 0
     except Exception as exc:
-        completed = int(exc.evidence.get("completed_fit_count") or 0) if isinstance(exc, RidgeCandidateError) else 0
+        completed = completed_fit_count
+        if isinstance(exc, RidgeCandidateError):
+            completed = max(completed, int(exc.evidence.get("completed_fit_count") or 0))
         report = report_for_write(
             failure_report(
                 request,

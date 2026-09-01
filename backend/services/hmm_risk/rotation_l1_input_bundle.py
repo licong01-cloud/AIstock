@@ -1215,6 +1215,50 @@ def _h5_lookup(frame: pd.DataFrame) -> dict[tuple[date, str], tuple[float, ...]]
     }
 
 
+def _daily_basic_lookup(
+    frame: pd.DataFrame,
+) -> tuple[
+    dict[tuple[date, str], tuple[float, ...]],
+    dict[date, tuple[tuple[str, float | None, str, str | None], ...]],
+]:
+    """Index daily-basic rows and preserve causal circ-mv history outside PIT spans."""
+
+    lookup: dict[tuple[date, str], tuple[float, ...]] = {}
+    updates: dict[date, list[tuple[str, float | None, str, str | None]]] = defaultdict(list)
+    circ_index = _DAILY_BASIC_COLUMNS.index("db_circ_mv")
+    for (timestamp, source_code), raw_row in zip(
+        frame.index,
+        frame.to_numpy(dtype=np.float32),
+        strict=True,
+    ):
+        day = pd.Timestamp(timestamp).date()
+        source = str(source_code)
+        row = tuple(float(value) for value in raw_row)
+        lookup[(day, source)] = row
+        circ_mv = row[circ_index]
+        if math.isfinite(circ_mv) and circ_mv > 0:
+            updates[day].append((source, circ_mv * 10_000.0, "available", None))
+        elif not math.isfinite(circ_mv):
+            updates[day].append(
+                (
+                    source,
+                    None,
+                    "latest_value_non_finite",
+                    "hmm_risk_stock_fact_circ_mv_latest_value_non_finite",
+                )
+            )
+        else:
+            updates[day].append(
+                (
+                    source,
+                    None,
+                    "latest_value_non_positive",
+                    "hmm_risk_stock_fact_circ_mv_latest_value_non_positive",
+                )
+            )
+    return lookup, {day: tuple(sorted(rows, key=lambda item: item[0])) for day, rows in sorted(updates.items())}
+
+
 def _advance_interval(
     active: dict[str, tuple[date, date, tuple[str, ...]]],
     completed: list[tuple[str, date, date, tuple[str, ...]]],
@@ -1383,7 +1427,7 @@ def _build_stock_fact_aggregates(
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     active_span_start: dict[str, date] = {}
-    circ_state: dict[str, tuple[date, float]] = {}
+    circ_state: dict[str, tuple[date, float | None, str, str | None]] = {}
     l1_aggregates: list[Any] = []
     l2_aggregates: list[Any] = []
     unavailable: dict[tuple[date, str, str], str] = {}
@@ -1402,7 +1446,7 @@ def _build_stock_fact_aggregates(
                 max_rss_bytes=BUILD_MAX_RSS_BYTES,
             )
         month_start, month_end = _month_bounds(month_path)
-        basic = _h5_lookup(
+        basic, basic_updates_by_day = _daily_basic_lookup(
             _load_fixed_h5_window(
                 assets["files"]["daily_basic"],
                 expected_columns=_DAILY_BASIC_COLUMNS,
@@ -1423,11 +1467,26 @@ def _build_stock_fact_aggregates(
             )
         )
         source_rows = _read_spooled_month(month_path)
+        basic_update_days = tuple(sorted(basic_updates_by_day))
+        basic_update_index = 0
+
+        def advance_circ_state(*, before: date | None = None, through: date | None = None) -> None:
+            nonlocal basic_update_index
+            while basic_update_index < len(basic_update_days):
+                update_day = basic_update_days[basic_update_index]
+                if before is not None and update_day >= before:
+                    break
+                if through is not None and update_day > through:
+                    break
+                for source_code, value, fact_status, reason_code in basic_updates_by_day[update_day]:
+                    circ_state[source_code] = (update_day, value, fact_status, reason_code)
+                basic_update_index += 1
+
         for raw_day, raw_group in itertools.groupby(source_rows, key=lambda row: int(row["trade_date"])):
             day = _date_from_yyyymmdd(raw_day, "qlib.trade_date")
+            advance_circ_state(before=day)
             previous_day = calendar[calendar_position[day] - 1] if calendar_position[day] > 0 else None
             day_rows: list[dict[str, Any]] = []
-            current_basic_updates: list[tuple[str, float]] = []
             for raw in raw_group:
                 symbol = bytes(raw["symbol"]).rstrip(b"\x00").decode("ascii")
                 matching_spans = [value for value in spans[symbol] if value[0] <= day <= value[1]]
@@ -1443,8 +1502,6 @@ def _build_stock_fact_aggregates(
                 basic_row = basic.get((day, daily_resolution.source_ts_code))
                 flow_row = moneyflow.get((day, flow_resolution.source_ts_code))
                 qlib_missing = _qlib_row_is_fully_missing(raw)
-                if basic_row is not None and math.isfinite(float(basic_row[15])) and float(basic_row[15]) > 0:
-                    current_basic_updates.append((symbol, float(basic_row[15]) * 10_000.0))
                 projection = adapter.resolve(symbol, day)
                 if projection.status != "resolved":
                     if not suspended and not qlib_missing:
@@ -1489,8 +1546,26 @@ def _build_stock_fact_aggregates(
                         }
                     )
                     continue
-                prior = circ_state.get(symbol)
-                prior_circ = prior[1] if prior is not None and prior[0] >= eligible_start else None
+                prior_resolution = (
+                    security.resolve(symbol, previous_day, "market.daily_basic") if previous_day is not None else None
+                )
+                prior = circ_state.get(str(prior_resolution.source_ts_code)) if prior_resolution is not None else None
+                prior_circ = (
+                    prior[1]
+                    if prior is not None
+                    and prior[2] == "available"
+                    and prior[1] is not None
+                    and SOURCE_START <= prior[0] <= previous_day < day
+                    else None
+                )
+                circ_source_date = prior[0] if prior is not None else None
+                circ_fact_status = prior[2] if prior is not None else "source_unavailable"
+                circ_reason_code = prior[3] if prior is not None else "hmm_risk_stock_fact_circ_mv_source_unavailable"
+                circ_staleness = (
+                    calendar_position[day] - calendar_position[circ_source_date]
+                    if circ_source_date is not None and circ_source_date in calendar_position
+                    else None
+                )
                 prices = history[symbol]
                 previous_5 = prices[-5] if len(prices) >= 5 else None
                 previous_10 = prices[-10] if len(prices) >= 10 else None
@@ -1570,6 +1645,16 @@ def _build_stock_fact_aggregates(
                             "prev_close_10_yuan": previous_10,
                             "total_mv_cny": None if basic_row is None else float(basic_row[14]) * 10_000.0,
                             "prev_circ_mv_cny": prior_circ,
+                            "circ_mv_source_date": circ_source_date,
+                            "circ_mv_staleness_trading_days": circ_staleness,
+                            "circ_mv_pit_eligible_start": eligible_start,
+                            "circ_mv_history_start": SOURCE_START,
+                            "circ_mv_crossed_pit_entry_boundary": bool(
+                                circ_source_date is not None and circ_source_date < eligible_start
+                            ),
+                            "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+                            "circ_mv_fact_status": circ_fact_status,
+                            "circ_mv_reason_code": circ_reason_code,
                             "up_limit_yuan": None,
                             "buy_sm_amount_cny": None,
                             "sell_sm_amount_cny": None,
@@ -1604,6 +1689,16 @@ def _build_stock_fact_aggregates(
                     "prev_close_10_yuan": previous_10,
                     "total_mv_cny": None if basic_row is None else float(basic_row[14]) * 10_000.0,
                     "prev_circ_mv_cny": prior_circ,
+                    "circ_mv_source_date": circ_source_date,
+                    "circ_mv_staleness_trading_days": circ_staleness,
+                    "circ_mv_pit_eligible_start": eligible_start,
+                    "circ_mv_history_start": SOURCE_START,
+                    "circ_mv_crossed_pit_entry_boundary": bool(
+                        circ_source_date is not None and circ_source_date < eligible_start
+                    ),
+                    "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+                    "circ_mv_fact_status": circ_fact_status,
+                    "circ_mv_reason_code": circ_reason_code,
                     "up_limit_yuan": qlib["up_limit_price"],
                     "buy_sm_amount_cny": None if flow_row is None else float(flow_row[1]),
                     "sell_sm_amount_cny": None if flow_row is None else float(flow_row[3]),
@@ -1616,8 +1711,7 @@ def _build_stock_fact_aggregates(
                 }
                 day_rows.append(row)
                 prices.append(qlib["close"])
-            for symbol, value in current_basic_updates:
-                circ_state[symbol] = (day, value)
+            advance_circ_state(through=day)
             _append_day_level_aggregates(
                 day_rows,
                 l1_aggregates=l1_aggregates,
@@ -1625,6 +1719,7 @@ def _build_stock_fact_aggregates(
                 unavailable=unavailable,
                 contributor_eligibility=contributor_eligibility,
             )
+        advance_circ_state()
     interval_evidence = {
         "industry": [
             {

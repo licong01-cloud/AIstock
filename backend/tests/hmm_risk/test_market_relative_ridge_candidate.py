@@ -2562,6 +2562,95 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
     assert failure["runtime_action"] is False
 
 
+@pytest.mark.parametrize(
+    ("failing_process_index", "failing_process_fit_count", "expected_total"),
+    [(1, 10, 10), (2, 7, 19)],
+)
+def test_c012_rl1_parent_propagates_child_completed_fit_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_process_index: int,
+    failing_process_fit_count: int,
+    expected_total: int,
+) -> None:
+    request = _rl1_request(artifact_root=tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    producer = "a" * 40
+    monkeypatch.setattr(cli, "_producer_commit", lambda: producer)
+    success_payload = _rl1_child_payload(request, producer)
+
+    def run_child(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        index = int(command[command.index("--child-index") + 1])
+        if index != failing_process_index:
+            body = {
+                "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+                "record_type": "fresh_process_child",
+                "status": "child_complete",
+                "process_index": index,
+                "producer_commit": producer,
+                "reproducibility_payload": success_payload,
+                "reproducibility_payload_sha256": subject.canonical_sha256(success_payload),
+            }
+            success = {**body, "report_sha256": subject.canonical_sha256(body)}
+            subject.write_report(
+                cli._child_path(Path(str(request["outputs"]["child_dir"])), index),
+                success,
+                repository_root=Path(__file__).resolve().parents[3],
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+        error = subject.RidgeCandidateError(
+            subject.REASON_RL1_DEVELOPMENT,
+            "development effect unavailable",
+            stage="development_acceptance",
+        )
+        child = subject.report_for_write(
+            subject.failure_report(
+                request,
+                producer_commit=producer,
+                error=error,
+                completed_fit_count=failing_process_fit_count,
+                candidate_mode="c012-rl1",
+                process_index=index,
+            ),
+            failure=True,
+        )
+        subject.write_report(
+            cli._failure_path(cli._child_path(Path(str(request["outputs"]["child_dir"])), index)),
+            child,
+            repository_root=Path(__file__).resolve().parents[3],
+        )
+        return subprocess.CompletedProcess(command, 1, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", run_child)
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(request["outputs"]["acceptance_path"]),
+            "--child-dir",
+            str(request["outputs"]["child_dir"]),
+            "--acceptance-core-output",
+            str(request["outputs"]["acceptance_core_path"]),
+            "--model-output",
+            str(request["outputs"]["component_model_path"]),
+            "--bundle-output",
+            str(request["outputs"]["capability_bundle_path"]),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
+        ]
+    )
+
+    assert result == 1
+    failure = json.loads(Path(str(request["outputs"]["failure_path"])).read_text(encoding="utf-8"))
+    assert failure["completed_fit_count"] == expected_total
+    assert failure["failure_evidence"]["completed_fit_count"] == expected_total
+    assert failure["failure_evidence"]["process_index"] == failing_process_index
+
+
 def test_c012_rl1_cli_finalization_failure_records_partial_artifact_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
