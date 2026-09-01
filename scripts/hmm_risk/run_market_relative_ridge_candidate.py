@@ -66,6 +66,10 @@ from backend.services.canonical_equity_pit import (  # noqa: E402
     CANONICAL_PIT_UNIVERSE_KEY,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError  # noqa: E402
+from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
+    RotationL1InputBundleError,
+    read_rotation_l1_input_bundle,
+)
 from scripts.hmm_risk.prepare_state_model_set import _load_l1_source_inputs  # noqa: E402
 
 
@@ -345,6 +349,24 @@ def _validate_c012_cli_output_scope(args: argparse.Namespace) -> None:
         ) from exc
 
 
+def _load_c012_input_bundle(path: Path) -> dict[str, Any]:
+    if not path.is_absolute():
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            "rotation L1 input bundle root must be absolute",
+            stage="source_preflight",
+        )
+    try:
+        return read_rotation_l1_input_bundle(path.resolve(), forbidden_roots=(ROOT,))
+    except RotationL1InputBundleError as exc:
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            str(exc),
+            stage="source_preflight",
+            evidence={"input_bundle_reason_code": exc.reason_code, "input_bundle_context": exc.context},
+        ) from exc
+
+
 def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
     producer_commit = "unknown"
     request: dict[str, Any] = {}
@@ -363,37 +385,14 @@ def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
             _child_path(args.child_dir, 2),
         ):
             preflight_output_path(path, repository_root=ROOT)
-        source = _source_authority(args.source_authority.resolve())
-        source["industry_pit"] = _industry_pit_authority(args.industry_pit_authority.resolve())
-        source["source_end"] = RL1_DEVELOPMENT_END.isoformat()
-        source["source_revision"] = RL1_SOURCE_REVISION
-        loader_request = {
-            "source": source,
-            "families": [
-                {
-                    "train_start": RL1_DEVELOPMENT_START.isoformat(),
-                    "train_end": RL1_DEVELOPMENT_END.isoformat(),
-                },
-                {
-                    "train_start": RL1_DEVELOPMENT_START.isoformat(),
-                    "train_end": RL1_DEVELOPMENT_END.isoformat(),
-                },
-            ],
-        }
-        try:
-            inputs = _load_l1_source_inputs(
-                loader_request,
-                db_prefix=str(args.db_env_prefix),
-                c010_formal=True,
-                rotation_l1_only=True,
-            )
-        except StateModelSetError as exc:
+        inputs = _load_c012_input_bundle(args.input_bundle_root)
+        source = dict(inputs["source"])
+        if source.get("source_revision") != RL1_SOURCE_REVISION:
             raise RidgeCandidateError(
                 REASON_RL1_INPUT,
-                str(exc),
+                "rotation L1 input bundle source revision differs",
                 stage="source_preflight",
-                evidence={"exception_type": type(exc).__name__, "error_message": str(exc)},
-            ) from exc
+            )
         request = build_c012_rl1_replay_request(
             inputs,
             source=source,
@@ -524,22 +523,7 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
                 stage="input",
             )
         if args.child_index is not None:
-            loader_request = _loader_request(request, "c012-rl1")
-            try:
-                inputs = _load_l1_source_inputs(
-                    loader_request,
-                    db_prefix=str(args.db_env_prefix),
-                    c010_formal=True,
-                    expected_database_identity=request["input_identity"]["database_identity"],
-                    rotation_l1_only=True,
-                )
-            except StateModelSetError as exc:
-                raise RidgeCandidateError(
-                    "hmm_risk_rotation_l1_input_identity_mismatch",
-                    str(exc),
-                    stage="source_preflight",
-                    evidence={"exception_type": type(exc).__name__},
-                ) from exc
+            inputs = _load_c012_input_bundle(args.input_bundle_root)
             child = run_c012_rl1_candidate_process(
                 inputs,
                 request,
@@ -584,8 +568,8 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
             str(args.model_output.resolve()),
             "--bundle-output",
             str(args.bundle_output.resolve()),
-            "--db-env-prefix",
-            str(args.db_env_prefix),
+            "--input-bundle-root",
+            str(args.input_bundle_root.resolve()),
         ]
         for index in (1, 2):
             completed = subprocess.run(
@@ -696,7 +680,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-mode", choices=("p2-3b", "p2-3c", "c012-rl1"), required=True)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--db-env-prefix", required=True)
+    parser.add_argument("--db-env-prefix")
+    parser.add_argument("--input-bundle-root", type=Path)
     parser.add_argument("--child-dir", type=Path)
     parser.add_argument("--child-index", type=int, choices=(1, 2))
     parser.add_argument("--acceptance-core-output", type=Path)
@@ -717,17 +702,19 @@ def main(argv: list[str] | None = None) -> int:
         missing = [name for name, value in required.items() if value is None]
         if missing:
             parser.error(f"{', '.join(missing)} required for c012-rl1")
+        if args.input_bundle_root is None:
+            parser.error("--input-bundle-root is required for c012-rl1")
+        if args.db_env_prefix is not None:
+            parser.error("--db-env-prefix is forbidden for c012-rl1 input-bundle execution")
+        if args.source_authority is not None or args.industry_pit_authority is not None:
+            parser.error("legacy source authority arguments are forbidden for c012-rl1 input-bundle execution")
         if args.prepare_request:
             if args.child_index is not None:
                 parser.error("--prepare-request and --child-index are mutually exclusive")
-            if args.source_authority is None:
-                parser.error("--source-authority is required with --prepare-request")
-            if args.industry_pit_authority is None:
-                parser.error("--industry-pit-authority is required with --prepare-request")
             return _prepare_c012_rl1_request(args)
-        if args.source_authority is not None or args.industry_pit_authority is not None:
-            parser.error("source authority arguments are only valid with --prepare-request")
         return _run_c012_rl1(args)
+    if args.db_env_prefix is None:
+        parser.error("--db-env-prefix is required for p2-3b/p2-3c legacy execution")
     if (
         any(
             value is not None
@@ -739,6 +726,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.bundle_output,
                 args.source_authority,
                 args.industry_pit_authority,
+                args.input_bundle_root,
             )
         )
         or args.prepare_request

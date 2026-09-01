@@ -211,13 +211,12 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
         )
     c010_body = {
         "eligibility_receipt_sha256": "d" * 64,
-        "aggregate_receipt_sha256": "e" * 64,
-        "l1_cross_section_receipt_sha256": "f" * 64,
+        "aggregate_evidence_receipt_sha256": "e" * 64,
+        "l1_cross_section_evidence_receipt_sha256": "f" * 64,
         "l1_feature_definition_sha256": "1" * 64,
         "provider_absence_manifest_sha256": "2" * 64,
         "security_identity_manifest_sha256": "3" * 64,
     }
-    database_identity = {"dbname": "dev"}
     body: dict[str, object] = {
         "schema_version": subject.RL1_REQUEST_SCHEMA_VERSION,
         "contract_version": subject.RL1_CONTRACT_VERSION,
@@ -272,30 +271,13 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
             "circ_mv_history_start": "2020-07-30",
             "universe_key": "unit-universe",
             "universe_rule_version": "unit-rule",
-            "security_identity_manifest_path": "security.json",
-            "security_identity_manifest_sha256": "4" * 64,
-            "provider_absence_manifest_path": "absence.json",
-            "provider_absence_manifest_sha256": "5" * 64,
-            "industry_pit": {
-                "artifact_root": "F:/AIstock_artifacts/industry_pit/unit",
-                "identity": {
-                    "schema_version": "hmm_risk_industry_pit_authority_v1",
-                    "bundle_hash": "6" * 64,
-                    "classification_candidate_hash": "7" * 64,
-                    "index_membership_candidate_hash": "8" * 64,
-                    "classification_receipt_hash": "9" * 64,
-                    "index_membership_receipt_hash": "a" * 64,
-                    "preflight_canonical_hash": "b" * 64,
-                },
-                "l1_projection": _l1_projection(),
-                "research_basis": _research_basis(),
-            },
         },
         "input_identity": {
             "dataset_manifest_sha256": "b" * 64,
             "mapping_manifest_sha256": "c" * 64,
-            "database_identity": database_identity,
-            "database_identity_sha256": subject.canonical_sha256(database_identity),
+            "bundle_canonical_sha256": "6" * 64,
+            "bundle_manifest_body_sha256": "7" * 64,
+            "bundle_h5_sha256": "8" * 64,
         },
         "c010_formal_evidence": {
             **c010_body,
@@ -323,6 +305,19 @@ def _top_level_inputs() -> dict[str, object]:
         "feature_definition": {"level": "L1"},
         "l2_feature_definition": {"level": "L2"},
         "database": {"host": "redacted", "port": 5432, "dbname": "dev"},
+        "input_bundle_identity": {
+            "bundle_canonical_sha256": "6" * 64,
+            "manifest_body_sha256": "7" * 64,
+            "h5_sha256": "8" * 64,
+        },
+    }
+
+
+def _unit_bundle_identity() -> dict[str, str]:
+    return {
+        "bundle_canonical_sha256": "6" * 64,
+        "manifest_body_sha256": "7" * 64,
+        "h5_sha256": "8" * 64,
     }
 
 
@@ -408,7 +403,11 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
         "dataset_manifest_sha256": "b" * 64,
         "mapping_manifest_sha256": "c" * 64,
         "c010_formal_evidence": request["c010_formal_evidence"],
-        "database_identity": request["input_identity"]["database_identity"],
+        "input_bundle_identity": {
+            "bundle_canonical_sha256": request["input_identity"]["bundle_canonical_sha256"],
+            "manifest_body_sha256": request["input_identity"]["bundle_manifest_body_sha256"],
+            "h5_sha256": request["input_identity"]["bundle_h5_sha256"],
+        },
         "development_start": subject.RL1_DEVELOPMENT_START.isoformat(),
         "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": len(_rl1_calendar()),
@@ -447,17 +446,32 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
 
 
 def _bind_rl1_request_inputs(request: dict[str, object], inputs: dict[str, object]) -> None:
-    database_identity = inputs["database"]
+    bundle_identity = inputs.setdefault("input_bundle_identity", _unit_bundle_identity())
+    inputs.setdefault("c010_bundle_identity", _unit_c010_bundle_identity(inputs))
     request["input_identity"] = {
         "dataset_manifest_sha256": subject.canonical_sha256(inputs["dataset_manifest"]),
         "mapping_manifest_sha256": subject.canonical_sha256(inputs["mapping_manifest"]),
-        "database_identity": database_identity,
-        "database_identity_sha256": subject.canonical_sha256(database_identity),
+        "bundle_canonical_sha256": bundle_identity["bundle_canonical_sha256"],
+        "bundle_manifest_body_sha256": bundle_identity["manifest_body_sha256"],
+        "bundle_h5_sha256": bundle_identity["h5_sha256"],
     }
     request["c010_formal_evidence"] = subject._c012_rl1_c010_identity(inputs)
     request["request_sha256"] = subject.canonical_sha256(
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
+
+
+def _unit_c010_bundle_identity(inputs: dict[str, object]) -> dict[str, str]:
+    c010 = inputs["c010_diagnostic"]
+    body = {
+        "eligibility_receipt_sha256": c010["eligibility"]["receipt_sha256"],
+        "aggregate_evidence_receipt_sha256": c010["aggregate_evidence"]["receipt_sha256"],
+        "l1_cross_section_evidence_receipt_sha256": c010["l1_cross_section_evidence"]["receipt_sha256"],
+        "l1_feature_definition_sha256": subject.canonical_sha256(c010["l1_feature_definition"]),
+        "provider_absence_manifest_sha256": subject.canonical_sha256(inputs["provider_absence_manifest"]),
+        "security_identity_manifest_sha256": subject.canonical_sha256(inputs["security_identity_manifest"]),
+    }
+    return {**body, "receipt_sha256": subject.canonical_sha256(body)}
 
 
 def _prepared_relative_component(values: np.ndarray) -> jump_subject.PreparedComponent:
@@ -1783,6 +1797,7 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
         "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
         "mapping_manifest": {"rows": []},
         "database": {"dbname": "dev"},
+        "input_bundle_identity": _unit_bundle_identity(),
         "provider_absence_manifest": {"manifest": "v1"},
         "security_identity_manifest": {"manifest": "v1"},
         "c010_diagnostic": {
@@ -1792,6 +1807,7 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
             "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
         },
     }
+    inputs["c010_bundle_identity"] = _unit_c010_bundle_identity(inputs)
     template = _rl1_request(artifact_root=tmp_path)
     request = subject.build_c012_rl1_replay_request(
         inputs,
@@ -1812,6 +1828,17 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
     with pytest.raises(subject.RidgeCandidateError) as captured:
         subject.validate_c012_rl1_static_request(escaped)
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+    legacy_only = dict(inputs)
+    legacy_only.pop("c010_bundle_identity")
+    with pytest.raises(subject.RidgeCandidateError) as legacy_captured:
+        subject.build_c012_rl1_replay_request(
+            legacy_only,
+            source=template["source"],
+            outputs=template["outputs"],
+            producer_commit="a" * 40,
+        )
+    assert legacy_captured.value.reason_code == subject.REASON_RL1_INPUT
 
 
 def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary_is_closed() -> None:
@@ -2273,8 +2300,8 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
             str(request_value["outputs"]["component_model_path"]),
             "--bundle-output",
             str(request_value["outputs"]["capability_bundle_path"]),
-            "--db-env-prefix",
-            "UNIT",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
     assert result == 0
@@ -2285,9 +2312,7 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
     assert report["holdout_accessed"] is False
 
 
-def test_c012_rl1_cli_child_rebuilds_exact_rotation_l1_only_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_c012_rl1_cli_child_reads_only_immutable_input_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _rl1_request(artifact_root=tmp_path)
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
@@ -2299,7 +2324,12 @@ def test_c012_rl1_cli_child_rebuilds_exact_rotation_l1_only_source(
         observed_loader_kwargs.update(kwargs)
         return {}
 
-    monkeypatch.setattr(cli, "_load_l1_source_inputs", fake_loader)
+    monkeypatch.setattr(cli, "_load_c012_input_bundle", fake_loader)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for C-012 input-bundle execution"),
+    )
     monkeypatch.setattr(
         cli,
         "run_c012_rl1_candidate_process",
@@ -2324,21 +2354,57 @@ def test_c012_rl1_cli_child_rebuilds_exact_rotation_l1_only_source(
             str(request["outputs"]["component_model_path"]),
             "--bundle-output",
             str(request["outputs"]["capability_bundle_path"]),
-            "--db-env-prefix",
-            "UNIT",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
 
     assert result == 0
-    assert observed_loader_kwargs == {
-        "db_prefix": "UNIT",
-        "c010_formal": True,
-        "expected_database_identity": request["input_identity"]["database_identity"],
-        "rotation_l1_only": True,
-    }
+    assert observed_loader_kwargs == {}
 
 
-def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
+def test_c012_rl1_cli_rejects_database_prefix_before_any_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_c012_input_bundle",
+        lambda *args, **kwargs: pytest.fail("input bundle loader must not run after CLI contract rejection"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for C-012 input-bundle execution"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            [
+                "--candidate-mode",
+                "c012-rl1",
+                "--request",
+                str(tmp_path / "request.json"),
+                "--output",
+                str(tmp_path / "acceptance.json"),
+                "--child-dir",
+                str(tmp_path / "children"),
+                "--acceptance-core-output",
+                str(tmp_path / "acceptance.core.json"),
+                "--model-output",
+                str(tmp_path / "rotation_l1.component.json"),
+                "--bundle-output",
+                str(tmp_path / "capability_bundle.json"),
+                "--input-bundle-root",
+                str(tmp_path / "input-bundle"),
+                "--db-env-prefix",
+                "AISTOCK_HMM_RISK",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+
+
+def test_c012_rl1_cli_prepares_request_from_verified_input_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calendar = _rl1_calendar()
@@ -2351,7 +2417,6 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
         "trading_dates": tuple(calendar),
         "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
         "mapping_manifest": {"rows": []},
-        "database": {"dbname": "dev"},
         "provider_absence_manifest": {"manifest": "v1"},
         "security_identity_manifest": {"manifest": "v1"},
         "c010_diagnostic": {
@@ -2361,37 +2426,25 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
             "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
         },
     }
-    source_authority = tmp_path / "source.json"
-    source_authority.write_text(
-        json.dumps(
-            {
-                "source": {
-                    "source_start": "2020-07-30",
-                    "circ_mv_history_start": "2020-07-30",
-                    "source_end": "2025-04-30",
-                    "universe_key": "unit-universe",
-                    "universe_rule_version": "unit-rule",
-                    "security_identity_manifest_path": "security.json",
-                    "security_identity_manifest_sha256": "1" * 64,
-                    "provider_absence_manifest_path": "absence.json",
-                    "provider_absence_manifest_sha256": "2" * 64,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    inputs["c010_bundle_identity"] = _unit_c010_bundle_identity(inputs)
+    template = _rl1_request(artifact_root=tmp_path)
+    inputs["source"] = template["source"]
+    inputs["input_bundle_identity"] = _unit_bundle_identity()
     monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
-    monkeypatch.setattr(cli, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+    monkeypatch.setattr(cli, "_load_c012_input_bundle", lambda path: inputs)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader is forbidden for request preparation"),
+    )
     request_path = tmp_path / "request.json"
     result = cli.main(
         [
             "--candidate-mode",
             "c012-rl1",
             "--prepare-request",
-            "--source-authority",
-            str(source_authority),
-            "--industry-pit-authority",
-            str(_write_industry_pit_authority(tmp_path)),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
             "--request",
             str(request_path),
             "--output",
@@ -2404,13 +2457,12 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
             str(tmp_path / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNIT",
         ]
     )
     assert result == 0
     request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["schema_version"] == subject.RL1_REQUEST_SCHEMA_VERSION
+    assert "database_identity" not in request["input_identity"]
     assert request["source"]["source_end"] == "2026-03-31"
     assert request["expected_producer_commit"] == "a" * 40
     assert request["outputs"]["acceptance_core_path"].endswith("acceptance.core.json")
@@ -2470,9 +2522,12 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
     monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
     monkeypatch.setattr(
         cli,
-        "_load_l1_source_inputs",
+        "read_rotation_l1_input_bundle",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            cli.StateModelSetError("requested PIT universe state is missing")
+            cli.RotationL1InputBundleError(
+                "hmm_risk_rotation_l1_input_bundle_source_range_incomplete",
+                "requested frozen bundle input is missing",
+            )
         ),
     )
     result = cli.main(
@@ -2480,10 +2535,8 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
             "--candidate-mode",
             "c012-rl1",
             "--prepare-request",
-            "--source-authority",
-            str(source_path),
-            "--industry-pit-authority",
-            str(_write_industry_pit_authority(tmp_path)),
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
             "--request",
             str(tmp_path / "request.json"),
             "--output",
@@ -2496,17 +2549,14 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
             str(tmp_path / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNIT",
         ]
     )
     assert result == 1
     failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
     assert failure["failure_stage"] == "source_preflight"
-    assert failure["failure_evidence"] == {
-        "exception_type": "StateModelSetError",
-        "error_message": "requested PIT universe state is missing",
-    }
+    assert failure["failure_evidence"]["input_bundle_reason_code"] == (
+        "hmm_risk_rotation_l1_input_bundle_source_range_incomplete"
+    )
     assert failure["completed_fit_count"] == 0
     assert failure["database_write"] is False
     assert failure["runtime_action"] is False
@@ -2568,8 +2618,8 @@ def test_c012_rl1_cli_finalization_failure_records_partial_artifact_writes(
             str(request_value["outputs"]["component_model_path"]),
             "--bundle-output",
             str(bundle_path),
-            "--db-env-prefix",
-            "UNIT",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
     assert result == 1
@@ -2768,8 +2818,8 @@ def test_c012_rl1_cli_output_drift_writes_only_request_authorized_failure(
             str(tmp_path / "other" / "rotation_l1.component.json"),
             "--bundle-output",
             str(tmp_path / "other" / "capability_bundle.json"),
-            "--db-env-prefix",
-            "UNUSED",
+            "--input-bundle-root",
+            str(tmp_path / "input-bundle"),
         ]
     )
 
