@@ -1,6 +1,8 @@
 {
   "actual": "C-012-RL1 immutable bundle build on frozen full universe fails closed at qlib_month_spool after 1342.84s versus approved 1200s while RSS is only 243945472 bytes. _read_qlib_stock_rows performs Python per-row per-field structured-array assignment across the full Qlib panel. Preserve the exact source, schema, universe, 20-minute budget and output bytes; vectorize the equivalent assignments, add deterministic/fail-closed tests, and prove the frozen build can complete without changing model contracts.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
   ],
   "assigned_agent": null,
@@ -25,7 +27,11 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +41,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1306-formal-hmm-input-bundle-scalar-qlib-materialization-exceeds-approved-bui.json"
+    ]
   },
   "first_seen_at": "2026-09-01T06:31:12.264426Z",
   "fix_branch": null,

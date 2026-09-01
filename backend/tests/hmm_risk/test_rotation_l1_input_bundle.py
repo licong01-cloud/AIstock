@@ -570,6 +570,37 @@ def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: 
     assert exc_info.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
 
 
+def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_active_spans(tmp_path: Path) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    calendar = tuple(subject.SOURCE_START + timedelta(days=index) for index in range(6))
+    for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = np.asarray(
+            [0.0, *(field_index * 100.0 + index for index in range(len(calendar)))],
+            dtype="<f4",
+        )
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[1]), (calendar[4], calendar[5])),
+    )
+
+    expected = np.zeros(4, dtype=subject._QLIB_SOURCE_DTYPE)
+    for output_index, calendar_index in enumerate((0, 1, 4, 5)):
+        expected[output_index]["trade_date"] = int(calendar[calendar_index].strftime("%Y%m%d"))
+        expected[output_index]["symbol"] = b"000001.SZ"
+        for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+            expected[output_index][field] = field_index * 100.0 + calendar_index
+
+    assert rows.dtype == subject._QLIB_SOURCE_DTYPE
+    assert rows.flags.c_contiguous
+    assert rows.tobytes() == expected.tobytes()
+
+
 def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

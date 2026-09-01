@@ -551,13 +551,17 @@ def _read_qlib_stock_rows(
     positions = [index for index in expected_positions if start_index <= index < start_index + length]
     if positions != expected_positions:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    result = np.zeros(len(positions), dtype=_QLIB_SOURCE_DTYPE)
-    for output_index, calendar_index in enumerate(positions):
-        result[output_index]["trade_date"] = int(calendar[calendar_index].strftime("%Y%m%d"))
-        result[output_index]["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
-        local = calendar_index - start_index
-        for field in QLIB_STOCK_FIELDS:
-            result[output_index][field] = arrays[field][1][local]
+    calendar_positions = np.asarray(positions, dtype=np.int64)
+    local_positions = calendar_positions - start_index
+    result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
+    result["trade_date"] = np.fromiter(
+        (int(calendar[index].strftime("%Y%m%d")) for index in calendar_positions),
+        dtype="<i4",
+        count=len(calendar_positions),
+    )
+    result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
+    for field in QLIB_STOCK_FIELDS:
+        result[field] = arrays[field][1][local_positions]
     return result
 
 
