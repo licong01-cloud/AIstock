@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1302",
-  "closed_at": null,
+  "closed_at": "2026-09-01T09:25:42.228201Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -160,8 +160,8 @@
   },
   "first_seen_at": "2026-09-01T03:06:45.869317Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "61b5d4a47794853efff20e5fdfd41e0fde81dae7",
+  "fixed_at": "2026-09-01T04:43:49Z",
   "github_issue_number": 4112,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4112",
   "last_seen_at": "2026-09-01T03:48:00.000000Z",
@@ -169,6 +169,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4119",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -197,9 +198,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1302\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1302",
+      "business_smoke_semantic": {
+        "contract_id": "factor_lifecycle_detail",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "5d45e5c76d34500ecfd1cb299317f07113824d308fe63479216cd6da55f46247",
+      "expected_identity": "61b5d4a47794853efff20e5fdfd41e0fde81dae7",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-01T09:24:02.567104Z",
+      "mode": "read_only",
+      "observed_identity": "c3fcde3eb7bee295a73a426112865a5ed0137a4a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "99da466fadd7b90c830bcfb951b52ca7051b8d1f5e37a5ffe724cef393a8a697",
+      "receipt_sha256": "b5413c205cb62f13841b846f9acbbd2c8aa8acc3baf44b058124ec6c1fc49eed",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7a139c69b3dec86ee5f61242f16b23933846b5723b6cadd1c28ee2abbd909c75",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -209,7 +233,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "qe"
   ],
@@ -218,6 +242,15 @@
     "fingerprint": "d866a92146d8dc723cf18101",
     "source_event_id": "FE-20260901-d866a92146d8"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests; ownership mapped=14 unmapped=0 ambiguous=0",
+    "python -m nox -s platform_api_backend -> passed on parent 4a3748fa0: 15 tests; current merge added unrelated BUG registry only",
+    "python -m nox -s qe_read_backend -> passed on parent 4a3748fa0: 133 tests; current merge added unrelated BUG registry only",
+    "python -m nox -s paper_v2_backend -> passed on parent 4a3748fa0: 1079 tests, 3 skipped, 2 expected failures; current merge added unrelated BUG registry only",
+    "rtk pytest -q backend/tests/strategy_package/test_factor_library_protection_batch4.py -> 13 passed",
+    "rtk ruff check backend/routers/quantevolver.py backend/routers/factor_library.py backend/services/quantevolver/factor_cleanup_service.py backend/tests/strategy_package/test_factor_library_protection_batch4.py -> passed: no issues",
+    "rtk git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
