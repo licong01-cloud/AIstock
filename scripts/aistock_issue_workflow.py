@@ -14596,18 +14596,35 @@ def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
         "status": "check_failed",
     }
     result = _run_read_command_with_retry(
-        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,url,headRefOid,body"],
+        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefOid,body"],
         cwd=REPO_ROOT,
         timeout=30,
     )
     if not result.get("ok"):
-        profile["error"] = result.get("stderr") or result.get("stdout") or "cannot inspect merged PR receipt"
-        return profile
-    try:
-        payload = json.loads(str(result.get("stdout") or "{}"))
-    except json.JSONDecodeError as exc:
-        profile["error"] = f"cannot parse merged PR receipt check: {exc}"
-        return profile
+        message = str(result.get("stderr") or result.get("stdout") or "cannot inspect merged PR receipt")
+        if not _looks_like_github_transport_failure(message):
+            profile["error"] = message
+            return profile
+        try:
+            readback = _github_pull_rest_readback(pr_url)
+        except WorkflowError as exc:
+            profile["error"] = str(exc)
+            return profile
+        payload = {
+            "state": "MERGED" if readback.get("merged") else readback.get("state"),
+            "mergedAt": readback.get("merged_at"),
+            "url": readback.get("url"),
+            "headRefOid": readback.get("head_sha"),
+            "mergeCommit": {"oid": readback.get("merge_sha")},
+            "body": readback.get("body"),
+        }
+        profile["read_fallback"] = "github_rest"
+    else:
+        try:
+            payload = json.loads(str(result.get("stdout") or "{}"))
+        except json.JSONDecodeError as exc:
+            profile["error"] = f"cannot parse merged PR receipt check: {exc}"
+            return profile
     merged = payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
     head_oid = str(payload.get("headRefOid") or "").strip().lower()
     receipt_commits = sorted(
@@ -14626,6 +14643,8 @@ def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
             "merged": merged,
             "durable_receipt_present": receipt_present,
             "head_oid": head_oid or None,
+            "merge_commit": _merge_commit_from_pr_check({"pr": payload}),
+            "merged_at": payload.get("mergedAt"),
             "receipt_commit": matching_commit,
             "status": (
                 "finalized_merged_pr_receipt"
@@ -15420,6 +15439,25 @@ def _github_pr_number_from_url(pr_url: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _parse_bug_pr_mappings(values: list[str] | None) -> dict[str, str]:
+    mappings: dict[str, str] = {}
+    for raw in values or []:
+        bug_text, separator, pr_text = str(raw).partition("=")
+        bug_id = bug_text.strip().upper()
+        pr_url = pr_text.strip().rstrip("/")
+        if not separator or not re.fullmatch(r"BUG-\d+", bug_id):
+            raise WorkflowError(f"invalid --source-pr mapping {raw!r}; expected BUG-NNN=https://github.com/.../pull/NNN")
+        pr_number = _github_pr_number_from_url(pr_url)
+        expected_url = f"https://github.com/{GITHUB_REPO}/pull/{pr_number}" if pr_number is not None else ""
+        if not expected_url or pr_url != expected_url:
+            raise WorkflowError(f"invalid --source-pr URL for {bug_id}: {pr_url or 'missing'}")
+        previous = mappings.get(bug_id)
+        if previous and previous != pr_url:
+            raise WorkflowError(f"conflicting --source-pr mappings for {bug_id}: {previous} vs {pr_url}")
+        mappings[bug_id] = pr_url
+    return mappings
+
+
 def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
     pr_number = _github_pr_number_from_url(pr_url)
     if pr_number is None:
@@ -15454,6 +15492,7 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
         "head_ref": str(head.get("ref") or "").strip(),
         "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
+        "body": str(payload.get("body") or ""),
     }
 
 
@@ -18885,6 +18924,7 @@ def build_close_sync_aggregate_plan(
     *,
     bug_ids: list[str],
     apply: bool,
+    source_pr_urls: dict[str, str] | None = None,
     skip_github_check: bool = False,
     create_registry_worktree: bool = False,
     allow_current_worktree: bool = False,
@@ -18892,13 +18932,24 @@ def build_close_sync_aggregate_plan(
     """Close independently merged, non-runtime BUGs in one metadata-only PR.
 
     Unlike close-sync-batch, this mode never projects one source PR identity or
-    one validation receipt onto every BUG. Each record must already carry its
-    own source PR and durable validation evidence, and every source PR is
-    verified before any BUG JSON is changed.
+    one validation receipt onto every BUG. Source identities may come from the
+    record or explicit per-BUG mappings. Missing BUG JSON evidence may be
+    satisfied only by a commit-bound durable receipt in that BUG's merged
+    source PR. Every source PR is verified before any BUG JSON is changed.
     """
     canonical_bug_ids = flow._unique_strings([item.strip().upper() for item in bug_ids if item.strip()])
     if len(canonical_bug_ids) < 2:
         raise WorkflowError("close-sync-aggregate requires at least two unique --bug-id values")
+    requested_source_prs = {
+        str(key).strip().upper(): str(value).strip().rstrip("/")
+        for key, value in (source_pr_urls or {}).items()
+    }
+    unknown_mappings = sorted(set(requested_source_prs) - set(canonical_bug_ids))
+    if unknown_mappings:
+        raise WorkflowError(
+            "close-sync-aggregate received --source-pr mappings for unselected BUGs: "
+            + _delimited_text(unknown_mappings, ", ")
+        )
 
     records: list[dict[str, Any]] = []
     for item in canonical_bug_ids:
@@ -18907,15 +18958,20 @@ def build_close_sync_aggregate_plan(
         status = str(record.get("status") or "").strip()
         if status not in flow.VALID_BUG_STATUSES:
             raise WorkflowError(f"{item} has invalid status for close/sync: {status!r}")
-        source_pr_url = str(record.get("pr_url") or "").strip()
-        if not source_pr_url:
-            raise WorkflowError(f"close-sync-aggregate requires {item} to record its own source pr_url")
-        durable_evidence = flow._unique_strings(flow._as_list(record.get("validation_evidence")))
-        if not durable_evidence:
+        recorded_pr_url = str(record.get("pr_url") or "").strip().rstrip("/")
+        mapped_pr_url = requested_source_prs.get(item, "")
+        if recorded_pr_url and mapped_pr_url and recorded_pr_url != mapped_pr_url:
             raise WorkflowError(
-                f"close-sync-aggregate requires durable validation_evidence in {item}; "
-                "do not use one aggregate-wide receipt"
+                f"close-sync-aggregate source PR mismatch for {item}: "
+                f"recorded={recorded_pr_url} requested={mapped_pr_url}"
             )
+        source_pr_url = mapped_pr_url or recorded_pr_url
+        if not source_pr_url:
+            raise WorkflowError(
+                f"close-sync-aggregate requires a source PR for {item}; "
+                f"pass --source-pr {item}=https://github.com/{GITHUB_REPO}/pull/NNN"
+            )
+        durable_evidence = flow._unique_strings(flow._as_list(record.get("validation_evidence")))
         records.append(
             {
                 "bug_id": item,
@@ -18924,12 +18980,13 @@ def build_close_sync_aggregate_plan(
                 "missing_github_linkage": missing,
                 "source_pr_url": source_pr_url,
                 "validation_evidence": durable_evidence,
+                "validation_receipt_profile": None,
                 "source_record_fingerprint": _short_hash(record, length=16),
             }
         )
 
-    source_pr_urls = [row["source_pr_url"] for row in records]
-    if len(set(source_pr_urls)) != len(source_pr_urls):
+    selected_source_pr_urls = [row["source_pr_url"] for row in records]
+    if len(set(selected_source_pr_urls)) != len(selected_source_pr_urls):
         raise WorkflowError(
             "close-sync-aggregate requires independent source PRs; shared source PR records belong in close-sync-batch"
         )
@@ -18968,6 +19025,23 @@ def build_close_sync_aggregate_plan(
             + _delimited_text(runtime_pending, ", ")
         )
 
+    for row in records:
+        if row["validation_evidence"]:
+            continue
+        receipt_profile = _merged_pr_validation_receipt_profile(row["source_pr_url"])
+        if not receipt_profile.get("durable_receipt_present"):
+            raise WorkflowError(
+                f"close-sync-aggregate requires durable validation evidence for {row['bug_id']}; "
+                f"source PR receipt status={receipt_profile.get('status') or 'unknown'} "
+                f"error={receipt_profile.get('error') or 'none'}"
+            )
+        row["validation_receipt_profile"] = receipt_profile
+        row["validation_evidence"] = [
+            "source PR durable validation receipt: "
+            f"pr={row['source_pr_url']} head={receipt_profile.get('head_oid')} "
+            f"receipt_commit={receipt_profile.get('receipt_commit')} status=passed"
+        ]
+
     apply_guard = (
         _validate_close_sync_apply_target(REPO_ROOT)
         if apply and not create_registry_worktree
@@ -18979,7 +19053,20 @@ def build_close_sync_aggregate_plan(
     verified_sources: dict[str, dict[str, Any]] = {}
     if apply:
         for row in records:
-            pr_check = _verify_pr_merged(row["source_pr_url"], skip_github_check=skip_github_check)
+            receipt_profile = row.get("validation_receipt_profile") or {}
+            if receipt_profile.get("durable_receipt_present") and receipt_profile.get("merge_commit"):
+                pr_check = {
+                    "checked": True,
+                    "merged": True,
+                    "source": "commit_bound_validation_receipt",
+                    "pr": {
+                        "mergeCommit": {"oid": receipt_profile["merge_commit"]},
+                        "mergedAt": receipt_profile.get("merged_at"),
+                        "url": row["source_pr_url"],
+                    },
+                }
+            else:
+                pr_check = _verify_pr_merged(row["source_pr_url"], skip_github_check=skip_github_check)
             source_merge_commit = _merge_commit_from_pr_check(pr_check)
             if not source_merge_commit:
                 raise WorkflowError(f"cannot resolve merged commit for {row['bug_id']} source PR")
@@ -19019,16 +19106,12 @@ def build_close_sync_aggregate_plan(
                     **row,
                     "record": target_record,
                     "source_path": target_source,
-                    "source_pr_url": str(target_record.get("pr_url") or "").strip(),
-                    "validation_evidence": flow._unique_strings(
-                        flow._as_list(target_record.get("validation_evidence"))
-                    ),
                 }
             )
     else:
         target_rows = records
 
-    source_pr_urls = [row["source_pr_url"] for row in target_rows]
+    selected_source_pr_urls = [row["source_pr_url"] for row in target_rows]
 
     if apply and create_registry_worktree:
         apply_guard = _validate_close_sync_apply_target(close_sync_root)
@@ -19048,6 +19131,7 @@ def build_close_sync_aggregate_plan(
             "source_pr_url": row["source_pr_url"],
             "source_merge_commit": str(row["record"].get("fix_commit") or "") or None,
             "validation_evidence": row["validation_evidence"],
+            "validation_receipt_profile": row.get("validation_receipt_profile"),
             "runtime_contract": runtime_contracts[row["bug_id"]],
         }
         for row in target_rows
@@ -19059,7 +19143,7 @@ def build_close_sync_aggregate_plan(
         "aggregate_key": aggregate_key,
         "bug_ids": canonical_bug_ids,
         "source_bug_jsons": [row["source_bug_json"] for row in per_issue],
-        "source_prs": source_pr_urls,
+        "source_prs": selected_source_pr_urls,
         "registry_root": str(close_sync_root),
         "registry_worktree_plan": registry_worktree_plan,
         "apply_guard": apply_guard,
@@ -20044,9 +20128,18 @@ def cmd_close_sync_batch(args: argparse.Namespace) -> int:
 def cmd_close_sync_aggregate(args: argparse.Namespace) -> int:
     if args.create_pr and not args.apply:
         raise WorkflowError("close-sync-aggregate --create-pr requires --apply")
+    if args.create_pr and not args.create_registry_worktree:
+        raise WorkflowError("close-sync-aggregate --create-pr requires --create-registry-worktree")
+    if args.merge_close_sync_pr and not (args.apply and args.create_pr):
+        raise WorkflowError("close-sync-aggregate --merge-close-sync-pr requires --apply --create-pr")
+    if args.cleanup and not args.merge_close_sync_pr:
+        raise WorkflowError("close-sync-aggregate --cleanup requires --merge-close-sync-pr")
+    if args.sync_root and not args.cleanup:
+        raise WorkflowError("close-sync-aggregate --sync-root requires --cleanup")
     payload = build_close_sync_aggregate_plan(
         bug_ids=list(args.bug_id or []),
         apply=args.apply,
+        source_pr_urls=_parse_bug_pr_mappings(list(args.source_pr or [])),
         skip_github_check=args.skip_github_check,
         create_registry_worktree=args.create_registry_worktree,
         allow_current_worktree=args.allow_current_worktree,
@@ -20062,8 +20155,54 @@ def cmd_close_sync_aggregate(args: argparse.Namespace) -> int:
             close_sync=payload,
             validation_evidence=receipt_summary,
         )
+        if args.merge_close_sync_pr:
+            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                bug_id=payload["bug_ids"][0],
+                close_sync_commit=payload["close_sync_commit"],
+                auto_merge=True,
+            )
+            payload["close_sync_pr_merge"] = close_sync_pr_merge
+            if close_sync_pr_merge.get("workflow_gate") == "blocked":
+                payload["workflow_gate"] = "blocked"
+                payload["blocking"] = close_sync_pr_merge.get("blocking") or []
+            elif close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}:
+                merge_result = close_sync_pr_merge.get("merge") or {}
+                verified_pr_check = (
+                    close_sync_pr_merge.get("verified")
+                    or (merge_result.get("verified") if isinstance(merge_result, dict) else None)
+                )
+                cleanup_plan, root_sync_deferred = _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
+                    bug_id=payload["bug_ids"][0],
+                    close_sync_commit=payload["close_sync_commit"],
+                    close_sync_pr_merge=close_sync_pr_merge,
+                    cleanup=args.cleanup,
+                    apply=True,
+                    sync_root=args.sync_root,
+                    verified_pr_check=verified_pr_check,
+                )
+                payload["close_sync_cleanup"] = cleanup_plan
+                if root_sync_deferred:
+                    payload["root_sync_deferred"] = root_sync_deferred
+                if cleanup_plan and cleanup_plan.get("workflow_gate") == "blocked":
+                    payload["workflow_gate"] = "blocked"
+                    payload["blocking"] = cleanup_plan.get("blocking") or []
+                elif args.cleanup and cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done":
+                    payload["workflow_gate"] = "complete"
+                else:
+                    payload["workflow_gate"] = "close_sync_persisted"
+            else:
+                payload["workflow_gate"] = "blocked"
+                payload["blocking"] = [
+                    "aggregate close-sync PR merge was requested but no merged PR identity was returned: "
+                    f"status={close_sync_pr_merge.get('workflow_gate') or 'unknown'}"
+                ]
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
+    return 0 if payload.get("workflow_gate") in {
+        "ready_for_apply",
+        "close_synced",
+        "close_sync_persisted",
+        "complete",
+    } else 2
 
 
 def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
@@ -20545,6 +20684,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Close-sync independently merged non-runtime BUGs in one metadata-only registry PR.",
     )
     close_aggregate.add_argument("--bug-id", action="append", required=True)
+    close_aggregate.add_argument(
+        "--source-pr",
+        action="append",
+        metavar="BUG-ID=PR-URL",
+        help="Explicit source PR identity for a BUG whose merged registry record does not yet contain pr_url.",
+    )
     close_aggregate.add_argument("--apply", action="store_true")
     close_aggregate.add_argument(
         "--skip-github-check",
@@ -20556,6 +20701,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--create-pr",
         action="store_true",
         help="Commit, push, and open one metadata-only close-sync PR after every source identity is verified.",
+    )
+    close_aggregate.add_argument(
+        "--merge-close-sync-pr",
+        action="store_true",
+        help="After --create-pr, wait for required checks and merge the aggregate metadata PR.",
+    )
+    close_aggregate.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="After the aggregate PR merges, remove only its task-owned worktree and branch.",
+    )
+    close_aggregate.add_argument(
+        "--sync-root",
+        action="store_true",
+        help="Fast-forward canonical main during aggregate PR cleanup.",
     )
     close_aggregate.add_argument(
         "--allow-current-worktree",
