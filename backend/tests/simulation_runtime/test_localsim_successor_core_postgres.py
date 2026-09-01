@@ -32,6 +32,7 @@ from backend.services.simulation_runtime.successor_models import (
 )
 from backend.services.simulation_runtime.successor_repository import LocalSimSuccessorRepository
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
+from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 
 
@@ -57,9 +58,7 @@ class _RuntimeProfileAuthority:
         self, *, package_id: str, manifest_sha256: str, config: LocalSimRuntimeProfileConfigRequestV1
     ) -> tuple[LocalSimRuntimeProfileConfigV1, dict[str, Any]]:
         self.require_package_identity(package_id=package_id, manifest_sha256=manifest_sha256)
-        return config.materialize(runtime_variant_materialized_config=None), {
-            "dev_postgres_reference_readback": True
-        }
+        return config.materialize(runtime_variant_materialized_config=None), {"dev_postgres_reference_readback": True}
 
 
 @contextmanager
@@ -383,6 +382,35 @@ def test_successor_schema_and_repository_are_idempotent_atomic_and_readable_on_d
         )
         lineage_id = lineage.lineage_id
         lineage_account_id = lineage_account.account_id
+        assert _economic_scope_sha256(dsn, legacy_account_id) == economic_before
+        with pytest.raises(InvalidStateTransitionError, match="identity is not repairable"):
+            repository.delete_prepared_lineage_bundle(
+                legacy_account_id=legacy_account_id,
+                expected_lineage_id=lineage.lineage_id,
+                expected_lineage_hash="0" * 64,
+                expected_account_id=lineage_account.account_id,
+                expected_account_hash=lineage_account.account_hash,
+                expected_economic_facts_sha256=economic_before,
+                expected_created_by=f"test_int_{marker}",
+            )
+        assert repository.get_lineage_by_legacy_account(legacy_account_id) is not None
+        repository.delete_prepared_lineage_bundle(
+            legacy_account_id=legacy_account_id,
+            expected_lineage_id=lineage.lineage_id,
+            expected_lineage_hash=lineage.lineage_hash,
+            expected_account_id=lineage_account.account_id,
+            expected_account_hash=lineage_account.account_hash,
+            expected_economic_facts_sha256=economic_before,
+            expected_created_by=f"test_int_{marker}",
+        )
+        assert repository.get_lineage_by_legacy_account(legacy_account_id) is None
+        with psycopg2.connect(**dsn) as repair_read_conn:
+            with repair_read_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM paper_v2.simulation_account_v1 WHERE account_id = %s",
+                    (lineage_account_id,),
+                )
+                assert cur.fetchone()[0] == 0
         assert _economic_scope_sha256(dsn, legacy_account_id) == economic_before
 
         with psycopg2.connect(**dsn) as read_conn:
