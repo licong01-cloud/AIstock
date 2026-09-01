@@ -14582,6 +14582,7 @@ def test_close_sync_apply_can_create_registry_worktree(
         return ""
 
     monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
     monkeypatch.setattr(
         workflow,
@@ -14636,8 +14637,8 @@ def test_worktree_creation_puts_branch_option_before_path(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
-        "_run_read_command_with_retry",
-        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+        "_git_fetch_with_transport_retry",
+        lambda args, **kwargs: "",
     )
     monkeypatch.setattr(
         workflow,
@@ -14658,6 +14659,55 @@ def test_worktree_creation_puts_branch_option_before_path(
     ]
 
 
+def test_close_sync_worktree_fetch_retries_schannel_before_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_attempts = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal fetch_attempts
+        fetch_attempts += 1
+        if fetch_attempts == 1:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "schannel: failed to receive handshake, SSL/TLS connection failed",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "fetched", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    stdout = workflow._git_fetch_with_transport_retry(["origin", "main"])
+
+    assert stdout == "fetched"
+    assert fetch_attempts == 2
+
+
+def test_git_fetch_transport_retry_does_not_retry_non_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal attempts
+        attempts += 1
+        return {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "fatal: couldn't find remote ref missing",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="couldn't find remote ref"):
+        workflow._git_fetch_with_transport_retry(["origin", "missing"])
+
+    assert attempts == 1
+
+
 def test_close_sync_worktree_creation_reuses_clean_existing_worktree(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -14671,6 +14721,7 @@ def test_close_sync_worktree_creation_reuses_clean_existing_worktree(
         return ""
 
     monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
     monkeypatch.setattr(
         workflow,
         "_close_sync_worktree_names",
@@ -14722,6 +14773,7 @@ def test_close_sync_worktree_fast_forwards_clean_stale_reuse(
         lambda bug_id: ("chore/BUG-199-close-sync", registry),
     )
     monkeypatch.setattr(workflow, "_git_snapshot", lambda root: next(snapshots))
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
     monkeypatch.setattr(
         workflow,
         "_git",
@@ -14773,6 +14825,7 @@ def test_close_sync_worktree_reuses_clean_ahead_branch_after_push_failure(
             "origin_main": "main-commit",
         },
     )
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
     monkeypatch.setattr(
         workflow,
         "_run_command",
@@ -18411,3 +18464,148 @@ def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
     assert "close-sync completed" not in text
     assert "`origin/main`" in text
     assert any(args[:3] == ["gh", "issue", "comment"] for args in calls)
+
+
+def test_sync_github_issue_after_close_recovers_applied_transport_mutations(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_reads = 0
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        nonlocal marker_reads
+        if args[:2] == ["gh", "api"]:
+            marker_reads += 1
+            return {
+                "ok": True,
+                "stdout": "" if marker_reads == 1 else "12345",
+                "stderr": "",
+                "returncode": 0,
+            }
+        if args[:3] == ["gh", "issue", "comment"]:
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "Post api.github.com: EOF",
+                "returncode": 1,
+            }
+        if args[:3] == ["gh", "issue", "close"]:
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "schannel: failed to receive handshake, SSL/TLS connection failed",
+                "returncode": 1,
+            }
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {"state": "CLOSED", "labels": [{"name": "status:fixed"}]}
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    result = workflow._sync_github_issue_after_close(
+        _bug(github_issue_number=715),
+        {
+            "merged_pr": "https://github.example/pull/731",
+            "merge_commit": "abc124",
+            "validation_evidence": ["python -m nox -s l0 -> passed"],
+            "production_gates": {"production_ddl_gate": "noop"},
+        },
+        root=isolated_workflow_root,
+    )
+    assert result["status"] == "synced"
+    assert result["comment_verified"] is True
+    assert result["comment_readback_after"]["present"] is True
+    assert result["close_verified"] is True
+
+
+def test_sync_github_issue_after_close_skips_existing_exact_comment(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["gh", "api"]:
+            return {"ok": True, "stdout": "12345", "stderr": "", "returncode": 0}
+        if args[:3] == ["gh", "issue", "comment"]:
+            pytest.fail("an existing exact close-sync comment must not be duplicated")
+        if args[:3] == ["gh", "issue", "close"]:
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {"state": "CLOSED", "labels": [{"name": "status:fixed"}]}
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    result = workflow._sync_github_issue_after_close(
+        _bug(github_issue_number=716),
+        {
+            "merged_pr": "https://github.example/pull/732",
+            "merge_commit": "abc125",
+            "validation_evidence": ["python -m nox -s l0 -> passed"],
+            "production_gates": {"production_ddl_gate": "noop"},
+        },
+        root=isolated_workflow_root,
+    )
+
+    assert result["status"] == "synced"
+    assert result["comment"]["skipped"] is True
+    assert result["comment_verified"] is True
+
+
+def test_sync_github_issue_after_close_keeps_non_transport_comment_failure_visible(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_github_issue_comment_marker_readback",
+        lambda *args, **kwargs: {"ok": True, "present": False, "attempts": 1},
+    )
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["gh", "issue", "comment"]:
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "HTTP 403: Resource not accessible",
+                "returncode": 1,
+            }
+        if args[:3] == ["gh", "issue", "close"]:
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {"state": "CLOSED", "labels": [{"name": "status:fixed"}]}
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    result = workflow._sync_github_issue_after_close(
+        _bug(github_issue_number=717),
+        {
+            "merged_pr": "https://github.example/pull/733",
+            "merge_commit": "abc126",
+            "validation_evidence": ["python -m nox -s l0 -> passed"],
+            "production_gates": {"production_ddl_gate": "noop"},
+        },
+        root=isolated_workflow_root,
+    )
+
+    assert result["status"] == "warning"
+    assert result["comment_verified"] is False
+    assert result["close_verified"] is True

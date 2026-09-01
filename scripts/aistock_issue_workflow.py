@@ -4076,6 +4076,27 @@ def _git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def _git_fetch_with_transport_retry(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    attempts: int = 2,
+    timeout: int = 60,
+) -> str:
+    """Retry only transport-class failures for an idempotent git fetch."""
+
+    total = max(1, int(attempts))
+    for index in range(total):
+        result = _run_command(["git", "fetch", *args], cwd=cwd or REPO_ROOT, timeout=timeout)
+        if result.get("ok"):
+            return str(result.get("stdout") or "").strip()
+        message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
+        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+            raise WorkflowError(message)
+        time.sleep(0.5 * (index + 1))
+    raise AssertionError("unreachable git fetch retry state")
+
+
 def _assert_no_user_backend_process_control(args: list[str]) -> None:
     if not args:
         return
@@ -5186,6 +5207,11 @@ def _looks_like_github_transport_failure(message: str) -> bool:
             "timeout",
             "timed out",
             "tls handshake",
+            "schannel",
+            "ssl/tls",
+            "gnutls",
+            "curl 35",
+            "curl 56",
             "unexpected eof",
             "connection reset",
             "connection aborted",
@@ -6024,7 +6050,7 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
     }
     if not create or dry_run:
         return plan
-    _git(["fetch", "origin", "main"])
+    _git_fetch_with_transport_retry(["origin", "main"])
     if worktree.exists():
         git, relation = _refresh_reused_close_sync_worktree(
             worktree=worktree,
@@ -6078,7 +6104,7 @@ def _maybe_create_close_sync_group_worktree(
     }
     if not create or dry_run:
         return plan
-    _git(["fetch", "origin", "main"])
+    _git_fetch_with_transport_retry(["origin", "main"])
     if worktree.exists():
         git, relation = _refresh_reused_close_sync_worktree(
             worktree=worktree,
@@ -15305,6 +15331,58 @@ def build_registry_intake_cleanup_plan(
     return payload
 
 
+def _close_sync_issue_comment_marker(
+    record: dict[str, Any],
+    evidence_payload: dict[str, Any],
+) -> str:
+    bug_id = str(record.get("bug_id") or "BUG-UNKNOWN").strip().upper()
+    if not re.fullmatch(r"BUG-\d+", bug_id):
+        bug_id = "BUG-UNKNOWN"
+    identity = _short_hash(
+        bug_id,
+        str(evidence_payload.get("merged_pr") or ""),
+        str(evidence_payload.get("merge_commit") or ""),
+        length=16,
+    )
+    return f"aistock-close-sync:{bug_id}:{identity}"
+
+
+def _github_issue_comment_marker_readback(
+    issue_number: int | str,
+    marker: str,
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    jq = f'.[] | select((.body // "") | contains("{marker}")) | .id'
+    result = _run_transport_read_with_retry(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{GITHUB_REPO}/issues/{issue_number}/comments?per_page=100",
+            "--jq",
+            jq,
+        ],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "present": False,
+            "attempts": result.get("attempts"),
+            "error": result.get("stderr") or result.get("stdout") or "comment marker readback failed",
+        }
+    comment_ids = [line.strip() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
+    return {
+        "ok": True,
+        "present": bool(comment_ids),
+        "attempts": result.get("attempts"),
+        "matching_comment_count": len(comment_ids),
+    }
+
+
 def _sync_github_issue_after_close(
     record: dict[str, Any],
     evidence_payload: dict[str, Any],
@@ -15315,8 +15393,10 @@ def _sync_github_issue_after_close(
     issue_number = record.get("github_issue_number")
     if not issue_number:
         return {"status": "skipped_missing_issue_number"}
+    comment_marker = _close_sync_issue_comment_marker(record, evidence_payload)
     lines = [
         f"AIstock workflow close-sync persisted to the current registry worktree for `{record.get('bug_id')}`.",
+        f"<!-- {comment_marker} -->",
         "",
         f"- PR: {evidence_payload.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
@@ -15334,18 +15414,60 @@ def _sync_github_issue_after_close(
     ]
     tmp_comment = root / WORKFLOW_ROOT / str(record.get("bug_id") or issue_number) / "github-close-comment.md"
     _write_text(tmp_comment, "\n".join(lines))
-    comment = _run_command(
-        ["gh", "issue", "comment", str(issue_number), "--repo", GITHUB_REPO, "--body-file", str(tmp_comment)],
-        cwd=root,
-        timeout=60,
+    comment_readback_before = _github_issue_comment_marker_readback(
+        issue_number,
+        comment_marker,
+        root=root,
+    )
+    if comment_readback_before.get("present"):
+        comment = {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "skipped": True,
+            "reason": "exact_close_sync_comment_already_present",
+        }
+        comment_readback_after = comment_readback_before
+    else:
+        comment = _run_command(
+            ["gh", "issue", "comment", str(issue_number), "--repo", GITHUB_REPO, "--body-file", str(tmp_comment)],
+            cwd=root,
+            timeout=60,
+        )
+        comment_message = str(comment.get("stderr") or comment.get("stdout") or "")
+        comment_readback_after = (
+            _github_issue_comment_marker_readback(issue_number, comment_marker, root=root)
+            if not comment.get("ok") and _looks_like_github_transport_failure(comment_message)
+            else None
+        )
+    comment_verified = bool(
+        comment.get("ok")
+        or (comment_readback_after and comment_readback_after.get("present"))
     )
     close = _run_command(["gh", "issue", "close", str(issue_number), "--repo", GITHUB_REPO], cwd=root, timeout=60)
     label_sync = _sync_closed_issue_status_labels(issue_number, require_closed=True)
+    close_verified = bool(close.get("ok") or (label_sync.get("ok") and label_sync.get("verified")))
     return {
-        "status": "synced" if comment.get("ok") and close.get("ok") and label_sync.get("ok") else "warning",
+        "status": "synced" if comment_verified and close_verified and label_sync.get("ok") else "warning",
         "comment": comment,
+        "comment_marker": comment_marker,
+        "comment_verified": comment_verified,
+        "comment_readback_before": comment_readback_before,
+        "comment_readback_after": comment_readback_after,
         "close": close,
-        "label_sync": _pick(label_sync, "ok", "returncode", "skipped", "removed_labels", "added_labels"),
+        "close_verified": close_verified,
+        "label_sync": _pick(
+            label_sync,
+            "ok",
+            "returncode",
+            "skipped",
+            "verified",
+            "attempts",
+            "reason",
+            "removed_labels",
+            "added_labels",
+        ),
         "comment_path": _repo_rel(tmp_comment, root),
     }
 
@@ -17098,7 +17220,11 @@ def _find_bug_record_in_root(root: Path, bug_id: str) -> tuple[dict[str, Any], P
 def _fetch_origin_main_for_close_sync(root: Path) -> dict[str, Any]:
     if not (root / ".git").exists() and not (root / ".git").is_file():
         return {"status": "skipped_no_git_checkout"}
-    result = _run_command(["git", "fetch", "origin", "main", "--quiet"], cwd=root, timeout=120)
+    try:
+        stdout = _git_fetch_with_transport_retry(["origin", "main", "--quiet"], cwd=root)
+        result = {"ok": True, "returncode": 0, "stdout": stdout, "stderr": ""}
+    except WorkflowError as exc:
+        result = {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc)}
     return {"status": "fetched" if result.get("ok") else "warning", "result": result}
 
 
