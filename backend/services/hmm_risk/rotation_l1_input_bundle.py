@@ -1159,6 +1159,41 @@ def _append_feature_domain_aggregate(
     aggregates.append(aggregate)
 
 
+def _append_day_level_aggregates(
+    day_rows: Sequence[dict[str, Any]],
+    *,
+    l1_aggregates: list[Any],
+    l2_aggregates: list[Any],
+    unavailable: dict[tuple[date, str, str], str],
+    contributor_eligibility: Mapping[str, bool],
+) -> None:
+    l1_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    l2_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in day_rows:
+        l1_groups[str(row["l1_code"])].append(row)
+        l2_groups[str(row["l2_code"])].append(row)
+    for code in sorted(l1_groups):
+        _append_feature_domain_aggregate(
+            l1_groups[code],
+            level="L1",
+            aggregates=l1_aggregates,
+            unavailable=unavailable,
+            contributor_eligibility=contributor_eligibility,
+        )
+    for code in sorted(l2_groups):
+        rows = l2_groups[code]
+        for row in rows:
+            row["l1_code"] = row["l2_code"]
+            row["l1_name"] = row["l2_name"]
+        _append_feature_domain_aggregate(
+            rows,
+            level="L2",
+            aggregates=l2_aggregates,
+            unavailable=unavailable,
+            contributor_eligibility=contributor_eligibility,
+        )
+
+
 def _build_train_only_contributor_eligibility(
     *,
     spans: Mapping[str, Sequence[tuple[date, date]]],
@@ -1426,29 +1461,13 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
             for symbol, value in current_basic_updates:
                 circ_state[symbol] = (day, value)
-            l1_sorted = sorted(day_rows, key=lambda row: (str(row["l1_code"]), str(row["symbol"]), str(row["l2_code"])))
-            for _, group in itertools.groupby(l1_sorted, key=lambda row: str(row["l1_code"])):
-                _append_feature_domain_aggregate(
-                    list(group),
-                    level="L1",
-                    aggregates=l1_aggregates,
-                    unavailable=unavailable,
-                    contributor_eligibility=contributor_eligibility,
-                )
-            l2_rows: list[dict[str, Any]] = []
-            for row in sorted(day_rows, key=lambda item: (str(item["l2_code"]), str(item["symbol"]))):
-                projected = dict(row)
-                projected["l1_code"] = row["l2_code"]
-                projected["l1_name"] = row["l2_name"]
-                l2_rows.append(projected)
-            for _, group in itertools.groupby(l2_rows, key=lambda row: str(row["l1_code"])):
-                _append_feature_domain_aggregate(
-                    list(group),
-                    level="L2",
-                    aggregates=l2_aggregates,
-                    unavailable=unavailable,
-                    contributor_eligibility=contributor_eligibility,
-                )
+            _append_day_level_aggregates(
+                day_rows,
+                l1_aggregates=l1_aggregates,
+                l2_aggregates=l2_aggregates,
+                unavailable=unavailable,
+                contributor_eligibility=contributor_eligibility,
+            )
     interval_evidence = {
         "industry": [
             {

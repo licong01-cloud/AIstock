@@ -621,6 +621,57 @@ def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
     assert len(labels.reads) <= 12
 
 
+def test_day_level_grouping_preserves_symbol_order_and_projects_only_l2_after_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000001.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2B",
+            "l2_name": "B2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000002.SZ",
+            "l1_code": "L1A",
+            "l1_name": "A",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000003.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+    ]
+    observed: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def capture(group, *, level, **_kwargs):
+        observed.append((level, [(str(row["symbol"]), str(row["l1_code"])) for row in group]))
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._append_day_level_aggregates(
+        rows,
+        l1_aggregates=[],
+        l2_aggregates=[],
+        unavailable={},
+        contributor_eligibility={},
+    )
+
+    assert observed == [
+        ("L1", [("000002.SZ", "L1A")]),
+        ("L1", [("000001.SZ", "L1B"), ("000003.SZ", "L1B")]),
+        ("L2", [("000002.SZ", "L2A"), ("000003.SZ", "L2A")]),
+        ("L2", [("000001.SZ", "L2B")]),
+    ]
+
+
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
