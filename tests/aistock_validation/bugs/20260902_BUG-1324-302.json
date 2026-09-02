@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1324",
-  "closed_at": null,
+  "closed_at": "2026-09-02T17:04:39.943063Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -128,10 +128,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1324/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1324",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "8a15f1dae00e06aed02bb4787d12192e5374d6e6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-02T17:03:47.940272Z",
+      "mode": "read_only",
+      "observed_identity": "c65bc15747f440c93b1ab1232be8af819b57ad68",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "413f60cb12476db895093c6e5c3b148013ee5f9930d6921dcfa3fe2d9db41a87",
+      "receipt_sha256": "7a2b8f196002325e6f5d1c4a9938a786402aa6397f99bcbbce80c1374ee8702f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1b66d2f49c0e43a0b0b732410afa78987d170be22f2acecb4630d6af54c7e6b8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -163,7 +185,7 @@
     ],
     "validation_evidence_digest": "4f6b95eed9d6d0e04dc245f146610f8efd221d8b7d9c1dc6475d191278328139"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
