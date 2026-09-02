@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.21
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.22
 
 > 初始日期：2026-07-10
 > 修订日期：2026-09-02
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0_FAMILY_FROZEN_N1_N2_DIAGNOSTICS_COMPLETE_N3_UPSTREAM_ALPHA_MVE_SOURCE_IMPLEMENTED_FORMAL_RUN_PENDING`
+> 当前状态：`P0_FAMILY_FROZEN_N1_N2_COMPLETE_N3_UPSTREAM_ALPHA_MVE_FORMAL_COMPLETE_NO_STANDALONE_CANDIDATE_INFORMATION_SET_REVIEW`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
-> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A和N0控制面均已进入`main`。N1 bundle `74827d03...`、N2-A bundle `6784df1a...`、N2-B v2 bundle `bcdcb31d...`、Entry/Exit action bundle `5c5946a7...`及Exit fixed-information learnability bundle `03d17a18...`均已完成且仅为开发窗口诊断；Exit源码PR #4181及读取公开inspect合同修复PR #4183已合入。N3 QE上游Alpha MVE的F2设计、24个声明式proposal、PIT evaluator、统计frontier、immutable bundle/registry/route和CLI已在最新main派生worktree实现，正式实验必须等待本源码合入后从clean merge SHA冻结request。生产descriptor仍指向P0-D exact bundle；N1/N2/N3研究均不修改baseline、Selection或运行时
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A和N0控制面均已进入`main`。N1 bundle `74827d03...`、N2-A bundle `6784df1a...`、N2-B v2 bundle `bcdcb31d...`、Entry/Exit action bundle `5c5946a7...`及Exit fixed-information learnability bundle `03d17a18...`均已完成且仅为开发窗口诊断。N3 QE上游Alpha MVE源码PR #4187已合入merge commit `dc3ace36...`；从该clean merge SHA运行的正式bundle为`09137f0c...`，24个proposal全部评价、selected=0、exact retry为registry/route no-op。生产descriptor仍指向P0-D exact bundle；N1/N2/N3研究均不修改baseline、Selection或运行时
 > P0-J权威结果：正式request `advselpriorresreq_3a50e2f6fd9cf43cb1f6ad3e`在首条outer path的inner block 3形成完全平坦的decreasing-isotonic prior，按预登记条件以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`停止；evidence-only bundle为`eb8ade9b...`，exact retry返回同identity，零trial、无winner/PBO/Stage B。该结果证明rank-to-return单调关系跨时间分区不稳定，不证明Selection全局无效
 > P0-K权威结果：源码、PR/CI、合入和正式 Stage A 均已完成。request `advselgatereq_943f9e551d5fee35e57340cc`完成`168/168`，bundle为`fee9b561...`，结果`NEGATIVE_STOP_NOT_ADVANCED`且未激活。168条trial全部选择`0.4`、拒绝数均为0，策略与Selection恒等；liability日Spearman约`0.254589`，但约束选择器没有让信号进入决策。`PBO=1.0`来自六个arm的block分数完全相同和固定tie-break，不按普通过拟合解释
 > P0-L权威结果：BUG-1251修复后的正式request `advp0lreq_b86425d3b5ce508904fa01b0`生成evidence-only bundle `4476afeb...`。第一条outer path的identity control精确复现P0-G但无真实干预；gain `12/8/4/1`分别产生`33/71/85/85`次实际entry变化并把OOF换手从`0.276692`降至`0.272180/0.272180/0.269173/0.269173`，均低于P0-D预算`0.299248`，但cash day从`1`增至`2`、active-slot coverage从`0.999248`降至`0.998496/0.997744`，不满足冻结完整性合同，以`ADVISORY_P0L_LOCAL_RERANK_INFEASIBLE`在`0/168`停止。结果为`NEGATIVE_STOP_INCOMPLETE_CPCV`，无winner、无可计算PBO、无Stage B、无激活；exact retry返回同一bundle identity
@@ -17,7 +17,8 @@
 > N2-A权威结果：正式request `advalpha3req_e7295a31a4e1953e9048cec5`、bundle `6784df1a...`覆盖386日和1,710,301条共同signal outcome；父包与N1 ranking精确parity。LSTM/FUND/父包RankIC分别为`0.11677/0.05628/0.12284`，Top5 H20净超额均值为`397.89/245.73/446.52 bps`。父包相对FUND的RankIC与Top5增量区间均大于0，但相对LSTM的RankIC增量`+0.00607`区间`[-0.00223,0.01484]`、Top5增量`+48.63 bps`区间`[-103.99,186.53]`均跨0；现有Alpha主要由LSTM贡献，FUND较弱但不同源，固定IC组合尚无确认性证据优于LSTM。父包Top50召回虽为随机期望`1.75×`，绝对值仍仅`1.7617%`。结果为0-trial `ORACLE_DIAGNOSTIC/NAVIGATION_ONLY`，sealed holdout未读，不支持调权、激活或生产替换
 > N2-B权威结果：v2 bundle `bcdcb31d...`在同一386日PIT/H20/cost窗口比较当前父包与两个合格独立旧包。当前父包RankIC `0.12284`、Top5净超额`446.52 bps`；`pkg_378eb9...`为`0.00107/166.32 bps`，`pkg_5a5ccb...`为`0.01124/101.88 bps`且Top5区间跨0。父包相对两包的RankIC与Top5配对增量下界均大于0；没有旧包可替换父包。当前父包Top50全市场赢家召回仍仅`1.7617%`、上界`2.5907%`，平均每日约`0.088`个全市场Top5赢家，显著低于预注册“一日至少一个赢家”的`20%`结构门槛
 > N2 Entry/Exit权威结果：Entry动态Q90具备干预支持但配对lift显著为负；固定3%/5%正point均因仅3至5个干预日而欠功效，没有confirmatory-positive arm。Exit clairvoyant oracle为`386.60 bps/episode`；固定22项T-visible Ridge learnability正式结果为`-56.81 bps/五槽entry-day`，95%区间`[-200.33,52.62]`、MDE `181.29`，1928 episode/384 entry-day支持充分但`INCONCLUSIVE/NAVIGATION_ONLY`，不能把oracle上限或liability信号当成可学Exit策略
-> 当前双轨目标：自然future OOS与H0同核执行优化继续独立运行；模型研究已完成N1和全部必要N2候选源、Entry与Exit诊断。综合路由唯一选择`N3_QE_UPSTREAM_ALPHA_MVE`：固定开发窗口执行6族×4 proposal轻量筛选，完整报告RankIC、Top5成本后增量、父包相关、churn、block/family-wise区间与DSR，只允许一次选择0或1个探索candidate。Entry/Exit转为以后扩信息集后的观察项，不并行训练；Alpha/排名与Risk-managed Advisory继续使用独立合同。动态资金仓位不在当前授权范围
+> N3上游Alpha MVE权威结果：request `advqemvereq_28ac7e998080dd2258cf4c23`、bundle `09137f0c...`在386日、1,709,387条current-parent outcome上完成`24/24/24`；elapsed `91.21s`、peak RSS `7.42GB`、temp `175.1MB`。24个单信号Top5相对父包lift全部为负且family-wise下界均不大于0，因此`selected=0`、next task=`N3_ALPHA_INFORMATION_SET_REVIEW`。同时有5个全窗口proposal和1个下行regime proposal的family-wise RankIC下界为正、父包相关均低于0.8；这不能改判本轮frontier，但说明“没有独立替换者”不等于“没有可组合弱信号”
+> 当前双轨目标：自然future OOS与H0同核执行优化继续独立运行；模型研究进入`N3_ALPHA_INFORMATION_SET_REVIEW`。下一研究lineage优先验证弱信号对当前父包的小权重增量overlay，而不是再次要求单信号独立替换父包；该overlay必须重新预注册、计入新trial、复用当前窗口时只可导航，失败后才转向分钟数据/腿间分歧/行为拥挤等信息集扩展。Entry/Exit不并行训练；Alpha/排名与Risk-managed Advisory继续使用独立合同。动态资金仓位不在当前授权范围
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -111,7 +112,7 @@ H0 的权威详细设计为
 | 多 Program 模型分发 | `DYNAMIC_BINDING_VERIFIED_ONE_P0D_PACKAGE` | active binding动态解析已完成；目标多Alpha Program绑定P0-D exact bundle `e555903e...`，单Alpha无bundle时基线继续且模型typed unavailable。P0-E至P0-L均未接入descriptor |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 | P0-D至P0-L研究族 | `FROZEN_NO_ACTIVATABLE_WINNER` | 同一P0-C开发数据/候选/feature schema/CORE家族上的九轮自适应研究已事实收敛；旧结果、合同和消费窗口不改写，不派生P0-M |
-| 新模型演进路线 | `N1_N2_DIAGNOSTICS_COMPLETE_N3_UPSTREAM_ALPHA_MVE_IMPLEMENTED_FORMAL_PENDING` | N0、N1、N2-A、N2-B v2、Entry/Exit oracle及Exit fixed-information learnability均已完成；N2-B证明两个合格旧包显著弱于当前父包，Entry无confirmatory-positive arm，Exit固定信息集未确认可学。Top50赢家召回上界仍仅约`2.59%`，低于`20%`结构门槛，唯一N3路线为QE上游Alpha MVE。源码已实现固定24 proposal筛选与不可变交付，待合入后从clean merge SHA运行；不激活、不改权重、不读sealed holdout |
+| 新模型演进路线 | `N1_N2_COMPLETE_N3_ALPHA_MVE_COMPLETE_INFORMATION_SET_REVIEW` | N0/N1/N2均完成；N3正式24-proposal筛选`selected=0`，没有单信号可独立替换父包。6个proposal仍显示family-wise正RankIC且父包相关低，下一lineage先验证小权重父包overlay的边际增量；若新lineage仍无增量，再扩分钟/分歧/行为拥挤信息集。不激活、不改生产权重、不读sealed holdout |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
 
@@ -129,7 +130,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow，M4继续提供价格范围而非选股alpha |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `N0 COMPLETE / N1 COMPLETE / N2 COMPLETE / N3 SOURCE IMPLEMENTED` | N2全部诊断均为不可激活的开发窗口证据，已完成分流；N3固定24-trial `EXPLORATORY_SCREEN/NAVIGATION_ONLY`实现已通过direct PIT/frontier/bundle测试。正式bundle、registry追加和结果结论仍待合入后运行，不能提前声称candidate或收益 |
+| 新路线实现状态 | `N0 COMPLETE / N1 COMPLETE / N2 COMPLETE / N3 FORMAL COMPLETE SELECTED 0` | N3 bundle `09137f0c...` inspect与exact retry通过，registry total=22，route为`N3_ALPHA_INFORMATION_SET_REVIEW`；没有模型、因子库、StrategyPackage、Selection或runtime激活 |
 
 PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`；P0-D PR #3368 已于 2026-08-13 合入 `458199cd902323e006ac23d3767c908637068fa8`，后续通过descriptor rotation作为experimental shadow接入。P0-L源码PR #3959、BUG-1251修复PR #3967和close-sync PR #3969均已合入；P0-E至P0-L均未激活，M4 v1 price-range binding保持不变。源码合入、descriptor接入、运行时加载、模型激活和自然OOS成熟继续分别报告。
 
@@ -1028,7 +1029,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 优先级：`AFTER_N1_AND_REQUIRED_N2_DIAGNOSTICS`。
 
-状态：`ROUTE_FROZEN_QE_UPSTREAM_ALPHA_MVE_SOURCE_IMPLEMENTED_FORMAL_RUN_PENDING`。
+状态：`FORMAL_COMPLETE_NO_STANDALONE_CANDIDATE_INFORMATION_SET_REVIEW`。
 
 - Top40/50赢家召回或候选流不足：进入QE/StrategyPackage上游alpha MVE。
 - 召回充足且Top20理论、learnability均高：进入包含新信息的Top20 ranker；禁止继续P0同信息集loss/model轮换。
@@ -1040,6 +1041,12 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 当前分流事实：Top50全市场赢家召回95%上界约`2.59%`，远低于预注册`20%`门槛；N1 ranker `direction_ready=false`，Entry无confirmatory-positive arm，Exit固定信息集未确认可学。因此只启动`N3_QE_UPSTREAM_ALPHA_MVE`，Entry/Exit不作为并行模型线。
 
 N3首批是固定6族×4 proposal、总计24次的轻量探索屏：声明式AST只消费Qlib daily与冻结`static_factors.parquet`的T-visible字段，目标使用N2-B `CURRENT_IC_PARENT`共同窗口H20成本后outcome；所有same-date rank/zscore只在当日canonical PIT成员内计算，窗口并集中的非成员必须mask。每个proposal报告RankIC、Top5净超额、相对父包Top5 lift、coverage、churn、父包相关、20日block 95%区间、24-trial family-wise区间和DSR；只有全部预注册门槛满足时一次选择0或1个candidate。结果始终为`EXPLORATORY_SCREEN/NAVIGATION_ONLY`，不写因子库、不生成StrategyPackage、不激活运行时。
+
+正式结果：request `advqemvereq_28ac7e998080dd2258cf4c23`绑定`main@dc3ace36...`、N1/N2 receipts、119,953,459-byte outcome hash和2,182,434,551-byte static hash；bundle `09137f0c...`完成24个proposal，registry由21增至22。所有proposal的family-wise Top5 lift下界均不大于0，故本轮frontier按合同一次选择0个candidate；exact retry复用相同bundle、registry duplicate-noop、route exact-noop。该结论关闭的是“本批单信号独立替换父包”假设，不关闭弱信号组合或新信息集方向。
+
+信息集审查：`N3_CROWDING_DISPERSION_01/03/04`、`N3_SECTOR_RELATIVE_04`、`N3_PRICE_VOLUME_BEHAVIOR_02`在完整386日的family-wise RankIC下界为正；`N3_REGIME_CONDITIONED_02`在158个下行有效日亦为正但不满足全窗口382日门槛。它们与父包的平均同日Spearman绝对值均低于0.23。下一新lineage可以把这6项作为已消费探索结果选出的固定候选，使用父包回退的小权重overlay测试边际价值；不得回写本轮selected=0，不得把同窗overlay当确认或激活证据。
+
+下一lineage的最小边界：每个候选只允许4个预冻结非零权重，总计24 trial；组合在同日先把父包和候选都转为canonical PIT成员rank，候选缺失/非激活regime时精确回退父包，不形成现金或仓位。主判据是相对父包的paired Top5成本后lift与RankIC delta的24-trial family-wise下界；如果仍没有candidate，立即转入信息集扩展，不继续权重网格、反向符号或结果后挑子窗口。
 
 ### N4：信号组合、重训窗口与prospective activation
 
@@ -1278,7 +1285,7 @@ N3首批是固定6族×4 proposal、总计24次的轻量探索屏：声明式AST
 | F-170 | P0-K contracts/training/pipeline/bundle/request+WSL CLI；F2 detailed design | `backend/tests/advisory_model_first/test_selection_liability_gate_contracts.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/advancement_receipt.json` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
 | F-171 | P0-L F2 design；contracts/training/pipeline/bundle/request+WSL CLI；BUG-1251 date-role fix；formal Stage A | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_contracts.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py`; artifact `4476afeb...`记录非零local-rerank降低换手但违反冻结coverage/cash完整性、无winner/PBO/Stage B；PR #3959/#3967/#3969 | STAGE_A_INCOMPLETE_STOP_VERIFIED_NOT_ACTIVATED | none |
 | F-172 | §0、§6.1、§9 P0研究族冻结 | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py`; `backend/tests/advisory_model_first/test_research_control_cli.py`; formal route SHA256 `1b8164ce...` | FORMAL_ROUTE_VERIFIED_FAMILY_FROZEN | none |
-| F-173 | §5.3决策栈；§9 N2/N3单主线规则 | N1/N2 formal receipts；`test_qe_alpha_mve_contracts.py` route gate | N3_UPSTREAM_ALPHA_SINGLE_ROUTE_VERIFIED_SOURCE_FORMAL_PENDING | activation remains future scope |
+| F-173 | §5.3决策栈；§9 N2/N3单主线规则 | N1/N2 formal receipts；N3 bundle `09137f0c...` route | N3_ALPHA_MVE_COMPLETE_INFORMATION_SET_REVIEW | activation remains future scope |
 | F-174 | `AdvisoryObjectiveContractV1`；§5.3、§7.2 | target: `backend/tests/advisory_model_first/test_objective_contracts.py`; UI/API objective-label test | DESIGN_READY_NOT_IMPLEMENTED | approved_by_user: contract implementation and contract-specific activation/display remain future work |
 | F-175 | `AdvisoryResearchTrialRegistryV1`；§4.1.2、§9 N0 | `backend/tests/advisory_model_first/test_research_trial_registry.py`; `backend/tests/advisory_model_first/test_research_control_cli.py`; formal registry SHA256 `8d7ae5cd...` | IMPLEMENTED_FORMAL_VERIFIED | none |
 | F-176 | §4.1.2 parent prediction extension；§9 N0 | `backend/tests/advisory_model_first/test_parent_prediction_extension.py`; formal N0 completion `9b460c29...` | IMPLEMENTED_FORMAL_VERIFIED | none |
@@ -1291,7 +1298,7 @@ N3首批是固定6族×4 proposal、总计24次的轻量探索屏：声明式AST
 | F-183 | `AdvisoryIncrementalValueLabelV1`；`incremental_value_labels.py`；§6.7/§6.8 | N2 Entry/Exit labels、policy/cost/simulator hash与formal receipts | IMPLEMENTED_FORMAL_N2_LABEL_VERIFIED | none |
 | F-184 | `AdvisoryEntryGuardDecisionV1`；`entry_guard_decision.py`；§6.7 | action bundle `5c5946a7...`；固定/dynamic/cash/replacement paired结果 | FORMAL_ENTRY_COMPLETE_NO_CONFIRMATORY_POSITIVE_ARM | none |
 | F-185 | `AdvisoryExitDecisionV1`；`exit_label_oracle.py`；fixed learnability；§6.8 | action bundle `5c5946a7...`; learnability bundle `03d17a18...` | FORMAL_EXIT_ORACLE_HIGH_FIXED_INFORMATION_INCONCLUSIVE | no Exit candidate activated |
-| F-186 | §6.9、§9 QE preparation与N3 upstream MVE | preparation `advqeprep_7d28...`; `test_qe_alpha_mve_contracts.py`; `test_qe_alpha_mve_pipeline.py`; `test_qe_alpha_mve_delivery.py` | N3_SOURCE_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RUN_PENDING | no factor catalog or runtime write |
+| F-186 | §6.9、§9 QE preparation与N3 upstream MVE | preparation `advqeprep_7d28...`; bundle `09137f0c...`; direct/full/L0/F2 receipts | N3_FORMAL_COMPLETE_SELECTED_ZERO | no factor catalog or runtime write |
 | F-187 | §6.9 signal admission/combination | `backend/tests/test_multi_alpha_orthogonality.py`; `backend/tests/test_multi_alpha_combine_backtest.py`; target role/seed stability and attribution-overlap tests | DESIGN_READY_NOT_IMPLEMENTED | approved_by_user: no P0 signal is admitted automatically; role/seed/economic-attribution evidence waits for N4 |
 | F-188 | §4.1.2、§6.10 evidence levels；N2 builder historical-only gate | `backend/tests/advisory_model_first/test_evidence_level_boundaries.py`; `backend/tests/advisory_model_first/test_incremental_value_labels.py`; forward observation maturity tests pending | IMPLEMENTED_CONTRACT_LOCAL_VERIFIED_SEALED_AND_PROSPECTIVE_RECEIPTS_PENDING | sealed holdout/prospective receipts不存在且不得回填；只有对应前向证据可支持激活 |
 | F-189 | §2、§3、§5.3 no-position boundary；Entry/Exit strict output contracts | `backend/tests/advisory_model_first/test_entry_guard_decision.py`; `backend/tests/advisory_model_first/test_exit_label_oracle.py` | IMPLEMENTED_LOCAL_VERIFIED_NO_POSITION_OUTPUT | fixed-slot cash only；dynamic position scope仍未授权 |
@@ -1473,17 +1480,17 @@ historical_batch_activation = separate user-confirmed action after source merge;
 
 ## 16. 当前下一步
 
-M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1及全部必要N2诊断现已完成：旧独立包不能替代父包，Entry没有confirmatory-positive arm，Exit fixed-information learnability未确认，而Top50全市场赢家召回上界仍只有约`2.59%`。因此唯一模型主线已经冻结为`N3_QE_UPSTREAM_ALPHA_MVE`，不再等待或重复N2，也不并行训练ranker、Entry或Exit。
+M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1、N2及N3首批上游Alpha MVE均已完成；N3没有单信号独立替换父包的candidate，但保留6个低父包相关、family-wise正RankIC的弱信号导航结果。当前不回选本轮frontier，进入`N3_ALPHA_INFORMATION_SET_REVIEW`并优先验证父包增量overlay这一明确的新假设。
 
 下一工作严格按以下顺序执行；自然前向、模型研究与H0历史执行互不冒充，模型研究最多一条主线和一条独立辅助线：
 
 1. **保持旧研究族与N2结论冻结（已持续满足）**：P0-D至P0-L保持负向/未激活；N1/N2 immutable bundle保持原结论。不得创建P0-M、放宽旧合同、替换旧包、回选Entry/Exit或把已消费窗口声称为新OOS。
-2. **完成N3源码合入（当前工程任务）**：对F2设计、24 proposal合同、PIT evaluator、family-wise统计、frontier、immutable bundle/registry/route和CLI执行多轮direct/full Advisory/L0/ownership/F2审核；全部通过后合入，不触发后端重启、DDL、descriptor、因子库或runtime变更。
-3. **从clean merge SHA冻结正式request**：绑定N1/N2-A/N2-B/Entry/Exit/Exit-learnability/QE-preparation、registry-before、Qlib/static schema与文件hash、N2-B outcome、repository commit；验证sealed=false、DB/network=false和唯一N3路由。
-4. **运行24-proposal正式N3 MVE**：单并发读取已消费开发窗口，计算完整score panel、日指标、block/family-wise区间和DSR；RSS 16GiB与temp 32GiB继续fail closed，墙钟只作telemetry。运行期间可每30分钟轻量检查，但不设置8/10小时自动停止门禁。
-5. **一次性交付与分流**：发布immutable bundle，append一条`24/24/24/0|1` registry记录并更新单页route；exact retry必须复用bundle且registry duplicate no-op。若无eligible proposal，下一步为`N3_ALPHA_INFORMATION_SET_REVIEW`；若有且仅有一个，则只进入其confirmation设计，不能回frontier重选。
-6. **确认后才组合**：只有N3 candidate在新lineage形成确认增量后，才执行原创性/已知效应重叠、种子稳定性、残差正交、LOO、成本后组合、重训窗口对照和prospective activation；探索结果本身不能写因子库或进入StrategyPackage。
+2. **N3首批上游Alpha MVE（已完成）**：源码PR #4187与正式bundle `09137f0c...`均闭合；`24/24/24/0`、registry total=22、sealed/runtime/catalog均为false。selected=0不得回选或放宽。
+3. **父包增量overlay详细设计（当前主任务）**：创建新hypothesis lineage，固定上述6个弱信号和每项4个非零小权重，总计24 trial；候选缺失/非激活regime时回退父包。冻结父包、PIT、H20 outcome、成本、窗口和一次选点规则，不新增通用组合平台。
+4. **父包增量overlay探索MVE**：在同一已消费development window只产生`EXPLORATORY_SCREEN/NAVIGATION_ONLY`证据；主报告paired RankIC delta、Top5成本后lift、churn、父包相关及24-trial family-wise区间。任一正结果都不能直接确认或激活。
+5. **按overlay结果单次分流**：若0 candidate，转向分钟数据、腿间预测分歧、横截面行为/拥挤和regime信息集扩展，并优先建立自动alpha生成MVE；若有1 candidate，只为该固定overlay设计新窗口confirmation，不回到本窗口重选权重或信号。
+6. **确认后才进入正式组合与激活**：只有新lineage在独立证据上形成确认增量后，才执行原创性/已知效应重叠、种子稳定性、残差正交、LOO、成本后组合、重训窗口对照和prospective activation；探索结果本身不能写因子库或进入StrategyPackage。
 7. **继续自然前向与H0**：自然observation/outcome按交易日形成且不回填；H0在独立revision按冻结v6完成同核、未来毒化、恢复和性能验收，但不决定模型方向。
 8. **只修阻碍演进的正确性BUG**：不恢复历史证据固化、归档、通用平台或旧任务清理。P1-A、P1-B和LONG_TREND仍按各自真实输入条件启动。
 
-当前无需等待动态资金仓位授权即可执行N3固定24-proposal探索；只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。N3源码和实验均不需要后端重启或DDL；如未来任务产生这些操作，仍须由用户执行或另行授权。继续禁止未授权历史补账/归档、旧batch/root清理、通用缓存/调度/ModelOps、角色审批和额外门禁。Historical Range仅按H0详细设计执行已授权验证优化。
+当前无需等待动态资金仓位授权即可执行固定分数overlay探索；这里的“权重”仅是两个rank score的研究组合系数，不是资金权重、仓位或交易输入。只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。后续源码和实验均不需要后端重启或DDL；如未来任务产生这些操作，仍须由用户执行或另行授权。继续禁止未授权历史补账/归档、旧batch/root清理、通用缓存/调度/ModelOps、角色审批和额外门禁。Historical Range仅按H0详细设计执行已授权验证优化。

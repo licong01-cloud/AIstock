@@ -1,7 +1,7 @@
-# AIstock Advisory N3 QE 上游 Alpha MVE F2 详细设计 v1.1
+# AIstock Advisory N3 QE 上游 Alpha MVE F2 详细设计 v1.2
 
 > 日期：2026-09-02
-> 状态：`IMPLEMENTED_PR_READY`
+> 状态：`FORMAL_COMPLETE_NO_STANDALONE_CANDIDATE`
 > tier：F2
 > objective contract：`ALPHA_RANKING`
 > study type：`EXPLORATORY_SCREEN`
@@ -26,6 +26,16 @@
 4. 逐 proposal 输出完整日 RankIC、Top5 成本后净超额、相对父包 Top5 lift、coverage、churn、父包相关、95% block CI 和 24-trial family-wise 区间。
 5. 按预注册的一次性 frontier 规则选择 0 或 1 个 exploratory candidate；结果只导航到后续 confirmation 设计，不形成模型、StrategyPackage、Selection 或运行时激活。
 6. 发布 immutable bundle，append 一条 24-trial registry record，并把单页 route 更新为 N3 上游主线。
+
+## 2.1 Formal result / 完成事实
+
+- source PR：#4187；merge commit：`dc3ace36e3fbce80c7a0aa4438c111a3722ac2db`。
+- request：`advqemvereq_28ac7e998080dd2258cf4c23`；request SHA256：`28ac7e998080dd2258cf4c23485efca2229b3797c37fe05174cb7911fef66da1`。
+- immutable bundle：`09137f0c46c1fc3c40798e7ab63df0c0374cd11f65f75b7046cc9f939f099803`；inspect=`VALID`；exact retry复用同一bundle，registry duplicate-noop、route exact-noop。
+- coverage：386个decision day、1,709,387条`CURRENT_IC_PARENT/outcome_known=true`；trial=`24/24/24/0`。
+- resource：elapsed `91.205s`；peak RSS `7,422,263,296` bytes；temp `175,060,647` bytes；wall time仅遥测。
+- result：24个proposal的family-wise Top5 lift下界均不大于0，因此按预注册frontier选择0个candidate；next task=`N3_ALPHA_INFORMATION_SET_REVIEW`。
+- navigation signal：5个完整窗口proposal和1个下行regime proposal的family-wise RankIC下界为正且父包相关低于0.8。它们不能改判本轮selected=0，但为新lineage的父包小权重overlay提供导航依据；同窗overlay仍不得作为confirmation或activation evidence。
 
 ## 3. Non-goals
 
@@ -240,12 +250,12 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | F-839 | `prepare_qe_alpha_mve_request`; `FrozenAdvisoryQEAlphaMVERequestV1` | `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_mve_delivery.py` | PASS | none |
 | F-840 | `build_default_proposals`; `validate_expression`; `compile_proposal_scores` | `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | PASS | none |
 | F-841 | `_trailing_operation`; `compile_proposal_scores` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py` | PASS | none |
-| F-842 | `_load_verified_sources`; `build_source_panel`; `_normalize_outcomes` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py`; frozen N1/N2/static-schema preflight receipt in task log | PASS | none |
-| F-843 | `_evaluate_one_proposal_daily`; `_summarize_one_proposal` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py` | PASS | none |
-| F-844 | `_moving_block_interval`; `_deflated_sharpe_diagnostic` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py` | PASS | none |
-| F-845 | `evaluate_proposals` frontier receipt | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py` | PASS | none |
-| F-846 | `_publish_bundle`; `_read_bundle`; `_deliver_bundle`; CLI | `backend/tests/advisory_model_first/test_qe_alpha_mve_delivery.py` | PASS | none |
-| F-847 | literal request/receipt/manifest/route gates | `backend/tests/advisory_model_first/test_qe_alpha_mve_delivery.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_upstream_alpha_mve_f2_detailed_design_20260902.md --tier F2` | PASS | none |
+| F-842 | `_load_verified_sources`; `build_source_panel`; `_normalize_outcomes` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py`; artifact `09137f0c.../source_identity_receipt.json` | FORMAL_PASS | none |
+| F-843 | `_evaluate_one_proposal_daily`; `_summarize_one_proposal` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py`; artifact `09137f0c.../proposal_summary.json` | FORMAL_PASS | none |
+| F-844 | `_moving_block_interval`; `_deflated_sharpe_diagnostic` | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py`; artifact `09137f0c.../proposal_summary.json` | FORMAL_PASS | none |
+| F-845 | `evaluate_proposals` frontier receipt | `backend/tests/advisory_model_first/test_qe_alpha_mve_pipeline.py`; artifact `09137f0c.../frontier_receipt.json` selected=0 | FORMAL_PASS | none |
+| F-846 | `_publish_bundle`; `_read_bundle`; `_deliver_bundle`; CLI | `backend/tests/advisory_model_first/test_qe_alpha_mve_delivery.py`; bundle `09137f0c...`; registry total=22；exact retry no-op | FORMAL_PASS | none |
+| F-847 | literal request/receipt/manifest/route gates | `backend/tests/advisory_model_first/test_qe_alpha_mve_delivery.py`; bundle `09137f0c.../manifest.json`; route `N3_ALPHA_INFORMATION_SET_REVIEW` | FORMAL_PASS | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
