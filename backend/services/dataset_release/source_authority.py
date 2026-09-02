@@ -84,6 +84,7 @@ SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1
 MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED = False
 MAX_SOURCE_STAGE_ARTIFACT_BYTES = 64 * 1024 * 1024
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
+_POSTGRES_IDENTIFIER = re.compile(r"^[_a-z][_a-z0-9]*$")
 _STOCK_CODE = re.compile(r"^[0-9]{6}\.(?:SH|SZ)$")
 POSTGRES_NUMERIC_NON_FINITE_MARKERS = ("NaN", "Infinity", "-Infinity")
 STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS = frozenset({"pre_close", "up_limit", "down_limit"})
@@ -210,6 +211,8 @@ class SourceQuerySpec:
     date_expression: str | None
     start_policy: str
     query_version: str
+    date_range_policy: str = "inclusive_date"
+    order_by_source_keys: bool = False
     audit_non_null_value_columns: tuple[str, ...] = ()
     audit_dataset: str | None = None
     audit_eligible_sources: tuple[str, ...] = ()
@@ -248,6 +251,14 @@ class SourceQuerySpec:
             raise ValueError("source query start policy is invalid")
         if self.start_policy == "timeless" and self.date_expression is not None:
             raise ValueError("timeless query cannot carry a date expression")
+        if self.date_range_policy not in {"inclusive_date", "timestamp_day_half_open"}:
+            raise ValueError("source query date-range policy is invalid")
+        if self.date_range_policy == "timestamp_day_half_open" and (
+            self.start_policy != "minute" or self.date_expression is None
+        ):
+            raise ValueError("timestamp day bounds require a dated minute source")
+        if self.start_policy == "timeless" and self.date_range_policy != "inclusive_date":
+            raise ValueError("timeless query cannot carry a date-range policy")
         if (self.audit_dataset is None) != (not self.audit_eligible_sources):
             raise ValueError("dated source audit dataset and eligible sources must be specified together")
         if self.date_expression is None and self.audit_dataset is not None:
@@ -268,9 +279,64 @@ class SourceQuerySpec:
         return f"{self.schema_name}.{self.table_name}"
 
     @property
-    def sql(self) -> str:
+    def order_sql(self) -> str:
+        if self.order_by_source_keys:
+            return "ORDER BY " + ",".join(f"source_row.{column}" for column in self.key_columns)
+        return "ORDER BY row_key, row_payload"
+
+    def _generic_select_sql(
+        self,
+        *,
+        table_identity: str | None = None,
+        include_order_columns: bool = False,
+    ) -> str:
         alias = "source_row"
         key = ",".join(f"{alias}.{column}" for column in self.key_columns)
+        projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
+        payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
+        clauses: list[str] = []
+        if self.date_expression is not None:
+            if self.date_range_policy == "timestamp_day_half_open":
+                clauses.extend(
+                    (
+                        f"{self.date_expression} >= %(start)s::date",
+                        f"{self.date_expression} < (%(end)s::date + interval '1 day')",
+                    )
+                )
+            else:
+                clauses.extend(
+                    (
+                        f"{self.date_expression} >= %(start)s",
+                        f"{self.date_expression} <= %(end)s",
+                    )
+                )
+        if self.code_column is not None:
+            clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
+        if self.code_policy == "profile_index_codes":
+            clauses.append(
+                f"{self.date_expression} >= "
+                f"(%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
+            )
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        source_order = ""
+        if include_order_columns:
+            source_order = "".join(
+                f",{alias}.{column} AS __source_order_{index}"
+                for index, column in enumerate(self.key_columns)
+            )
+        return (
+            "SELECT jsonb_build_array("
+            + key
+            + ")::text AS row_key, ("
+            + payload
+            + ")::text AS row_payload"
+            + source_order
+            + f" FROM {table_identity or self.table_identity} AS {alias}{where}"
+        )
+
+    @property
+    def sql(self) -> str:
+        alias = "source_row"
         projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
         payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
         if self.query_id == "bak_basic":
@@ -301,38 +367,18 @@ class SourceQuerySpec:
                 "AND source_row.cal_date <= %(end)s "
                 "AND source_row.is_trading = TRUE ORDER BY row_key,row_payload"
             )
-        clauses: list[str] = []
-        if self.date_expression is not None:
-            clauses.extend(
-                (
-                    f"{self.date_expression} >= %(start)s",
-                    f"{self.date_expression} <= %(end)s",
-                )
-            )
-        if self.code_column is not None:
-            clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
-        if self.code_policy == "profile_index_codes":
-            clauses.append(
-                f"{self.date_expression} >= "
-                f"(%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
-            )
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        return (
-            "SELECT jsonb_build_array("
-            + key
-            + ")::text AS row_key, ("
-            + payload
-            + ")::text AS row_payload "
-            + f"FROM {self.table_identity} AS {alias}{where} "
-            + "ORDER BY row_key, row_payload"
-        )
+        return self._generic_select_sql() + " " + self.order_sql
 
     @property
     def fingerprint_sql(self) -> str:
         """Bounded-result MVCC revision fingerprint over the exact row query."""
 
         sql = self.sql.strip()
-        for suffix in (" ORDER BY row_key,row_payload", " ORDER BY row_key, row_payload"):
+        for suffix in (
+            " " + self.order_sql,
+            " ORDER BY row_key,row_payload",
+            " ORDER BY row_key, row_payload",
+        ):
             if sql.endswith(suffix):
                 sql = sql[: -len(suffix)]
                 break
@@ -368,6 +414,8 @@ def _query(
     *,
     values: Sequence[str],
     date_expression: str | None = None,
+    date_range_policy: str = "inclusive_date",
+    order_by_source_keys: bool = False,
     start_policy: str = "daily",
     required: Sequence[str] = (),
     non_null_values: Sequence[str] = (),
@@ -404,6 +452,8 @@ def _query(
         ),
         date_expression=date_expression,
         start_policy=start_policy,
+        date_range_policy=date_range_policy,
+        order_by_source_keys=order_by_source_keys,
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
             + (":derived_l2_v1" if derived_values else "")
@@ -609,7 +659,9 @@ _QUERY_SPECS = (
         ("ts_code", "trade_time", "freq"),
         values=_OHLCV_RAW_VALUES,
         non_null_values=_OHLCV_RAW_VALUES,
-        date_expression="source_row.trade_time::date",
+        date_expression="source_row.trade_time",
+        date_range_policy="timestamp_day_half_open",
+        order_by_source_keys=True,
         start_policy="minute",
         audit_dataset="kline_minute_raw",
         audit_eligible_sources=("physical_audit_seed", "script", "tdx_api"),
@@ -796,6 +848,51 @@ SELECT column_name,data_type,udt_name
 FROM information_schema.columns
 WHERE table_schema = %(schema_name)s AND table_name = %(table_name)s
 ORDER BY ordinal_position
+"""
+
+_MINUTE_CHUNK_TARGETS_SQL = """
+WITH target_hypertable AS (
+    SELECT id
+    FROM _timescaledb_catalog.hypertable
+    WHERE schema_name = 'market' AND table_name = 'kline_minute_raw'
+), code_hashes AS (
+    SELECT DISTINCT
+           _timescaledb_functions.get_partition_for_key(code::text)::bigint AS hash_value
+    FROM unnest(%(codes)s::text[]) AS code
+)
+SELECT DISTINCT chunk.schema_name,chunk.table_name
+FROM target_hypertable AS hypertable
+JOIN _timescaledb_catalog.chunk AS chunk
+  ON chunk.hypertable_id = hypertable.id AND NOT chunk.dropped
+JOIN _timescaledb_catalog.chunk_constraint AS time_constraint
+  ON time_constraint.chunk_id = chunk.id
+JOIN _timescaledb_catalog.dimension_slice AS time_slice
+  ON time_slice.id = time_constraint.dimension_slice_id
+JOIN _timescaledb_catalog.dimension AS time_dimension
+  ON time_dimension.id = time_slice.dimension_id
+ AND time_dimension.hypertable_id = hypertable.id
+ AND time_dimension.column_name = 'trade_time'
+JOIN _timescaledb_catalog.chunk_constraint AS code_constraint
+  ON code_constraint.chunk_id = chunk.id
+JOIN _timescaledb_catalog.dimension_slice AS code_slice
+  ON code_slice.id = code_constraint.dimension_slice_id
+JOIN _timescaledb_catalog.dimension AS code_dimension
+  ON code_dimension.id = code_slice.dimension_id
+ AND code_dimension.hypertable_id = hypertable.id
+ AND code_dimension.column_name = 'ts_code'
+WHERE time_slice.range_start <
+      _timescaledb_functions.time_to_internal(
+          (%(end)s::date + interval '1 day')::timestamptz
+      )
+  AND time_slice.range_end >
+      _timescaledb_functions.time_to_internal(%(start)s::date::timestamptz)
+  AND EXISTS (
+      SELECT 1
+      FROM code_hashes
+      WHERE code_hashes.hash_value >= code_slice.range_start
+        AND code_hashes.hash_value < code_slice.range_end
+  )
+ORDER BY chunk.schema_name,chunk.table_name
 """
 
 _OFFICIAL_CUTOFF_SQL = """
@@ -1157,7 +1254,14 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
     ) -> Iterable[Mapping[str, Any]]:
         if not 1 <= int(fetch_rows) <= self.policy.validation_read_chunk_rows:
             raise ValueError("source stream fetch_rows is outside profile policy")
-        sql = _stream_sql(query_id)
+        sql = (
+            _targeted_minute_stream_sql(
+                _required_query_spec(query_id),
+                self._minute_chunk_relations(params),
+            )
+            if query_id == "kline_minute_raw"
+            else _stream_sql(query_id)
+        )
         connection = self._required_connection()
         try:
             cursor = connection.cursor(name=f"dataset_release_{uuid.uuid4().hex}")
@@ -1177,6 +1281,47 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                     yield _row_mapping(cursor, row)
         finally:
             cursor.close()
+
+    def _minute_chunk_relations(
+        self,
+        params: Mapping[str, Any],
+    ) -> tuple[tuple[str, str], ...]:
+        cursor = self._cursor()
+        try:
+            cursor.execute(_MINUTE_CHUNK_TARGETS_SQL, dict(params))
+            rows = tuple(cursor.fetchall())
+        except Exception as exc:
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog is unavailable",
+                context={"query_id": "kline_minute_raw"},
+            ) from exc
+        finally:
+            cursor.close()
+        if not rows:
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog returned no target relations",
+                context={"query_id": "kline_minute_raw"},
+            )
+        relations: list[tuple[str, str]] = []
+        for row in rows:
+            if len(row) != 2:
+                raise SourceConfigurationMissing(
+                    "Timescale minute chunk catalog returned an invalid row",
+                    context={"query_id": "kline_minute_raw"},
+                )
+            schema_name, table_name = (str(row[0]), str(row[1]))
+            if not _POSTGRES_IDENTIFIER.fullmatch(schema_name) or not _POSTGRES_IDENTIFIER.fullmatch(table_name):
+                raise SourceConfigurationMissing(
+                    "Timescale minute chunk catalog returned an invalid identifier",
+                    context={"query_id": "kline_minute_raw"},
+                )
+            relations.append((schema_name, table_name))
+        if relations != sorted(set(relations)):
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog relations are duplicated or unordered",
+                context={"query_id": "kline_minute_raw"},
+            )
+        return tuple(relations)
 
     def partition_fingerprint(
         self,
@@ -3996,6 +4141,43 @@ def _metadata_sql(query_id: str) -> str:
     if query_id == "pit_state":
         return _PIT_STATE_SQL
     raise SourceConfigurationMissing("metadata query id is not allowlisted", context={"query_id": query_id})
+
+
+def _targeted_minute_stream_sql(
+    query: SourceQuerySpec,
+    relations: Sequence[tuple[str, str]],
+) -> str:
+    if query.query_id != "kline_minute_raw" or not query.order_by_source_keys:
+        raise SourceConfigurationMissing(
+            "targeted minute stream requires the canonical minute query",
+            context={"query_id": query.query_id},
+        )
+    if not relations:
+        raise SourceConfigurationMissing(
+            "targeted minute stream requires at least one chunk relation",
+            context={"query_id": query.query_id},
+        )
+    branches: list[str] = []
+    for schema_name, table_name in relations:
+        if not _POSTGRES_IDENTIFIER.fullmatch(schema_name) or not _POSTGRES_IDENTIFIER.fullmatch(table_name):
+            raise SourceConfigurationMissing(
+                "targeted minute stream relation identifier is invalid",
+                context={"query_id": query.query_id},
+            )
+        table_identity = f'"{schema_name}"."{table_name}"'
+        branches.append(
+            query._generic_select_sql(
+                table_identity=table_identity,
+                include_order_columns=True,
+            )
+        )
+    order_columns = ",".join(f"__source_order_{index}" for index in range(len(query.key_columns)))
+    return (
+        "SELECT row_key,row_payload FROM ("
+        + " UNION ALL ".join(branches)
+        + ") AS targeted_source_rows ORDER BY "
+        + order_columns
+    )
 
 
 def _stream_sql(query_id: str) -> str:

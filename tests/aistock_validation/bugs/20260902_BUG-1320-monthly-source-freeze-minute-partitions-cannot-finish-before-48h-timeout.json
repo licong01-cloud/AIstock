@@ -1,6 +1,8 @@
 {
   "actual": "qe_hmm_full_v2 source freeze streams full market.kline_minute_raw history using 3-month x 1024 stable hash-bucket partitions. Live 2026-08-31 candidate run remained in the first 2024Q1 chunk after about nine hours (bucket about 717), projecting beyond the configured 48-hour source-freeze timeout. Related to BUG-1290 source-scan safety but distinct: this is deterministic completion-time failure. Fix must preserve canonical content/hash accuracy, fail-closed semantics, candidate-only isolation and bounded memory, while removing pathological repeated query overhead. Do not add resource or approval gates, do not change production data, and do not interrupt the active evidence run.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
     "tests/aistock_validation/bugs/20260902_BUG-1320-monthly-source-freeze-minute-partitions-cannot-finish-before-48h-timeout.json"
   ],
   "assigned_agent": null,
@@ -62,15 +64,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "BUG1320_FRESH_PROCESS_TARGETED_MINUTE_CHUNKS_OK: isolated Python imported the task worktree and read the production 2024Q1 six-symbol minute partition through PostgresSourceSnapshotSession; 85314 rows in 1.208 seconds, no database writes",
+      "BUG1320_FRESH_PROCESS_TARGETED_MINUTE_CHUNKS_OK: isolated Python imported the task worktree and read the production 2024Q1 six-symbol minute partition through PostgresSourceSnapshotSession; 85314 rows, sha256 parity 4fbde275db7bb104b6e3c7674294c05ef457375d9ab0fb892bfb4c80ce549a6b, 1.208 seconds, no database writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
