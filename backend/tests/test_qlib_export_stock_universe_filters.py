@@ -551,6 +551,48 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     assert calls[0]["allowed_bin_root"] == tmp_path / "bin"
 
 
+def test_daily_cli_forwards_resume_csv_to_exporter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Summary:
+        def __init__(self) -> None:
+            self.resumed_csv_files = 1
+
+    monkeypatch.setattr(
+        authoritative_cli,
+        "export_stock_daily_csv",
+        lambda **kwargs: calls.append(kwargs) or Summary(),
+    )
+
+    exit_code = authoritative_cli.main(
+        [
+            "--dataset",
+            "stock_daily",
+            "--stage",
+            "export",
+            "--snapshot-id",
+            "daily-candidate",
+            "--start",
+            "2026-08-01",
+            "--end",
+            "2026-08-31",
+            "--csv-root",
+            str(tmp_path / "csv"),
+            "--bin-root",
+            str(tmp_path / "bin"),
+            "--reports-dir",
+            str(tmp_path / "reports"),
+            "--resume-csv",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["resume_csv"] is True
+
+
 def test_canonical_pit_export_preflight_is_readonly_and_never_rebuilds() -> None:
     calls: list[str] = []
 
