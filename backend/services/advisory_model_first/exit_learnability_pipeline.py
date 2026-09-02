@@ -24,6 +24,7 @@ from backend.services.advisory_model_first.alpha_signal_audit_pipeline import (
     _git_dirty_paths as _cross_os_git_dirty_paths,
 )
 from backend.services.advisory_model_first.entry_exit_formal_contracts import (
+    AdvisoryN2ActionAuditReceiptV1,
     FrozenAdvisoryN2ActionAuditRequestV1,
 )
 from backend.services.advisory_model_first.entry_exit_formal_pipeline import (
@@ -107,16 +108,14 @@ def prepare_exit_learnability_request(
         action_request_path.read_text(encoding="utf-8")
     )
     action_inspection = inspect_n2_action_audit_bundle(action_bundle)
-    if action_inspection["request"].request_sha256 != action_request.request_sha256:
-        _raise(
-            "N2 action request/bundle identity mismatch",
-            "ADVISORY_EXIT_LEARNABILITY_SOURCE_IDENTITY_MISMATCH",
-        )
-    if action_inspection["receipt"].sealed_holdout_accessed or action_inspection["receipt"].deployable:
-        _raise(
-            "N2 action source is not a development-only diagnostic",
-            "ADVISORY_EXIT_LEARNABILITY_SOURCE_IDENTITY_MISMATCH",
-        )
+    action_receipt = AdvisoryN2ActionAuditReceiptV1.model_validate_json(
+        (action_bundle / "audit_receipt.json").read_text(encoding="utf-8")
+    )
+    _validate_action_source_summary(
+        action_request=action_request,
+        action_inspection=action_inspection,
+        action_receipt=action_receipt,
+    )
     n1_request_path = Path(action_request.n1_request_path).resolve()
     n1_bundle = Path(action_request.n1_bundle_path).resolve()
     n1_request = AdvisoryN1Tier1RequestV1.model_validate_json(n1_request_path.read_text(encoding="utf-8"))
@@ -859,6 +858,28 @@ def _build_episode_metadata(sources: Mapping[str, Any]) -> pd.DataFrame:
     return metadata
 
 
+def _validate_action_source_summary(
+    *,
+    action_request: FrozenAdvisoryN2ActionAuditRequestV1,
+    action_inspection: Mapping[str, Any],
+    action_receipt: AdvisoryN2ActionAuditReceiptV1,
+) -> None:
+    if (
+        action_inspection.get("status") != "VALID"
+        or action_inspection.get("request_sha256") != action_request.request_sha256
+        or action_inspection.get("receipt_sha256") != action_receipt.receipt_sha256
+        or action_receipt.request_sha256 != action_request.request_sha256
+        or action_inspection.get("sealed_holdout_accessed") is not False
+        or action_inspection.get("deployable") is not False
+        or action_receipt.sealed_holdout_accessed
+        or action_receipt.deployable
+    ):
+        _raise(
+            "N2 action request/bundle public inspection identity mismatch",
+            "ADVISORY_EXIT_LEARNABILITY_SOURCE_IDENTITY_MISMATCH",
+        )
+
+
 def _load_verified_sources(
     request: FrozenAdvisoryN2ExitLearnabilityRequestV1,
 ) -> dict[str, Any]:
@@ -886,17 +907,22 @@ def _load_verified_sources(
         Path(request.n2_action_request_path).read_text(encoding="utf-8")
     )
     action = inspect_n2_action_audit_bundle(request.n2_action_bundle_path)
+    action_receipt = AdvisoryN2ActionAuditReceiptV1.model_validate_json(
+        (Path(request.n2_action_bundle_path) / "audit_receipt.json").read_text(encoding="utf-8")
+    )
+    _validate_action_source_summary(
+        action_request=action_request,
+        action_inspection=action,
+        action_receipt=action_receipt,
+    )
     n1_request = AdvisoryN1Tier1RequestV1.model_validate_json(Path(request.n1_request_path).read_text(encoding="utf-8"))
     n1 = inspect_n1_bundle(request.n1_bundle_path)
     if (
-        action["request"].request_sha256 != action_request.request_sha256
-        or action_request.dataset_identity != request.dataset_identity
+        action_request.dataset_identity != request.dataset_identity
         or action_request.feature_schema_hash != request.parent_feature_schema_hash
         or action_request.shadow_policy_sha256 != request.shadow_policy_sha256
         or action_request.cost_policy_sha256 != request.cost_policy_sha256
         or action_request.exit_intervention_policy_sha256 != request.intervention_policy_sha256
-        or action["receipt"].sealed_holdout_accessed
-        or action["receipt"].deployable
         or n1["request_sha256"] != n1_request.request_sha256
         or n1_request.policy_dataset_bundle_id != request.dataset_identity
     ):
@@ -924,6 +950,7 @@ def _load_verified_sources(
     return {
         "action_request": action_request,
         "action_inspection": action,
+        "action_receipt": action_receipt,
         "n1_request": n1_request,
         "exit_labels": exit_labels,
         "exit_decisions": exit_decisions,
@@ -1105,7 +1132,7 @@ def _publish_bundle(
             "parent_feature_schema_hash": request.parent_feature_schema_hash,
             "feature_schema_hash": request.feature_schema_hash,
             "n2_action_request_sha256": sources["action_request"].request_sha256,
-            "n2_action_receipt_sha256": sources["action_inspection"]["receipt"].receipt_sha256,
+            "n2_action_receipt_sha256": sources["action_receipt"].receipt_sha256,
             "n1_request_sha256": sources["n1_request"].request_sha256,
             "exit_label_row_count": len(sources["exit_labels"]),
             "evaluable_episode_count": int(sources["exit_episode_best"]["episode_id"].nunique()),
