@@ -36,31 +36,19 @@
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/a_share_limit_rule.py",
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/direct_monthly.py",
-      "scripts/qlib_authoritative_bin_export.py",
-      "backend/tests/dataset_release/test_a_share_limit_rule.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_a_share_limit_rule.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "merged_source_pr",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/a_share_limit_rule.py",
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/services/dataset_release/direct_monthly.py",
-        "scripts/qlib_authoritative_bin_export.py",
-        "backend/tests/dataset_release/test_a_share_limit_rule.py",
-        "backend/tests/test_qlib_export_stock_universe_filters.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_a_share_limit_rule.py"
       ],
       "impacted_modules": [
-        "qlib_data",
-        "qe.core",
         "local_data",
         "platform.api",
-        "factor_library",
-        "paper_v2"
+        "qe.core",
+        "qlib_data"
       ],
       "matched_rules": [
         {
@@ -75,62 +63,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/qlib_exporter/authoritative_bin_exporter.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/services/dataset_release/direct_monthly.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "scripts/qlib_authoritative_bin_export.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
           "file": "backend/tests/dataset_release/test_a_share_limit_rule.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/test_qlib_export_stock_universe_filters.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_direct_monthly.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -146,12 +79,7 @@
       ],
       "suggested_scope": [
         "backend/services/dataset_release/a_share_limit_rule.py",
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/services/dataset_release/direct_monthly.py",
-        "scripts/qlib_authoritative_bin_export.py",
-        "backend/tests/dataset_release/test_a_share_limit_rule.py",
-        "backend/tests/test_qlib_export_stock_universe_filters.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_a_share_limit_rule.py"
       ],
       "unmatched_files": []
     },
@@ -167,12 +95,7 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/a_share_limit_rule.py",
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/direct_monthly.py",
-      "scripts/qlib_authoritative_bin_export.py",
-      "backend/tests/dataset_release/test_a_share_limit_rule.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_a_share_limit_rule.py"
     ]
   },
   "first_seen_at": "2026-09-02T15:26:26.672740Z",
