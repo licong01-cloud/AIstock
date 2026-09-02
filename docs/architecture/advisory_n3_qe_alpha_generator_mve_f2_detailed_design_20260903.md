@@ -1,11 +1,11 @@
 # AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.0
 
-> 日期：2026-09-03  
-> 状态：`DESIGN_FROZEN_READY_FOR_IMPLEMENTATION`  
-> tier：F2  
-> objective contract：`ALPHA_RANKING`  
-> study type：`EXPLORATORY_SCREEN`  
-> decision use：`NAVIGATION_ONLY`  
+> 日期：2026-09-03
+> 状态：`DESIGN_FROZEN_READY_FOR_IMPLEMENTATION`
+> tier：F2
+> objective contract：`ALPHA_RANKING`
+> study type：`EXPLORATORY_SCREEN`
+> decision use：`NAVIGATION_ONLY`
 > production gates：backend restart / DDL / DML / factor catalog write / StrategyPackage write / runtime activation 均为 noop
 
 ## 1. Background / 已确认事实
