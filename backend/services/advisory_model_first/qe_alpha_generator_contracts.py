@@ -206,9 +206,9 @@ class AdvisoryQEAlphaGenerationReceiptV1(BaseModel):
     receipt_id: str = Field(pattern=r"^advqegenrcpt_[0-9a-f]{24}$")
     receipt_sha256: str = Field(pattern=SHA256_PATTERN)
     request_sha256: str = Field(pattern=SHA256_PATTERN)
-    status: Literal["COMPLETE", "INCOMPLETE_SUPPORT"] = "COMPLETE"
+    status: Literal["COMPLETE", "INCOMPLETE_SUPPORT", "INFRASTRUCTURE_FAILURE"] = "COMPLETE"
     generation_call_count: int = Field(ge=6, le=12)
-    raw_generation_attempt_count: int = Field(ge=12, le=48)
+    raw_generation_attempt_count: int = Field(ge=0, le=48)
     accepted_expression_count: int = Field(ge=0, le=24)
     rejected_expression_count: int = Field(ge=0, le=48)
     proposals_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -222,9 +222,14 @@ class AdvisoryQEAlphaGenerationReceiptV1(BaseModel):
 
     @model_validator(mode="after")
     def validate_receipt(self) -> "AdvisoryQEAlphaGenerationReceiptV1":
-        if self.raw_generation_attempt_count < self.accepted_expression_count + self.rejected_expression_count:
+        if self.raw_generation_attempt_count != self.accepted_expression_count + self.rejected_expression_count:
             raise ValueError("QE alpha generation attempt accounting is invalid")
-        if (self.status == "COMPLETE") != (not self.support_reason_codes):
+        infrastructure_failure = "LLM_PROVIDER_CALL_FAILURE" in self.support_reason_codes
+        if self.status == "COMPLETE" and self.support_reason_codes:
+            raise ValueError("QE alpha generation status/support relation is invalid")
+        if self.status == "INCOMPLETE_SUPPORT" and (not self.support_reason_codes or infrastructure_failure):
+            raise ValueError("QE alpha generation status/support relation is invalid")
+        if self.status == "INFRASTRUCTURE_FAILURE" and not infrastructure_failure:
             raise ValueError("QE alpha generation status/support relation is invalid")
         digest = canonical_json_sha256(self.functional_payload())
         if self.receipt_sha256 != digest or self.receipt_id != f"advqegenrcpt_{digest[:24]}":
