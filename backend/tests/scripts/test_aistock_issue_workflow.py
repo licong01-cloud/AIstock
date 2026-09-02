@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -304,6 +307,97 @@ def test_workflow_command_runner_refuses_user_backend_process_control(
 
     with pytest.raises(workflow.WorkflowError, match="process control is forbidden"):
         workflow._run_command(command)
+
+
+def test_run_command_timeout_terminates_owned_process_tree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 4321
+        returncode: int | None = None
+        communicate_calls = 0
+
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                raise workflow.subprocess.TimeoutExpired(
+                    cmd=["git", "ls-remote", "origin"],
+                    timeout=timeout,
+                    output="partial stdout",
+                )
+            return "final stdout", ""
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    fake_process = FakeProcess()
+    popen_kwargs: dict[str, Any] = {}
+
+    def fake_popen(*_args: Any, **kwargs: Any) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return fake_process
+
+    def fake_terminate(proc: FakeProcess, **_kwargs: Any) -> dict[str, Any]:
+        assert proc is fake_process
+        proc.returncode = -9
+        return {"attempted": True, "method": "test_process_tree_kill", "returncode": 0}
+
+    monkeypatch.setattr(workflow.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(workflow, "_terminate_owned_process_tree", fake_terminate)
+
+    result = workflow._run_command(
+        ["git", "ls-remote", "origin"],
+        cwd=isolated_workflow_root,
+        timeout=7,
+    )
+
+    assert result["ok"] is False
+    assert result["timed_out"] is True
+    assert result["timeout_seconds"] == 7
+    assert result["termination"]["method"] == "test_process_tree_kill"
+    assert result["stdout"] == "final stdout"
+    assert "timed out after 7 seconds" in result["stderr"]
+    assert popen_kwargs["stdin"] is workflow.subprocess.DEVNULL
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process-tree contract")
+def test_run_command_timeout_leaves_no_windows_child_process(
+    isolated_workflow_root: Path,
+) -> None:
+    child_code = "import time; time.sleep(30)"
+    parent_code = (
+        "import subprocess,sys,time; "
+        "p=subprocess.Popen([sys.executable,'-c'," + repr(child_code) + "]); "
+        "print(f'CHILD_PID={p.pid}', flush=True); "
+        "time.sleep(30)"
+    )
+
+    result = workflow._run_command(
+        [sys.executable, "-c", parent_code],
+        cwd=isolated_workflow_root,
+        timeout=1,
+    )
+
+    assert result["timed_out"] is True
+    assert result["termination"]["method"].startswith("windows_taskkill_tree")
+    match = re.search(r"CHILD_PID=(\d+)", result["stdout"])
+    assert match is not None
+    child_pid = match.group(1)
+    observed = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {child_pid}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert child_pid not in observed.stdout
 
 
 def test_git_decodes_output_as_utf8_with_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -16194,6 +16288,156 @@ def test_cleanup_after_merge_apply_refreshes_origin_before_merge_check(
     assert calls.index(("git", "fetch", "origin", "--prune")) < calls.index(
         ("git", "branch", "--format=%(refname:short)", "--merged", "origin/main")
     )
+
+
+def test_registry_intake_cleanup_fails_closed_when_remote_read_fails(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "chore/BUG-199-close-sync"
+    registry_worktree = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    registry_worktree.mkdir(parents=True)
+    monkeypatch.setattr(
+        workflow,
+        "_canonical_bug_record_snapshot",
+        lambda *args, **kwargs: {"persisted": True, "status": "fixed"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_active_workflows_for_bug",
+        lambda bug_id: [
+            {
+                "workflow_role": "registry_close_sync",
+                "worktree": str(registry_worktree),
+                "branch": branch,
+                "git": {"dirty": False},
+            }
+        ],
+    )
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "command timed out after 60 seconds",
+            "timed_out": True,
+            "attempts": 2,
+        },
+    )
+
+    payload = workflow.build_registry_intake_cleanup_plan(
+        bug_id="BUG-199",
+        apply=False,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "skipped"
+    assert payload["candidates"][0]["safe"] is False
+    assert payload["candidates"][0]["skip_reason"] == "remote_branch_check_failed"
+    assert payload["candidates"][0]["remote_check"]["timed_out"] is True
+
+
+def test_cleanup_after_merge_batch_reuses_fetch_and_continues_after_target_failure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = isolated_workflow_root / "cleanup-batch.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": workflow.CLEANUP_BATCH_MANIFEST_SCHEMA,
+                "targets": [
+                    {
+                        "branch": "bug/BUG-199-first",
+                        "bug_id": "BUG-199",
+                        "worktree": str(isolated_workflow_root / "worktrees" / "BUG-199-first"),
+                        "pr_url": "https://github.example/pull/199",
+                    },
+                    {
+                        "branch": "bug/BUG-200-second",
+                        "bug_id": "BUG-200",
+                        "worktree": str(isolated_workflow_root / "worktrees" / "BUG-200-second"),
+                        "pr_url": "https://github.example/pull/200",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fetch_calls = 0
+    planner_calls: list[dict[str, Any]] = []
+    shared_fetch = _fetched_origin_payload()
+
+    def fake_fetch(root: Path, *, apply: bool) -> dict[str, Any]:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        assert apply is True
+        return shared_fetch
+
+    def fake_planner(**kwargs: Any) -> dict[str, Any]:
+        planner_calls.append(kwargs)
+        if kwargs["branch"].endswith("second"):
+            raise workflow.WorkflowError("second target failed safely")
+        return {
+            "schema_version": "aistock_issue_workflow_cleanup_v1",
+            "branch": kwargs["branch"],
+            "worktree": kwargs["worktree"],
+            "workflow_gate": "cleanup_done",
+            "cleanup_verification": {"all_clear": True},
+            "blocking": [],
+            "warnings": [],
+            "duration_seconds": 1.0,
+        }
+
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", fake_fetch)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "headRefName": "unused", "headRefOid": "a" * 40, "mergeCommit": {"oid": "b" * 40}},
+        },
+    )
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_planner)
+    monkeypatch.setattr(workflow, "_finalize_cleanup_bug_completion", lambda payload, bug_id: payload)
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_batch_failure_plan",
+        lambda target, **kwargs: {
+            "workflow_gate": "cleanup_incomplete",
+            "cleanup_verification": {"all_clear": False, "remote_branch_absent": False},
+            "blocking": [kwargs["error"]],
+            "warnings": [],
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_batch_plan(
+        manifest_path=str(manifest),
+        apply=True,
+        sync_root=True,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert fetch_calls == 1
+    assert len(planner_calls) == 2
+    assert all(call["preflight_fetch"] is shared_fetch for call in planner_calls)
+    assert payload["workflow_gate"] == "cleanup_partial"
+    assert payload["success_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["completed_count"] == 2
+    assert payload["results"][0]["workflow_gate"] == "cleanup_done"
+    assert payload["results"][1]["error"] == "second target failed safely"
+    assert payload["results"][1]["cleanup_verification"]["all_clear"] is False
 
 
 def test_cleanup_after_merge_allows_origin_equivalent_root_dirty_files(
