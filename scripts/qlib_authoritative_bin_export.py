@@ -179,15 +179,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     exchanges = normalize_stock_export_exchanges(parse_csv_list(args.exchanges))
     codes = parse_csv_list(args.codes)
     pit_universe_key = args.universe_key if args.stock_universe_mode == "pit_spans" else None
+    canonical_pit = pit_universe_key == CANONICAL_PIT_UNIVERSE_KEY
     pit_ensure = None
     if pit_universe_key:
-        pit_ensure = StockUniversePitService().ensure_st_pit_universe(
+        pit_ensure = require_readonly_pit_coverage(
+            StockUniversePitService(),
             universe_key=pit_universe_key,
-            start_date=min(start, DEFAULT_ST_PIT_START_DATE),
-            end_date=end,
-            rule_version=DEFAULT_ST_PIT_RULE_VERSION,
-            strict=True,
-            rebuild_if_stale=True,
+            start=min(start, DEFAULT_ST_PIT_START_DATE),
+            end=end,
         )
 
     result: dict = {
@@ -200,14 +199,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         "basis_end": basis_end.isoformat(),
         "stock_universe_mode": args.stock_universe_mode,
         "universe_key": pit_universe_key,
-        "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
-        "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+        "rule_version": (pit_ensure["rule_version"] if pit_ensure else None),
+        "authority_scope": (
+            "canonical_pit_v2"
+            if canonical_pit
+            else "current_active_shsz_st_pit"
+            if pit_universe_key
+            else "legacy_static"
+        ),
         "st_pit": bool(pit_universe_key),
-        "delist_pit": False if pit_universe_key else None,
+        "delist_pit": canonical_pit if pit_universe_key else None,
         "pause_pit": False if pit_universe_key else None,
         "survivorship_bias": (
-            "current D/P stocks excluded by scope; delisting PIT not implemented"
-            if pit_universe_key else None
+            "canonical_lifecycle_pit"
+            if canonical_pit
+            else "current D/P stocks excluded by scope; delisting PIT not implemented"
+            if pit_universe_key
+            else None
         ),
         "pit_ensure": pit_ensure,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -331,14 +339,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "tool": "scripts/qlib_authoritative_bin_export.py",
                 "stock_universe_mode": args.stock_universe_mode,
                 "universe_key": pit_universe_key,
-                "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
-                "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+                "rule_version": (pit_ensure["rule_version"] if pit_ensure else None),
+                "authority_scope": (
+                    "canonical_pit_v2"
+                    if canonical_pit
+                    else "current_active_shsz_st_pit"
+                    if pit_universe_key
+                    else "legacy_static"
+                ),
                 "st_pit": bool(pit_universe_key),
-                "delist_pit": False if pit_universe_key else None,
+                "delist_pit": canonical_pit if pit_universe_key else None,
                 "pause_pit": False if pit_universe_key else None,
                 "survivorship_bias": (
-                    "current D/P stocks excluded by scope; delisting PIT not implemented"
-                    if pit_universe_key else None
+                    "canonical_lifecycle_pit"
+                    if canonical_pit
+                    else "current D/P stocks excluded by scope; delisting PIT not implemented"
+                    if pit_universe_key
+                    else None
                 ),
                 "pit_ensure": pit_ensure,
                 "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
@@ -377,6 +394,58 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_path.write_text(json.dumps(result, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
     print(f"[OK] wrote report: {report_path}")
     return 0
+
+
+from backend.services.canonical_equity_pit import (  # noqa: E402
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_UNIVERSE_KEY,
+)
+
+
+def require_readonly_pit_coverage(
+    service: StockUniversePitService,
+    *,
+    universe_key: str,
+    start: date,
+    end: date,
+) -> dict[str, object]:
+    """Confirm PIT coverage without source scans or database writes."""
+
+    state = service.get_status_readonly(universe_key=universe_key)
+    try:
+        state_start = date.fromisoformat(str(state.get("start_date")))
+        state_end = date.fromisoformat(str(state.get("end_date")))
+    except ValueError as exc:
+        raise RuntimeError(f"PIT authority {universe_key} has invalid coverage dates") from exc
+    expected_rule = (
+        CANONICAL_PIT_RULE_VERSION
+        if universe_key == CANONICAL_PIT_UNIVERSE_KEY
+        else DEFAULT_ST_PIT_RULE_VERSION
+    )
+    expected_scope = CANONICAL_PIT_SCOPE if universe_key == CANONICAL_PIT_UNIVERSE_KEY else None
+    if (
+        state.get("status") != "ready"
+        or bool(state.get("dirty"))
+        or state.get("rule_version") != expected_rule
+        or (expected_scope is not None and state.get("scope") != expected_scope)
+        or state_start > start
+        or state_end < end
+    ):
+        raise RuntimeError(
+            f"PIT authority {universe_key} is not ready for {start.isoformat()}~{end.isoformat()}"
+        )
+    return {
+        "status": "ready",
+        "universe_key": universe_key,
+        "rule_version": expected_rule,
+        "scope": state.get("scope"),
+        "start_date": state_start.isoformat(),
+        "end_date": state_end.isoformat(),
+        "read_only": True,
+        "source_scan": False,
+        "database_writes": 0,
+    }
 
 
 if __name__ == "__main__":

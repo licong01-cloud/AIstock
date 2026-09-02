@@ -53,6 +53,10 @@ from backend.services.dataset_release.profile import (  # noqa: E402
 )
 
 
+class LegacyV2MonthlyPipelineDisabled(DatasetReleaseError):
+    code = "LEGACY_V2_SOURCE_FREEZE_DISABLED"
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -164,6 +168,11 @@ def _monthly(
     if not args.candidate_only:
         raise ValueError("monthly requires --candidate-only")
     profile_id = _selected_profile_id(service, args)
+    if profile_id == "qe_hmm_full_v2":
+        raise LegacyV2MonthlyPipelineDisabled(
+            "qe_hmm_full_v2 no longer submits the legacy source-freeze pipeline; "
+            "use the direct component exporters until the direct monthly builder is active"
+        )
     preview = service.preview_monthly(
         profile_id=profile_id,
         cutoff_policy="auto-previous-month",

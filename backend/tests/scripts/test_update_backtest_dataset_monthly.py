@@ -137,20 +137,21 @@ def test_monthly_explicit_idempotency_key_replays_exact_submission(tmp_path, cap
     assert store._many("SELECT * FROM runs", ()) == []
 
 
-def test_monthly_can_explicitly_select_canonical_v2_without_changing_legacy_default(tmp_path, capsys) -> None:
+def test_monthly_rejects_legacy_v2_source_freeze_without_creating_submission(tmp_path, capsys) -> None:
     service, store = _dual_profile_service(tmp_path)
     observed = datetime(2026, 8, 11, tzinfo=UTC)
 
     assert (
         cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed)
-        == 0
+        == 2
     )
-    canonical = _output(capsys)
-    request = store.get_submission(canonical["submission_id"])
-    assert request is not None
+    canonical = json.loads(capsys.readouterr().err)
+    assert canonical["error_code"] == "LEGACY_V2_SOURCE_FREEZE_DISABLED"
+    assert store._many("SELECT * FROM submissions", ()) == []
     assert cli.main(["monthly", "--candidate-only"], service=service, observed_at=observed) == 0
     legacy = _output(capsys)
-    assert canonical["logical_request_key"] != legacy["logical_request_key"]
+    assert legacy["submission_id"]
+    assert len(store._many("SELECT * FROM submissions", ())) == 1
 
 
 def test_initial_migration_cli_submits_fixed_plan_once_without_execution(tmp_path, capsys) -> None:
@@ -193,11 +194,12 @@ def test_initial_migration_plan_is_fixed_allowlisted_and_digest_bound() -> None:
     assert first.sample_instruments == (
         "000001.SZ",
         "300379.SZ",
+        "300741.SZ",
         "600462.SH",
         "600930.SH",
         "688981.SH",
     )
-    assert len(first.event_windows) == 10
+    assert len(first.event_windows) == 11
     assert len(first.index_windows) == 2
     assert first.plan_digest == second.plan_digest
     assert len(first.plan_digest) == 64

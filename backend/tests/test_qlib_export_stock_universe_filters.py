@@ -279,8 +279,15 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     calls: list[dict[str, object]] = []
 
     class _FakePitService:
-        def ensure_st_pit_universe(self, **_kwargs):
-            return {"status": "ready"}
+        def get_status_readonly(self, **_kwargs):
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.DEFAULT_ST_PIT_RULE_VERSION,
+                "scope": "sh_sz_a_ex_bj_st_excluded_pit",
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 8, 31),
+            }
 
     monkeypatch.setattr(authoritative_cli, "StockUniversePitService", _FakePitService)
     monkeypatch.setattr(authoritative_cli, "run_wsl_dump", lambda **_kwargs: {"ok": True, "returncode": 0})
@@ -318,6 +325,62 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     assert len(calls) == 1
     assert calls[0]["feature_frequency"] == "1min"
     assert calls[0]["allowed_bin_root"] == tmp_path / "bin"
+
+
+def test_canonical_pit_export_preflight_is_readonly_and_never_rebuilds() -> None:
+    calls: list[str] = []
+
+    class _FakePitService:
+        def get_status_readonly(self, *, universe_key: str):
+            calls.append(universe_key)
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.CANONICAL_PIT_RULE_VERSION,
+                "scope": authoritative_cli.CANONICAL_PIT_SCOPE,
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 8, 31),
+            }
+
+        def ensure_st_pit_universe(self, **_kwargs):
+            raise AssertionError("direct export must not rebuild PIT")
+
+        def ensure_canonical_pit_universe(self, **_kwargs):
+            raise AssertionError("direct export must not rebuild PIT")
+
+    receipt = authoritative_cli.require_readonly_pit_coverage(
+        _FakePitService(),
+        universe_key=authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY,
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+    )
+
+    assert calls == [authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY]
+    assert receipt["read_only"] is True
+    assert receipt["source_scan"] is False
+    assert receipt["database_writes"] == 0
+    assert receipt["rule_version"] == authoritative_cli.CANONICAL_PIT_RULE_VERSION
+
+
+def test_canonical_pit_export_preflight_rejects_incomplete_coverage_without_write() -> None:
+    class _FakePitService:
+        def get_status_readonly(self, **_kwargs):
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.CANONICAL_PIT_RULE_VERSION,
+                "scope": authoritative_cli.CANONICAL_PIT_SCOPE,
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 7, 31),
+            }
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        authoritative_cli.require_readonly_pit_coverage(
+            _FakePitService(),
+            universe_key=authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY,
+            start=date(2024, 1, 2),
+            end=date(2026, 8, 31),
+        )
 
 
 def test_backend_minute_finalize_passes_physical_range_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
