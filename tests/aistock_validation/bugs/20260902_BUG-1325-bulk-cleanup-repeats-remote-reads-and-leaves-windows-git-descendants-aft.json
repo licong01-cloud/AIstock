@@ -15,6 +15,13 @@
   ],
   "created_at": "2026-09-02T15:48:40.762110Z",
   "description": "cleanup-after-merge is safe for one target but large authorized cleanup requires one process per worktree. Each invocation repeats fetch origin --prune and PR/remote reads, while timed-out git ls-remote or git push on Windows can leave git-remote-https descendants alive and the parent workflow blocked for several minutes. In a 101-target cleanup this created dominant network latency and required exact process-tree recovery. Add a bounded bulk cleanup path that performs one shared preflight fetch and reuses validated PR receipts without weakening per-target worktree, artifact, process, remote-SHA, or four-state checks. Ensure subprocess timeout terminates the owned Windows process tree and records a structured per-target failure while continuing independent targets.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: single-target cleanup semantics and every per-target artifact, process, PR, remote-SHA, and four-state check remain authoritative",
+    "no_silent_error": "passed: transport and timeout failures retain structured target evidence, keep failed targets visible, and never report cleanup_done without all-clear readback",
+    "no_simplified_delivery": "passed: shared fetch, exact PR receipt reuse, independent target continuation, checkpoint persistence, compact output, bounded remote reads, and real Windows process-tree cleanup are implemented and tested",
+    "no_unrequested_gate_or_approval": "passed: the batch entrypoint reuses existing cleanup controls and adds no business, runtime, database, dependency, or approval gate",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
