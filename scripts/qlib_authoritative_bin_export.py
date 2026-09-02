@@ -280,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
                 overwrite_csv=args.overwrite_csv,
+                resume_csv=args.resume_csv,
             )
         result["export_summary"] = summary.__dict__
         print(json.dumps({"export_summary": summary.__dict__}, ensure_ascii=False, indent=2))
