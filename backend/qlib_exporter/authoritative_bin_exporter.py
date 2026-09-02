@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 import shutil
@@ -91,6 +92,7 @@ class CsvExportSummary:
     strict_limit: bool
     generated_at: str
     rule_derived_limit_rows: int = 0
+    resumed_csv_files: int = 0
 
 
 STOCK_EXPORT_EXCHANGES = ("sh", "sz")
@@ -1273,6 +1275,33 @@ def _read_csv_last_date(path: Path) -> str | None:
     return None
 
 
+def _daily_csv_matches_raw_rows(path: Path, code: str, raw_rows: pd.DataFrame) -> bool:
+    """Return true only for a complete atomic daily CSV from this physical range."""
+
+    if raw_rows.empty or not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+        return False
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader)
+            first = next(reader)
+    except (OSError, UnicodeDecodeError, csv.Error, StopIteration):
+        return False
+    if header != DAILY_REQUIRED_COLUMNS or len(first) != len(DAILY_REQUIRED_COLUMNS):
+        return False
+    last_date = _read_csv_last_date(path)
+    if last_date is None:
+        return False
+    first_date = pd.to_datetime(raw_rows["trade_date"].iloc[0]).date().isoformat()
+    expected_last = pd.to_datetime(raw_rows["trade_date"].iloc[-1]).date().isoformat()
+    return (
+        first[0] == first_date
+        and first[1].upper() == code.upper()
+        and last_date == expected_last
+        and _count_csv_data_rows(path) == len(raw_rows)
+    )
+
+
 def _count_csv_data_rows(path: Path) -> int:
     with path.open("rb") as f:
         line_count = sum(chunk.count(b"\n") for chunk in iter(lambda: f.read(1024 * 1024), b""))
@@ -1441,6 +1470,7 @@ def export_stock_minute_csv_chunked(
             last_date = _read_csv_last_date(path)
             if last_date:
                 existing_last_dates[path.stem.upper()] = last_date
+    resumed_csv_files = len(existing_last_dates)
 
     with get_conn() as conn:
         adj = pd.read_sql(
@@ -1673,6 +1703,7 @@ def export_stock_minute_csv_chunked(
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
         rule_derived_limit_rows=rule_derived_limit_rows,
+        resumed_csv_files=resumed_csv_files,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary
@@ -1693,11 +1724,14 @@ def export_stock_daily_csv(
     basis_end: date | None = None,
     strict_limit: bool = False,
     overwrite_csv: bool = False,
+    resume_csv: bool = False,
 ) -> CsvExportSummary:
     """Export per-stock day CSV files with the same required QE limit fields."""
 
     if end < start:
         raise ValueError("end must be >= start")
+    if overwrite_csv and resume_csv:
+        raise ValueError("overwrite_csv and resume_csv cannot both be true")
     basis_start = basis_start or start
     basis_end = basis_end or end
 
@@ -1723,10 +1757,15 @@ def export_stock_daily_csv(
     suspended_prev_close_filled_rows = 0
     previous_daily_prev_close_filled_rows = 0
     rule_derived_limit_rows = 0
+    resumed_csv_files = 0
     for code in codes:
         df = _load_daily_raw(code, start, end)
         if df.empty:
             skipped += 1
+            continue
+        csv_path = csv_dir / f"{code}.csv"
+        if resume_csv and _daily_csv_matches_raw_rows(csv_path, code, df):
+            resumed_csv_files += 1
             continue
         out = _build_daily_expected_frame(
             code,
@@ -1740,13 +1779,14 @@ def export_stock_daily_csv(
 
         required = DAILY_REQUIRED_COLUMNS if strict_limit else ["date", "symbol", "open", "high", "low", "close", "volume", "amount", "factor"]
         _check_required_non_null(out, code, required)
-        _write_csv_atomic(out, csv_dir / f"{code}.csv", DAILY_REQUIRED_COLUMNS)
+        _write_csv_atomic(out, csv_path, DAILY_REQUIRED_COLUMNS)
         csv_files += 1
         csv_rows += len(out)
         suspended_prev_close_filled_rows += int(out.attrs.get("suspended_prev_close_filled_rows", 0))
         previous_daily_prev_close_filled_rows += int(out.attrs.get("previous_daily_prev_close_filled_rows", 0))
         rule_derived_limit_rows += int(out.attrs.get("rule_derived_limit_rows", 0))
 
+    csv_files_final, csv_rows_final = _count_csv_dir(csv_dir) if resume_csv else (csv_files, csv_rows)
     summary = CsvExportSummary(
         dataset="stock_daily",
         start=start.isoformat(),
@@ -1754,16 +1794,17 @@ def export_stock_daily_csv(
         basis_start=basis_start.isoformat(),
         basis_end=basis_end.isoformat(),
         csv_dir=str(csv_dir),
-        csv_files=csv_files,
-        csv_rows=csv_rows,
+        csv_files=csv_files_final,
+        csv_rows=csv_rows_final,
         stocks_requested=len(codes),
-        stocks_written=csv_files,
+        stocks_written=csv_files_final,
         skipped_no_price_rows=skipped,
         suspended_prev_close_filled_rows=suspended_prev_close_filled_rows,
         previous_daily_prev_close_filled_rows=previous_daily_prev_close_filled_rows,
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
         rule_derived_limit_rows=rule_derived_limit_rows,
+        resumed_csv_files=resumed_csv_files,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary
