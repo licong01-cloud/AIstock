@@ -1,6 +1,6 @@
 # Advisory N3 腿间共识/分歧信息集扩展 MVE F2 详细设计
 
-> 版本：v1.2
+> 版本：v1.3
 > 日期：2026-09-02
 > Feature tier：F2
 > 状态：IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING
@@ -243,6 +243,8 @@ route 只记录研究导航，不构成模型激活或交易输入。
 - `backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`
 - `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py`
 - `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py`
+- `scripts/ci_change_classifier.py`（仅新增本CLI到`advisory_modeling_backend`的direct mapping）
+- `backend/tests/scripts/test_ci_change_classifier.py`（仅验证上述direct mapping）
 - 本设计和主蓝图
 
 实现顺序：合同与 source guard → feature builder/poison → CPCV OOF → paired evaluator → immutable delivery/CLI →真实只读预检 →重复审核。
@@ -303,7 +305,7 @@ Rollout仅是合入源码后从 clean main 生成一次冻结request并运行开
 | F-904 | `leg_disagreement_pipeline.run_leg_crossfit` | `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` path isolation、全部source row七OOF、typed missing不入训练但保留评分 | IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-905 | `leg_disagreement_pipeline.evaluate_leg_models` | `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` paired bootstrap/support/selection及Top5 typed-unavailable cases | IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-906 | `prepare/run/inspect`; `_publish/_read/_deliver_bundle` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` manifest mutation and exact retry cases | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-907 | frozen request/receipt/manifest false gates | `backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`；F2 validator；L0/ownership/static gates | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-907 | frozen request/receipt/manifest false gates；CLI direct CI mapping | `backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`；`backend/tests/scripts/test_ci_change_classifier.py`；F2 validator；L0/ownership/static gates | IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-908 | `LegDisagreementReceiptV1`; `_write_route_page` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` selected-zero/one route cases | IMPLEMENTED_LOCAL_VERIFIED | none |
 
 ## 17. DESIGN-COMPLIANCE-001
