@@ -12,6 +12,7 @@ from backend.services.advisory_model_first.exit_learnability_contracts import (
 from backend.services.advisory_model_first.exit_learnability_pipeline import (
     _find_existing_bundle,
     _publish_bundle,
+    _validate_action_source_summary,
     inspect_exit_learnability_bundle,
 )
 from backend.services.advisory_model_first.tier1_oracle_contracts import (
@@ -50,7 +51,8 @@ def test_publish_inspect_and_mutation_fail_closed(tmp_path) -> None:
     )
     sources = {
         "action_request": SimpleNamespace(request_sha256="3" * 64),
-        "action_inspection": {"receipt": SimpleNamespace(receipt_sha256="4" * 64)},
+        "action_inspection": {"receipt_sha256": "4" * 64},
+        "action_receipt": SimpleNamespace(receipt_sha256="4" * 64),
         "n1_request": SimpleNamespace(request_sha256="5" * 64),
         "exit_labels": pd.DataFrame({"episode_id": ["episode-1"]}),
         "exit_episode_best": pd.DataFrame({"episode_id": ["episode-1"]}),
@@ -93,6 +95,36 @@ def test_publish_inspect_and_mutation_fail_closed(tmp_path) -> None:
     with pytest.raises(AdvisoryModelFirstError) as exc_info:
         inspect_exit_learnability_bundle(bundle)
     assert exc_info.value.reason_code == "ADVISORY_EXIT_LEARNABILITY_BUNDLE_INVALID"
+
+
+def test_action_source_uses_public_inspection_summary_contract() -> None:
+    request = SimpleNamespace(request_sha256="a" * 64)
+    receipt = SimpleNamespace(
+        request_sha256="a" * 64,
+        receipt_sha256="b" * 64,
+        sealed_holdout_accessed=False,
+        deployable=False,
+    )
+    public_summary = {
+        "status": "VALID",
+        "request_sha256": "a" * 64,
+        "receipt_sha256": "b" * 64,
+        "sealed_holdout_accessed": False,
+        "deployable": False,
+    }
+
+    _validate_action_source_summary(
+        action_request=request,
+        action_inspection=public_summary,
+        action_receipt=receipt,
+    )
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        _validate_action_source_summary(
+            action_request=request,
+            action_inspection={**public_summary, "receipt_sha256": "c" * 64},
+            action_receipt=receipt,
+        )
+    assert exc_info.value.reason_code == ("ADVISORY_EXIT_LEARNABILITY_SOURCE_IDENTITY_MISMATCH")
 
 
 def test_cli_argument_failure_is_typed(capsys) -> None:
