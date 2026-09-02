@@ -31,15 +31,24 @@
   ],
   "expected": "Provider or transport failures are recorded separately from model-output/schema failures, create no synthetic expression attempts, do not become alpha evidence, and support a bounded recovery using the same frozen request without resampling successful responses.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260902_BUG-1330-advisory-qe-alpha-generator-misclassifies-llm-transport-failures-as-sche.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
       "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
       "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
       "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
-      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260902_BUG-1330-advisory-qe-alpha-generator-misclassifies-llm-transport-failures-as-sche.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
@@ -145,16 +154,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
