@@ -18,6 +18,7 @@ from backend.services.dataset_release.source_authority import (
     MonthlySourceAuthority,
     PostgresSourceSnapshotSession,
     SourceAuditIncomplete,
+    SourceConfigurationMissing,
     SourceRequiredTableMissing,
     SourceSnapshotRevised,
     SourceTableSchema,
@@ -91,6 +92,145 @@ def test_postgres_snapshot_parallel_same_query_streams_use_unique_cursor_names(d
         second.close()
 
     assert connection.active_names == set()
+
+
+class _MinuteChunkCursorFixture:
+    def __init__(self, connection: "_MinuteChunkConnectionFixture", *, named: bool) -> None:
+        self._connection = connection
+        self._named = named
+        self._rows = (
+            [
+                (
+                    '["300508.SZ", "2024-01-02T09:31:00+08:00", "1min"]',
+                    '{"ts_code": "300508.SZ"}',
+                )
+            ]
+            if named
+            else []
+        )
+        self.description = (("row_key",), ("row_payload",)) if named else None
+        self.itersize = 0
+
+    def execute(self, sql: str, params: Mapping[str, Any]) -> None:
+        if self._named:
+            self._connection.stream_sql = sql
+            self._connection.stream_params = dict(params)
+        else:
+            self._connection.catalog_sql = sql
+            self._connection.catalog_params = dict(params)
+
+    def fetchall(self) -> list[tuple[str, str]]:
+        return list(self._connection.catalog_relations)
+
+    def fetchmany(self, _size: int) -> list[tuple[str, str]]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def close(self) -> None:
+        return None
+
+
+class _MinuteChunkConnectionFixture:
+    def __init__(self, relations: tuple[tuple[str, str], ...]) -> None:
+        self.catalog_relations = relations
+        self.catalog_sql = ""
+        self.catalog_params: Mapping[str, Any] = {}
+        self.stream_sql = ""
+        self.stream_params: Mapping[str, Any] = {}
+
+    def cursor(self, name: str | None = None) -> _MinuteChunkCursorFixture:
+        return _MinuteChunkCursorFixture(self, named=name is not None)
+
+
+def test_postgres_minute_stream_targets_catalog_chunks_without_parent_fallback(dataset_profile) -> None:
+    relations = (
+        ("_timescaledb_internal", "_hyper_23_100_chunk"),
+        ("_timescaledb_internal", "_hyper_23_101_chunk"),
+    )
+    connection = _MinuteChunkConnectionFixture(relations)
+    session = PostgresSourceSnapshotSession(dataset_profile.resource_policy)
+    session._connection = connection
+    params = {
+        "start": date(2024, 1, 2),
+        "end": date(2024, 4, 1),
+        "codes": ["300508.SZ"],
+    }
+
+    rows = list(session.stream("kline_minute_raw", params, fetch_rows=10))
+
+    assert rows == [
+        {
+            "row_key": '["300508.SZ", "2024-01-02T09:31:00+08:00", "1min"]',
+            "row_payload": '{"ts_code": "300508.SZ"}',
+        }
+    ]
+    assert "_timescaledb_functions.get_partition_for_key" in connection.catalog_sql
+    assert connection.catalog_params == params
+    assert 'FROM "_timescaledb_internal"."_hyper_23_100_chunk" AS source_row' in connection.stream_sql
+    assert 'FROM "_timescaledb_internal"."_hyper_23_101_chunk" AS source_row' in connection.stream_sql
+    assert " UNION ALL " in connection.stream_sql
+    assert "FROM market.kline_minute_raw" not in connection.stream_sql
+    assert connection.stream_sql.count("source_row.trade_time >= %(start)s::date") == len(relations)
+    assert connection.stream_sql.count("source_row.ts_code = ANY(%(codes)s)") == len(relations)
+    assert connection.stream_sql.endswith(
+        "ORDER BY __source_order_0,__source_order_1,__source_order_2"
+    )
+    assert "source_row.trade_time::date" not in connection.stream_sql
+    assert connection.stream_params == params
+
+
+def test_postgres_minute_stream_rejects_invalid_chunk_identifier(dataset_profile) -> None:
+    connection = _MinuteChunkConnectionFixture((("_timescaledb_internal", "chunk;drop"),))
+    session = PostgresSourceSnapshotSession(dataset_profile.resource_policy)
+    session._connection = connection
+
+    with pytest.raises(SourceConfigurationMissing, match="invalid identifier"):
+        list(
+            session.stream(
+                "kline_minute_raw",
+                {
+                    "start": date(2024, 1, 2),
+                    "end": date(2024, 4, 1),
+                    "codes": ["300508.SZ"],
+                },
+                fetch_rows=10,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "relations",
+    [
+        (
+            ("_timescaledb_internal", "_hyper_23_101_chunk"),
+            ("_timescaledb_internal", "_hyper_23_100_chunk"),
+        ),
+        (
+            ("_timescaledb_internal", "_hyper_23_100_chunk"),
+            ("_timescaledb_internal", "_hyper_23_100_chunk"),
+        ),
+    ],
+)
+def test_postgres_minute_stream_rejects_unstable_chunk_catalog(
+    dataset_profile,
+    relations: tuple[tuple[str, str], ...],
+) -> None:
+    connection = _MinuteChunkConnectionFixture(relations)
+    session = PostgresSourceSnapshotSession(dataset_profile.resource_policy)
+    session._connection = connection
+
+    with pytest.raises(SourceConfigurationMissing, match="duplicated or unordered"):
+        list(
+            session.stream(
+                "kline_minute_raw",
+                {
+                    "start": date(2024, 1, 2),
+                    "end": date(2024, 4, 1),
+                    "codes": ["300508.SZ"],
+                },
+                fetch_rows=10,
+            )
+        )
 
 
 class FakeSnapshotSession:
@@ -480,6 +620,24 @@ def test_production_source_allowlist_uses_semantic_projection_and_code_major_ord
         "trade_time",
         "freq",
     )
+    minute_spec = PRODUCTION_QUERY_SPECS["kline_minute_raw"]
+    assert minute_spec.date_expression == "source_row.trade_time"
+    assert minute_spec.date_range_policy == "timestamp_day_half_open"
+    assert minute_spec.order_by_source_keys is True
+    assert "source_row.trade_time::date" not in minute_spec.sql
+    assert "source_row.trade_time >= %(start)s::date" in minute_spec.sql
+    assert "source_row.trade_time < (%(end)s::date + interval '1 day')" in minute_spec.sql
+    assert minute_spec.sql.endswith(
+        "ORDER BY source_row.ts_code,source_row.trade_time,source_row.freq"
+    )
+    assert "ORDER BY row_key, row_payload" not in minute_spec.sql
+    assert "ORDER BY source_row.ts_code" not in minute_spec.fingerprint_sql
+    assert minute_spec.query_version == "kline_minute_raw_canonical_row_code_major_v3"
+
+    daily_spec = PRODUCTION_QUERY_SPECS["kline_daily_raw"]
+    assert daily_spec.date_range_policy == "inclusive_date"
+    assert "source_row.trade_date <= %(end)s" in daily_spec.sql
+    assert daily_spec.sql.endswith("ORDER BY row_key, row_payload")
     assert PRODUCTION_QUERY_SPECS["moneyflow_ts"].audit_dataset == ("stock_moneyflow_ts")
     assert "source_row.is_trading = TRUE" in PRODUCTION_QUERY_SPECS["trading_calendar"].sql
     limit_spec = PRODUCTION_QUERY_SPECS["stk_limit"]
