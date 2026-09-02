@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import signal
 import shutil
 import stat
 import subprocess
@@ -74,6 +75,16 @@ ACTIVE_WORKFLOW_STATES = {
     "ci_green",
 }
 TERMINAL_WORKFLOW_STATES = {"merged", "close_synced", "cleanup_done", "complete"}
+CLEANUP_BATCH_MANIFEST_SCHEMA = "aistock_cleanup_after_merge_batch_manifest_v1"
+CLEANUP_BATCH_RESULT_SCHEMA = "aistock_cleanup_after_merge_batch_v1"
+CLEANUP_BATCH_MAX_TARGETS = 200
+CLEANUP_BATCH_TARGET_KEYS = {
+    "branch",
+    "bug_id",
+    "worktree",
+    "pr_url",
+    "source_receipt_path",
+}
 NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 MERGE_QUALITY_CHECK_CONTEXTS = (
     "CI verdict",
@@ -1455,6 +1466,22 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact["validation_evidence_count"] = len(payload.get("validation_evidence") or [])
         if "github_issue_sync" in payload:
             compact["github_issue_sync"] = _pick(payload["github_issue_sync"], "status", "channel", "fallback_used")
+    elif schema == CLEANUP_BATCH_RESULT_SCHEMA:
+        compact.update(
+            _pick(
+                payload,
+                "manifest_sha256",
+                "target_count",
+                "completed_count",
+                "success_count",
+                "failed_count",
+                "sync_root",
+                "dry_run",
+                "duration_seconds",
+            )
+        )
+        compact["blocking_count"] = len(payload.get("blocking") or [])
+        compact["blocking_samples"] = list(payload.get("blocking") or [])[:5]
     elif schema.endswith("_cleanup_v1"):
         compact.update(
             _pick(
@@ -4140,29 +4167,125 @@ def _assert_no_user_backend_process_control(args: list[str]) -> None:
         )
 
 
+def _owned_process_creation_options() -> dict[str, Any]:
+    if os.name == "nt":
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        }
+    return {"start_new_session": True}
+
+
+def _terminate_owned_process_tree(proc: subprocess.Popen[str], *, timeout: float = 10.0) -> dict[str, Any]:
+    """Terminate only the process tree created by this workflow command."""
+
+    if proc.poll() is not None:
+        return {"attempted": False, "method": "already_exited", "returncode": proc.returncode}
+    if os.name == "nt":
+        try:
+            killed = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if proc.poll() is None:
+                with contextlib.suppress(OSError):
+                    proc.kill()
+            return {
+                "attempted": True,
+                "method": "windows_taskkill_tree",
+                "returncode": killed.returncode,
+                "stderr": killed.stderr.strip(),
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            with contextlib.suppress(OSError):
+                proc.kill()
+            return {
+                "attempted": True,
+                "method": "windows_taskkill_tree_fallback_kill",
+                "returncode": None,
+                "stderr": str(exc),
+            }
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+        return {"attempted": True, "method": "posix_process_group_kill", "returncode": 0}
+    except (OSError, ProcessLookupError) as exc:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        return {
+            "attempted": True,
+            "method": "posix_process_group_fallback_kill",
+            "returncode": None,
+            "stderr": str(exc),
+        }
+
+
 def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
     cwd = cwd or REPO_ROOT
     _assert_no_user_backend_process_control(args)
+    proc: subprocess.Popen[str] | None = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(  # lifecycle timeout is enforced by communicate(timeout=timeout) below
             args,
             cwd=str(cwd),
             text=True,
             encoding="utf-8",
             errors="replace",
-            capture_output=True,
-            check=False,
-            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=_subprocess_env(args),
+            **_owned_process_creation_options(),
         )
+        stdout, stderr = proc.communicate(timeout=timeout)
         return {
             "ok": proc.returncode == 0,
             "returncode": proc.returncode,
-            "stdout": proc.stdout.strip(),
-            "stderr": proc.stderr.strip(),
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+        }
+    except subprocess.TimeoutExpired as exc:
+        termination = _terminate_owned_process_tree(proc) if proc is not None else {"attempted": False, "method": "not_started"}
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if proc is not None:
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                final_stdout, final_stderr = proc.communicate(timeout=5)
+                stdout = final_stdout or stdout
+                stderr = final_stderr or stderr
+        message = f"command timed out after {timeout} seconds"
+        if str(stderr).strip():
+            message = f"{message}: {str(stderr).strip()}"
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": str(stdout).strip(),
+            "stderr": message,
+            "timed_out": True,
+            "timeout_seconds": timeout,
+            "termination": termination,
         }
     except Exception as exc:
-        return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
+        termination = None
+        if proc is not None and proc.poll() is None:
+            termination = _terminate_owned_process_tree(proc)
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+            "termination": termination,
+        }
 
 
 def _run_read_command_with_retry(
@@ -15255,8 +15378,19 @@ def build_registry_intake_cleanup_plan(
         git = item.get("git") if isinstance(item.get("git"), dict) else (_git_snapshot(worktree_path) if exists else {})
         dirty = bool(git.get("dirty")) if git else True
         is_current_cwd = exists and worktree_path.resolve() == current_cwd
-        remote_ref = _git(["ls-remote", "--heads", "origin", branch], check=False) if branch else ""
-        safe = bool(persisted.get("persisted")) and exists and not dirty and not is_current_cwd
+        remote_result = (
+            _run_read_command_with_retry(
+                ["git", "ls-remote", "--heads", "origin", branch],
+                cwd=root,
+                timeout=60,
+                attempts=2,
+            )
+            if branch
+            else {"ok": True, "stdout": "", "stderr": "", "attempts": 0}
+        )
+        remote_ref = str(remote_result.get("stdout") or "") if remote_result.get("ok") else ""
+        remote_check_ok = bool(remote_result.get("ok"))
+        safe = bool(persisted.get("persisted")) and exists and not dirty and not is_current_cwd and remote_check_ok
         reason = None
         if not persisted.get("persisted"):
             reason = "canonical_bug_record_missing"
@@ -15266,6 +15400,8 @@ def build_registry_intake_cleanup_plan(
             reason = "worktree_dirty"
         elif is_current_cwd:
             reason = "refusing_current_cwd"
+        elif not remote_check_ok:
+            reason = "remote_branch_check_failed"
         actions = []
         if exists:
             actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": safe})
@@ -15295,6 +15431,7 @@ def build_registry_intake_cleanup_plan(
                 "branch": branch or None,
                 "issue_json": item.get("issue_json"),
                 "dirty": dirty,
+                "remote_check": remote_result,
                 "safe": safe,
                 "skip_reason": None if safe else reason,
                 "actions": actions,
@@ -19435,23 +19572,13 @@ def build_cleanup_after_merge_plan(
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    if apply:
-        remote_ref_result = _run_read_command_with_retry(
-            ["git", "ls-remote", "--heads", "origin", branch],
-            cwd=root,
-            timeout=60,
-        )
-        remote_ref = str(remote_ref_result.get("stdout") or "") if remote_ref_result.get("ok") else ""
-    else:
-        remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
-        remote_ref_result = {
-            "ok": True,
-            "returncode": 0,
-            "stdout": remote_ref,
-            "stderr": "",
-            "attempts": 1,
-            "mode": "single_dry_run_read",
-        }
+    remote_ref_result = _run_read_command_with_retry(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        timeout=60,
+        attempts=2 if apply else 1,
+    )
+    remote_ref = str(remote_ref_result.get("stdout") or "") if remote_ref_result.get("ok") else ""
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines())
     merged = branch in merged_refs
     merge_verification = _cleanup_merge_verification(
@@ -19984,6 +20111,286 @@ def build_cleanup_after_merge_plan(
     return payload
 
 
+def _load_cleanup_batch_manifest(manifest_path: str) -> dict[str, Any]:
+    path = Path(manifest_path)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    if _is_reparse_or_symlink(path):
+        raise WorkflowError(f"cleanup batch manifest must not be a symlink or reparse point: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise WorkflowError(f"cleanup batch manifest is unavailable: {path}: {exc}") from exc
+    if not resolved.is_file() or _is_reparse_or_symlink(resolved):
+        raise WorkflowError(f"cleanup batch manifest must be a regular non-reparse file: {resolved}")
+    payload = _load_json(resolved)
+    if payload.get("schema_version") != CLEANUP_BATCH_MANIFEST_SCHEMA:
+        raise WorkflowError(
+            f"cleanup batch manifest schema must be {CLEANUP_BATCH_MANIFEST_SCHEMA}"
+        )
+    raw_targets = payload.get("targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise WorkflowError("cleanup batch manifest requires a non-empty targets list")
+    if len(raw_targets) > CLEANUP_BATCH_MAX_TARGETS:
+        raise WorkflowError(
+            f"cleanup batch manifest exceeds {CLEANUP_BATCH_MAX_TARGETS} targets"
+        )
+    targets: list[dict[str, Any]] = []
+    branches: set[str] = set()
+    worktrees: set[str] = set()
+    for index, raw in enumerate(raw_targets):
+        if not isinstance(raw, dict):
+            raise WorkflowError(f"cleanup batch target {index} must be an object")
+        unknown = sorted(set(raw) - CLEANUP_BATCH_TARGET_KEYS)
+        if unknown:
+            raise WorkflowError(
+                f"cleanup batch target {index} has unsupported fields: {unknown}"
+            )
+        invalid_types = sorted(
+            key
+            for key, value in raw.items()
+            if value is not None and not isinstance(value, str)
+        )
+        if invalid_types:
+            raise WorkflowError(
+                f"cleanup batch target {index} fields must be strings: {invalid_types}"
+            )
+        target = {
+            key: str(raw.get(key) or "").strip() or None
+            for key in CLEANUP_BATCH_TARGET_KEYS
+        }
+        branch = str(target.get("branch") or "")
+        if not branch:
+            raise WorkflowError(f"cleanup batch target {index} requires branch")
+        branch_check = _run_command(
+            ["git", "check-ref-format", "--branch", branch],
+            cwd=REPO_ROOT,
+            timeout=15,
+        )
+        if not branch_check.get("ok"):
+            raise WorkflowError(f"cleanup batch target {index} has invalid branch: {branch}")
+        if branch in branches:
+            raise WorkflowError(f"cleanup batch manifest repeats branch: {branch}")
+        branches.add(branch)
+        worktree = str(target.get("worktree") or "")
+        if worktree:
+            worktree_key = os.path.normcase(str(Path(worktree).resolve()))
+            if worktree_key in worktrees:
+                raise WorkflowError(f"cleanup batch manifest repeats worktree: {worktree}")
+            worktrees.add(worktree_key)
+        bug_id = str(target.get("bug_id") or "")
+        if bug_id and not re.fullmatch(r"BUG-\d+", bug_id.upper()):
+            raise WorkflowError(f"cleanup batch target {index} has invalid bug_id: {bug_id}")
+        if bug_id:
+            target["bug_id"] = bug_id.upper()
+        targets.append(target)
+    return {
+        "path": str(resolved),
+        "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        "targets": targets,
+    }
+
+
+def _finalize_cleanup_bug_completion(payload: dict[str, Any], bug_id: str | None) -> dict[str, Any]:
+    if payload.get("workflow_gate") != "cleanup_done" or not bug_id:
+        return payload
+    canonical_bug_id = bug_id.strip().upper()
+    try:
+        pre_cleanup_postmortem = build_postmortem_plan(
+            bug_id=canonical_bug_id,
+            output_markdown=False,
+        )
+        if _workflow_artifacts_enabled():
+            pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id / "postmortem-pre-cleanup.json"
+            _write_json(pre_cleanup_path, pre_cleanup_postmortem)
+            payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
+        else:
+            payload["pre_cleanup_postmortem"] = {
+                "artifact_policy": "compact_success_no_artifact",
+                "timing_summary": pre_cleanup_postmortem.get("timing_summary"),
+                "h6_summary": pre_cleanup_postmortem.get("h6_summary"),
+                "context_metrics": pre_cleanup_postmortem.get("context_metrics"),
+                "artifact_metrics": pre_cleanup_postmortem.get("artifact_metrics"),
+                "task_card_availability": pre_cleanup_postmortem.get("task_card_availability"),
+                "validation_receipt_summary": pre_cleanup_postmortem.get("validation_receipt_summary"),
+            }
+    except WorkflowError as exc:
+        payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")
+    cleanup_evidence = {
+        key: payload.get(key)
+        for key in (
+            "schema_version",
+            "branch",
+            "worktree",
+            "canonical_root",
+            "sync_root",
+            "workflow_gate",
+            "actions",
+            "applied",
+            "duration_seconds",
+        )
+    }
+    payload["complete_state"] = _write_state(
+        canonical_bug_id,
+        state="complete",
+        root=REPO_ROOT,
+        cleanup_evidence=cleanup_evidence,
+        pre_cleanup_postmortem=payload.get("pre_cleanup_postmortem"),
+        next_actions=[],
+    )
+    return payload
+
+
+def _cleanup_batch_target_receipt(
+    target: dict[str, Any],
+    *,
+    plan: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    value = plan or {}
+    return {
+        "branch": target.get("branch"),
+        "bug_id": target.get("bug_id"),
+        "worktree": target.get("worktree"),
+        "pr_url": target.get("pr_url"),
+        "workflow_gate": value.get("workflow_gate") or "failed",
+        "cleanup_verification": value.get("cleanup_verification"),
+        "blocking": value.get("blocking") or ([error] if error else []),
+        "warnings": value.get("warnings") or [],
+        "duration_seconds": value.get("duration_seconds"),
+        "error": error,
+    }
+
+
+def _cleanup_batch_failure_plan(
+    target: dict[str, Any],
+    *,
+    root: Path,
+    error: str,
+) -> dict[str, Any]:
+    worktree = Path(str(target["worktree"])) if target.get("worktree") else None
+    try:
+        verification = _cleanup_post_removal_verification(
+            root=root,
+            worktree_path=worktree,
+            branch=str(target["branch"]),
+        )
+    except (OSError, WorkflowError) as exc:
+        verification = {
+            "schema_version": "aistock_worktree_cleanup_verification_v1",
+            "all_clear": False,
+            "verification_error": str(exc),
+        }
+    return {
+        "workflow_gate": "cleanup_incomplete",
+        "cleanup_verification": verification,
+        "blocking": [error],
+        "warnings": [],
+    }
+
+
+def build_cleanup_after_merge_batch_plan(
+    *,
+    manifest_path: str,
+    apply: bool = False,
+    sync_root: bool = False,
+    canonical_root: str | None = None,
+) -> dict[str, Any]:
+    root = Path(canonical_root) if canonical_root else _canonical_root()
+    manifest = _load_cleanup_batch_manifest(manifest_path)
+    targets = manifest["targets"]
+    shared_fetch = _cleanup_preflight_fetch_origin(root, apply=apply)
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / "cleanup-batch"
+    checkpoint_path = output_dir / f"{manifest['sha256'][:16]}-evidence.json"
+    payload: dict[str, Any] = {
+        "schema_version": CLEANUP_BATCH_RESULT_SCHEMA,
+        "generated_at": _utc_now(),
+        "manifest_path": manifest["path"],
+        "manifest_sha256": manifest["sha256"],
+        "target_count": len(targets),
+        "canonical_root": str(root),
+        "sync_root": sync_root,
+        "dry_run": not apply,
+        "shared_preflight_fetch": shared_fetch,
+        "results": [],
+        "blocking": [],
+        "workflow_gate": "running",
+    }
+    _write_json(checkpoint_path, payload)
+    if apply and shared_fetch.get("status") != "fetched":
+        result = shared_fetch.get("result") if isinstance(shared_fetch.get("result"), dict) else {}
+        payload["blocking"] = [
+            str(result.get("stderr") or result.get("stdout") or "shared cleanup fetch failed")
+        ]
+        payload["workflow_gate"] = "blocked"
+        _write_json(checkpoint_path, payload)
+        return payload
+
+    started = time.monotonic()
+    for index, target in enumerate(targets, start=1):
+        cleanup_started = False
+        try:
+            verified_pr_check = (
+                _verify_pr_merged(str(target["pr_url"]))
+                if target.get("pr_url")
+                else None
+            )
+            cleanup_started = True
+            plan = build_cleanup_after_merge_plan(
+                branch=str(target["branch"]),
+                bug_id=target.get("bug_id"),
+                worktree=target.get("worktree"),
+                pr_url=target.get("pr_url"),
+                apply=apply,
+                sync_root=sync_root,
+                canonical_root=str(root),
+                source_receipt_path=target.get("source_receipt_path"),
+                verified_pr_check=verified_pr_check,
+                preflight_fetch=shared_fetch,
+            )
+            if apply:
+                plan = _finalize_cleanup_bug_completion(plan, target.get("bug_id"))
+            receipt = _cleanup_batch_target_receipt(target, plan=plan)
+        except CleanupBlockedError as exc:
+            receipt = _cleanup_batch_target_receipt(target, plan=exc.payload, error=str(exc))
+        except WorkflowError as exc:
+            failure_plan = (
+                _cleanup_batch_failure_plan(target, root=root, error=str(exc))
+                if cleanup_started
+                else None
+            )
+            receipt = _cleanup_batch_target_receipt(target, plan=failure_plan, error=str(exc))
+        payload["results"].append(receipt)
+        payload["completed_count"] = index
+        payload["last_progress_at"] = _utc_now()
+        _write_json(checkpoint_path, payload)
+
+    success_gate = "cleanup_done" if apply else "ready_for_cleanup"
+    success_count = sum(1 for item in payload["results"] if item.get("workflow_gate") == success_gate)
+    failed_count = len(targets) - success_count
+    payload.update(
+        {
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "workflow_gate": (
+                success_gate
+                if failed_count == 0
+                else ("cleanup_partial" if apply and success_count else "blocked")
+            ),
+        }
+    )
+    if not apply and failed_count:
+        payload["workflow_gate"] = "blocked"
+    payload["blocking"] = [
+        f"{item.get('branch')}: {item.get('blocking') or [item.get('error') or 'cleanup failed']}"
+        for item in payload["results"]
+        if item.get("workflow_gate") != success_gate
+    ]
+    _write_json(checkpoint_path, payload)
+    return payload
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     payload = build_start_plan(
         bug_id=args.bug_id,
@@ -20481,49 +20888,18 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         canonical_root=args.canonical_root,
         source_receipt_path=args.source_receipt_path,
     )
-    if payload.get("workflow_gate") == "cleanup_done" and args.bug_id:
-        bug_id = args.bug_id.strip().upper()
-        try:
-            pre_cleanup_postmortem = build_postmortem_plan(bug_id=bug_id, output_markdown=False)
-            if _workflow_artifacts_enabled():
-                pre_cleanup_path = REPO_ROOT / WORKFLOW_ROOT / bug_id / "postmortem-pre-cleanup.json"
-                _write_json(pre_cleanup_path, pre_cleanup_postmortem)
-                payload["pre_cleanup_postmortem_path"] = _repo_rel(pre_cleanup_path)
-            else:
-                payload["pre_cleanup_postmortem"] = {
-                    "artifact_policy": "compact_success_no_artifact",
-                    "timing_summary": pre_cleanup_postmortem.get("timing_summary"),
-                    "h6_summary": pre_cleanup_postmortem.get("h6_summary"),
-                    "context_metrics": pre_cleanup_postmortem.get("context_metrics"),
-                    "artifact_metrics": pre_cleanup_postmortem.get("artifact_metrics"),
-                    "task_card_availability": pre_cleanup_postmortem.get("task_card_availability"),
-                    "validation_receipt_summary": pre_cleanup_postmortem.get("validation_receipt_summary"),
-                }
-        except WorkflowError as exc:
-            payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")
-        cleanup_evidence = {
-            key: payload.get(key)
-            for key in (
-                "schema_version",
-                "branch",
-                "worktree",
-                "canonical_root",
-                "sync_root",
-                "workflow_gate",
-                "actions",
-                "applied",
-                "duration_seconds",
-            )
-        }
-        state = _write_state(
-            bug_id,
-            state="complete",
-            root=REPO_ROOT,
-            cleanup_evidence=cleanup_evidence,
-            pre_cleanup_postmortem=payload.get("pre_cleanup_postmortem"),
-            next_actions=[],
-        )
-        payload["complete_state"] = state
+    payload = _finalize_cleanup_bug_completion(payload, args.bug_id)
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
+
+
+def cmd_cleanup_after_merge_batch(args: argparse.Namespace) -> int:
+    payload = build_cleanup_after_merge_batch_plan(
+        manifest_path=args.manifest,
+        apply=args.apply,
+        sync_root=args.sync_root,
+        canonical_root=args.canonical_root,
+    )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
@@ -21004,6 +21380,17 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--apply", action="store_true")
     add_output_options(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
+
+    cleanup_batch = sub.add_parser(
+        "cleanup-after-merge-batch",
+        help="Safely clean an explicit bounded manifest of merged worktrees with one shared fetch.",
+    )
+    cleanup_batch.add_argument("--manifest", required=True)
+    cleanup_batch.add_argument("--sync-root", action="store_true")
+    cleanup_batch.add_argument("--canonical-root")
+    cleanup_batch.add_argument("--apply", action="store_true")
+    add_output_options(cleanup_batch)
+    cleanup_batch.set_defaults(func=cmd_cleanup_after_merge_batch)
 
     finalizer = sub.add_parser("merge-finalizer", help="Finalize a merged issue PR through close-sync, optional close-sync PR merge, cleanup, and postmortem.")
     finalizer.add_argument("--bug-id", action="append", required=True)
