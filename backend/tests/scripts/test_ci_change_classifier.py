@@ -232,6 +232,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert entry_exit_audit_payload["dev_db_required"] is False
     assert entry_exit_audit_payload["unmapped_code_files"] == []
 
+    exit_learnability_payload = classifier.classify_changed_files(
+        ["scripts/advisory_exit_learnability_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert exit_learnability_payload["classification"] == "targeted_ci_required"
+    assert exit_learnability_payload["backend_required"] is True
+    assert exit_learnability_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert exit_learnability_payload["dev_db_required"] is False
+    assert exit_learnability_payload["unmapped_code_files"] == []
+
     qe_alpha_preparation_payload = classifier.classify_changed_files(
         ["scripts/advisory_qe_alpha_mve_prepare.py"],
         repo_root=tmp_path,
