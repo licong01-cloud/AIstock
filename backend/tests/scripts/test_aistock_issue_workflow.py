@@ -2142,6 +2142,46 @@ def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
+def test_bug_1331_offline_advisory_generator_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+        "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/advisory_model_first/outcome_shadow_service.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+
+
 def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> None:
     changed_files = [
         "backend/services/dataset_release/a_share_limit_rule.py",

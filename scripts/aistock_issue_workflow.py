@@ -1966,6 +1966,8 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
         "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
         "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
         "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
         "scripts/advisory_p0l_build_training_request.py",
         "scripts/wsl/advisory_p0l_train.py",
