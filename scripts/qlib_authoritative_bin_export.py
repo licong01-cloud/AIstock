@@ -161,14 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minute-code-batch-size", type=int, default=20)
     parser.add_argument("--minute-chunk-months", type=int, default=3)
     parser.add_argument("--overwrite-csv", action="store_true")
-    parser.add_argument(
-        "--resume-csv",
-        action="store_true",
-        help=(
-            "Resume daily exports by reusing structurally complete atomic CSV files, or resume a "
-            "chunked stock_minute export after each file's last timestamp."
-        ),
-    )
+    parser.add_argument("--resume-csv", action="store_true", help="Resume a chunked stock_minute CSV export by appending only rows after each file's last timestamp.")
     return parser
 
 
@@ -263,7 +256,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
                 overwrite_csv=args.overwrite_csv,
-                resume_csv=args.resume_csv,
             )
         else:
             summary = export_stock_daily_csv(
