@@ -96,6 +96,139 @@ def test_authoritative_explicit_bj_codes_fail_fast() -> None:
         )
 
 
+def test_missing_stk_limit_rows_use_versioned_board_and_st_rules() -> None:
+    required = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 23), date(2024, 7, 23)],
+        }
+    )
+    history = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 22)],
+            "daily_close": [10.0, 10.0],
+        }
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ", "000001.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)] * 2,
+            "adj_factor": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+    st_periods = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "start_date": [date(2024, 7, 1)],
+            "end_date": [date(2024, 7, 31)],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=pd.DataFrame(
+            columns=["ts_code", "trade_date", "prev_close", "up_limit_price", "down_limit_price"]
+        ),
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=st_periods,
+        required_keys=required,
+    )
+
+    values = completed.set_index("ts_code")
+    assert count == 2
+    assert values.loc["000622.SZ", ["prev_close", "up_limit_price", "down_limit_price"]].tolist() == [
+        10.0,
+        11.0,
+        9.0,
+    ]
+    assert values.loc["000001.SZ", ["prev_close", "up_limit_price", "down_limit_price"]].tolist() == [
+        10.0,
+        10.5,
+        9.5,
+    ]
+
+
+def test_partial_stk_limit_preserves_existing_values_and_fills_only_missing_fields() -> None:
+    limits = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ"],
+            "trade_date": [date(2024, 7, 23)],
+            "prev_close": [10.0],
+            "up_limit_price": [12.0],
+            "down_limit_price": [None],
+        }
+    )
+    history = pd.DataFrame(
+        {"ts_code": ["000622.SZ"], "trade_date": [date(2024, 7, 22)], "daily_close": [10.0]}
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)],
+            "adj_factor": [1.0, 1.0],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=limits,
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=pd.DataFrame(columns=["ts_code", "start_date", "end_date"]),
+        required_keys=limits[["ts_code", "trade_date"]],
+    )
+
+    assert count == 1
+    assert completed.iloc[0]["up_limit_price"] == 12.0
+    assert completed.iloc[0]["down_limit_price"] == 9.0
+
+
+def test_missing_daily_close_uses_last_intraday_close_as_rule_reference() -> None:
+    minute = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ", "000622.SZ"],
+            "trade_time": [
+                "2024-07-22 09:31:00",
+                "2024-07-22 15:00:00",
+                "2024-07-23 09:31:00",
+            ],
+            "close_li": [1600, 1630, 1640],
+        }
+    )
+    history = authoritative._augment_daily_history_from_price_rows(
+        pd.DataFrame(columns=["ts_code", "trade_date", "daily_close"]),
+        minute,
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)],
+            "adj_factor": [2.525, 2.525],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=pd.DataFrame(
+            {
+                "ts_code": ["000622.SZ"],
+                "trade_date": [date(2024, 7, 23)],
+                "prev_close": [None],
+                "up_limit_price": [1.79],
+                "down_limit_price": [1.47],
+            }
+        ),
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=pd.DataFrame(columns=["ts_code", "start_date", "end_date"]),
+        required_keys=pd.DataFrame(
+            {"ts_code": ["000622.SZ"], "trade_date": [date(2024, 7, 23)]}
+        ),
+    )
+
+    assert count == 1
+    assert completed.iloc[0]["prev_close"] == 1.63
+
+
 def test_db_reader_base_universe_defaults_to_sh_sz_and_rejects_bj(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

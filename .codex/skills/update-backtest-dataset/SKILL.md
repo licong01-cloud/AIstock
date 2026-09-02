@@ -29,6 +29,8 @@ description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset u
 - 其他组件只追加 8 月尾部或选择性重建真实失效分区；
 - 不得因为分钟组件重建而全量重导所有无关组件。
 
+本轮是第一个完整 canonical v2 candidate，旧的 7 月基线仍是 v1 股票池，因此四个组件都执行一次 `COMPONENT_REBUILD`；这不是由分钟重建扩散，而是 v1→v2 authority 迁移所需。完成首个 v2 基线后再评估按月尾部追加，不得在本轮为增量复用重新引入冻结、哈希或复杂 lineage。
+
 ## 每月固定顺序
 
 1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
@@ -45,11 +47,11 @@ description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset u
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 receipt --run-id <run_id>
 ```
 
-在 BUG-1322 direct-build 源码合入并完成 `worker-scheduler` runtime readback 前，不得重新提交 `monthly`；旧 runtime 仍会启动已停用的 source-freeze。
+BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后，上述 `monthly --candidate-only` 命令在当前进程中直接顺序执行 daily、minute、factor/static/sector 和 12-index 四个组件，状态写入新 candidate 自身的 `direct_monthly_state.json`；它不依赖 backend 或 worker-scheduler 重启。
+
+同一天对同一 cutoff 重复执行会读取该状态，只跳过已经 `PASS` 的组件。没有状态文件的非空目录默认拒绝采用；仅允许采用由本轮已授权直接分钟导出产生、且只含 `components/logs/reports/work` 标准子目录的精确候选路径。
 
 ## 不可突破边界
 

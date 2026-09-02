@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from ..services.dataset_release.a_share_limit_rule import derive_limit_prices
 from .config import IPO_FILTER_DAYS
 
 
@@ -89,6 +90,7 @@ class CsvExportSummary:
     previous_daily_prev_close_filled_rows: int
     strict_limit: bool
     generated_at: str
+    rule_derived_limit_rows: int = 0
 
 
 STOCK_EXPORT_EXCHANGES = ("sh", "sz")
@@ -770,7 +772,7 @@ def _load_adj_factors(code: str, basis_start: date, basis_end: date) -> pd.DataF
     if not np.isfinite(denominator) or denominator <= 0:
         raise RuntimeError(f"{code}: invalid qfq denominator {denominator}")
     df["qfq_factor"] = (df["adj_factor"] / denominator).astype("float64")
-    return df[["ts_code", "trade_date", "qfq_factor"]]
+    return df[["ts_code", "trade_date", "adj_factor", "qfq_factor"]]
 
 
 def _load_limits(code: str, start: date, end: date) -> pd.DataFrame:
@@ -794,6 +796,161 @@ def _load_limits(code: str, start: date, end: date) -> pd.DataFrame:
     for col in ["prev_close", "up_limit_price", "down_limit_price"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
+
+
+def _load_st_periods(code: str, start: date, end: date) -> pd.DataFrame:
+    with get_conn() as conn:
+        frame = pd.read_sql(
+            """
+            SELECT ts_code, start_date, end_date
+            FROM market.stock_st
+            WHERE ts_code = %(code)s
+              AND start_date <= %(end)s
+              AND (end_date IS NULL OR end_date >= %(start)s)
+            ORDER BY start_date, end_date NULLS LAST
+            """,
+            conn,
+            params={"code": code, "start": start, "end": end},
+        )
+    if frame.empty:
+        return pd.DataFrame(columns=["ts_code", "start_date", "end_date"])
+    frame["start_date"] = pd.to_datetime(frame["start_date"]).dt.date
+    frame["end_date"] = pd.to_datetime(frame["end_date"], errors="coerce").dt.date
+    return frame
+
+
+def _complete_missing_limits_with_rules(
+    *,
+    limits: pd.DataFrame,
+    daily_history: pd.DataFrame,
+    adj_factors: pd.DataFrame,
+    st_periods: pd.DataFrame,
+    required_keys: pd.DataFrame,
+) -> tuple[pd.DataFrame, int]:
+    """Fill only missing or partial stock-day limits from the versioned rule."""
+
+    columns = ["ts_code", "trade_date", "prev_close", "up_limit_price", "down_limit_price"]
+    output = limits.loc[:, columns].copy() if not limits.empty else pd.DataFrame(columns=columns)
+    required = required_keys.loc[:, ["ts_code", "trade_date"]].drop_duplicates().copy()
+    required["ts_code"] = required["ts_code"].astype(str).str.upper()
+    required["trade_date"] = pd.to_datetime(required["trade_date"]).dt.date
+    if required.empty:
+        return output, 0
+    output["ts_code"] = output["ts_code"].astype(str).str.upper()
+    output["trade_date"] = pd.to_datetime(output["trade_date"]).dt.date
+    merged = required.merge(output, on=["ts_code", "trade_date"], how="left")
+    missing = merged.loc[
+        merged[["prev_close", "up_limit_price", "down_limit_price"]].isna().any(axis=1),
+        ["ts_code", "trade_date"],
+    ]
+    if missing.empty:
+        return output, 0
+
+    history = daily_history.copy()
+    history["ts_code"] = history["ts_code"].astype(str).str.upper()
+    history["trade_date"] = pd.to_datetime(history["trade_date"]).dt.date
+    factors = adj_factors.copy()
+    factors["ts_code"] = factors["ts_code"].astype(str).str.upper()
+    factors["trade_date"] = pd.to_datetime(factors["trade_date"]).dt.date
+    periods = st_periods.copy()
+    if not periods.empty:
+        periods["ts_code"] = periods["ts_code"].astype(str).str.upper()
+        periods["start_date"] = pd.to_datetime(periods["start_date"]).dt.date
+        periods["end_date"] = pd.to_datetime(periods["end_date"], errors="coerce").dt.date
+
+    derived_rows: list[dict[str, object]] = []
+    for row in missing.itertuples(index=False):
+        code = str(row.ts_code)
+        day = row.trade_date
+        code_history = history.loc[
+            (history["ts_code"] == code) & (history["trade_date"] < day)
+        ].sort_values("trade_date")
+        if code_history.empty:
+            continue
+        previous = code_history.iloc[-1]
+        previous_day = previous["trade_date"]
+        code_factors = factors.loc[factors["ts_code"] == code].sort_values("trade_date")
+        previous_factor = code_factors.loc[code_factors["trade_date"] <= previous_day, "adj_factor"]
+        current_factor = code_factors.loc[code_factors["trade_date"] == day, "adj_factor"]
+        if previous_factor.empty or current_factor.empty:
+            continue
+        is_st = False
+        if not periods.empty:
+            code_periods = periods.loc[periods["ts_code"] == code]
+            is_st = bool(
+                (
+                    (code_periods["start_date"] <= day)
+                    & (code_periods["end_date"].isna() | (code_periods["end_date"] >= day))
+                ).any()
+            )
+        derived = derive_limit_prices(
+            ts_code=code,
+            trade_date=day,
+            previous_close=previous["daily_close"],
+            previous_adj_factor=previous_factor.iloc[-1],
+            current_adj_factor=current_factor.iloc[-1],
+            is_st=is_st,
+        )
+        source = derived.as_source_row()
+        derived_rows.append(
+            {
+                "ts_code": code,
+                "trade_date": day,
+                "prev_close": float(source["pre_close"]),
+                "up_limit_price": float(source["up_limit"]),
+                "down_limit_price": float(source["down_limit"]),
+            }
+        )
+    if not derived_rows:
+        return output, 0
+    derived_frame = pd.DataFrame.from_records(derived_rows)
+    output = output.set_index(["ts_code", "trade_date"])
+    for derived in derived_frame.itertuples(index=False):
+        key = (derived.ts_code, derived.trade_date)
+        if key in output.index:
+            for column in ("prev_close", "up_limit_price", "down_limit_price"):
+                existing = output.at[key, column]
+                candidate = getattr(derived, column)
+                if pd.isna(existing):
+                    output.at[key, column] = candidate
+        else:
+            output.loc[key, :] = [derived.prev_close, derived.up_limit_price, derived.down_limit_price]
+    return output.reset_index().sort_values(["ts_code", "trade_date"]), len(derived_rows)
+
+
+def _augment_daily_history_from_price_rows(
+    daily_history: pd.DataFrame,
+    price_rows: pd.DataFrame,
+) -> pd.DataFrame:
+    """Use last intraday/daily raw close when the daily table has a real gap."""
+
+    history = daily_history.copy()
+    source = price_rows.copy()
+    if source.empty or "close_li" not in source.columns or "ts_code" not in source.columns:
+        return history
+    if "trade_date" not in source.columns:
+        if "trade_time" not in source.columns:
+            return history
+        source["trade_date"] = pd.to_datetime(source["trade_time"]).dt.date
+    else:
+        source["trade_date"] = pd.to_datetime(source["trade_date"]).dt.date
+    source["daily_close"] = pd.to_numeric(source["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
+    order = ["ts_code", "trade_date"]
+    if "trade_time" in source.columns:
+        order.append("trade_time")
+    fallback = (
+        source.dropna(subset=["daily_close"])
+        .sort_values(order)
+        .groupby(["ts_code", "trade_date"], as_index=False)
+        .tail(1)[["ts_code", "trade_date", "daily_close"]]
+    )
+    if history.empty:
+        return fallback.sort_values(["ts_code", "trade_date"])
+    return (
+        pd.concat([history, fallback], ignore_index=True)
+        .drop_duplicates(["ts_code", "trade_date"], keep="first")
+        .sort_values(["ts_code", "trade_date"])
+    )
 
 
 def _load_suspend_dates(code: str, start: date, end: date) -> set[date]:
@@ -878,10 +1035,11 @@ def _load_daily_close_history(code: str, start: date, end: date, lookback_days: 
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params={"code": code, "lookback_start": lookback_start, "end": end})
     if df.empty:
-        return pd.DataFrame(columns=["trade_date", "daily_close"])
+        return pd.DataFrame(columns=["ts_code", "trade_date", "daily_close"])
+    df["ts_code"] = code
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     df["daily_close"] = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
-    return df[["trade_date", "daily_close"]]
+    return df[["ts_code", "trade_date", "daily_close"]]
 
 
 def _fill_prev_close_from_daily_history(
@@ -939,6 +1097,15 @@ def _build_minute_expected_frame(
 
     adj = _load_adj_factors(code, basis_start, basis_end)
     limits = _load_limits(code, start, end)
+    daily_history = _load_daily_close_history(code, start, end)
+    daily_history = _augment_daily_history_from_price_rows(daily_history, df)
+    limits, derived_limit_rows = _complete_missing_limits_with_rules(
+        limits=limits,
+        daily_history=daily_history,
+        adj_factors=adj,
+        st_periods=_load_st_periods(code, start, end),
+        required_keys=df[["ts_code", "trade_date"]],
+    )
     df = df.merge(adj[["trade_date", "qfq_factor"]], on="trade_date", how="left")
     df = df.merge(limits[["trade_date", "prev_close", "up_limit_price", "down_limit_price"]], on="trade_date", how="left")
     raw_close_for_fill = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
@@ -955,7 +1122,6 @@ def _build_minute_expected_frame(
                 df.loc[fill_mask, "prev_close"] = raw_close_for_fill[fill_mask]
                 filled_prev_close = int(fill_mask.sum())
     if df["prev_close"].isna().any():
-        daily_history = _load_daily_close_history(code, start, end)
         filled_prev_close_from_daily = _fill_prev_close_from_daily_history(df, daily_history, code=code)
 
     if df["qfq_factor"].isna().any():
@@ -989,6 +1155,7 @@ def _build_minute_expected_frame(
     out["limit_down"] = np.where(have_limits, (raw_close <= out["down_limit_price"] + VALUE_COMPARE_ABS_TOL).astype("float32"), np.nan)
     out.attrs["suspended_prev_close_filled_rows"] = filled_prev_close
     out.attrs["previous_daily_prev_close_filled_rows"] = filled_prev_close_from_daily
+    out.attrs["rule_derived_limit_rows"] = derived_limit_rows
     return out
 
 
@@ -1006,6 +1173,15 @@ def _build_daily_expected_frame(
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     adj = _load_adj_factors(code, basis_start, basis_end)
     limits = _load_limits(code, start, end)
+    daily_history = _load_daily_close_history(code, start, end)
+    daily_history = _augment_daily_history_from_price_rows(daily_history, df)
+    limits, derived_limit_rows = _complete_missing_limits_with_rules(
+        limits=limits,
+        daily_history=daily_history,
+        adj_factors=adj,
+        st_periods=_load_st_periods(code, start, end),
+        required_keys=df[["ts_code", "trade_date"]],
+    )
     df = df.merge(adj[["trade_date", "qfq_factor"]], on="trade_date", how="left")
     df = df.merge(limits[["trade_date", "prev_close", "up_limit_price", "down_limit_price"]], on="trade_date", how="left")
     raw_close_for_fill = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
@@ -1020,7 +1196,6 @@ def _build_daily_expected_frame(
                 df.loc[fill_mask, "prev_close"] = raw_close_for_fill[fill_mask]
                 filled_prev_close = int(fill_mask.sum())
     if df["prev_close"].isna().any():
-        daily_history = _load_daily_close_history(code, start, end)
         filled_prev_close_from_daily = _fill_prev_close_from_daily_history(df, daily_history, code=code)
     if df["qfq_factor"].isna().any():
         bad = df.loc[df["qfq_factor"].isna(), ["ts_code", "trade_date"]].drop_duplicates().head()
@@ -1053,6 +1228,7 @@ def _build_daily_expected_frame(
     out["limit_down"] = np.where(have_limits, (raw_close <= out["down_limit_price"] + VALUE_COMPARE_ABS_TOL).astype("float32"), np.nan)
     out.attrs["suspended_prev_close_filled_rows"] = filled_prev_close
     out.attrs["previous_daily_prev_close_filled_rows"] = filled_prev_close_from_daily
+    out.attrs["rule_derived_limit_rows"] = derived_limit_rows
     return out
 
 
@@ -1165,6 +1341,7 @@ def export_stock_minute_csv(
     skipped = 0
     suspended_prev_close_filled_rows = 0
     previous_daily_prev_close_filled_rows = 0
+    rule_derived_limit_rows = 0
 
     for code in codes:
         df = _load_minute_raw(code, start, end)
@@ -1187,6 +1364,7 @@ def export_stock_minute_csv(
         csv_rows += len(out)
         suspended_prev_close_filled_rows += int(out.attrs.get("suspended_prev_close_filled_rows", 0))
         previous_daily_prev_close_filled_rows += int(out.attrs.get("previous_daily_prev_close_filled_rows", 0))
+        rule_derived_limit_rows += int(out.attrs.get("rule_derived_limit_rows", 0))
 
     summary = CsvExportSummary(
         dataset="stock_minute_1min",
@@ -1204,6 +1382,7 @@ def export_stock_minute_csv(
         previous_daily_prev_close_filled_rows=previous_daily_prev_close_filled_rows,
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
+        rule_derived_limit_rows=rule_derived_limit_rows,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary
@@ -1304,6 +1483,18 @@ def export_stock_minute_csv_chunked(
             conn,
             params={"codes": codes, "start": start, "end": end},
         )
+        st_periods = pd.read_sql(
+            """
+            SELECT ts_code, start_date, end_date
+            FROM market.stock_st
+            WHERE ts_code = ANY(%(codes)s)
+              AND start_date <= %(end)s
+              AND (end_date IS NULL OR end_date >= %(start)s)
+            ORDER BY ts_code, start_date, end_date NULLS LAST
+            """,
+            conn,
+            params={"codes": codes, "start": start, "end": end},
+        )
         daily_history = pd.read_sql(
             """
             SELECT d.ts_code, d.trade_date, d.close_li
@@ -1327,7 +1518,7 @@ def export_stock_minute_csv_chunked(
         bad = adj.loc[adj["adj_factor"].isna() | (adj["adj_factor"] <= 0), ["ts_code", "trade_date", "adj_factor"]].head()
         raise RuntimeError(f"invalid adj_factor rows: {bad.to_dict(orient='records')}")
     adj["qfq_factor"] = (adj["adj_factor"] / adj.groupby("ts_code")["adj_factor"].transform("max")).astype("float64")
-    adj = adj[["ts_code", "trade_date", "qfq_factor"]]
+    adj = adj[["ts_code", "trade_date", "adj_factor", "qfq_factor"]]
 
     if limits.empty and strict_limit:
         raise RuntimeError(f"no stk_limit rows in export window {start}~{end}")
@@ -1352,6 +1543,7 @@ def export_stock_minute_csv_chunked(
     csv_rows = 0
     suspended_prev_close_filled_rows = 0
     previous_daily_prev_close_filled_rows = 0
+    rule_derived_limit_rows = 0
     current = pd.Timestamp(start)
     end_exclusive_all = pd.Timestamp(end) + pd.Timedelta(days=1)
 
@@ -1391,6 +1583,15 @@ def export_stock_minute_csv_chunked(
                 continue
             df["trade_time"] = pd.to_datetime(df["trade_time"])
             df["trade_date"] = df["trade_time"].dt.date
+            effective_history = _augment_daily_history_from_price_rows(daily_history, df)
+            limits, derived_count = _complete_missing_limits_with_rules(
+                limits=limits,
+                daily_history=effective_history,
+                adj_factors=adj,
+                st_periods=st_periods,
+                required_keys=df[["ts_code", "trade_date"]],
+            )
+            rule_derived_limit_rows += derived_count
             df = df.merge(adj, on=["ts_code", "trade_date"], how="left")
             df = df.merge(limits, on=["ts_code", "trade_date"], how="left")
             raw_close_for_fill = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
@@ -1403,7 +1604,9 @@ def export_stock_minute_csv_chunked(
                     df.loc[fill_mask, "prev_close"] = raw_close_for_fill[fill_mask]
                     suspended_prev_close_filled_rows += int(fill_mask.sum())
             if df["prev_close"].isna().any():
-                previous_daily_prev_close_filled_rows += _fill_prev_close_from_daily_history(df, daily_history)
+                previous_daily_prev_close_filled_rows += _fill_prev_close_from_daily_history(
+                    df, effective_history
+                )
 
             if df["qfq_factor"].isna().any():
                 bad = df.loc[df["qfq_factor"].isna(), ["ts_code", "trade_date"]].drop_duplicates().head()
@@ -1469,6 +1672,7 @@ def export_stock_minute_csv_chunked(
         previous_daily_prev_close_filled_rows=previous_daily_prev_close_filled_rows,
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
+        rule_derived_limit_rows=rule_derived_limit_rows,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary
@@ -1518,6 +1722,7 @@ def export_stock_daily_csv(
     skipped = 0
     suspended_prev_close_filled_rows = 0
     previous_daily_prev_close_filled_rows = 0
+    rule_derived_limit_rows = 0
     for code in codes:
         df = _load_daily_raw(code, start, end)
         if df.empty:
@@ -1540,6 +1745,7 @@ def export_stock_daily_csv(
         csv_rows += len(out)
         suspended_prev_close_filled_rows += int(out.attrs.get("suspended_prev_close_filled_rows", 0))
         previous_daily_prev_close_filled_rows += int(out.attrs.get("previous_daily_prev_close_filled_rows", 0))
+        rule_derived_limit_rows += int(out.attrs.get("rule_derived_limit_rows", 0))
 
     summary = CsvExportSummary(
         dataset="stock_daily",
@@ -1557,6 +1763,7 @@ def export_stock_daily_csv(
         previous_daily_prev_close_filled_rows=previous_daily_prev_close_filled_rows,
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
+        rule_derived_limit_rows=rule_derived_limit_rows,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary

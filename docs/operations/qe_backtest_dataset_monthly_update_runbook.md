@@ -617,6 +617,21 @@ production_activation=not_requested
 当前实现 PR 的合法上限就是上述状态；不得为了获得“真实耗时”重导旧 cutoff，也不得读取或修改上一批候选。
 > 2026-09-02 operator 变更：本手册现行入口改为直接月更。所有 source-freeze、全历史源哈希、publish 前全值复扫、source-drift waiting、re-attestation 和旧 sample/initial-migration 步骤均已停用；下文冲突内容只保留历史解释，不得执行。
 
+### 0A.0 直接执行入口的实际行为
+
+`qe_hmm_full_v2 monthly --candidate-only` 不再向旧 control catalog 提交 resolution。命令直接：
+
+1. 只读解析目标 cutoff 和最近一个更早的 `final_validation_validated` 基线；
+2. 创建 `YYYYMMDD-qe_hmm_full_v2-direct-YYYYMMDD-candidate` 独立目录；
+3. 顺序执行 `daily_bin`、`minute_bin`、`factor_h5_static`、`index_context`；
+4. factor/static 按三个月日期块查询并写出，P3A sector 只消费 `resolved + aligned` 行，unavailable 保持缺失和 `l2_code_id=-1`，不回退旧行业；
+5. minute 使用完整 `2024-01-02..cutoff` 流式重建，因此覆盖 7 月补录和 8 月新增；
+6. 仅检查各组件结构文件、metadata 和 calendar cutoff，之后写 `CANDIDATE_READY`；数值抽样和 QE/HMM smoke 仍按本手册验收段执行后才可签收。
+
+状态文件只保存路径、动作、状态、行数和 cutoff，不计算数据内容哈希。重复命令仅续跑未 `PASS` 组件；partial 组件不会被自动删除或覆盖。
+
+2026-08-31 是首个完整 canonical v2 candidate，而可复用的 2026-07-31 validated 基线仍使用 v1 股票池，所以四个组件各执行一次全组件重建。分钟重建没有触发无关组件；其他三项重建来自 v1→v2 股票池/行业 authority 迁移。首个 v2 基线完成后再单独实现简单尾部追加，本轮不为增量优化增加冻结、内容哈希、lineage 或资源门禁。
+
 ## 0A. 当前直接月更步骤
 
 ### 0A.1 当前目标
