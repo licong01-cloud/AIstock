@@ -925,7 +925,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 父蓝图v2.39；Phase 2详细设计§4.3.4.2～§4.3.4.10、§23.35～§23.45；`industry_pit_adapter.py`、`market_relative_ridge_{candidate,holdout}.py`、`rotation_l1_input_bundle.py`及直接测试 | immutable input bundle canonical `9d9658bf…57aa`；RW1 parent failure canonical `eee9e2e1…5ba`；10/24 fits，五fold metric-valid/full-coverage | FORMAL_EXECUTED_ROTATION_L1_NOT_AVAILABLE_TERMINAL | 输入/程序完整，模型D4失败；不写candidate/model/product bundle/READY。继续Phase 2须新模型合同，CAPABILITY_AVAILABLE和真实API/UI仍为0 |
+| F-011 | 父蓝图v2.39；Phase 2详细设计§4.3.4.2～§4.3.4.10、§23.35～§23.45；`industry_pit_adapter.py`、`market_relative_ridge_{candidate,holdout}.py`、`rotation_l1_input_bundle.py`及直接测试 | `artifact:F:/Dev/AIstock_artifacts/C012_RL1_RW1_FORMAL_24FIT_20260902_ae5d245a_r5/acceptance.failure.json` canonical `eee9e2e1…5ba`；10/24 fits，五foldmetric-valid/full-coverage | APPROVED_BY_USER_VERIFIED_FORMAL_NOT_AVAILABLE_TERMINAL | 用户已批准D1～D6失败停止合同；输入/程序完整、模型D4失败，不写candidate/model/product bundle/READY。继续Phase 2须新模型合同，CAPABILITY_AVAILABLE和真实API/UI仍为0 |
 | F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | DESIGN_READY_USER_APPROVED | 用户明确批准 legacy producer/consumer 冻结与 advisory-only 隔离；源码与结果证据待实现 PR 回填 |
 | F-013 | Phase 2 F2 详细设计 §9～§11：G2-A真实L1纵切 + G2-B扩展产品 + `/hmm-risk` 最终默认首页 | `backend/tests/hmm_risk/test_api.py`、`backend/tests/hmm_risk/test_retrospective_report.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：真实单日L1热力图、capability状态、后续L1/L2/7日history、固定详情、预警、renderer/error、完整分母与abstention） | APPROVED_BY_USER_G2_A_L1_PRODUCT_AND_G2_B_EXPANSION_PENDING | G2-A必须交付真实单日rotation_L1 API/UI纵切，不能等待G2-B；G2-B扩展历史/预警/详情及后续已验收能力。`/hmm`默认切换仍等待F-011～F-013完整验收 |
 | F-014 | 本文 Phase 3 UI/隔离方向；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径，尚未建立） | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准跨阶段方向；不得从父蓝图直接编码，身份、训练任务、artifact、状态机、API/UI 和验证合同待独立设计 |
@@ -1178,3 +1178,70 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 ---
 
 **文档归档路径**: `docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md`
+
+## 15. Phase 2 模型方向修订建议（PROPOSED_NOT_APPROVED）
+
+> 本章是基于P2-3A/P2-3B/P2-3C/P2-4、HR1与RW1正式结果形成的蓝图修订建议，供独立复审和用户决策。它不修改v2.39当前权威状态，不批准新模型、特征、目标、阈值、holdout、依赖、源码、fit、API/UI或runtime动作；严格产品进度仍为`11/17=64.71%`。
+
+### 15.1 为什么连续候选未通过
+
+1. **早期验收对象与产品目标错位**。逐sector HMM/K=3结构更擅长描述当前隐状态，不能天然回答“同一交易日哪些板块未来相对更强或更弱”。P2-3A的18/18正式spread为负、Rank IC仅3/18为正，已经否定以descriptive state直接承担未来轮动语义。
+2. **后续模型仍受固定线性关系限制**。P2-3B/P2-3C、HR1和RW1虽然改为直接预测未来相对收益，并引入market regime、交互项和252日rolling window，但核心仍是固定Ridge斜率。不同fold反复发生Rank IC与spread符号反转，说明主要问题是跨时期非平稳和非线性，而不是seed、covariance、coverage或单一窗口长度。
+3. **开发通过不能稳定外推**。P2-3C在development成功后被一次正式holdout终结；HR1/RW1也分别在完整因果回放中失败。现有证据支持“当前模型类预测力不足”，不支持通过重跑、调seed/alpha/window、删除fold或降低阈值恢复。
+4. **输入与实现不再是当前主因**。BUG-1306/1316/1318闭合后，RW1五fold全部`metric_valid=true`且`FULL_COVERAGE`；median Rank IC与spread通过，但正向fold仅3/5，两项OOF Newey-West t-stat仅0.5025/0.4200。模型失败已与数据/PIT/停牌/provider-absence及程序失败分离。
+5. **验收合同存在相关条件重复合取，但这不足以解释RW1失败**。4/5正向fold、median IC、median spread及两项NW t-stat都在衡量相近的效果/稳定性，全部AND会增加false-reject；然而RW1同时失败于fold符号稳定性和两项总体显著性，不能通过删除一个门禁追认成功。任何验收重构只适用于未来预注册新合同，禁止反写既有结果。
+
+### 15.2 建议调整的核心模型范式
+
+1. **HMM/jump model角色收敛为market context**。市场级HMM或jump model只负责输出因果`market_regime`及其confidence/availability，不再要求逐sector HMM直接生成产品预测，也不以hidden-state index承担`trending/neutral/fading`语义。
+2. **板块核心预测改为直接监督的横截面排序**。新的唯一候选应直接学习交易日×canonical sector的未来10日相对强弱顺序，而不是再次用普通最小二乘逼近绝对收益。优先评估一个受约束、可解释的非线性cross-sectional ranker；具体estimator、loss、dependency和有限参数必须进入新的F2 D1～D6并由用户批准，本文不预先授权LightGBM、XGBoost、神经网络、ensemble或依赖安装，也不允许horizon grid。
+3. **market regime作为条件变量而非最终答案**。P2-3C/RW1已经证明“market context + 线性interaction”本身不足，因此新假设不能复制旧Ridge后换名。sector特征可与冻结market context形成非线性交互或分段函数，但不得按validation/holdout结果选择regime划分、模型分支或fallback。
+4. **连续预测优先**。主要输出为方向明确的连续`rotation_score`与可解释贡献；`trending/neutral/fading`只能由预注册横截面映射、coverage和abstention规则派生，不得由state index、当前强弱、默认neutral或失败fallback生成。
+5. **风险预警保持独立能力**。rotation score不能自动冒充risk warning。G2-A先只证明`rotation_L1`；`rotation_L2|risk_L1|risk_L2`继续显式`NOT_AVAILABLE`，后续能力各自需要产品目标、label和验收合同。
+6. **feature集合必须紧凑且预注册**。现有五项relative feature及其market-sign交互已不足以证明稳定预测力；新F2可以从当前已准入H5/Bin字段中提出一个有经济含义的有界集合，例如多周期相对动量、波动/回撤、breadth、换手与资金流，但必须在读取新评估尾部前固定公式、方向、lookback和缺失语义。禁止自动feature generation、全库筛选、PCA黑箱或根据holdout保留特征。
+
+### 15.3 建议重构的验收结构
+
+未来合同应保留数值安全、PIT、coverage、walk-forward和未见时间尾部，但避免五个高度相关效果条件平级合取：
+
+1. **一个主要预测力指标**：预注册一个横截面排序主指标及其时间序列显著性；不得在看到新candidate结果后在Rank IC、AUC、NDCG或其他指标间切换。
+2. **一个经济幅度指标**：预注册top-bottom或多空relative spread，用于证明排序差异具有业务量级；公式、持有期、成本口径和分组必须冻结。
+3. **一个跨期稳定性指标**：只选择一个不与主显著性重复的稳定性规则，例如最坏fold下界、正向fold比例或分期sign consistency；不再同时堆叠多项同义gate。
+4. **独立coverage/abstention合同**：完整canonical denominator、typed unavailable、行业/规模/流动性代表性继续单独验收；coverage通过不能补足预测失败，预测通过也不能隐藏coverage不足。
+5. **全新未消费评估尾部**：P2-4 holdout、HR1/RW1 development和全部已读取结果永久只作历史证据。新合同的最终评估窗口必须证明未被模型/阈值/feature决策访问且10D outcome已因果完整；确切日期与source readiness须在详细设计中闭合，不能为了赶进度伪称untouched。
+6. **阈值不得从现有失败结果反推**：本章不提出使RW1恰好通过的数值。新阈值必须由产品最小有效性、统计功效、样本规模与false-accept/false-reject分析预注册，并由用户批准。
+
+### 15.4 最短实现路线与反过度工程约束
+
+1. 只设计和执行**一个**新candidate；禁止线性/树/深度模型并行、模型海选、无界参数grid、自动fallback或失败后继续第二candidate。
+2. 复用已经闭合的C-013/PIT、immutable input bundle思想和现有特征authority；只在新模型确有必要且经批准时增加最小字段，不重建dataset registry、通用feature store、通用training/evidence平台或Phase 3 scheduler。
+3. 新F2详细设计必须一次闭合：candidate identity、输入/target、因果边界、estimator与有限参数、train-only preprocessing/selection、walk-forward、全新评估尾部、产品/coverage验收、compact writer、失败语义、最大fit成本与停止条件。不得拆成多个小设计阶段。
+4. 通过正式development与全新评估后，同一G2-A范围立即交付一个真实历史完整交易日prediction、最小repository/read API、真实L1热力图和无mock浏览器验收；不得再次停在model/bundle/receipt。
+5. 任一主要预测、经济幅度、稳定性、coverage、reproducibility或writer/readback条件失败，candidate为`NOT_AVAILABLE`且不生成产品能力；是否开启另一模型方向必须重新由用户决定。
+6. 建议新candidate单次完整实现与受控实验的工程预算目标不超过10小时，并预先声明fit上限；该预算不是模型验收门禁。若预检证明完整合同无法在预算内执行，应停止并报告成本设计问题，不得把超时、局部fit或未完成评估改写为成功，也不得为赶时限缩减数据、fold或产品指标。
+
+### 15.5 蓝图可行性判断
+
+- **产品目标可行但不能保证指定模型成功**：因果板块相对强弱预测、状态展示和风险提示具有明确数据、接口与验收定义；其实现可行性取决于是否找到在未见时间段仍有稳定经济效果的模型，而不是文档或工程完成度。
+- **当前模型路径已被证伪**：逐sector descriptive HMM、当前jump-label、固定linear Ridge及其market-conditioned/rolling变体均不得继续局部修补或冒充可用能力。
+- **基础数据架构可继续复用**：PIT/security/provider-absence/停牌/immutable input bundle与fail-closed readback已经证明可支撑正式实验，不应因模型失败推倒重建。
+- **当前蓝图执行路线暂不完整**：v2.39正确终止G2-A，但在用户批准新模型合同前没有合法的G2-B/G2-C实施路径。正式蓝图更新应在独立复审本章后，把获批的新模型方向写入Gate 2，而不是把本提案直接视为active authority。
+
+### 15.6 待独立复审与用户决定
+
+1. 是否批准“HMM/jump只负责market context，sector使用直接监督的非线性横截面排序”作为新的唯一G2-A模型方向；
+2. 是否批准将效果验收重构为“一个主预测指标 + 一个经济幅度指标 + 一个稳定性指标 + 独立coverage”，并在详细设计中批准确切公式与阈值；
+3. 是否确认旧P2-3A～P2-4、HR1、RW1全部保持immutable终态，不允许重跑、调参或复用已消费窗口；
+4. 是否批准在新F2中选择一个具体estimator、有限参数及全新未消费评估尾部；任何新依赖安装仍单独授权；
+5. 是否确认新candidate通过后必须在同一G2-A直接闭合真实prediction/API/UI，失败则返回用户而不继续自动演进。
+
+### 15.7 本轮正式审核结论
+
+1. **可行性与证据边界：PASS**。建议只声明“非线性横截面排序值得作为单一可证伪假设”，不保证成功，也不把线性模型失败外推为所有模型不可行；全新评估尾部、统计功效和dependency readiness仍须后续F2证明。
+2. **禁止简化交付：PASS**。单一candidate通过后仍必须在同一G2-A闭合真实prediction/repository/API/UI，不能用fit、metric、bundle、静态页面或`rotation_L1`局部结果冒充FULL_READY或Phase 2完成。
+3. **禁止静默错误：PASS**。PIT、typed unavailable、coverage/abstention、fresh-process、writer/readback及失败`NOT_AVAILABLE`语义全部保留；没有默认neutral、前值、旧模型fallback、删sector或自动换candidate。
+4. **禁止业务逻辑迁移：PASS**。v2.39当前终态、advisory-only、canonical denominator、旧artifact不可复用及四能力独立状态均未改变；本章只提出待审模型范式和验收结构，不激活新业务语义。
+5. **禁止未经确认的门禁和审批：PASS**。没有确定estimator、参数、feature集合、数值阈值、评估日期、依赖或runtime人工审批；所有精确项留给用户批准的新F2 D1～D6。10小时仅是建议工程预算，不是成功门禁。
+6. **反过度工程：PASS**。只允许一个candidate、一个详细设计和一个端到端G2-A任务；不建设通用模型/feature/evidence/training平台，不并行路线，不迁移历史artifact。
+
+本章审核后状态：`PASS_PROPOSAL_REVIEW_READY_FOR_INDEPENDENT_PEER_REVIEW_NOT_APPROVED_NOT_IMPLEMENTATION_READY`。它不解除G2-A终止状态，不允许源码实施或实验，也不增加F-011/F-013完成度；Claude Code复审与用户正式批准后，方可另行更新active蓝图正文。
