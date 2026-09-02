@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1323",
-  "closed_at": null,
+  "closed_at": "2026-09-02T10:01:30.377324Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -35,6 +35,17 @@
   ],
   "expected": "一个candidate-only月度命令按cutoff直接编排各组件，支持已存在步骤续跑，不做source-freeze或全历史内容哈希，不覆盖既有候选或production。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "scripts/update_backtest_dataset_monthly.py",
+      "tests/aistock_validation/bugs/20260902_BUG-1323-v2.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/direct_monthly.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
@@ -48,7 +59,7 @@
       ".codex/skills/update-backtest-dataset/SKILL.md",
       "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "merge_commit",
     "ownership": {
       "changed_files": [
         "scripts/update_backtest_dataset_monthly.py",
@@ -218,10 +229,32 @@
     "inference_basis": "planned_scope",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1323/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1323",
+      "business_smoke_semantic": {
+        "contract_id": "openapi_document",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "3bd1771dfd27621c8836771a2cfbcd66dff00fa4e1dfffefff11e16650a92cef",
+      "expected_identity": "08f536c4d8ae3d9ebc0ef3dd2265a3b969cc4bcd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-02T09:59:16.134212Z",
+      "mode": "read_only",
+      "observed_identity": "08f536c4d8ae3d9ebc0ef3dd2265a3b969cc4bcd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "baffbaafbb5c0b53fdb5edc6d06f1f18a2e0329ac3504a7657463a0988d515a3",
+      "receipt_sha256": "70aa94924f28ccaec609d0b5ac725e597c8471cd24f9a8cbef0589e278f64990",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c7fb083150a3f3e64bbbfee27bca380b75598e651d1d18868f6050fde2310d39",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -254,7 +287,7 @@
     ],
     "validation_evidence_digest": "d4b5d2bae69c0a246960b686949f12b59d3abd5d5dfec2e9091b69c73c601130"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
