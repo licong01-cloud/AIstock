@@ -615,3 +615,38 @@ production_activation=not_requested
 ```
 
 当前实现 PR 的合法上限就是上述状态；不得为了获得“真实耗时”重导旧 cutoff，也不得读取或修改上一批候选。
+> 2026-09-02 operator 变更：本手册现行入口改为直接月更。所有 source-freeze、全历史源哈希、publish 前全值复扫、source-drift waiting、re-attestation 和旧 sample/initial-migration 步骤均已停用；下文冲突内容只保留历史解释，不得执行。
+
+## 0A. 当前直接月更步骤
+
+### 0A.1 当前目标
+
+- profile：`qe_hmm_full_v2`
+- cutoff：`2026-08-31`
+- 输出：X 盘新的独立 candidate 目录
+- 基线：现有 2026-07-31 数据集只读保留
+- 特殊事实：7 月分钟线已在旧候选导出后补录，因此新候选必须重新导出分钟组件
+- 禁止：覆盖旧候选、production activation、source-freeze、全历史内容哈希、全历史复扫和新增门禁
+
+### 0A.2 执行顺序
+
+1. 只读确认 canonical PIT v2、industry/P3A 和数据库数据覆盖到目标 cutoff；已有合格结果直接复用。
+2. 读取 7 月分钟补录影响清单。清单完整时只重建受影响股票/日期；清单不完整时重建整个分钟组件。
+3. 对其他组件只追加 8 月尾部或选择性重建真实失效分区，不重导无关历史数据。
+4. 输出到不存在的新候选目录；旧 7 月数据集始终只读。
+5. 运行一次结构验收、分层数值抽样和 QE/HMM producer smoke。
+6. PASS 后停止并汇报候选路径；不执行生产切换。
+
+### 0A.3 允许结束任务的真实失败
+
+只有数据库/文件系统/WSL/Qlib 工具实际失败、必要数据仍缺失、PIT/唯一键/数值契约错误或候选写入失败可以结束任务。CPU、内存、commit headroom、swap、预测磁盘、性能下降和其他模块负载只记录 telemetry，不得阻断、等待、缩小数据范围或自动取消。
+
+### 0A.4 完成条件
+
+- PIT 和数据覆盖到 `2026-08-31`；
+- 7 月补录分钟数据和 8 月新增分钟数据进入新候选；
+- daily/minute/H5/static/12-index/sector 结构与范围完整；
+- ST、涨跌停、复权、QFQ、moneyflow 和行业数据抽样通过；
+- 股票池、PIT、instruments、H5/static一致；
+- QE/HMM producer smoke PASS；
+- 旧候选和 production 均未修改。
