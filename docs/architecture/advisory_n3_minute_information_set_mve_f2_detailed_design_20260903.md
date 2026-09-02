@@ -1,9 +1,9 @@
 # Advisory N3 分钟信息集 Learnability MVE F2 详细设计
 
-> 版本：v1.0  
+> 版本：v1.1
 > 日期：2026-09-03  
 > Feature tier：F2  
-> 状态：DESIGN_ACCEPTED_SOURCE_READY  
+> 状态：APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING
 > objective contract：`ALPHA_RANKING`  
 > study type：`LEARNABILITY_AUDIT`  
 > decision use：`NAVIGATION_ONLY`
@@ -15,7 +15,7 @@
 3. 正式 route 已唯一指向 `N3_MINUTE_INFORMATION_SET_MVE`。本任务只引入 T 日收盘时已可见的盘中路径信息，不并行启动 Entry、Exit、N2-B 包或另一个模型族。
 4. target-free/PIT spike 已确认活跃源为 WSL `/home/lc999/data/qlib_minute_bin`，Qlib `0.9.6.99`，snapshot id 为 `qlib_minute_authoritative_full_candidate_20240102_20260630`。日历覆盖 `2024-01-02 09:30:00..2026-06-30 15:00:00`，完整包围 N2-A 的 386 个决策日。
 5. N2-A key-only 读取确认 1,710,301 行、4,503 只股票，时间为 `2024-07-04..2026-02-02`；spike 没有读取 outcome/target 列。全 386 日 target-free 扫描原始结果为 1,695,153 complete、13,473 partial、1,675 whole-day missing。
-6. 13,473 个 raw partial 中，13,461 个来自三个交易日全市场共同缺少 `13:00` calendar slot；剥离该 provider/session gap 后为 1,708,614 complete、12 partial、1,675 whole-day missing，complete fraction `0.999013624`、any-bar availability `0.999020640`。扫描耗时 1,282.87 秒，峰值 RSS 896,438,272 bytes，source-ready receipt 为 `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`，SHA256 `20b2f7639ffa6467f056e47b4decd77f0ab39650ae1d8d6d04226a9e20aebbc2`。
+6. 13,473 个 raw partial 中，13,461 个来自 `2025-11-27/2025-12-08/2025-12-12` 三个 241-slot session：每个候选都只有 240 个合法 OHLC bar。source spike 以 bar-count 归一化后得到 1,708,614 complete、12 partial、1,675 whole-day missing，complete fraction `0.999013624`、any-bar availability `0.999020640`。实现期真实 Qlib 烟测进一步确认，这不是严格意义上“所有股票同一个 slot 都为空”：以 `2025-12-08` 为例，4,474 只股票缺 `13:00`，另 13 只缺 `11:30` 且在 `13:00` 有值。因此正式实现必须同时保留 raw `240/241` coverage 与独立 `SESSION_WIDE_SINGLE_BAR_DEFICIT` 归一化分类，不能伪造一个全市场空 slot，也不能移动、补零或删除 bar。扫描耗时 1,282.87 秒，峰值 RSS 896,438,272 bytes，source-ready receipt 为 `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`，SHA256 `20b2f7639ffa6467f056e47b4decd77f0ab39650ae1d8d6d04226a9e20aebbc2`。
 7. 本 MVE 的分钟聚合公式不读取 LSTM/FUND 腿，工程接口可被其它包复用；但本轮证据仍严格绑定当前 N2-A 父包候选、parent score 和 policy。它不把单包结果冒充跨包通用模型，跨包共享仍须至少两个兼容包的独立 exact bundle 证据。
 
 ## 2. Scope / 目标与成功边界
@@ -117,7 +117,7 @@ Advisory ranking 在 T 日收盘后产生，目标入场日为下一交易日。
 
 ### 6.2 原始字段与 bar 合法性
 
-只读取八个字段：`$open/$high/$low/$close/$volume/$amount/$limit_up/$limit_down`。价格必须 finite 且大于 0；volume/amount 必须 finite 且不小于 0；非空 limit flag 必须严格为 `0/1`。calendar 决定当日 raw expected slots，不能写死 240，因为 source 中历史日存在 241-slot 语义。若某一 slot 在该日全部 N2-A 股票的八字段均为空，则记录 `MARKET_WIDE_EMPTY_CALENDAR_SLOT` 并从股票级 effective expected slots 分母中剥离；不得把同一个 provider/session gap 重复计为数千只股票 partial。若整日 effective slots 为 0，全部股票仍按 whole-day missing 保留。
+只读取八个字段：`$open/$high/$low/$close/$volume/$amount/$limit_up/$limit_down`。价格必须 finite 且大于 0；volume/amount 必须 finite 且不小于 0；非空 limit flag 必须严格为 `0/1`。calendar 决定当日 raw expected slots，不能写死 240，因为 source 中历史日存在 241-slot 语义。若某一 slot 在该日全部 N2-A 股票中都不存在合法 OHLC bar，则记录真实 `MARKET_WIDE_EMPTY_CALENDAR_SLOT` 并从股票级 effective expected slots 分母中剥离；volume/amount/limit 占位值不能把无 OHLC 的 slot 冒充为合法 bar。另对三个已冻结的 241-slot 日期，只有在当日每个 N2-A 候选都恰好拥有 240 个合法 OHLC bar 时才记录 `SESSION_WIDE_SINGLE_BAR_DEFICIT`：raw coverage 仍为 `240/241`，同时在 coverage receipt 中报告归一化 session 分类；不得声称具体 slot 全市场为空，不得移动、填充或删除任一股票 bar。若整日 effective slots 为 0，全部股票仍按 whole-day missing 保留。
 
 - `minute_valid_bar`：OHLC 全 finite 且大于 0。
 - `minute_available`：当日至少一个 valid bar 时为 1，否则为 0。
@@ -198,7 +198,7 @@ Advisory ranking 在 T 日收盘后产生，目标入场日为下一交易日。
 - Top5 `economic_net_excess_bps` 均值与 `top5_evaluable`；
 - Top5 instrument set、candidate 相对 parent/comparator replacement count；
 - 相邻决策日 Top5 churn；
-- minute complete/partial/whole-day-missing 数、coverage 分布和各特征 finite fraction。
+- raw 与 session-normalized complete/partial/whole-day-missing 数、coverage 分布、session-wide deficit 日期和各特征 finite fraction。
 
 candidate 同时报告相对 parent 和 comparator 的 RankIC delta 与 Top5 lift。推断固定为 20 日 moving-block bootstrap、2,000 repetitions、seed `20260903`。四个主比较（2 指标×2 baseline）使用 Bonferroni `alpha=0.05/4`；model trial 数仍为 2，并报告 DSR 诊断但不以 DSR 替代经济门槛。
 
@@ -346,21 +346,21 @@ Rollout 仅指源码合入后从 clean main 生成一次冻结 request，并在 
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-920 | `prepare_minute_information_set_request` design | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | DESIGN_READY | none |
-| F-921 | source fingerprint/readback design | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | SOURCE_READY | none |
-| F-922 | `build_minute_feature_panel` design | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | DESIGN_READY | none |
-| F-923 | typed coverage + train-fold imputer design | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | DESIGN_READY | none |
-| F-924 | request/model contract design | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py` | DESIGN_READY | none |
-| F-925 | `run_minute_crossfit` design | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | DESIGN_READY | none |
-| F-926 | `evaluate_minute_models` design | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | DESIGN_READY | none |
-| F-927 | per-date extractor/resource guard design | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | SOURCE_READY | none |
-| F-928 | prepare/run/inspect/delivery design | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | DESIGN_READY | none |
-| F-929 | frozen request flags + CLI CI mapping design | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py`; `backend/tests/scripts/test_ci_change_classifier.py` | DESIGN_READY | none |
-| F-930 | receipt/route writer design | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | DESIGN_READY | none |
+| F-920 | `prepare_minute_information_set_request`；`_validate_bound_sources` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: clean-main formal request/bundle pending |
+| F-921 | `fingerprint_minute_source`；`_validate_source_control_refs`；`_read_minute_bundle` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: full formal content readback pending |
+| F-922 | `build_minute_feature_panel`；`aggregate_minute_day` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py`；真实 WSL/Qlib `2025-12-08` 单日 4,487-key smoke | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 386 日正式 panel pending |
+| F-923 | `aggregate_minute_day`；`run_minute_crossfit` train-fold imputer | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 raw/normalized coverage receipt pending |
+| F-924 | `FrozenMinuteInformationSetRequestV1`；`MinuteInformationSetModelTrialV1` | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: clean-main frozen request pending |
+| F-925 | `run_minute_crossfit` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 28-path/7-OOF readback pending |
+| F-926 | `evaluate_minute_models` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式双 baseline 经济结果 pending |
+| F-927 | `_QlibMinuteLoader`；`_check_resource_limits`；`_verify_environment` | source-ready receipt；真实 WSL/Qlib `2025-12-08` smoke；`backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: full formal resource report pending |
+| F-928 | `prepare_minute_information_set_request`；`run_minute_information_set_mve`；`inspect_minute_information_set_bundle`；`_deliver_bundle` | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 publish/exact retry pending |
+| F-929 | frozen request flags；`scripts/advisory_minute_information_set_mve_run.py`；CI classifier mapping | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py`; `backend/tests/scripts/test_ci_change_classifier.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: CI/merge pending；restart/DDL 仍 noop |
+| F-930 | `MinuteInformationSetReceiptV1`；`_write_route_page` | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 0/1 receipt 与 route pending |
 
 ## 17. DESIGN-COMPLIANCE-001
 
-1. **设计目标逐项覆盖**：F-920 至 F-930 均有完整业务要求；source-ready 不冒充代码完成。
-2. **代码逐项映射设计**：实现只能使用 §11 精确范围；每项必须回填 matrix 的 symbol 和测试。
-3. **测试逐项证明业务结果**：必须证明 PIT、missing 业务语义、7 OOF、parent/comparator 增量经济、route 与 exact retry，不以 schema-only 测试代替。
-4. **差距显式保留**：full scan、实现、正式运行和独立 confirmation 各自保持独立状态；任何未完成项不得标记 verified、merge-ready 或可激活。
+1. **设计目标逐项覆盖**：F-920 至 F-930 均已映射到真实源码；source-ready、local verification 与正式经济结果保持独立。
+2. **代码逐项映射设计**：实现保持 §11 精确范围；没有新增通用分钟平台、运行时激活、仓位或交易输出。
+3. **测试逐项证明业务结果**：本地测试覆盖 PIT、真实/归一化 missing、相邻 minute return、7 OOF、parent/comparator 增量、route 与 exact retry；并以真实 WSL/Qlib 单日烟测纠正 source spike 的 slot 解释。
+4. **差距显式保留**：源码仍待 CI/合入；clean-main 386 日正式 request、bundle、registry/route、exact retry 与经济结论均未产生，独立 confirmation 更未启动；当前不得标记 formal verified、可激活或业务收益有效。
