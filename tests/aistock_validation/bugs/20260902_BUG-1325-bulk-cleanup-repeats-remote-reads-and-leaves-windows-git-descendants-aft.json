@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1325",
-  "closed_at": null,
+  "closed_at": "2026-09-02T16:36:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -62,8 +62,8 @@
   },
   "first_seen_at": "2026-09-02T15:48:40.762110Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5d3f9031899ccedfe0d31ca9da3fca8e71011b51",
+  "fixed_at": "2026-09-02T16:36:07Z",
   "github_issue_number": 4200,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4200",
   "last_seen_at": "2026-09-02T15:48:40.762110Z",
@@ -71,6 +71,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4205",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -88,6 +89,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -97,7 +99,35 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1325",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f9a6dea55e863b11",
+    "recorded_at": "2026-09-02T16:37:47.943766Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9eb556cf221c788f53fc3afaa54463949bdc60a7",
+    "source_merge_commit": "5d3f9031899ccedfe0d31ca9da3fca8e71011b51",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4205",
+    "validation_evidence": [
+      "validation-receipt: id=3896ab154bb8fcc7 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`17 passed`",
+      "validation-receipt: id=2d2857986e491616 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_run_command_timeout_terminates_owned_process_tree backend/tests/scripts/test_aistock_issue_workflow.py::test_run_command_timeout_leaves_no_windows_child_process backend/tests/scripts/test_aistock_issue_workflow.py::test_registry_intake_cleanup_fails_closed_when_remote_read_fails backend/tests/scripts/test_aistock_issue_workflow.py::test_cleanup_after_merge_batch_reuses_fetch_and_continues_after_target_failure -q` result=`4 passed`",
+      "validation-receipt: id=641a159659317218 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+      "validation-receipt: id=9b7ffc4c5f77ef76 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=bc368599a9d67ab7 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1325 --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --changed-file tests/aistock_validation/bugs/20260902_BUG-1325-bulk-cleanup-repeats-remote-reads-and-leaves-windows-git-descendants-aft.json --module validation` result=`passed`",
+      "validation-receipt: id=8b6eb48bcb628297 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+      "validation-receipt: id=eb3956a6b5670bdd commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=compile plan=direct status=passed command=`python -m py_compile scripts/aistock_issue_workflow.py` result=`passed`",
+      "validation-receipt: id=d2089cf636d3b014 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "8ed03d66c245e816c9f54f943b6b67fb33355b144b1063de606381a4dcc41bbf"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -106,6 +136,16 @@
     "fingerprint": "eacc6ec382940fb7e4b7a2dd",
     "source_event_id": "FE-20260902-eacc6ec38294"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3896ab154bb8fcc7 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`17 passed`",
+    "validation-receipt: id=2d2857986e491616 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_run_command_timeout_terminates_owned_process_tree backend/tests/scripts/test_aistock_issue_workflow.py::test_run_command_timeout_leaves_no_windows_child_process backend/tests/scripts/test_aistock_issue_workflow.py::test_registry_intake_cleanup_fails_closed_when_remote_read_fails backend/tests/scripts/test_aistock_issue_workflow.py::test_cleanup_after_merge_batch_reuses_fetch_and_continues_after_target_failure -q` result=`4 passed`",
+    "validation-receipt: id=641a159659317218 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=9b7ffc4c5f77ef76 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=bc368599a9d67ab7 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1325 --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --changed-file tests/aistock_validation/bugs/20260902_BUG-1325-bulk-cleanup-repeats-remote-reads-and-leaves-windows-git-descendants-aft.json --module validation` result=`passed`",
+    "validation-receipt: id=8b6eb48bcb628297 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+    "validation-receipt: id=eb3956a6b5670bdd commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=compile plan=direct status=passed command=`python -m py_compile scripts/aistock_issue_workflow.py` result=`passed`",
+    "validation-receipt: id=d2089cf636d3b014 commit=9eb556cf221c788f53fc3afaa54463949bdc60a7 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
