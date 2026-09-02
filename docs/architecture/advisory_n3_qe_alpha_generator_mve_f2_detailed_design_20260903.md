@@ -1,7 +1,7 @@
-# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.0
+# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.1
 
 > 日期：2026-09-03
-> 状态：`DESIGN_FROZEN_READY_FOR_IMPLEMENTATION`
+> 状态：`IMPLEMENTED_LOCAL_FULL_VERIFIED_FORMAL_PENDING`
 > tier：F2
 > objective contract：`ALPHA_RANKING`
 > study type：`EXPLORATORY_SCREEN`
@@ -16,6 +16,7 @@
 4. 分钟 MVE 的 candidate 在 384 个可评价日全部产生干预，但相对父包 RankIC 下降 `0.032643`、Top5 成本后 lift 下降 `315.32 bps`，说明继续在同一候选流上增加固定信息集或模型复杂度不是当前优先方向。
 5. 现有 RD-Agent 具备 LLM 假设/因子生成能力，QE 具备因子目录、字段 schema、相关性和正式评价资产；但原生 RD-Agent 因子流只做名称级去重、允许生成任意 Python，并会进入完整工作区/回测/目录同步，不能直接作为本 MVE 的安全执行合同。
 6. 2026-09-03 只读可行性预检确认：DEV `aistock_factor_catalog` 当前可提供 789 条目录元数据；QE 的 `evolution_researcher` 可解析到 `deepseek/deepseek-reasoner`；本机 Python 已安装 `litellm`。该预检未生成 proposal、未读取收益、未形成 research trial。
+7. 本设计源码已完成本地完整实现：DEV目录READ ONLY快照两次得到同一`advqegencat_6608bb...`/789行；声明式generator、原创性过滤、固定10% overlay、累计多重检验、immutable bundle、registry/route和薄CLI均已有直接测试。Advisory完整回归`785 passed/16 skipped`，L0无阻断；尚未从合入后的clean main调用真实LLM或运行正式经济评价，因此没有candidate或研究结论。
 
 ## 2. Goal / 成功定义
 
@@ -205,8 +206,8 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 
 - concurrency=1，RSS<=16 GiB，temp<=32 GiB；wall time 只记录、不设自动停止门禁。
 - 生成阶段网络串行；评价阶段复用旧 pipeline 的单份 source panel、AST 子表达式 cache 和 float32 score panel，不 materialize 24 份源表。
-- 顺序：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests -> formal run。
-- 设计合入后才允许实现；源码经多轮正确性、安全、PIT、统计、资源与交付审核，通过后合入。正式实验从 clean merged main 运行。
+- 已完成：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests。
+- 待执行：源码经CI通过并合入后，从clean merged main冻结正式catalog/request，调用固定LLM生成并运行经济评价；不得从当前dirty/未合入源码形成正式证据。
 
 ## 14. Verification plan
 
@@ -256,16 +257,16 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-197 | planned generator route contract | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py` | READY_FOR_IMPLEMENTATION | none |
-| F-198 | planned request/pipeline phase gates | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | READY_FOR_IMPLEMENTATION | none |
-| F-199 | planned generator budget contract | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`；`backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | READY_FOR_IMPLEMENTATION | none |
-| F-200 | existing QE AST types/interpreter + planned generator parser | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`；`backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | READY_FOR_IMPLEMENTATION | none |
-| F-201 | planned originality ledger | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | READY_FOR_IMPLEMENTATION | none |
-| F-202 | planned fixed overlay evaluator | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | READY_FOR_IMPLEMENTATION | none |
-| F-203 | planned cumulative inference receipt | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | READY_FOR_IMPLEMENTATION | none |
-| F-204 | planned frontier/route writer | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | READY_FOR_IMPLEMENTATION | none |
-| F-205 | planned bundle/registry/delivery CLI | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | READY_FOR_IMPLEMENTATION | none |
-| F-206 | literal request/receipt/manifest gates | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | READY_FOR_IMPLEMENTATION | none |
+| F-197 | `qe_alpha_generator_contracts.py`; `qe_alpha_generator_pipeline.py` route contract | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `python -m nox -s advisory_modeling_backend` | PASS | none |
+| F-198 | request phase gates；READ ONLY catalog snapshot；generation/evaluation split | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_preflight_20260903/catalog_snapshot.json` | PASS | none |
+| F-199 | fixed budget fields；generation receipt support accounting | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
+| F-200 | existing `validate_expression/compile_proposal_scores`；strict generator proposal parser | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | PASS | none |
+| F-201 | `preliminary_originality_reasons`; vectorized `target_free_score_overlap` | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
+| F-202 | `evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` incremental/unknown-Top5 cases | PASS | none |
+| F-203 | `_summarize_overlay` current+cumulative block inference/DSR | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
+| F-204 | frontier/receipt exact 0/1 route relation | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
+| F-205 | generation/result publisher/reader、exact retry、registry/route、CLI | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
+| F-206 | literal no-write/no-activation fields、secret redaction、L0 | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py`; `python -m nox -s l0` | PASS | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 

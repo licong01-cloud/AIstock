@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.31
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.32
 
 > 初始日期：2026-07-10
 > 修订日期：2026-09-03
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0_FAMILY_FROZEN_N1_N2_COMPLETE_N3_MINUTE_SELECTED_ZERO_QE_ALPHA_GENERATOR_MVE_DESIGN_FROZEN`
+> 当前状态：`P0_FAMILY_FROZEN_N1_N2_COMPLETE_N3_MINUTE_SELECTED_ZERO_QE_ALPHA_GENERATOR_IMPLEMENTED_LOCAL_FORMAL_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件均已有真实模型实现与独立验证，但尚未形成一个当前同时提供四类输出的组合bundle。两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode；P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线shadow重排，但该meta-label role不包含M3 outcome或M4 price-range child，当前两项返回typed unavailable。自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前策略包边界：荐股编排和动态 binding 已支持按 Program 解析不同 StrategyPackage，但当前学习模型不是“策略包无关模型”。Top20 候选来自目标策略包，M5/P0 重排、M3 outcome/holding 和 M4 价格区间均绑定该包的候选、父 Alpha 特征、manifest/style/runtime semantics 与 exact descriptor；当前只有目标多 Alpha 包具备模型 bundle，其他包无 bundle 时基线继续且模型 typed unavailable
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A和N0控制面均已进入`main`。N1 bundle `74827d03...`、N2-A bundle `6784df1a...`、N2-B v2 bundle `bcdcb31d...`、Entry/Exit action bundle `5c5946a7...`及Exit fixed-information learnability bundle `03d17a18...`均已完成且仅为开发窗口诊断。N3 QE上游Alpha MVE `09137f0c...`、父包增量overlay `fdca2130...`、腿间共识/分歧 `42ac23b6...`及分钟信息集 `0076a3a6...`均已正式完成、selected=0并通过inspect/exact retry。分钟源码PR #4210以merge commit `a82a58ce...`进入main；正式request `advn3minreq_333ff0cf8e102efef88961c3`完成`2/2/2/0`。生产descriptor仍指向P0-D exact bundle，只激活`meta_label_take_skip_confidence` shadow role；M3/M4是已实现但当前descriptor未组合的独立历史bundle。N1/N2/N3研究均不修改baseline、Selection或运行时
@@ -23,7 +23,7 @@
 > N3腿间共识/分歧权威结果：request `advn3legreq_d267b3646b727505db3274c6`、bundle `42ac23b6...`在clean main `4cd08263...`完成`2/2/2/0`；382个paired-evaluable日中380日形成真实干预，support充分。expanded相对parent的RankIC delta/Top5 lift为`-0.003564/-151.22 bps`，family-wise下界为`-0.006159/-332.91 bps`；相对linear为`-0.001469/-58.02 bps`，family-wise下界为`-0.003176/-172.00 bps`。expanded与parent日均score Spearman仍为`0.98209`，说明显式腿间交互是近似重表达且经济结果退化。inspect与exact retry通过，selected=0，固定next task=`N3_MINUTE_INFORMATION_SET_MVE`
 > N3分钟source-ready权威结果：target-free/PIT全扫描读取386日、1,710,301个N2-A键和12个minute字段，不读取target/label/sealed/DB/network/runtime。raw结果为1,695,153 complete、13,473 partial、1,675 whole-day missing；三个241-slot日期的13,461个partial均为每个候选恰少一个合法OHLC bar，按session分类归一化后为1,708,614 complete、12 partial、1,675 whole-day missing，any-bar availability为`99.9021%`。实现期真实Qlib烟测确认各股票缺失位置并不完全相同，故正式代码保留raw `240/241` coverage并另报`SESSION_WIDE_SINGLE_BAR_DEFICIT`，不再把它误写成严格的全市场共同`13:00`空slot；正常缺失全部保留，不删股票、不删日期、不移动bar、不填零。总耗时1,282.87秒、峰值RSS 896,438,272 bytes；corrected multi-span manifest覆盖100%。source-ready receipt为`F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`，SHA256 `20b2f763...`
 > N3分钟MVE权威结果：bundle `0076a3a6...`在386日、1,710,301行上完成`2/2/2/0`，两个trial每行恰好7 OOF。384个可评价日全部真实干预；candidate RankIC/Top5净超额为`0.09020/128.31 bps`，parent/comparator为`0.12284/443.65 bps`，delta/lift为`-0.03264/-315.32 bps`，四项family-wise门槛全部失败。elapsed `853.45s`、peak RSS `2.33GB`、temp `184.27MB`；exact retry同bundle、registry duplicate-noop、route exact-noop。该frontier已消费关闭，不证明所有分钟信息全局不可学，但证明当前八聚合+冻结Ridge不能提供增量
-> 当前唯一主动目标：按 `advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` 实现并运行 `N3_QE_ALPHA_GENERATOR_MVE`。该设计冻结目录只读准备、LLM无target生成、离线经济评价三阶段，6族/12调用/48生成attempt/最多24经济trial预算、声明式AST、原创性/已知效应/防衰减约束、固定10%父包rank overlay、跨旧standalone/overlay累计多重检验与一次性frontier；不重跑旧24-proposal，不回到三腿/分钟/loss/model搜索，不读取sealed holdout、写因子库/StrategyPackage或激活运行时
+> 当前唯一主动目标：`N3_QE_ALPHA_GENERATOR_MVE`源码已本地完整验证；待CI合入后从clean main冻结正式目录/request，执行六族固定LLM生成和离线经济评价。不得从未合入源码形成正式证据；不重跑旧24-proposal，不回到三腿/分钟/loss/model搜索，不读取sealed holdout、写因子库/StrategyPackage或激活运行时
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -148,7 +148,7 @@ H0 的权威详细设计为
 | 跨策略包荐股模型覆盖 | `FRAMEWORK_DYNAMIC_MODEL_PACKAGE_CONDITIONED_RERANK_ONE_PACKAGE_ONLY` | 编排可动态解析package，但模型特征和descriptor仍精确绑定目标多Alpha包；当前只有该包的P0-D重排role在线，M3/M4 child未组合，不同包也不能直接复用这些历史bundle，P1-B共享模型实验未就绪 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 | P0-D至P0-L研究族 | `FROZEN_NO_ACTIVATABLE_WINNER` | 同一P0-C开发数据/候选/feature schema/CORE家族上的九轮自适应研究已事实收敛；旧结果、合同和消费窗口不改写，不派生P0-M |
-| 新模型演进路线 | `N3_MINUTE_MVE_FORMAL_SELECTED_ZERO__QE_ALPHA_GENERATOR_DESIGN_FROZEN` | N0/N1/N2、N3单信号、父overlay、腿间及分钟MVE均已正式完成；四个N3 frontier均`selected=0`且exact retry稳定。新generator设计已冻结，下一步只允许实现该固定MVE，不重跑旧24-proposal screen，不改生产权重、不读sealed holdout |
+| 新模型演进路线 | `N3_MINUTE_MVE_FORMAL_SELECTED_ZERO__QE_ALPHA_GENERATOR_IMPLEMENTED_LOCAL_FORMAL_PENDING` | 四个旧N3 frontier均`selected=0`且关闭。新generator源码已通过完整Advisory/L0/F2本地门禁；下一步只允许合入后clean-main正式生成/评价，不重跑旧screen、不改生产权重、不读sealed holdout |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
 
@@ -1106,7 +1106,7 @@ N3首批是固定6族×4 proposal、总计24次的轻量探索屏：声明式AST
 
 分钟MVE权威设计与结果为`advisory_n3_minute_information_set_mve_f2_detailed_design_20260903.md` v1.2：只读取T日`open/high/low/close/volume/amount/limit_up/limit_down`，冻结八项聚合、parent-only Ridge comparator与parent+minute Ridge candidate，并复用N1 28 READY path/7 OOF。源码PR #4210已合入；正式request `advn3minreq_333ff0cf8e102efef88961c3`、bundle `0076a3a6...`完成`2/2/2/0`。candidate相对两个baseline的RankIC delta均为`-0.032643`，Top5 lift均为`-315.32 bps`；相对parent的family-wise lower为`-0.072894/-480.67 bps`，相对comparator为`-0.077498/-472.57 bps`。384个可评价日全部干预且score Spearman仅`0.78918`，说明失败不是恒等输出，而是新分钟表达导致经济退化。本frontier关闭，selected=0固定转`N3_QE_ALPHA_GENERATOR_MVE_DESIGN`；结果仍package-conditioned、navigation-only、不可激活。
 
-QE Alpha generator MVE权威设计为`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.0。它不复用原生RD-Agent任意Python执行链，而只复用LLM配置能力和现有allowlist AST evaluator：Phase A以READ ONLY事务冻结不含性能/秘密的因子目录元数据，Phase B按六族固定预算生成无target声明式AST并做exact/structural/catalog/field/known-effect/score-overlap过滤，Phase C关闭DB/network后以固定10% parent rank overlay评价增量经济价值。最多12次LLM调用、48次生成attempt、24次经济trial；旧24 standalone和24 overlay计入累计family-wise/DSR。selected=0固定转新的上游数据源MVE设计，selected=1只进入独立confirmation，均不写因子库或运行时。
+QE Alpha generator MVE权威设计为`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.1。它不复用原生RD-Agent任意Python执行链，而只复用LLM配置能力和现有allowlist AST evaluator：Phase A以READ ONLY事务冻结不含性能/秘密的因子目录元数据，Phase B按六族固定预算生成无target声明式AST并做exact/structural/catalog/field/known-effect/score-overlap过滤，Phase C关闭DB/network后以固定10% parent rank overlay评价增量经济价值。源码已实现严格request/proposal/receipt、789行目录快照、六族生成、失败attempt持久化、向量化score-overlap、unknown Top5不可用、当前+累计family-wise/DSR、immutable bundle/exact retry/registry/route和CLI；完整Advisory`785 passed/16 skipped`且L0无阻断。尚未调用正式LLM或产生经济结果。selected=0固定转新的上游数据源MVE设计，selected=1只进入独立confirmation，均不写因子库或运行时。
 
 ### N4：信号组合、重训窗口与prospective activation
 
@@ -1379,7 +1379,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-194 | §5.6 role-specific binding stack；current `model_binding_resolution.py`/`model_inference.py` boundary | target: `backend/tests/advisory_model_first/test_role_binding_stack.py`; `backend/tests/advisory_model_first/test_model_inference.py` current rerank-only/typed-unavailable behavior | DESIGN_READY_NOT_IMPLEMENTED | approved_by_user: implement only after a role has confirmed incremental value; no generic registry platform |
 | F-195 | §9 N3腿间共识/分歧信息集MVE；F2详细设计 | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`；`backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`；`test_leg_disagreement_pipeline.py`；`test_leg_disagreement_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: result is navigation-only; no runtime/factor/package write |
 | F-196 | §9 N3分钟信息集MVE；`advisory_n3_minute_information_set_mve_f2_detailed_design_20260903.md` v1.2；`minute_information_set_contracts.py`；`minute_information_set_pipeline.py`；`advisory_minute_information_set_mve_run.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/learnability_receipt.json`；99 targeted tests；Advisory suite `774 passed/16 skipped`；exact retry | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: navigation-only frontier已消费关闭；no runtime/factor/package/position write |
-| F-197 | §9；`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.0 | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2`；`backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py` | DESIGN_FROZEN_READY_FOR_IMPLEMENTATION | none |
+| F-197 | §9；`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.1；`qe_alpha_generator_contracts.py`；`qe_alpha_generator_pipeline.py`；`advisory_qe_alpha_generator_mve_run.py` | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `test_qe_alpha_generator_pipeline.py`; `test_qe_alpha_generator_delivery.py`; `python -m nox -s advisory_modeling_backend`; `python -m nox -s l0` | IMPLEMENTED_LOCAL_FULL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式实验已授权但只在源码合入后的clean main执行；当前无research result |
 
 ## 12. Verification Plan
 
@@ -1566,7 +1566,7 @@ historical_batch_activation = separate user-confirmed action after source merge;
 
 ## 16. 当前下一步
 
-M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1、N2、N3上游单信号、父包overlay、腿间共识/分歧及分钟信息集MVE均已正式完成；四个N3 frontier都没有candidate。QE Alpha generator MVE设计已冻结，当前唯一主动步骤是按固定设计实现并运行新的自动化上游Alpha生成闭环，而不是继续在固定候选/固定信息集上换模型。
+M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1、N2、N3上游单信号、父包overlay、腿间共识/分歧及分钟信息集MVE均已正式完成；四个N3 frontier都没有candidate。QE Alpha generator MVE源码已本地完整验证，当前唯一主动步骤是完成合入并从clean main运行正式自动生成/评价，而不是继续在固定候选/固定信息集上换模型。
 
 ### 16.1 主动业务任务（严格顺序）
 
@@ -1575,8 +1575,8 @@ M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5
 3. **分钟信息集target-free/PIT可行性spike（已完成）**：全386日/1,710,301键target-free扫描、multi-span coverage、raw/session-normalized/normal missing语义、读取成本及资源均已核实；实现期真实Qlib smoke已纠正“所有股票同一13:00空slot”的过度简化，source-ready receipt仍不可作为收益证据。
 4. **固定分钟信息集MVE详细设计（已完成）**：冻结T日八字段/八聚合、parent-only与parent+minute两个Ridge trial、train-fold missing、28-path/7-OOF、双baseline family-wise门槛及0/1分流；不读取sealed holdout。
 5. **固定分钟信息集MVE源码与正式运行（已完成）**：PR #4210合入；bundle `0076a3a6...`为`2/2/2/0`，384个干预日support充分但RankIC/Top5均显著退化，exact retry稳定，lineage关闭。
-6. **QE Alpha generator MVE设计（已完成）**：`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md`冻结三阶段隔离、生成/评价预算、声明式AST、原创性/已知效应/防衰减、固定10%父包overlay、累计多重检验、资源与一次性frontier；设计阶段未生成proposal或读取经济结果。
-7. **QE Alpha generator源码与正式实验（当前唯一主动步骤）**：实现最小生成/评价闭环，经重复审核合入，再从clean main运行；实验可直接执行但仍只可navigation，不写因子库或StrategyPackage。selected=0固定转新的上游数据源MVE设计且不得扩本lineage预算；selected=1只进入独立confirmation。
+6. **QE Alpha generator MVE设计（已完成）**：`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.1冻结三阶段隔离、生成/评价预算、声明式AST、原创性/已知效应/防衰减、固定10%父包overlay、累计多重检验、资源与一次性frontier。
+7. **QE Alpha generator源码（本地完整验证）与正式实验（当前唯一主动步骤）**：源码、直接测试、789行DEV只读快照、完整Advisory回归和L0均通过；先合入，再从clean main运行正式LLM生成和经济评价。selected=0固定转新的上游数据源MVE设计且不得扩本lineage预算；selected=1只进入独立confirmation。
 8. **确认后进入业务接入**：只有新lineage在独立证据上形成确认增量后，才执行原创性/已知效应重叠、种子稳定性、残差正交、LOO、成本后组合和重训窗口对照；随后按§5.6通过exact package-conditioned role binding进入对应Program shadow，并积累prospective activation证据。探索结果本身不能写因子库、生成StrategyPackage或激活运行时。
 9. **扩展策略包覆盖**：当前目标包形成可确认角色信号后，为下一兼容包建立独立exact bundle基线；至少两个兼容包有真实bundle后才执行P1-B共享实验。这里追求通用框架和可验证覆盖，不追求未经验证的统一权重文件。
 
