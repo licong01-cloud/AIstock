@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_ALLOWED_FIELDS,
     build_generator_proposal,
@@ -16,6 +19,7 @@ from backend.services.advisory_model_first.qe_alpha_generator_pipeline import (
     expression_fingerprint,
     generate_alpha_candidates,
     inspect_generation_bundle,
+    run_generator_mve,
     weighted_jaccard,
 )
 from backend.services.advisory_model_first.qe_alpha_mve_contracts import MVE_FAMILIES, build_default_proposals
@@ -115,6 +119,132 @@ def test_generation_is_six_calls_target_free_and_exact_retry(tmp_path) -> None:
     prompt = build_family_prompt(request, MVE_FAMILIES[0], build_default_proposals(), build_catalog_snapshot([]))
     assert "economic_net_excess_bps" not in "".join(prompt)
     assert "top5_lift" not in "".join(prompt)
+
+
+def test_provider_failure_is_not_expression_rejection_and_recovers_only_failed_family(tmp_path) -> None:
+    request = make_generator_request(tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    old = set(request.old_source_fields)
+    new_fields = sorted(set(GENERATOR_ALLOWED_FIELDS) - old - {"market_regime"})
+    first_calls: list[str] = []
+    credential_marker = "_".join(("api", "key")) + "=must-not-survive"
+
+    def response_for(family: str) -> str:
+        family_index = MVE_FAMILIES.index(family)
+        proposals = []
+        for index in range(4):
+            left = new_fields[family_index * 8 + index * 2]
+            right = new_fields[family_index * 8 + index * 2 + 1]
+            proposals.append(
+                {
+                    "economic_hypothesis": f"{family} transport-safe mechanism {index}",
+                    "mechanism": f"combine two frozen T-visible inputs after transport recovery {index}",
+                    "known_effect_exposures": ["LIQUIDITY", "VALUE"],
+                    "expression": {
+                        "op": "ADD" if index % 2 == 0 else "SAFE_DIVIDE",
+                        "args": [
+                            {"op": "FIELD", "field": left},
+                            {
+                                "op": "ADD",
+                                "args": [{"op": "FIELD", "field": right}, {"op": "CONST", "value": index + 1.0}],
+                            },
+                        ],
+                    },
+                }
+            )
+        return json.dumps({"proposals": proposals})
+
+    def first_call(_system, user, _request):
+        family = json.loads(user)["family"]
+        first_calls.append(family)
+        if family == MVE_FAMILIES[0]:
+            raise ConnectionError(f"provider TLS failed before response {credential_marker}")
+        return response_for(family), {"total_tokens": 100}
+
+    first = generate_alpha_candidates(request_path, llm_call=first_call)
+    assert first_calls == list(MVE_FAMILIES)
+    assert first["generation_status"] == "INFRASTRUCTURE_FAILURE"
+    assert first["generation_call_count"] == 6
+    assert first["raw_generation_attempt_count"] == 20
+    assert first["accepted_expression_count"] == 20
+    assert first["rejected_expression_count"] == 0
+    assert first["failed_call_count"] == 1
+    assert first["unresolved_failed_families"] == [MVE_FAMILIES[0]]
+    assert credential_marker not in (Path(first["bundle_path"]) / "attempts.json").read_text(encoding="utf-8")
+    first_manifest = (Path(first["bundle_path"]) / "manifest.json").read_bytes()
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        run_generator_mve(request_path, first["bundle_path"])
+    assert exc_info.value.reason_code == "ADVISORY_QE_ALPHA_GENERATOR_LLM_CALL_FAILED"
+    assert not Path(request.registry_path).exists()
+    assert not Path(request.route_path).exists()
+
+    recovery_calls: list[str] = []
+
+    def recovery_call(_system, user, _request):
+        family = json.loads(user)["family"]
+        recovery_calls.append(family)
+        return response_for(family), {"total_tokens": 100}
+
+    recovered = generate_alpha_candidates(request_path, llm_call=recovery_call)
+    assert recovery_calls == [MVE_FAMILIES[0]]
+    assert recovered["recovery_attempted"] is True
+    assert recovered["generation_status"] == "COMPLETE"
+    assert recovered["generation_call_count"] == 7
+    assert recovered["raw_generation_attempt_count"] == 24
+    assert recovered["accepted_expression_count"] == 24
+    assert recovered["failed_call_count"] == 1
+    assert recovered["unresolved_failed_family_count"] == 0
+    assert recovered["recovery_parent_bundle_id"] == first["bundle_id"]
+    assert (Path(first["bundle_path"]) / "manifest.json").read_bytes() == first_manifest
+
+    exact = generate_alpha_candidates(
+        request_path,
+        llm_call=lambda *_args: (_ for _ in ()).throw(AssertionError("successful families must not resample")),
+    )
+    assert exact["exact_retry"] is True
+    assert exact["bundle_id"] == recovered["bundle_id"]
+
+
+def test_schema_failure_requires_response_and_counts_four_expression_attempts(tmp_path) -> None:
+    request = make_generator_request(tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    old = set(request.old_source_fields)
+    new_fields = sorted(set(GENERATOR_ALLOWED_FIELDS) - old - {"market_regime"})
+    family_counts = {family: 0 for family in MVE_FAMILIES}
+
+    def schema_then_valid(_system, user, _request):
+        family = json.loads(user.split("\n\nSchema-only retry violations:", 1)[0])["family"]
+        family_counts[family] += 1
+        if family_counts[family] == 1:
+            return "not-json", {}
+        family_index = MVE_FAMILIES.index(family)
+        proposals = []
+        for index in range(4):
+            proposals.append(
+                {
+                    "economic_hypothesis": f"{family} schema recovery mechanism {index}",
+                    "mechanism": f"combine two T-visible inputs after a schema-only retry {index}",
+                    "known_effect_exposures": ["VALUE"],
+                    "expression": {
+                        "op": "ADD",
+                        "args": [
+                            {"op": "FIELD", "field": new_fields[family_index * 8 + index * 2]},
+                            {"op": "FIELD", "field": new_fields[family_index * 8 + index * 2 + 1]},
+                        ],
+                    },
+                }
+            )
+        return json.dumps({"proposals": proposals}), {}
+
+    result = generate_alpha_candidates(request_path, llm_call=schema_then_valid)
+    assert result["generation_status"] == "COMPLETE"
+    assert result["generation_call_count"] == 12
+    assert result["raw_generation_attempt_count"] == 48
+    assert result["accepted_expression_count"] == 24
+    assert result["rejected_expression_count"] == 24
+    assert result["failed_call_count"] == 0
 
 
 def test_fixed_overlay_selects_only_consistently_incremental_candidate(tmp_path) -> None:

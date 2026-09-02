@@ -1,0 +1,283 @@
+{
+  "actual": "Twelve failed provider calls were classified as SCHEMA_REJECTED, counted as 48 raw/rejected expressions, and published as INCOMPLETE_SUPPORT.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+    "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+    "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+    "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+    "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+    "tests/aistock_validation/bugs/20260902_BUG-1330-advisory-qe-alpha-generator-misclassifies-llm-transport-failures-as-sche.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1330",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-02T21:36:36.047067Z",
+  "description": "Twelve failed provider calls were classified as SCHEMA_REJECTED, counted as 48 raw/rejected expressions, and published as INCOMPLETE_SUPPORT.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260902-10f8b60af1f8",
+      "timestamp": "2026-09-02T21:36:36.047053Z"
+    }
+  ],
+  "evidence_uris": [
+    "formal bundle b760e08f5698919f35f761ef2cd06dd69e598fdaa75853743e435163e8f820c7 attempts.json"
+  ],
+  "expected": "Provider or transport failures are recorded separately from model-output/schema failures, create no synthetic expression attempts, do not become alpha evidence, and support a bounded recovery using the same frozen request without resampling successful responses.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260902_BUG-1330-advisory-qe-alpha-generator-misclassifies-llm-transport-failures-as-sche.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260902_BUG-1330-advisory-qe-alpha-generator-misclassifies-llm-transport-failures-as-sche.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+        "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+        "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+    ]
+  },
+  "first_seen_at": "2026-09-02T21:36:36.047067Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4216,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4216",
+  "last_seen_at": "2026-09-02T21:36:36.047067Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/advisory_qe_alpha_generator_mve_run.py generate --request <formal-request.json>",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Advisory QE alpha generator misclassifies LLM transport failures as schema rejects",
+  "trigger_condition": {
+    "fingerprint": "10f8b60af1f83ed00d4fdc1c",
+    "source_event_id": "FE-20260902-10f8b60af1f8"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

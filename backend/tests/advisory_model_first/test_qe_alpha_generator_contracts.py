@@ -146,3 +146,23 @@ def test_generation_and_mve_receipts_bind_counts_and_next_task() -> None:
     payload["next_task"] = "N3_QE_ALPHA_GENERATOR_CANDIDATE_CONFIRMATION_DESIGN"
     with pytest.raises(ValidationError, match="selection/next-task"):
         type(result).model_validate(payload)
+
+
+def test_generation_receipt_separates_provider_failure_from_expression_attempts() -> None:
+    failure = build_generation_receipt(
+        request_sha256="a" * 64,
+        generation_call_count=6,
+        raw_generation_attempt_count=0,
+        accepted_expression_count=0,
+        rejected_expression_count=0,
+        proposals_sha256="b" * 64,
+        status="INFRASTRUCTURE_FAILURE",
+        support_reason_codes=("LLM_PROVIDER_CALL_FAILURE", "TOTAL_ACCEPTED_EXPRESSION_SUPPORT_INSUFFICIENT"),
+    )
+    assert failure.status == "INFRASTRUCTURE_FAILURE"
+    assert failure.raw_generation_attempt_count == 0
+
+    payload = failure.model_dump(mode="json")
+    payload["status"] = "INCOMPLETE_SUPPORT"
+    with pytest.raises(ValidationError, match="status/support"):
+        type(failure).model_validate(payload)

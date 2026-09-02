@@ -1,4 +1,4 @@
-# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.1
+# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.2
 
 > 日期：2026-09-03
 > 状态：`IMPLEMENTED_LOCAL_FULL_VERIFIED_FORMAL_PENDING`
@@ -16,14 +16,15 @@
 4. 分钟 MVE 的 candidate 在 384 个可评价日全部产生干预，但相对父包 RankIC 下降 `0.032643`、Top5 成本后 lift 下降 `315.32 bps`，说明继续在同一候选流上增加固定信息集或模型复杂度不是当前优先方向。
 5. 现有 RD-Agent 具备 LLM 假设/因子生成能力，QE 具备因子目录、字段 schema、相关性和正式评价资产；但原生 RD-Agent 因子流只做名称级去重、允许生成任意 Python，并会进入完整工作区/回测/目录同步，不能直接作为本 MVE 的安全执行合同。
 6. 2026-09-03 只读可行性预检确认：DEV `aistock_factor_catalog` 当前可提供 789 条目录元数据；QE 的 `evolution_researcher` 可解析到 `deepseek/deepseek-reasoner`；本机 Python 已安装 `litellm`。该预检未生成 proposal、未读取收益、未形成 research trial。
-7. 本设计源码已完成本地完整实现：DEV目录READ ONLY快照两次得到同一`advqegencat_6608bb...`/789行；声明式generator、原创性过滤、固定10% overlay、累计多重检验、immutable bundle、registry/route和薄CLI均已有直接测试。Advisory完整回归`785 passed/16 skipped`，L0无阻断；尚未从合入后的clean main调用真实LLM或运行正式经济评价，因此没有candidate或研究结论。
+7. 本设计 v1.1 源码已从 clean main 完成实现与验证：DEV目录READ ONLY快照两次得到同一`advqegencat_6608bb...`/789行；声明式generator、原创性过滤、固定10% overlay、累计多重检验、immutable bundle、registry/route和薄CLI均已有直接测试。Advisory完整回归`785 passed/16 skipped`，L0无阻断；首次正式调用未取得模型响应且未运行经济评价，因此仍没有candidate或研究结论。
+8. 2026-09-03 首次 clean-main 正式生成调用未收到任何模型响应：12 次调用均因 TLS `DECRYPTION_FAILED_OR_BAD_RECORD_MAC` 失败，但旧实现错误记为 48 个 `SCHEMA_OR_AST_INVALID`，形成 bundle `b760e08f...`。BUG-1330 将该 bundle 定性为基础设施/实现失败证据，不是 48 个 Alpha trial、不是生成支持不足结论，也未进入经济评价、registry 或 route。
 
 ## 2. Goal / 成功定义
 
 交付一个固定预算、可审计、一次性的自动上游 Alpha 生成 MVE：
 
 1. 自动生成而非人工编写一批声明式 Alpha AST；生成器只接收冻结字段、grammar、旧表达式排除清单、目录元数据和经济机制约束，不接收 IC、收益、Top5、父包表现或 sealed holdout。
-2. 生成阶段最多 6 个主调用和 6 个 schema-only retry，每个信号族最终最多接受 4 个、全批最多评价 24 个表达式；失败生成计 attempt，禁止因结果不好扩预算。
+2. 生成阶段最多 6 个主调用和 6 个 schema-only/recovery 调用，每个信号族最终最多接受 4 个、全批最多评价 24 个表达式；只有实际收到模型响应才形成 4 个 raw expression attempt，供应商/传输失败只计 call、计 0 个 expression attempt，禁止因结果不好扩预算。
 3. 所有表达式经现有 allowlist AST validator/interpreter 执行，禁止动态 Python、`eval/exec/import/subprocess`、文件写入、数据库访问和网络访问。
 4. 在与当前父包相同的 PIT 股票池、H20 成本后 outcome 和已消费开发窗口上，评价固定 10% rank overlay 对父包的增量 RankIC、Top5 净超额、干预支持、换手和时段稳定性。
 5. 同时执行 exact/structural/目录/score-correlation 原创性检查和已知效应标注；不把已知动量、反转、规模、换手、波动、流动性、价值、质量或行业 beta 的简单复刻称为新 Alpha。
@@ -99,6 +100,8 @@ preparation 不调用 LLM、不加载 outcome、不计 research trial。目录�
 - 每族 1 个主调用，要求 4 个 proposal；仅当 JSON/schema/AST/字段合法性失败时允许同族 1 个 schema-only retry；
 - `max_generation_calls=12`、`max_raw_generation_attempts=48`、`max_evaluated_expressions=24`、`concurrency=1`；
 - retry 只能收到 machine-readable schema violation，不得收到 IC、收益、相关性或其它经济反馈；成功族不得再次调用；
+- 只有 `caller` 已返回响应后发生的 JSON/schema/AST/字段错误才是 `SCHEMA_REJECTED`，保存响应 hash/原文并计 4 个 raw/rejected expression；`caller` 抛出的 provider、TLS、timeout 或配置异常必须记为 `CALL_FAILED`，计 0 个 raw/rejected expression，不得伪造 proposal rejection，也不得触发 schema-only retry；
+- 存在未解决 `CALL_FAILED` 时 generation 状态固定为 `INFRASTRUCTURE_FAILURE`，不得进入经济评价或形成 Alpha 方向证据。同一冻结 request 仅可在每族最多 2 call、全局最多 12 call 的剩余额度内恢复；恢复只调用最后状态为 `CALL_FAILED` 的族，已成功族的 response/proposal 原样复用并以 recovery-parent hash 绑定。额度耗尽后 exact retry 只读返回，不得继续调用；
 - 不足 24 个合法 proposal 时允许以实际数量继续，但每族至少 2 个、全批至少 12 个，否则 typed `GENERATION_SUPPORT_INSUFFICIENT`，不进入经济评价；不得临时补人工作品。
 
 ### 6.2 LLM identity and secret boundary
@@ -106,7 +109,7 @@ preparation 不调用 LLM、不加载 outcome、不计 research trial。目录�
 - 默认 agent locator 固定 `evolution_researcher`，模型 readback 固定并写入 request；正式 v1 预期 `deepseek/deepseek-reasoner`，发生漂移则冻结新 request，不能静默接受。
 - prompt template、system/user message、temperature、top_p、provider-supported seed、timeout 和 response schema 均写入 request/hash；`temperature=0`、`top_p=1`。
 - API key 只从现有非秘密 locator 解析并在内存使用；artifact 只记录 locator、model、provider、request/response hash、token/latency telemetry，不保存 key、authorization header 或包含秘密的 exception。
-- LLM 不保证字节确定性。因此第一次完整成功响应冻结为 content-addressed generation bundle；exact retry 复用该 bundle，不重新调用模型。
+- LLM 不保证字节确定性。因此第一次完整成功响应冻结为 content-addressed generation bundle；通常 exact retry 复用该 bundle，不重新调用模型。唯一例外是冻结 bundle 为 `INFRASTRUCTURE_FAILURE` 且仍有预注册 call 额度：只对未收到响应的失败族做一次有界恢复，不重采样任何成功族；恢复 bundle 累积原 attempts/transcript 并绑定 recovery-parent。BUG-1330 旧 bundle 已被错误消耗满 12 call，只能由修复后的新 source identity 冻结新 request，不得改写旧 bundle。
 
 ### 6.3 Output schema and code safety
 
@@ -183,7 +186,7 @@ generation bundle 固定包含 request、catalog snapshot、old-roster exclusion
 
 - manifest 绑定每个文件 SHA256/size/row_count 和 request/source/result identity；partial、mutation、missing 或 extra member fail closed。
 - registry 追加一个 `ADVISORY-N3-QE-ALPHA-GENERATOR-MVE-V1` record，分别记录 generation calls/raw attempts/accepted/evaluated/selected、cumulative trial count、objective、study、decision use、消费窗口和 route。
-- exact retry 先按 request identity 查找完整 bundle；存在则 inspect 后返回 same identity、registry duplicate-noop、route exact-noop，不调用 LLM、不重复评价。
+- exact retry 先按 request identity 选择累计 call 数最大的唯一 generation bundle；成功或普通支持不足 bundle 直接 inspect 后返回 same identity，不调用 LLM、不重复评价。仅 `INFRASTRUCTURE_FAILURE` 且仍有族级/全局剩余额度时发布一个新的 immutable recovery bundle；成功族不再调用，旧 bundle 不修改。若同一 request 出现相同最大 call 数的多个分支则 fail closed。
 - raw LLM response 只作为该生成 attempt 的不可变证据；不得将失败响应人工修成 proposal 后写回原 attempt。
 
 ## 12. Error contract
@@ -200,20 +203,20 @@ generation bundle 固定包含 request、catalog snapshot、old-roster exclusion
 - `ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID`
 - `ADVISORY_QE_ALPHA_GENERATOR_RESOURCE_LIMIT_EXCEEDED`
 
-CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码；exception 必须脱敏。失败不得发布成功 manifest、追加完成 registry 或推进 route。
+CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码；exception 必须脱敏。`INFRASTRUCTURE_FAILURE` 可以发布非成功 generation manifest 以保留调用证据，但不得追加完成 registry、推进 route或进入经济评价；`run` 对其返回 `ADVISORY_QE_ALPHA_GENERATOR_LLM_CALL_FAILED`。
 
 ## 13. Implementation plan and resources / 实施方案与资源
 
 - concurrency=1，RSS<=16 GiB，temp<=32 GiB；wall time 只记录、不设自动停止门禁。
 - 生成阶段网络串行；评价阶段复用旧 pipeline 的单份 source panel、AST 子表达式 cache 和 float32 score panel，不 materialize 24 份源表。
 - 已完成：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests。
-- 待执行：源码经CI通过并合入后，从clean merged main冻结正式catalog/request，调用固定LLM生成并运行经济评价；不得从当前dirty/未合入源码形成正式证据。
+- 待执行：BUG-1330 经CI通过并合入后，从新的 clean merged source identity 冻结正式 catalog/request，调用固定LLM生成；仅 `COMPLETE` generation 才运行经济评价。首次 TLS 失败 bundle 保持不可变且不作为研究 trial；不得从当前dirty/未合入源码形成正式证据。
 
 ## 14. Verification plan
 
 - request/hash/unknown-field/model drift/secret redaction；
 - READ ONLY catalog snapshot 精确字段与 transaction rollback；
-- 6 family、12-call/48-attempt/24-evaluation budgets，schema-only retry 不接收经济反馈；
+- 6 family、12-call/48-expression-attempt/24-evaluation budgets；provider failure 为 0 expression attempt，schema-only retry 不接收经济反馈；
 - AST operator/field/node/depth/window/direction 与 arbitrary-code rejection；
 - exact/structural/catalog/field/known-effect/score-correlation originality；
 - outcome 不可出现在 prompt/generation bundle，Phase C 网络/DB fail-closed；
@@ -230,7 +233,8 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | LLM 把旧公式换名 | exact + structural + catalog + target-free score overlap 四层拒绝 |
 | LLM 输出任意代码或幻觉字段 | JSON AST strict schema；现有 allowlist interpreter；未知字段/代码 typed reject |
 | economic result 进入下一 prompt | Phase B 不加载 outcome；prompt manifest 逐字 hash；retry 只含 schema violation |
-| 不确定 LLM 破坏 exact retry | 第一次完整响应 content-addressed 冻结；retry 复用 bundle，不重新调用 |
+| 不确定 LLM 破坏 exact retry | 第一次完整响应 content-addressed 冻结；通常 retry 只读复用；仅失败族可在原 call 预算内恢复，成功族永不重采样 |
+| provider/TLS 失败被误当 Alpha rejection | caller 与 parser 异常边界分离；`CALL_FAILED=0 raw expression`；`INFRASTRUCTURE_FAILURE` 禁止经济评价并绑定恢复父 bundle |
 | 目录读取泄露性能或秘密 | 字段 allowlist、code hash only、READ ONLY 回滚、artifact secret scan |
 | 24 次新搜索造成假阳性 | 当前批次和跨旧 standalone/overlay 的 cumulative family-wise + DSR |
 | 单窗口短期有效冒充抗衰减 | 后半窗口和 4-block 同向门槛；结果仍只 navigation |
@@ -244,7 +248,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 |---|---|
 | F-197 | 旧24/overlay/腿间/分钟lineage关闭后只进入新的自动QE Alpha generator MVE |
 | F-198 | 三阶段隔离：目录只读准备、LLM无target生成、DB/network-off离线经济评价 |
-| F-199 | 6族固定调用/attempt/evaluation预算，schema-only retry且失败生成计attempt |
+| F-199 | 6族固定调用/attempt/evaluation预算；schema失败计expression，provider失败仅计call；有界失败族恢复不重采样成功族 |
 | F-200 | 只接受allowlist声明式AST，不执行LLM Python或RD-Agent coder/runner |
 | F-201 | exact/structural/catalog/field/known-effect/score-correlation原创性与alpha-illusion边界 |
 | F-202 | 固定10% parent rank overlay和完整增量经济/干预/稳定性指标 |
@@ -259,7 +263,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 |---|---|---|---|---|
 | F-197 | `qe_alpha_generator_contracts.py`; `qe_alpha_generator_pipeline.py` route contract | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `python -m nox -s advisory_modeling_backend` | PASS | none |
 | F-198 | request phase gates；READ ONLY catalog snapshot；generation/evaluation split | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_preflight_20260903/catalog_snapshot.json` | PASS | none |
-| F-199 | fixed budget fields；generation receipt support accounting | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
+| F-199 | fixed budget fields；generation receipt/bundle call-vs-expression accounting；immutable recovery lineage | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
 | F-200 | existing `validate_expression/compile_proposal_scores`；strict generator proposal parser | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | PASS | none |
 | F-201 | `preliminary_originality_reasons`; vectorized `target_free_score_overlap` | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
 | F-202 | `evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` incremental/unknown-Top5 cases | PASS | none |

@@ -21,6 +21,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_EXPERIMENT_ID,
     GENERATOR_FAMILY_ID,
+    SHA256_PATTERN,
     AdvisoryQEAlphaGenerationReceiptV1,
     FrozenAdvisoryQEAlphaGeneratorRequestV1,
     QEAlphaGeneratorModelIdentityV1,
@@ -225,81 +226,110 @@ def generate_alpha_candidates(
 ) -> dict[str, Any]:
     request = _load_request(request_path)
     existing = _find_bundle(Path(request.output_root) / "qe_alpha_generation_bundles", request.request_sha256)
+    recovery_parent: Path | None = None
     if existing is not None:
-        inspected = inspect_generation_bundle(existing)
-        return {**inspected, "exact_retry": True, "bundle_path": existing.as_posix()}
-    parent = _local_path(request.parent_qe_bundle_path)
-    old_roster = _read_json(parent / "proposal_roster.json", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
+        prior = _read_generation_bundle(existing)
+        if prior["receipt"].status != "INFRASTRUCTURE_FAILURE" or not _has_generation_recovery_capacity(
+            prior["attempts"], request
+        ):
+            inspected = inspect_generation_bundle(existing)
+            return {**inspected, "exact_retry": True, "bundle_path": existing.as_posix()}
+        recovery_parent = existing
+        old_roster = prior["old_roster"]
+        catalog = prior["catalog"]
+        accepted = list(prior["proposals"])
+        attempts = [dict(item) for item in prior["attempts"]]
+        rejected = [dict(item) for item in prior["rejections"]]
+        transcript = [dict(item) for item in prior["transcript"]]
+    else:
+        parent = _local_path(request.parent_qe_bundle_path)
+        old_roster = _read_json(parent / "proposal_roster.json", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
+        catalog = _read_catalog_snapshot(_local_path(request.catalog_snapshot_path))
+        accepted = []
+        attempts = []
+        rejected = []
+        transcript = []
     old_proposals = tuple(QEAlphaProposalV1.model_validate(item) for item in old_roster["proposals"])
-    catalog = _read_catalog_snapshot(_local_path(request.catalog_snapshot_path))
     caller = llm_call or _default_llm_call
-    accepted: list[QEAlphaGeneratorProposalV1] = []
-    attempts: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-    transcript: list[dict[str, Any]] = []
     old_fingerprints = {item.proposal_id: expression_fingerprint(item.expression) for item in old_proposals}
     for family in MVE_FAMILIES:
+        family_attempts = [item for item in attempts if item.get("family") == family]
+        if family_attempts and family_attempts[-1].get("status") != "CALL_FAILED":
+            continue
+        if len(family_attempts) >= 2 or len(attempts) >= request.max_generation_calls:
+            continue
         system_prompt, user_prompt = build_family_prompt(request, family, old_proposals, catalog)
-        family_proposals: list[QEAlphaGeneratorProposalV1] = []
-        last_violations: list[str] = []
-        for call_index in (1, 2):
+        while len(family_attempts) < 2 and len(attempts) < request.max_generation_calls:
+            call_index = len(family_attempts) + 1
             retry_prompt = user_prompt
-            if call_index == 2:
+            if family_attempts and family_attempts[-1].get("status") == "SCHEMA_REJECTED":
                 retry_prompt += "\n\nSchema-only retry violations:\n" + "\n".join(
-                    f"- {item}" for item in last_violations
+                    f"- {item}" for item in family_attempts[-1].get("violations", ())
                 )
             started = time.monotonic()
             try:
                 raw_response, telemetry = caller(system_prompt, retry_prompt, request)
+            except AdvisoryModelFirstError:
+                raise
+            except Exception as exc:
+                call_failure = _attempt_row(
+                    family,
+                    call_index,
+                    "CALL_FAILED",
+                    system_prompt,
+                    retry_prompt,
+                    "",
+                    {},
+                    0,
+                    (_safe_error(exc),),
+                    time.monotonic() - started,
+                )
+                attempts.append(call_failure)
+                family_attempts.append(call_failure)
+                break
+            try:
                 raw_items = _parse_generation_response(raw_response)
                 parsed = _parse_family_proposals(family, raw_items)
             except Exception as exc:
-                last_violations = [_safe_error(exc)]
-                attempts.append(
-                    _attempt_row(
-                        family,
-                        call_index,
-                        "SCHEMA_REJECTED",
-                        system_prompt,
-                        retry_prompt,
-                        "",
-                        {},
-                        4,
-                        last_violations,
-                        time.monotonic() - started,
-                    )
-                )
-                rejected.extend(
-                    {"family": family, "reason_codes": ["SCHEMA_OR_AST_INVALID"], "attempt_index": call_index}
-                    for _ in range(4)
-                )
-                if call_index == 1:
-                    continue
-                break
-            attempts.append(
-                _attempt_row(
+                violations = (_safe_error(exc),)
+                schema_failure = _attempt_row(
                     family,
                     call_index,
-                    "PARSED",
+                    "SCHEMA_REJECTED",
                     system_prompt,
                     retry_prompt,
                     raw_response,
                     telemetry,
                     4,
-                    (),
+                    violations,
                     time.monotonic() - started,
                 )
+                attempts.append(schema_failure)
+                family_attempts.append(schema_failure)
+                transcript.append(_transcript_row(family, call_index, system_prompt, retry_prompt, raw_response))
+                rejected.extend(
+                    {"family": family, "reason_codes": ["SCHEMA_OR_AST_INVALID"], "attempt_index": call_index}
+                    for _ in range(4)
+                )
+                if len(family_attempts) < 2 and len(attempts) < request.max_generation_calls:
+                    continue
+                break
+            parsed_attempt = _attempt_row(
+                family,
+                call_index,
+                "PARSED",
+                system_prompt,
+                retry_prompt,
+                raw_response,
+                telemetry,
+                4,
+                (),
+                time.monotonic() - started,
             )
-            transcript.append(
-                {
-                    "family": family,
-                    "attempt_index": call_index,
-                    "system_prompt": system_prompt,
-                    "user_prompt": retry_prompt,
-                    "raw_response": raw_response,
-                    "response_sha256": hashlib.sha256(raw_response.encode("utf-8")).hexdigest(),
-                }
-            )
+            attempts.append(parsed_attempt)
+            family_attempts.append(parsed_attempt)
+            transcript.append(_transcript_row(family, call_index, system_prompt, retry_prompt, raw_response))
+            family_proposals: list[QEAlphaGeneratorProposalV1] = []
             for proposal in parsed:
                 reasons = preliminary_originality_reasons(
                     proposal,
@@ -321,18 +351,26 @@ def generate_alpha_candidates(
                     )
                 else:
                     family_proposals.append(proposal)
+            accepted.extend(family_proposals)
             break
-        accepted.extend(family_proposals)
     support_reasons = generation_support_reasons(accepted, request)
-    raw_attempts = len(attempts) * 4
+    unresolved_families = _unresolved_generation_families(attempts)
+    if unresolved_families:
+        support_reasons = ["LLM_PROVIDER_CALL_FAILURE", *support_reasons]
+    raw_attempts = sum(int(item.get("raw_generation_attempt_count") or 0) for item in attempts)
+    status = (
+        "INFRASTRUCTURE_FAILURE"
+        if unresolved_families
+        else ("COMPLETE" if not support_reasons else "INCOMPLETE_SUPPORT")
+    )
     receipt = build_generation_receipt(
         request_sha256=request.request_sha256,
         generation_call_count=len(attempts),
         raw_generation_attempt_count=raw_attempts,
         accepted_expression_count=len(accepted),
-        rejected_expression_count=raw_attempts - len(accepted),
+        rejected_expression_count=len(rejected),
         proposals_sha256=canonical_json_sha256([item.model_dump(mode="json") for item in accepted]),
-        status="COMPLETE" if not support_reasons else "INCOMPLETE_SUPPORT",
+        status=status,
         support_reason_codes=tuple(support_reasons),
     )
     bundle = _publish_generation_bundle(
@@ -344,8 +382,14 @@ def generate_alpha_candidates(
         accepted=accepted,
         rejected=rejected,
         receipt=receipt,
+        recovery_parent=recovery_parent,
     )
-    return {**inspect_generation_bundle(bundle), "exact_retry": False, "bundle_path": bundle.as_posix()}
+    return {
+        **inspect_generation_bundle(bundle),
+        "exact_retry": False,
+        "recovery_attempted": recovery_parent is not None,
+        "bundle_path": bundle.as_posix(),
+    }
 
 
 def build_family_prompt(
@@ -470,6 +514,13 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
     receipt: AdvisoryQEAlphaGenerationReceiptV1 = generation["receipt"]
     if receipt.request_sha256 != request.request_sha256:
         _raise("QE alpha generation/request identity mismatch", "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH")
+    if receipt.status == "INFRASTRUCTURE_FAILURE":
+        _raise(
+            "QE alpha generation has unresolved provider call failures",
+            "ADVISORY_QE_ALPHA_GENERATOR_LLM_CALL_FAILED",
+            support_reason_codes=list(receipt.support_reason_codes),
+            generation_bundle_id=generation_path.name,
+        )
     if receipt.status != "COMPLETE":
         _raise(
             "QE alpha generation support is insufficient for economic evaluation",
@@ -877,6 +928,8 @@ def _summarize_overlay(
 def inspect_generation_bundle(path: str | Path) -> dict[str, Any]:
     bundle = _read_generation_bundle(_local_path(path))
     receipt: AdvisoryQEAlphaGenerationReceiptV1 = bundle["receipt"]
+    failed_calls = [item for item in bundle["attempts"] if item.get("status") == "CALL_FAILED"]
+    unresolved_families = _unresolved_generation_families(bundle["attempts"])
     return {
         "status": "VALID",
         "bundle_id": bundle["manifest"]["bundle_id"],
@@ -886,6 +939,12 @@ def inspect_generation_bundle(path: str | Path) -> dict[str, Any]:
         "accepted_expression_count": receipt.accepted_expression_count,
         "rejected_expression_count": receipt.rejected_expression_count,
         "generation_status": receipt.status,
+        "failed_call_count": len(failed_calls),
+        "unresolved_failed_family_count": len(unresolved_families),
+        "unresolved_failed_families": unresolved_families,
+        "recovery_parent_bundle_id": (
+            bundle["recovery_parent"].get("parent_bundle_id") if bundle["recovery_parent"] else None
+        ),
         "support_reason_codes": list(receipt.support_reason_codes),
         "target_or_economic_metric_exposed": False,
         "secret_persisted": False,
@@ -1011,6 +1070,7 @@ def _publish_generation_bundle(
     accepted: Sequence[QEAlphaGeneratorProposalV1],
     rejected: Sequence[Mapping[str, Any]],
     receipt: AdvisoryQEAlphaGenerationReceiptV1,
+    recovery_parent: Path | None = None,
 ) -> Path:
     root = Path(request.output_root) / "qe_alpha_generation_bundles"
     root.mkdir(parents=True, exist_ok=True)
@@ -1026,6 +1086,16 @@ def _publish_generation_bundle(
         )
         _write_json(temporary / "rejection_ledger.json", {"rejections": list(rejected)})
         _write_json(temporary / "generation_receipt.json", receipt.model_dump(mode="json"))
+        if recovery_parent is not None:
+            parent_manifest = recovery_parent / "manifest.json"
+            _write_json(
+                temporary / "recovery_parent.json",
+                {
+                    "schema_version": "advisory_qe_alpha_generation_recovery_parent_v1",
+                    "parent_bundle_id": recovery_parent.name,
+                    "parent_manifest_sha256": hashlib.sha256(parent_manifest.read_bytes()).hexdigest(),
+                },
+            )
         members = _member_descriptors(temporary)
         bundle_id = canonical_json_sha256(
             {"schema_version": GENERATION_BUNDLE_SCHEMA, "request_sha256": request.request_sha256, "members": members}
@@ -1251,11 +1321,119 @@ def _read_generation_bundle(path: Path) -> dict[str, Any]:
     )
     roster = _read_json(path / "proposal_roster.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
     proposals = tuple(QEAlphaGeneratorProposalV1.model_validate(item) for item in roster.get("proposals", ()))
+    attempts_payload = _read_json(path / "attempts.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+    transcript_payload = _read_json(path / "transcript.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+    rejection_payload = _read_json(path / "rejection_ledger.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+    attempts = attempts_payload.get("attempts")
+    transcript = transcript_payload.get("transcript")
+    rejections = rejection_payload.get("rejections")
+    if not isinstance(attempts, list) or not isinstance(transcript, list) or not isinstance(rejections, list):
+        _raise("QE alpha generation ledger shape is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+    attempt_keys: set[tuple[str, int]] = set()
+    transcript_keys: set[tuple[str, int]] = set()
+    for item in attempts:
+        if not isinstance(item, dict):
+            _raise("QE alpha generation attempt row is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        family = str(item.get("family") or "")
+        attempt_index = int(item.get("attempt_index") or 0)
+        status = str(item.get("status") or "")
+        raw_count = int(item.get("raw_generation_attempt_count") or 0)
+        key = (family, attempt_index)
+        if (
+            family not in MVE_FAMILIES
+            or attempt_index not in (1, 2)
+            or status not in {"CALL_FAILED", "SCHEMA_REJECTED", "PARSED"}
+            or key in attempt_keys
+            or raw_count != (0 if status == "CALL_FAILED" else 4)
+            or (status == "CALL_FAILED") != (item.get("response_sha256") is None)
+        ):
+            _raise("QE alpha generation attempt relation is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        attempt_keys.add(key)
+    for item in transcript:
+        if not isinstance(item, dict):
+            _raise("QE alpha generation transcript row is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        key = (str(item.get("family") or ""), int(item.get("attempt_index") or 0))
+        if key in transcript_keys or key not in attempt_keys or not isinstance(item.get("response_sha256"), str):
+            _raise("QE alpha generation transcript relation is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        matching = next(row for row in attempts if (row.get("family"), row.get("attempt_index")) == key)
+        if matching.get("status") == "CALL_FAILED" or matching.get("response_sha256") != item.get("response_sha256"):
+            _raise("QE alpha generation transcript identity is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        transcript_keys.add(key)
+    response_attempt_keys = {
+        (str(item.get("family")), int(item.get("attempt_index")))
+        for item in attempts
+        if item.get("status") != "CALL_FAILED"
+    }
+    unresolved_families = _unresolved_generation_families(attempts)
+    recovery_parent = None
+    recovery_path = path / "recovery_parent.json"
+    if recovery_path.is_file():
+        recovery_parent = _read_json(recovery_path, "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        if (
+            set(recovery_parent) != {"schema_version", "parent_bundle_id", "parent_manifest_sha256"}
+            or recovery_parent.get("schema_version") != "advisory_qe_alpha_generation_recovery_parent_v1"
+            or not re.fullmatch(SHA256_PATTERN, str(recovery_parent.get("parent_bundle_id") or ""))
+            or not re.fullmatch(SHA256_PATTERN, str(recovery_parent.get("parent_manifest_sha256") or ""))
+        ):
+            _raise("QE alpha generation recovery reference is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        parent_path = path.parent / str(recovery_parent["parent_bundle_id"])
+        parent_manifest_path = parent_path / "manifest.json"
+        parent_receipt_path = parent_path / "generation_receipt.json"
+        if (
+            not parent_manifest_path.is_file()
+            or hashlib.sha256(parent_manifest_path.read_bytes()).hexdigest()
+            != recovery_parent["parent_manifest_sha256"]
+        ):
+            _raise("QE alpha generation recovery parent is unavailable", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        parent_manifest = _read_json(parent_manifest_path, "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        parent_receipt = AdvisoryQEAlphaGenerationReceiptV1.model_validate(
+            _read_json(parent_receipt_path, "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        )
+        parent_attempts = _read_json(parent_path / "attempts.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID").get(
+            "attempts"
+        )
+        parent_transcript = _read_json(
+            parent_path / "transcript.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID"
+        ).get("transcript")
+        parent_rejections = _read_json(
+            parent_path / "rejection_ledger.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID"
+        ).get("rejections")
+        parent_roster = _read_json(
+            parent_path / "proposal_roster.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID"
+        ).get("proposals")
+        current_roster = roster.get("proposals")
+        if not all(
+            isinstance(item, list)
+            for item in (parent_attempts, parent_transcript, parent_rejections, parent_roster, current_roster)
+        ):
+            _raise(
+                "QE alpha generation recovery parent ledger is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID"
+            )
+        new_attempts = attempts[len(parent_attempts) :]
+        recoverable_families = set(_unresolved_generation_families(parent_attempts))
+        if (
+            parent_manifest.get("request_sha256") != request.request_sha256
+            or parent_receipt.request_sha256 != request.request_sha256
+            or parent_receipt.status != "INFRASTRUCTURE_FAILURE"
+            or parent_receipt.generation_call_count >= receipt.generation_call_count
+            or attempts[: len(parent_attempts)] != parent_attempts
+            or transcript[: len(parent_transcript)] != parent_transcript
+            or rejections[: len(parent_rejections)] != parent_rejections
+            or current_roster[: len(parent_roster)] != parent_roster
+            or any(str(item.get("family") or "") not in recoverable_families for item in new_attempts)
+        ):
+            _raise("QE alpha generation recovery lineage is invalid", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
     proposals_sha256 = canonical_json_sha256([item.model_dump(mode="json") for item in proposals])
     if (
         receipt.request_sha256 != request.request_sha256
         or receipt.accepted_expression_count != len(proposals)
         or receipt.proposals_sha256 != proposals_sha256
+        or receipt.generation_call_count != len(attempts)
+        or receipt.raw_generation_attempt_count
+        != sum(int(item.get("raw_generation_attempt_count") or 0) for item in attempts)
+        or receipt.rejected_expression_count != len(rejections)
+        or response_attempt_keys != transcript_keys
+        or (receipt.status == "INFRASTRUCTURE_FAILURE") != bool(unresolved_families)
         or manifest.get("target_or_economic_metric_exposed") is not False
         or manifest.get("secret_persisted") is not False
         or manifest.get("sealed_holdout_accessed") is not False
@@ -1269,6 +1447,11 @@ def _read_generation_bundle(path: Path) -> dict[str, Any]:
         "request": request,
         "receipt": receipt,
         "proposals": proposals,
+        "catalog": _read_catalog_snapshot(path / "catalog_snapshot.json"),
+        "attempts": tuple(attempts),
+        "transcript": tuple(transcript),
+        "rejections": tuple(rejections),
+        "recovery_parent": recovery_parent,
         "old_roster": _read_json(path / "old_proposal_roster.json", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID"),
     }
 
@@ -1342,8 +1525,12 @@ def _find_bundle(root: Path, request_sha256: str) -> Path | None:
             continue
         if manifest.get("request_sha256") == request_sha256:
             matches.append(child)
+    if len(matches) > 1 and root.name == "qe_alpha_generation_bundles":
+        ranked = [(_read_generation_bundle(item)["receipt"].generation_call_count, item) for item in matches]
+        max_call_count = max(item[0] for item in ranked)
+        matches = [item[1] for item in ranked if item[0] == max_call_count]
     if len(matches) > 1:
-        _raise("QE alpha generator request maps to multiple bundles", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
+        _raise("QE alpha generator request maps to ambiguous bundles", "ADVISORY_QE_ALPHA_GENERATOR_BUNDLE_INVALID")
     return matches[0] if matches else None
 
 
@@ -1443,6 +1630,43 @@ def _catalog_text_keys(catalog: Mapping[str, Any]) -> set[str]:
             if value:
                 keys.add(value)
     return keys
+
+
+def _transcript_row(
+    family: str,
+    attempt_index: int,
+    system_prompt: str,
+    user_prompt: str,
+    raw_response: str,
+) -> dict[str, Any]:
+    return {
+        "family": family,
+        "attempt_index": attempt_index,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "raw_response": raw_response,
+        "response_sha256": hashlib.sha256(raw_response.encode("utf-8")).hexdigest(),
+    }
+
+
+def _unresolved_generation_families(attempts: Sequence[Mapping[str, Any]]) -> list[str]:
+    latest: dict[str, Mapping[str, Any]] = {}
+    for item in attempts:
+        family = str(item.get("family") or "")
+        if family in MVE_FAMILIES:
+            latest[family] = item
+    return [family for family in MVE_FAMILIES if latest.get(family, {}).get("status") == "CALL_FAILED"]
+
+
+def _has_generation_recovery_capacity(
+    attempts: Sequence[Mapping[str, Any]], request: FrozenAdvisoryQEAlphaGeneratorRequestV1
+) -> bool:
+    if len(attempts) >= request.max_generation_calls:
+        return False
+    for family in _unresolved_generation_families(attempts):
+        if sum(1 for item in attempts if item.get("family") == family) < 2:
+            return True
+    return False
 
 
 def _attempt_row(
@@ -1601,7 +1825,13 @@ def _normalized_text(value: Any) -> str:
 
 
 def _safe_error(exc: Exception) -> str:
-    text = re.sub(r"(?i)(api[_-]?key|authorization|bearer|password)\s*[:=]\s*\S+", r"\1=<redacted>", str(exc))
+    text = re.sub(
+        r"(?i)(api[_-]?key|authorization|password|token|secret)\s*[:=]\s*\S+",
+        r"\1=<redacted>",
+        str(exc),
+    )
+    text = re.sub(r"(?i)\bbearer\s+\S+", "Bearer <redacted>", text)
+    text = re.sub(r"\b(?:sk|ds)-[A-Za-z0-9_-]{12,}\b", "<redacted-token>", text)
     return f"{type(exc).__name__}:{text[:500]}"
 
 
