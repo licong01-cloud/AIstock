@@ -20,6 +20,97 @@ class _DummyConn:
         return False
 
 
+def _daily_csv_frame(code: str, dates: list[date]) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "date": [value.isoformat() for value in dates],
+            "symbol": [code] * len(dates),
+        }
+    )
+    for column in authoritative.DAILY_REQUIRED_COLUMNS[2:]:
+        frame[column] = 1.0
+    return frame.loc[:, authoritative.DAILY_REQUIRED_COLUMNS]
+
+
+def test_daily_csv_resume_reuses_only_complete_atomic_physical_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "302132.SZ"
+    dates = [date(2026, 8, 28), date(2026, 8, 31)]
+    raw = pd.DataFrame({"trade_date": dates, "ts_code": [code, code]})
+    csv_dir = tmp_path / "snapshot" / "stock_daily"
+    csv_dir.mkdir(parents=True)
+    _daily_csv_frame(code, dates).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "_load_daily_raw", lambda *_args, **_kwargs: raw)
+
+    def must_not_rebuild(*_args, **_kwargs):
+        raise AssertionError("complete atomic daily CSV must be reused")
+
+    monkeypatch.setattr(authoritative, "_build_daily_expected_frame", must_not_rebuild)
+
+    summary = authoritative.export_stock_daily_csv(
+        snapshot_id="snapshot",
+        start=dates[0],
+        end=dates[-1],
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 1
+    assert summary.csv_files == 1
+    assert summary.csv_rows == 2
+    assert summary.stocks_written == 1
+
+
+def test_daily_csv_resume_rebuilds_stale_or_incomplete_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "302132.SZ"
+    dates = [date(2026, 8, 28), date(2026, 8, 31)]
+    raw = pd.DataFrame({"trade_date": dates, "ts_code": [code, code]})
+    csv_dir = tmp_path / "snapshot" / "stock_daily"
+    csv_dir.mkdir(parents=True)
+    _daily_csv_frame(code, dates[:1]).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "_load_daily_raw", lambda *_args, **_kwargs: raw)
+    monkeypatch.setattr(
+        authoritative,
+        "_build_daily_expected_frame",
+        lambda *_args, **_kwargs: _daily_csv_frame(code, dates),
+    )
+
+    summary = authoritative.export_stock_daily_csv(
+        snapshot_id="snapshot",
+        start=dates[0],
+        end=dates[-1],
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 0
+    assert summary.csv_files == 1
+    assert summary.csv_rows == 2
+    assert pd.read_csv(csv_dir / f"{code}.csv")["date"].tolist() == [
+        "2026-08-28",
+        "2026-08-31",
+    ]
+
+
+def test_daily_csv_rejects_overwrite_and_resume_together(tmp_path) -> None:
+    with pytest.raises(ValueError, match="cannot both be true"):
+        authoritative.export_stock_daily_csv(
+            snapshot_id="snapshot",
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 31),
+            csv_root=tmp_path,
+            overwrite_csv=True,
+            resume_csv=True,
+        )
+
+
 def test_authoritative_stock_export_exchanges_are_sh_sz_only() -> None:
     assert authoritative.normalize_stock_export_exchanges(None) == ["sh", "sz"]
     assert authoritative.normalize_stock_export_exchanges(["sz", "sh", "sh"]) == ["sh", "sz"]

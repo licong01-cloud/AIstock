@@ -236,10 +236,12 @@ class DirectMonthlyRunner:
                 receipt = dict(self.handlers[component](layout))
             except Exception:
                 record["status"] = "FAILED"
+                state["status"] = "FAILED"
                 write_state(layout, state)
                 raise
             if receipt.get("status") != "PASS" or receipt.get("component") != component:
                 record["status"] = "FAILED"
+                state["status"] = "FAILED"
                 write_state(layout, state)
                 raise DirectMonthlyError(f"direct component receipt is invalid: {component}")
             record["status"] = "PASS"
@@ -248,8 +250,15 @@ class DirectMonthlyRunner:
 
         state["status"] = "VALIDATING"
         write_state(layout, state)
-        validation = dict(self.validator(layout))
+        try:
+            validation = dict(self.validator(layout))
+        except Exception:
+            state["status"] = "FAILED"
+            write_state(layout, state)
+            raise
         if validation.get("status") != "PASS":
+            state["status"] = "FAILED"
+            write_state(layout, state)
             raise DirectMonthlyError("direct candidate validation receipt is invalid")
         state["validation"] = validation
         state["status"] = DIRECT_TERMINAL_STATUS
@@ -430,6 +439,8 @@ def _run_qlib_component(
         csv_root = layout.work_root / snapshot_id / "stock_minute_1min"
         if csv_root.exists():
             command.append("--resume-csv")
+    elif dataset == "stock_daily":
+        command.append("--resume-csv")
     log_root = layout.candidate_root / "logs"
     log_root.mkdir(parents=True, exist_ok=True)
     with (log_root / f"{component}.stdout.log").open("a", encoding="utf-8") as stdout, (

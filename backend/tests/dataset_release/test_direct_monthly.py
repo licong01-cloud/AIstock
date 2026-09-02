@@ -17,6 +17,7 @@ from backend.services.dataset_release.direct_monthly import (
     default_candidate_path,
     discover_latest_validated_baseline,
     read_state,
+    _run_qlib_component,
     _date_chunks,
     _filter_frame_to_pit,
 )
@@ -135,6 +136,7 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
 
     failed_state = read_state(layout)
     assert failed_state is not None
+    assert failed_state["status"] == "FAILED"
     assert failed_state["components"]["daily_bin"]["status"] == "PASS"
     assert failed_state["components"]["minute_bin"]["status"] == "FAILED"
 
@@ -162,7 +164,59 @@ def test_runner_rejects_partial_registry_and_invalid_receipt(tmp_path) -> None:
     with pytest.raises(DirectMonthlyError, match="receipt is invalid"):
         runner.run(layout)
     state = json.loads(layout.state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "FAILED"
     assert state["components"]["daily_bin"]["status"] == "FAILED"
+
+
+def test_runner_persists_failed_top_level_when_validation_fails(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    runner = DirectMonthlyRunner(
+        {
+            component: (lambda _layout, name=component: {"status": "PASS", "component": name})
+            for component in DIRECT_COMPONENTS
+        },
+        validator=lambda _layout: {"status": "FAILED"},
+    )
+
+    with pytest.raises(DirectMonthlyError, match="validation receipt"):
+        runner.run(layout)
+
+    state = read_state(layout)
+    assert state is not None
+    assert state["status"] == "FAILED"
+    assert all(state["components"][component]["status"] == "PASS" for component in DIRECT_COMPONENTS)
+
+
+def test_daily_component_always_uses_structural_csv_resume(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    captured: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+        calendar.parent.mkdir(parents=True)
+        calendar.write_text("2026-08-31\n", encoding="utf-8")
+        return Completed()
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.subprocess.run",
+        fake_run,
+    )
+
+    receipt = _run_qlib_component(
+        layout,
+        project_root=tmp_path,
+        component="daily_bin",
+        dataset="stock_daily",
+        start=date(2018, 8, 1),
+        chunked=False,
+    )
+
+    assert receipt["status"] == "PASS"
+    assert "--resume-csv" in captured["command"]
 
 
 def test_existing_nonempty_candidate_without_state_is_never_adopted(tmp_path) -> None:
