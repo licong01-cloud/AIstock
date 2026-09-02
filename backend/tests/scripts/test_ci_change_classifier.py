@@ -282,6 +282,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert leg_disagreement_payload["dev_db_required"] is False
     assert leg_disagreement_payload["unmapped_code_files"] == []
 
+    minute_information_payload = classifier.classify_changed_files(
+        ["scripts/advisory_minute_information_set_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert minute_information_payload["classification"] == "targeted_ci_required"
+    assert minute_information_payload["backend_required"] is True
+    assert minute_information_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert minute_information_payload["dev_db_required"] is False
+    assert minute_information_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
