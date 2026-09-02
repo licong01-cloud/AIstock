@@ -24,6 +24,7 @@ from backend.services.dataset_release.a_share_limit_rule import (
         ("002001.SZ", AShareBoard.SZ_MAIN),
         ("300001.SZ", AShareBoard.CHINEXT),
         ("301001.SZ", AShareBoard.CHINEXT),
+        ("302132.SZ", AShareBoard.CHINEXT),
         ("688001.SH", AShareBoard.STAR),
         ("689001.SH", AShareBoard.STAR),
     ],
@@ -49,6 +50,7 @@ def test_unknown_or_non_a_share_board_fails_closed(ts_code) -> None:
         ("300001.SZ", date(2020, 8, 23), False, Decimal("0.10")),
         ("300001.SZ", date(2020, 8, 23), True, Decimal("0.05")),
         ("300001.SZ", date(2020, 8, 24), True, Decimal("0.20")),
+        ("302132.SZ", date(2026, 5, 8), False, Decimal("0.20")),
         ("688001.SH", date(2024, 7, 23), True, Decimal("0.20")),
     ],
 )
