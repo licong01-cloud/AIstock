@@ -30,14 +30,22 @@
   ],
   "expected": "Immutable bundle aggregation must use the latest authoritative finite positive circ_mv at or before prev_market_trade_date(t), including an explicitly evidenced source date before the PIT entry boundary, while preserving source/history bounds. Parent failure receipts must propagate the child completed fit count without marking the model available or writing candidate/model/READY artifacts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+      "tests/aistock_validation/bugs/20260902_BUG-1318-formal-rw1-bundle-drops-cross-pit-circ-mv-history-and-parent-masks-compl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
       "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+      "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+      "tests/aistock_validation/bugs/20260902_BUG-1318-formal-rw1-bundle-drops-cross-pit-circ-mv-history-and-parent-masks-compl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -127,10 +135,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
