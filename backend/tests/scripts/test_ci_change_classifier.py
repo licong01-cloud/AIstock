@@ -262,6 +262,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert qe_alpha_mve_payload["dev_db_required"] is False
     assert qe_alpha_mve_payload["unmapped_code_files"] == []
 
+    qe_alpha_generator_payload = classifier.classify_changed_files(
+        ["scripts/advisory_qe_alpha_generator_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert qe_alpha_generator_payload["classification"] == "targeted_ci_required"
+    assert qe_alpha_generator_payload["backend_required"] is True
+    assert qe_alpha_generator_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert qe_alpha_generator_payload["dev_db_required"] is False
+    assert qe_alpha_generator_payload["unmapped_code_files"] == []
+
     parent_overlay_payload = classifier.classify_changed_files(
         ["scripts/advisory_parent_incremental_overlay_run.py"],
         repo_root=tmp_path,

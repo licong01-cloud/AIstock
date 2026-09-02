@@ -358,7 +358,11 @@ class AdvisoryQEAlphaMVEReceiptV1(BaseModel):
         return self.model_dump(mode="json", exclude={"receipt_id", "receipt_sha256", "created_at"})
 
 
-def validate_expression(expression: dict[str, Any]) -> dict[str, Any]:
+def validate_expression(
+    expression: dict[str, Any],
+    *,
+    allowed_fields: frozenset[str] = ALLOWED_FIELDS,
+) -> dict[str, Any]:
     fields: set[str] = set()
     nodes = 0
 
@@ -376,7 +380,7 @@ def validate_expression(expression: dict[str, Any]) -> dict[str, Any]:
         if op == "FIELD":
             allowed_keys.add("field")
             name = node.get("field")
-            if name not in ALLOWED_FIELDS:
+            if name not in allowed_fields:
                 raise ValueError("QE alpha expression field is not allowed")
             fields.add(str(name))
             if "args" in node:
