@@ -8,6 +8,8 @@
     "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "backend/services/dataset_release/direct_monthly.py",
     "backend/tests/dataset_release/test_direct_monthly.py",
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
     "tests/aistock_validation/bugs/20260902_BUG-1323-v2.json"
   ],
   "assigned_agent": null,
@@ -35,7 +37,9 @@
   "file_scope_contract": {
     "added_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
     ],
     "changed_files": [
       "scripts/update_backtest_dataset_monthly.py",
@@ -53,7 +57,9 @@
         ".codex/skills/update-backtest-dataset/SKILL.md",
         "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -148,7 +154,9 @@
         ".codex/skills/update-backtest-dataset/SKILL.md",
         "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py"
       ],
       "unmatched_files": []
     },
@@ -159,7 +167,9 @@
       ".codex/skills/update-backtest-dataset/SKILL.md",
       "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -169,7 +179,9 @@
       ".codex/skills/update-backtest-dataset/SKILL.md",
       "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
     ]
   },
   "first_seen_at": "2026-09-02T07:24:24.658577Z",
@@ -195,8 +207,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "fresh_process_evidence": [
+      "Windows Python -I imported backend.services.dataset_release.direct_monthly and backend.qlib_exporter.authoritative_bin_exporter from the task worktree -> BUG1323_FRESH_PROCESS_IMPORT_OK",
+      "Windows Python executed scripts/update_backtest_dataset_monthly.py --help from the task worktree -> exit 0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,

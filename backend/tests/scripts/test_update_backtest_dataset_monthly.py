@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -23,6 +24,11 @@ from backend.services.dataset_release.profile import (
     CANONICAL_INITIAL_MIGRATION_PLAN_ID,
     load_dataset_profile,
     load_initial_migration_plan,
+)
+from backend.services.dataset_release.direct_monthly import (
+    DirectMonthlyLayout,
+    initial_state,
+    write_state,
 )
 
 
@@ -137,21 +143,73 @@ def test_monthly_explicit_idempotency_key_replays_exact_submission(tmp_path, cap
     assert store._many("SELECT * FROM runs", ()) == []
 
 
-def test_monthly_rejects_legacy_v2_source_freeze_without_creating_submission(tmp_path, capsys) -> None:
+def test_monthly_routes_v2_to_direct_builder_without_creating_legacy_submission(
+    tmp_path, capsys, monkeypatch
+) -> None:
     service, store = _dual_profile_service(tmp_path)
     observed = datetime(2026, 8, 11, tzinfo=UTC)
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "_direct_monthly",
+        lambda _service, args, *, observed_at: calls.append((args.scope, observed_at))
+        or {
+            "ok": True,
+            "action": "monthly-direct",
+            "status": "CANDIDATE_READY",
+            "execution_started_by_cli": True,
+            "production_activation": "not_requested",
+        },
+    )
 
     assert (
         cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed)
-        == 2
+        == 0
     )
-    canonical = json.loads(capsys.readouterr().err)
-    assert canonical["error_code"] == "LEGACY_V2_SOURCE_FREEZE_DISABLED"
+    canonical = _output(capsys)
+    assert canonical["action"] == "monthly-direct"
+    assert canonical["execution_started_by_cli"] is True
+    assert calls == [("full", observed)]
     assert store._many("SELECT * FROM submissions", ()) == []
     assert cli.main(["monthly", "--candidate-only"], service=service, observed_at=observed) == 0
     legacy = _output(capsys)
     assert legacy["submission_id"]
     assert len(store._many("SELECT * FROM submissions", ())) == 1
+
+
+def test_direct_status_reads_latest_candidate_local_state_without_control_submission(
+    tmp_path, monkeypatch
+) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "baseline-candidate"
+    baseline.mkdir()
+    older = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260731-qe_hmm_full_v2-direct-20260801-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 7, 31),
+    )
+    latest = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 8, 31),
+    )
+    for layout in (older, latest):
+        write_state(layout, initial_state(layout))
+    monkeypatch.setattr(
+        cli,
+        "load_dataset_profile",
+        lambda _path: SimpleNamespace(candidate_root=parent),
+    )
+
+    result = cli._direct_status()
+
+    assert result["action"] == "status-direct"
+    assert result["cutoff"] == "2026-08-31"
+    assert result["candidate_root"] == str(latest.candidate_root)
+    assert result["bounded_read"] is True
 
 
 def test_initial_migration_cli_submits_fixed_plan_once_without_execution(tmp_path, capsys) -> None:

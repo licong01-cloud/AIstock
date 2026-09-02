@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-"""One-command, candidate-only control client for monthly QE dataset releases.
+"""One-command, candidate-only monthly QE dataset entrypoint.
 
-This entrypoint only writes small durable intents/commands or performs bounded
-catalog reads.  It never starts a Worker, exporter, backend, database repair,
-activation, cleanup, or production data mutation.
+The canonical v2 profile executes the direct component builders in-process.
+Legacy v1 and catalog commands retain the bounded control-client behavior.
+Neither path performs database repair, activation, cleanup, or production data
+mutation.
 """
 
 from __future__ import annotations
@@ -51,16 +52,22 @@ from backend.services.dataset_release.profile import (  # noqa: E402
     CANONICAL_INITIAL_MIGRATION_PLAN_ID,
     load_dataset_profile,
 )
-
-
-class LegacyV2MonthlyPipelineDisabled(DatasetReleaseError):
-    code = "LEGACY_V2_SOURCE_FREEZE_DISABLED"
+from backend.services.dataset_release.direct_monthly import (  # noqa: E402
+    DirectMonthlyLayout,
+    DirectMonthlyRunner,
+    compact_status,
+    default_candidate_path,
+    discover_latest_validated_baseline,
+    production_handlers,
+    read_state,
+    validate_direct_candidate_with_smoke,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Submit or inspect candidate-only monthly QE dataset releases. This command never starts data execution."
+            "Build or inspect candidate-only monthly QE dataset releases; canonical v2 monthly runs direct builders."
         )
     )
     parser.add_argument(
@@ -169,9 +176,10 @@ def _monthly(
         raise ValueError("monthly requires --candidate-only")
     profile_id = _selected_profile_id(service, args)
     if profile_id == "qe_hmm_full_v2":
-        raise LegacyV2MonthlyPipelineDisabled(
-            "qe_hmm_full_v2 no longer submits the legacy source-freeze pipeline; "
-            "use the direct component exporters until the direct monthly builder is active"
+        return _direct_monthly(
+            service,
+            args,
+            observed_at=observed_at,
         )
     preview = service.preview_monthly(
         profile_id=profile_id,
@@ -209,6 +217,54 @@ def _monthly(
     }
 
 
+def _direct_monthly(
+    service: DatasetReleaseControlService,
+    args: argparse.Namespace,
+    *,
+    observed_at: datetime,
+) -> Mapping[str, Any]:
+    preview = service.preview_monthly(
+        profile_id="qe_hmm_full_v2",
+        cutoff_policy="auto-previous-month",
+        scope=args.scope,
+        candidate_only=True,
+        now=observed_at,
+    )
+    if args.scope != "full":
+        raise ValueError("direct qe_hmm_full_v2 monthly supports the full candidate only")
+    cutoff = date.fromisoformat(str(preview["resolved_cutoff"]))
+    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
+    candidate_parent = Path(str(profile.candidate_root)).resolve(strict=True)
+    candidate_root = default_candidate_path(
+        candidate_parent,
+        cutoff=cutoff,
+        observed_on=observed_at.date(),
+    )
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=candidate_parent,
+        candidate_root=candidate_root,
+        baseline_root=discover_latest_validated_baseline(candidate_parent, cutoff=cutoff),
+        cutoff=cutoff,
+    )
+    state = DirectMonthlyRunner(
+        production_handlers(project_root=REPOSITORY_ROOT),
+        validator=lambda current_layout: validate_direct_candidate_with_smoke(
+            current_layout,
+            project_root=REPOSITORY_ROOT,
+        ),
+    ).run(
+        layout,
+        adopt_known_direct_work=True,
+    )
+    return {
+        "ok": True,
+        "action": "monthly-direct",
+        **compact_status(state),
+        "execution_started_by_cli": True,
+        "production_activation": "not_requested",
+    }
+
+
 def _status(
     service: DatasetReleaseControlService,
     args: argparse.Namespace,
@@ -233,6 +289,42 @@ def _status(
         "bounded_read": True,
         "execution_started_by_cli": False,
         "production_activation": status["activation"],
+    }
+
+
+def _direct_status() -> Mapping[str, Any]:
+    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
+    parent = Path(str(profile.candidate_root)).resolve(strict=True)
+    states: list[tuple[date, datetime, Mapping[str, Any]]] = []
+    for candidate in parent.glob("*-qe_hmm_full_v2-direct-*-candidate"):
+        state_path = candidate / "direct_monthly_state.json"
+        if not state_path.is_file():
+            continue
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+            cutoff = date.fromisoformat(str(raw["cutoff"]))
+            updated = datetime.fromisoformat(str(raw["updated_at"]))
+            layout = DirectMonthlyLayout.create(
+                candidate_parent=parent,
+                candidate_root=candidate,
+                baseline_root=Path(str(raw["baseline_root"])),
+                cutoff=cutoff,
+            )
+            state = read_state(layout)
+        except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            continue
+        if state is not None:
+            states.append((cutoff, updated, state))
+    if not states:
+        raise ValueError("no direct qe_hmm_full_v2 candidate state is available")
+    states.sort(key=lambda item: (item[0], item[1]))
+    return {
+        "ok": True,
+        "action": "status-direct",
+        **compact_status(states[-1][2]),
+        "bounded_read": True,
+        "execution_started_by_cli": False,
+        "production_activation": "not_requested",
     }
 
 
@@ -470,7 +562,11 @@ def main(
                 observed_at=observed_at or datetime.now(UTC),
             )
         elif args.action == "status":
-            result = _status(control, args)
+            result = (
+                _direct_status()
+                if _selected_profile_id(control, args) == "qe_hmm_full_v2"
+                else _status(control, args)
+            )
         elif args.action == "events":
             result = _events(control, args)
         elif args.action == "receipt":
