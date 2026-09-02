@@ -283,8 +283,8 @@ def build_overlay_scores(
                     "candidate_unique_count": unique_count,
                     "candidate_active": bool(active),
                     "blended_row_count": int(blend_mask.sum()) if active else 0,
-                    "fallback_row_count": int(len(daily) - blend_mask.sum()) if active else len(daily),
-                    "fallback_reason": "NONE" if active else "INACTIVE_OR_DEGENERATE",
+                    "parent_passthrough_row_count": int(len(daily) - blend_mask.sum()) if active else len(daily),
+                    "parent_passthrough_reason": "NONE" if active else "INACTIVE_OR_DEGENERATE",
                 }
             )
     output["parent_rank"] = pd.to_numeric(output["parent_rank"], errors="coerce").astype("float32")
@@ -445,8 +445,8 @@ def _evaluate_one_overlay_daily(
                 "candidate_active": bool(activity_row.candidate_active),
                 "candidate_finite_fraction": float(activity_row.finite_candidate_fraction),
                 "blended_row_count": int(activity_row.blended_row_count),
-                "fallback_row_count": int(activity_row.fallback_row_count),
-                "fallback_reason": str(activity_row.fallback_reason),
+                "parent_passthrough_row_count": int(activity_row.parent_passthrough_row_count),
+                "parent_passthrough_reason": str(activity_row.parent_passthrough_reason),
                 "parent_rank_ic": parent_ic,
                 "overlay_rank_ic": overlay_ic,
                 "rank_ic_delta": overlay_ic - parent_ic,
