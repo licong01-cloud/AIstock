@@ -1,9 +1,9 @@
 # Advisory N3 分钟信息集 Learnability MVE F2 详细设计
 
-> 版本：v1.1
+> 版本：v1.2
 > 日期：2026-09-03  
 > Feature tier：F2  
-> 状态：APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING
+> 状态：IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO
 > objective contract：`ALPHA_RANKING`  
 > study type：`LEARNABILITY_AUDIT`  
 > decision use：`NAVIGATION_ONLY`
@@ -17,6 +17,7 @@
 5. N2-A key-only 读取确认 1,710,301 行、4,503 只股票，时间为 `2024-07-04..2026-02-02`；spike 没有读取 outcome/target 列。全 386 日 target-free 扫描原始结果为 1,695,153 complete、13,473 partial、1,675 whole-day missing。
 6. 13,473 个 raw partial 中，13,461 个来自 `2025-11-27/2025-12-08/2025-12-12` 三个 241-slot session：每个候选都只有 240 个合法 OHLC bar。source spike 以 bar-count 归一化后得到 1,708,614 complete、12 partial、1,675 whole-day missing，complete fraction `0.999013624`、any-bar availability `0.999020640`。实现期真实 Qlib 烟测进一步确认，这不是严格意义上“所有股票同一个 slot 都为空”：以 `2025-12-08` 为例，4,474 只股票缺 `13:00`，另 13 只缺 `11:30` 且在 `13:00` 有值。因此正式实现必须同时保留 raw `240/241` coverage 与独立 `SESSION_WIDE_SINGLE_BAR_DEFICIT` 归一化分类，不能伪造一个全市场空 slot，也不能移动、补零或删除 bar。扫描耗时 1,282.87 秒，峰值 RSS 896,438,272 bytes，source-ready receipt 为 `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`，SHA256 `20b2f7639ffa6467f056e47b4decd77f0ab39650ae1d8d6d04226a9e20aebbc2`。
 7. 本 MVE 的分钟聚合公式不读取 LSTM/FUND 腿，工程接口可被其它包复用；但本轮证据仍严格绑定当前 N2-A 父包候选、parent score 和 policy。它不把单包结果冒充跨包通用模型，跨包共享仍须至少两个兼容包的独立 exact bundle 证据。
+8. 正式 request `advn3minreq_333ff0cf8e102efef88961c3` 已在 clean `main@a82a58ce...` 完成，bundle `0076a3a6...` 为 `2/2/2/0`。384 个可评价日全部发生真实干预，但 candidate RankIC/Top5 净超额分别为 `0.09020/128.31 bps`，低于 parent/comparator 的 `0.12284/443.65 bps`；四项 family-wise 门槛全部失败，故 `selected=0`，唯一 next task 为 `N3_QE_ALPHA_GENERATOR_MVE_DESIGN`。
 
 ## 2. Scope / 目标与成功边界
 
@@ -346,21 +347,33 @@ Rollout 仅指源码合入后从 clean main 生成一次冻结 request，并在 
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-920 | `prepare_minute_information_set_request`；`_validate_bound_sources` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: clean-main formal request/bundle pending |
-| F-921 | `fingerprint_minute_source`；`_validate_source_control_refs`；`_read_minute_bundle` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: full formal content readback pending |
-| F-922 | `build_minute_feature_panel`；`aggregate_minute_day` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py`；真实 WSL/Qlib `2025-12-08` 单日 4,487-key smoke | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 386 日正式 panel pending |
-| F-923 | `aggregate_minute_day`；`run_minute_crossfit` train-fold imputer | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_source_spike_v1_20260903/source_spike_receipt.json`; `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 raw/normalized coverage receipt pending |
-| F-924 | `FrozenMinuteInformationSetRequestV1`；`MinuteInformationSetModelTrialV1` | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: clean-main frozen request pending |
-| F-925 | `run_minute_crossfit` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 28-path/7-OOF readback pending |
-| F-926 | `evaluate_minute_models` | `backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式双 baseline 经济结果 pending |
-| F-927 | `_QlibMinuteLoader`；`_check_resource_limits`；`_verify_environment` | source-ready receipt；真实 WSL/Qlib `2025-12-08` smoke；`backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: full formal resource report pending |
-| F-928 | `prepare_minute_information_set_request`；`run_minute_information_set_mve`；`inspect_minute_information_set_bundle`；`_deliver_bundle` | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 publish/exact retry pending |
-| F-929 | frozen request flags；`scripts/advisory_minute_information_set_mve_run.py`；CI classifier mapping | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py`; `backend/tests/scripts/test_ci_change_classifier.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: CI/merge pending；restart/DDL 仍 noop |
-| F-930 | `MinuteInformationSetReceiptV1`；`_write_route_page` | `backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | APPROVED_BY_USER_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: 正式 0/1 receipt 与 route pending |
+| F-920 | `prepare_minute_information_set_request`；`_validate_bound_sources` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/request.json`；`backend/tests/advisory_model_first/test_minute_information_set_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-921 | `fingerprint_minute_source`；`_validate_source_control_refs`；`_read_minute_bundle` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/source_identity_receipt.json` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-922 | `build_minute_feature_panel`；`aggregate_minute_day` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/minute_feature_panel.parquet`；`backend/tests/advisory_model_first/test_minute_information_set_pipeline.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-923 | `aggregate_minute_day`；`run_minute_crossfit` train-fold imputer | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/minute_coverage_daily.parquet`；`fold_diagnostics.parquet` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-924 | `FrozenMinuteInformationSetRequestV1`；`MinuteInformationSetModelTrialV1` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/request.json`；`backend/tests/advisory_model_first/test_minute_information_set_contracts.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-925 | `run_minute_crossfit` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/oof_score_panel.parquet` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-926 | `evaluate_minute_models` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/model_summary.json`；`frontier_receipt.json` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-927 | `_QlibMinuteLoader`；`_check_resource_limits`；`_verify_environment` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/resource_report.json` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-928 | `prepare_minute_information_set_request`；`run_minute_information_set_mve`；`inspect_minute_information_set_bundle`；`_deliver_bundle` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/manifest.json`；exact retry readback | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-929 | frozen request flags；CLI；CI classifier mapping | `backend/tests/advisory_model_first/test_minute_information_set_contracts.py`；`backend/tests/scripts/test_ci_change_classifier.py`；PR #4210 CI/CodeQL/L0 pass | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-930 | `MinuteInformationSetReceiptV1`；`_write_route_page` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/learnability_receipt.json`；route readback | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
 
 ## 17. DESIGN-COMPLIANCE-001
 
-1. **设计目标逐项覆盖**：F-920 至 F-930 均已映射到真实源码；source-ready、local verification 与正式经济结果保持独立。
+1. **设计目标逐项覆盖**：F-920 至 F-930 均已映射到真实源码与正式 artifact；source-ready、local verification 与正式经济结果保持独立。
 2. **代码逐项映射设计**：实现保持 §11 精确范围；没有新增通用分钟平台、运行时激活、仓位或交易输出。
-3. **测试逐项证明业务结果**：本地测试覆盖 PIT、真实/归一化 missing、相邻 minute return、7 OOF、parent/comparator 增量、route 与 exact retry；并以真实 WSL/Qlib 单日烟测纠正 source spike 的 slot 解释。
-4. **差距显式保留**：源码仍待 CI/合入；clean-main 386 日正式 request、bundle、registry/route、exact retry 与经济结论均未产生，独立 confirmation 更未启动；当前不得标记 formal verified、可激活或业务收益有效。
+3. **测试逐项证明业务结果**：本地测试覆盖 PIT、真实/归一化 missing、相邻 minute return、7 OOF、parent/comparator 增量、route 与 exact retry；正式 386 日 run 对全部行、日期、支持、资源和经济指标完成 readback。
+4. **差距显式保留**：本 MVE 已 formal complete 且 `selected=0`；它没有可进入 confirmation 的 candidate，也没有模型/因子/包/运行时/仓位输出。下一新假设是独立 `N3_QE_ALPHA_GENERATOR_MVE_DESIGN`，不得回选本 frontier。
+
+## 18. Formal Result / 正式结果
+
+- request：`advn3minreq_333ff0cf8e102efef88961c3`，clean `main@a82a58ce5ef1837a999691234f4a516d7fecf68f`。
+- bundle：`0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9`，receipt：`advn3minrcpt_727b08ffe123f191f619f7ba`，结果 `2/2/2/0`。
+- source：1,710,301 行、386 日；raw `1,695,153 complete / 13,473 partial / 1,675 whole-day missing`，session-normalized `1,708,614 complete / 12 partial / 1,675 whole-day missing`；三个 deficit 日期精确命中。
+- OOF：两个 trial 的全部 1,710,301 行均恰好 7 次；fold diagnostics 56 行；384 个 paired-evaluable 日，candidate 相对 parent/comparator 均在 384 日发生真实干预。
+- 经济结果：candidate RankIC `0.090195`，parent/comparator `0.122839`，delta `-0.032643`；candidate Top5 净超额 `128.31 bps`，parent/comparator `443.65 bps`，lift `-315.32 bps`。相对 parent 的 family-wise lower 为 RankIC `-0.072894`、Top5 `-480.67 bps`；相对 comparator 为 `-0.077498/-472.57 bps`。四项门槛全部失败。
+- 干预与相关：candidate-parent 日均 score Spearman `0.789179`，说明输出并非恒等；support 为 384/384 intervention days、fraction `1.0`，失败来自经济退化而非覆盖或零动作。
+- 资源：elapsed `853.45s`，peak RSS `2,326,515,712 bytes`，temp `184,274,656 bytes`，均低于冻结门槛；wall time 仅 telemetry。
+- delivery：首次 registry append `1`、总计 `25`；exact retry 使用相同 bundle，registry duplicate-noop、route exact-noop。sealed holdout、DB、network、Qlib daily、final model、factor、StrategyPackage、runtime、position 全为 false。
+- 结论：T 日这组固定分钟聚合在当前父包候选和简单冻结 Ridge 下可改变排序，但显著降低 RankIC 与 Top5 成本后收益；本 frontier 消费并关闭，不换窗口、特征、alpha、模型族或方向。唯一 next task 为 `N3_QE_ALPHA_GENERATOR_MVE_DESIGN`。
