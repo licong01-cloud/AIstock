@@ -37,21 +37,22 @@
   ],
   "expected": "月度更新直接读取权威 PIT 与目标截止日所需数据，复用既有有效候选并仅追加或修复必要分区；不执行全历史源冻结、全历史逐行内容哈希、source drift 复扫或相应阻断。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/dataset_release/resolution_processor.py",
-      "backend/services/dataset_release/build_processor.py",
+    "actual_changed_files": [
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
       "scripts/qlib_authoritative_bin_export.py",
       "scripts/update_backtest_dataset_monthly.py",
-      "configs/datasets/qe_backtest_monthly_v2.yaml",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
-      "backend/tests/dataset_release/test_resolution_processor.py",
-      "backend/tests/dataset_release/test_build_processor.py",
-      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
-      ".codex/skills/update-backtest-dataset/SKILL.md"
+      "tests/aistock_validation/bugs/20260902_BUG-1322-source-freeze.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "scripts/qlib_authoritative_bin_export.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "tests/aistock_validation/bugs/20260902_BUG-1322-source-freeze.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/resolution_processor.py",
@@ -219,16 +220,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "worker-scheduler",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "worker-scheduler"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
