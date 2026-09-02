@@ -262,6 +262,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert qe_alpha_mve_payload["dev_db_required"] is False
     assert qe_alpha_mve_payload["unmapped_code_files"] == []
 
+    parent_overlay_payload = classifier.classify_changed_files(
+        ["scripts/advisory_parent_incremental_overlay_run.py"],
+        repo_root=tmp_path,
+    )
+    assert parent_overlay_payload["classification"] == "targeted_ci_required"
+    assert parent_overlay_payload["backend_required"] is True
+    assert parent_overlay_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert parent_overlay_payload["dev_db_required"] is False
+    assert parent_overlay_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
