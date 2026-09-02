@@ -21,6 +21,7 @@ rules:
       - scripts/advisory_strategy_package_alpha_audit.py
       - scripts/advisory_independent_package_alpha_audit.py
       - scripts/advisory_entry_exit_formal_audit.py
+      - scripts/advisory_exit_learnability_audit.py
       - scripts/advisory_qe_alpha_mve_prepare.py
       - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py

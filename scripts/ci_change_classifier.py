@@ -231,6 +231,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_strategy_package_alpha_audit.py": ("advisory_modeling_backend",),
     "scripts/advisory_independent_package_alpha_audit.py": ("advisory_modeling_backend",),
     "scripts/advisory_entry_exit_formal_audit.py": ("advisory_modeling_backend",),
+    "scripts/advisory_exit_learnability_audit.py": ("advisory_modeling_backend",),
     "scripts/advisory_qe_alpha_mve_prepare.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
