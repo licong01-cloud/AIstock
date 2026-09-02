@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260902_BUG-1325-bulk-cleanup-repeats-remote-reads-and-leaves-windows-git-descendants-aft.json",
     "scripts/aistock_issue_workflow.py",
-    "backend/tests/scripts/test_aistock_issue_workflow.py"
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1325",
@@ -35,12 +36,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
       "tests/aistock_validation/bugs/20260902_BUG-1325-bulk-cleanup-repeats-remote-reads-and-leaves-windows-git-descendants-aft.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
       "tests/aistock_validation/bugs/20260902_BUG-1325-bulk-cleanup-repeats-remote-reads-and-leaves-windows-git-descendants-aft.json"
     ],

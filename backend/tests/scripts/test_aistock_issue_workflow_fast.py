@@ -265,14 +265,14 @@ def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(
             return branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
-        if args[:2] == ["ls-remote", "--heads"]:
-            return ""
         return ""
 
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         if args[:2] == ["git", "status"]:
             return _result()
         if args[:2] == ["git", "ls-files"]:
+            return _result(stdout="")
+        if args[:3] == ["git", "ls-remote", "--heads"]:
             return _result(stdout="")
         raise AssertionError(args)
 
