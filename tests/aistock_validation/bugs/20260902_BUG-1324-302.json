@@ -1,5 +1,5 @@
 {
-  "actual": "302132.SZ触发unsupported A-share board；日线停在2865/5341；顶层状态误报BUILDING；重跑会重新处理已有日线CSV。",
+  "actual": "302132.SZ ���� unsupported A-share board������ͣ�� 2865/5341��",
   "allowed_write_scope": [
     "backend/services/dataset_release/a_share_limit_rule.py",
     "backend/qlib_exporter/authoritative_bin_exporter.py",
@@ -19,7 +19,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-02T15:26:26.672740Z",
-  "description": "302132.SZ触发unsupported A-share board；日线停在2865/5341；顶层状态误报BUILDING；重跑会重新处理已有日线CSV。",
+  "description": "302132.SZ δ�� A ���ǵ�ͣ����ʶ�𣬵��� 2026-08-31 ���ݼ���ѡ���߹���ʧ�ܡ�",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,7 +31,7 @@
   "evidence_uris": [
     "candidate=20260831-qe_hmm_full_v2-direct-20260902-candidate; local stk_limit missing pre_close=69; Tushare coverage=69/69"
   ],
-  "expected": "302创业板按20%规则识别；Tushare可用时精确补齐pre_close；日线原子完整CSV可安全断点复用；任何组件失败时顶层进入FAILED；继续同一候选而不重做分钟线或覆盖生产。",
+  "expected": "302 ǰ׺֤ȯ����ҵ�� 20% �ǵ�ͣ����ʶ�𣬲��ɼ�������ͬһ��ѡ��",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -198,16 +198,18 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "BUG1324_FRESH_PROCESS_302_CHINEXT_OK: isolated Python imported the task worktree and classified 302132.SZ as CHINEXT with a 0.20 limit rate"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
@@ -217,7 +219,7 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "日线候选不识别302创业板且失败后无法断点续跑",
+  "title": "���ߺ�ѡ��ʶ�� 302 ��ҵ��֤ȯ",
   "trigger_condition": {
     "fingerprint": "d385bbd44d7009609d47d138",
     "source_event_id": "FE-20260902-d385bbd44d70"
