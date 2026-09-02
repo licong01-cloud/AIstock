@@ -1,9 +1,9 @@
 # Advisory N3 腿间共识/分歧信息集扩展 MVE F2 详细设计
 
-> 版本：v1.3
+> 版本：v1.4
 > 日期：2026-09-02
 > Feature tier：F2
-> 状态：IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING
+> 状态：IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO
 > objective contract：`ALPHA_RANKING`
 > study type：`LEARNABILITY_AUDIT`
 > decision use：`NAVIGATION_ONLY`
@@ -16,6 +16,15 @@
 4. route 已唯一指向 `N3_ALPHA_INFORMATION_SET_EXPANSION_MVE`。本任务只检验新的腿间共识/分歧信息，不并行启动分钟数据、N2-B 独立包、Entry、Exit 或新模型族。
 5. N2-A 正式三腿 panel 在相同开发窗口提供 `LSTM_ONLY`、`FUNDGROWTH_ONLY`、`IC_WEIGHTED_PARENT`逐股分数。只读可行性审计确认 1,710,301 行、386 日、4,503 股票三列均 100% finite；LSTM/FUND 日内 rank 相关仅约 0.186，分歧非退化。
 6. 只读可行性审计确认N2-A `IC_WEIGHTED_PARENT`与N2-B `CURRENT_IC_PARENT`在全部1,710,301个同键行上score、outcome和known状态精确一致，最大绝对差为0。正式MVE不新增N2-B依赖，而是把N2-A的1,709,387个known行与父overlay bundle中的current-parent known panel做exact parity硬门禁；914个unknown行及4,055个known但nonfinite行保留在逐日候选池和OOF评分中，只从训练标签与对应日的不可评价指标中排除。
+
+### 1.1 Formal result / 正式结果
+
+- 源码PR #4198以merge commit `4cd0826391ced997c6e63a52770fbfd622fd985e`进入main。正式request `advn3legreq_d267b3646b727505db3274c6`生成bundle `42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81`，完成`2/2/2/0`并通过inspect；exact retry复用同一bundle，registry duplicate-noop、route exact-noop。
+- 干预支持充分：382个paired-evaluable日、380个intervention日、intervention fraction `0.994764`，无support reason code。失败不是零干预、coverage或样本不足。
+- expanded相对parent的RankIC delta为`-0.003564`，family-wise下界`-0.006159`；Top5 lift为`-151.22 bps`，family-wise区间`[-332.91,33.56]`。
+- expanded相对linear comparator的RankIC delta为`-0.001469`，family-wise下界`-0.003176`；Top5 lift为`-58.02 bps`，family-wise区间`[-172.00,41.45]`。
+- parent/linear/expanded平均RankIC为`0.122839/0.120743/0.119274`，平均Top5成本后超额为`443.65/350.23/294.40 bps`。expanded与parent分数日均Spearman仍高达`0.98209`，说明当前显式共识/分歧交互主要是父分数的近似重表达且降低经济结果。
+- 按冻结合同selected=0，唯一next task为`N3_MINUTE_INFORMATION_SET_MVE`。本开发窗口结果仅`NAVIGATION_ONLY`，不支持回选feature/alpha/fold、确认、激活或生产替换。
 
 ## 2. Scope / 目标与成功边界
 
@@ -276,7 +285,7 @@ route 只记录研究导航，不构成模型激活或交易输入。
 
 Rollout仅是合入源码后从 clean main 生成一次冻结request并运行开发窗口审计。结果不接生产。
 
-回滚只删除未发布的临时失败目录或回退源码PR；immutable bundle和append-only registry证据不改写。正式运行、backend restart、DDL/DML、descriptor/runtime activation均不是本任务步骤。
+回滚只删除未发布的临时失败目录或回退源码PR；immutable bundle和append-only registry证据不改写。正式运行已经完成且结果不回写；backend restart、DDL/DML、descriptor/runtime activation均不是本任务步骤。
 
 `production_ddl_gate=noop`，`backend_restart_gate=noop`，`runtime_activation_gate=noop`。
 
@@ -298,15 +307,15 @@ Rollout仅是合入源码后从 clean main 生成一次冻结request并运行开
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-900 | `leg_disagreement_pipeline.prepare_leg_disagreement_request` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` parent selected-zero/next-task及跨OS registry/route规范化 | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-901 | `leg_disagreement_pipeline._load_verified_sources` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` mutation/schema/key/window/coverage；真实source-only preflight `1,710,301/1,709,387/1,705,332` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-902 | `leg_disagreement_pipeline.build_leg_feature_panel` | `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` exact formula and future/label poison cases | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-903 | `LegDisagreementModelSpecV1`; `run_leg_crossfit` | `backend/tests/advisory_model_first/test_leg_disagreement_contracts.py` fixed two-trial/alpha/solver cases | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-904 | `leg_disagreement_pipeline.run_leg_crossfit` | `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` path isolation、全部source row七OOF、typed missing不入训练但保留评分 | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-905 | `leg_disagreement_pipeline.evaluate_leg_models` | `backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` paired bootstrap/support/selection及Top5 typed-unavailable cases | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-906 | `prepare/run/inspect`; `_publish/_read/_deliver_bundle` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` manifest mutation and exact retry cases | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-907 | frozen request/receipt/manifest false gates；CLI direct CI mapping | `backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`；`backend/tests/scripts/test_ci_change_classifier.py`；F2 validator；L0/ownership/static gates | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-908 | `LegDisagreementReceiptV1`; `_write_route_page` | `backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` selected-zero/one route cases | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-900 | `leg_disagreement_pipeline.prepare_leg_disagreement_request` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/formal_request.json`；`backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-901 | `leg_disagreement_pipeline._load_verified_sources` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/source_identity_receipt.json`；`backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-902 | `leg_disagreement_pipeline.build_leg_feature_panel` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/feature_panel.parquet`；`backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-903 | `LegDisagreementModelSpecV1`; `run_leg_crossfit` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`；`backend/tests/advisory_model_first/test_leg_disagreement_contracts.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-904 | `leg_disagreement_pipeline.run_leg_crossfit` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/oof_score_panel.parquet`；`backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-905 | `leg_disagreement_pipeline.evaluate_leg_models` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/model_summary.json`；`backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
+| F-906 | `prepare/run/inspect`; `_publish/_read/_deliver_bundle` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/manifest.json`；`backend/tests/advisory_model_first/test_leg_disagreement_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-907 | frozen request/receipt/manifest false gates；CLI direct CI mapping | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/manifest.json`；`backend/tests/advisory_model_first/test_leg_disagreement_contracts.py`；`backend/tests/scripts/test_ci_change_classifier.py` | IMPLEMENTED_FORMAL_VERIFIED | none |
+| F-908 | `LegDisagreementReceiptV1`; `_write_route_page` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_leg_disagreement_formal_v1_20260902/leg_disagreement_bundles/42ac23b6d7cd756a035e0f8325a0f7561c9bc7a207fbaa43fed8fc158348bc81/learnability_receipt.json`；`F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830/current_route.md` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
 
 ## 17. DESIGN-COMPLIANCE-001
 
