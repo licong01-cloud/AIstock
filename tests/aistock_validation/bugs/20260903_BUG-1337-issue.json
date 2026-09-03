@@ -31,15 +31,24 @@
   ],
   "expected": "分钟验收只读取少量股票、少量日期的day/1min必要字段并确认非空、日期范围和240 bars，不执行策略、订单模拟或组合收益门禁。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "scripts/qlib_authoritative_smoke_backtest.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/direct_monthly.py",
@@ -139,10 +148,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
