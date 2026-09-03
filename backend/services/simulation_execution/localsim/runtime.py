@@ -82,6 +82,7 @@ from backend.services.trading_core.models import (
     Fill,
     Order,
     OrderEvent,
+    OrderEventType,
     OrderIntent,
     OrderSide,
     OrderStatus,
@@ -106,6 +107,12 @@ from backend.services.simulation_execution.broker import (
 
 
 _REALTIME_SNAPSHOT_MAX_WORKERS = 16
+_MARKET_STATE_NO_FILL_REASONS = frozenset(
+    {
+        "LIMIT_UP_BUY_BLOCKED",
+        "LIMIT_DOWN_SELL_BLOCKED",
+    }
+)
 
 
 _BACKEND_ID: BackendId = "local_sim"
@@ -483,6 +490,11 @@ class LocalSimBackend(BrokerBackend):
                             fills=fills,
                             events=events,
                         )
+                        market_state_wait = self._market_state_wait_from_events(events=events, bars=new_bars)
+                        runtime_wait = self._resolve_execution_wait(
+                            capital_wait=capital_wait,
+                            market_state_wait=market_state_wait,
+                        )
                         if capital_wait is not None and not fills:
                             record.order = final_order
                             record.status = self._build_status(record.handle.handle_id, final_order)
@@ -502,15 +514,9 @@ class LocalSimBackend(BrokerBackend):
                                 order=final_order,
                                 bars=new_bars,
                                 fill_count=len(fills),
-                                runtime_status_override=(
-                                    LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL
-                                    if capital_wait is not None
-                                    else None
-                                ),
-                                waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
-                                ),
-                                waiting_context=capital_wait,
+                                runtime_status_override=runtime_wait[0],
+                                waiting_reason_code=runtime_wait[1],
+                                waiting_context=runtime_wait[2],
                             )
                     elif (
                         not market_input.minute_bars
@@ -818,6 +824,14 @@ class LocalSimBackend(BrokerBackend):
                             fills=fills,
                             events=events,
                         )
+                        market_state_wait = self._market_state_wait_from_events(
+                            events=events,
+                            bars=list(market_input.minute_bars),
+                        )
+                        runtime_wait = self._resolve_execution_wait(
+                            capital_wait=capital_wait,
+                            market_state_wait=market_state_wait,
+                        )
                         if capital_wait is not None and not fills:
                             execution_state = self._waiting_execution_state(
                                 state=execution_state,
@@ -832,15 +846,9 @@ class LocalSimBackend(BrokerBackend):
                                 order=final_order,
                                 bars=list(market_input.minute_bars),
                                 fill_count=len(fills),
-                                runtime_status_override=(
-                                    LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL
-                                    if capital_wait is not None
-                                    else None
-                                ),
-                                waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
-                                ),
-                                waiting_context=capital_wait,
+                                runtime_status_override=runtime_wait[0],
+                                waiting_reason_code=runtime_wait[1],
+                                waiting_context=runtime_wait[2],
                             )
                     else:
                         final_order, fills, events = order, [], []
@@ -1857,6 +1865,55 @@ class LocalSimBackend(BrokerBackend):
             }
         )
         return LocalSimExecutionStateV1.model_validate(payload)
+
+    @staticmethod
+    def _market_state_wait_from_events(
+        *,
+        events: Iterable[OrderEvent],
+        bars: Iterable[Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        latest_bar_time = max((bar.bar_time for bar in bars), default=None)
+        if latest_bar_time is None:
+            return None
+        for event in reversed(list(events)):
+            reason = str(event.reason or "").strip().upper()
+            if (
+                event.event_type != OrderEventType.NO_FILL
+                or event.event_time != latest_bar_time
+                or reason not in _MARKET_STATE_NO_FILL_REASONS
+            ):
+                continue
+            metadata = dict(event.metadata or {})
+            raw_context = metadata.get("no_fill_context")
+            context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
+            context.update(
+                {
+                    "bar_time": latest_bar_time.isoformat(),
+                    "reason_code": reason,
+                }
+            )
+            return reason, context
+        return None
+
+    @staticmethod
+    def _resolve_execution_wait(
+        *,
+        capital_wait: dict[str, Any] | None,
+        market_state_wait: tuple[str, dict[str, Any]] | None,
+    ) -> tuple[LocalSimExecutionRuntimeStatus | None, str | None, dict[str, Any] | None]:
+        if capital_wait is not None:
+            return (
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL,
+                "LOCALSIM_WAITING_FOR_SELL_PROCEEDS",
+                capital_wait,
+            )
+        if market_state_wait is not None:
+            return (
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
+                market_state_wait[0],
+                market_state_wait[1],
+            )
+        return None, None, None
 
     def _waiting_execution_state(
         self,
