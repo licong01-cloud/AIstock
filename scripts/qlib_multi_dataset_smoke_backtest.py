@@ -105,6 +105,21 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Fail if the generated no-leak test signal has fewer dates.",
     )
+    parser.add_argument(
+        "--contract-smoke-only",
+        action="store_true",
+        help=(
+            "Validate that Qlib and requested factor sources are readable and non-empty; "
+            "skip IC, signal quality and portfolio performance checks."
+        ),
+    )
+    parser.add_argument(
+        "--require-nonempty-source",
+        action="append",
+        choices=tuple(STATIC_FEATURE_GROUPS),
+        default=[],
+        help="In contract-smoke mode, require each selected field from this source to have data.",
+    )
     return parser.parse_args()
 
 
@@ -349,6 +364,21 @@ def coverage_table(features: pd.DataFrame, start: pd.Timestamp, end: pd.Timestam
     return pd.DataFrame(rows).sort_values(["source", "feature"]).reset_index(drop=True)
 
 
+def contract_source_failures(coverage: pd.DataFrame, required_sources: Iterable[str]) -> list[str]:
+    failures: list[str] = []
+    for source in required_sources:
+        rows = coverage.loc[coverage["source"] == source]
+        if rows.empty:
+            failures.append(f"Required feature source is absent: {source}")
+            continue
+        empty_fields = rows.loc[rows["non_null"] <= 0, "feature"].astype(str).tolist()
+        if empty_fields:
+            failures.append(
+                f"Required feature source has empty fields: {source}=" + ",".join(empty_fields)
+            )
+    return failures
+
+
 def summarize_backtest(portfolio_metric_dict: dict) -> tuple[dict, pd.DataFrame | None]:
     report = None
     if isinstance(portfolio_metric_dict, dict):
@@ -483,10 +513,7 @@ def main() -> int:
     print(f"[INFO] Selected {len(instruments)} instruments: {', '.join(instruments)}")
 
     import qlib
-    from qlib.backtest import backtest as qlib_backtest
-    from qlib.backtest.executor import SimulatorExecutor
     from qlib.config import C
-    from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
     from qlib.data import D
 
     C["kernels"] = 1
@@ -498,57 +525,71 @@ def main() -> int:
     daily = flatten_columns(daily_raw)
     static = read_static_factors(snapshot_dir, instruments, feature_start, test_end)
     features, label_next_1d, ret_1d = build_factor_panel(daily, static)
-    ranked = cross_sectional_rank(features)
     coverage = coverage_table(features, train_start, test_end)
 
-    low_coverage = coverage[coverage["coverage"] < args.min_feature_coverage]
     failures = []
-    if not low_coverage.empty:
-        failures.append(
-            "Low feature coverage: "
-            + ", ".join(f"{row.feature}={row.coverage:.2%}" for row in low_coverage.itertuples(index=False))
+    if args.contract_smoke_only:
+        failures.extend(contract_source_failures(coverage, args.require_nonempty_source))
+        ic = pd.DataFrame(columns=["feature", "ic", "weight"])
+        signal = pd.DataFrame(columns=["score"])
+        weights = pd.Series(dtype=float)
+        signal_dates = 0
+        backtest_summary = {"skipped": True, "reason": "contract_smoke_only"}
+        backtest_report = None
+        indicator_dict = {}
+    else:
+        ranked = cross_sectional_rank(features)
+        low_coverage = coverage[coverage["coverage"] < args.min_feature_coverage]
+        if not low_coverage.empty:
+            failures.append(
+                "Low feature coverage: "
+                + ", ".join(
+                    f"{row.feature}={row.coverage:.2%}" for row in low_coverage.itertuples(index=False)
+                )
+            )
+        ic = compute_ic_weights(ranked, label_next_1d, train_start, train_end)
+        signal, weights = build_signal(ranked, ic, test_start, test_end)
+        signal_dates = int(signal.index.get_level_values("datetime").nunique())
+        if signal_dates < args.min_signal_dates:
+            failures.append(f"Only {signal_dates} signal dates, below required {args.min_signal_dates}")
+        print(f"[INFO] Signal rows={len(signal)}, dates={signal_dates}, topk={args.topk}, drop={args.drop}")
+        from qlib.backtest import backtest as qlib_backtest
+        from qlib.backtest.executor import SimulatorExecutor
+        from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
+
+        portfolio_metric_dict, indicator_dict = qlib_backtest(
+            start_time=str(test_start.date()),
+            end_time=str(backtest_end.date()),
+            strategy=TopkDropoutStrategy(signal=signal, topk=args.topk, n_drop=args.drop),
+            executor=SimulatorExecutor(time_per_step="day", generate_portfolio_metrics=True),
+            benchmark=None,
+            account=10_000_000,
+            exchange_kwargs={
+                "freq": "day",
+                "limit_threshold": ("$limit_up", "$limit_down"),
+                "deal_price": "close",
+                "open_cost": 0.000095,
+                "close_cost": 0.000595,
+                "min_cost": 5,
+                "trade_unit": 100,
+                "subscribe_fields": [
+                    "$open",
+                    "$high",
+                    "$low",
+                    "$close",
+                    "$volume",
+                    "$factor",
+                    "$prev_close",
+                    "$up_limit_price",
+                    "$down_limit_price",
+                    "$limit_up",
+                    "$limit_down",
+                ],
+            },
         )
-
-    ic = compute_ic_weights(ranked, label_next_1d, train_start, train_end)
-    signal, weights = build_signal(ranked, ic, test_start, test_end)
-    signal_dates = int(signal.index.get_level_values("datetime").nunique())
-    if signal_dates < args.min_signal_dates:
-        failures.append(f"Only {signal_dates} signal dates, below required {args.min_signal_dates}")
-
-    print(f"[INFO] Signal rows={len(signal)}, dates={signal_dates}, topk={args.topk}, drop={args.drop}")
-    portfolio_metric_dict, indicator_dict = qlib_backtest(
-        start_time=str(test_start.date()),
-        end_time=str(backtest_end.date()),
-        strategy=TopkDropoutStrategy(signal=signal, topk=args.topk, n_drop=args.drop),
-        executor=SimulatorExecutor(time_per_step="day", generate_portfolio_metrics=True),
-        benchmark=None,
-        account=10_000_000,
-        exchange_kwargs={
-            "freq": "day",
-            "limit_threshold": ("$limit_up", "$limit_down"),
-            "deal_price": "close",
-            "open_cost": 0.000095,
-            "close_cost": 0.000595,
-            "min_cost": 5,
-            "trade_unit": 100,
-            "subscribe_fields": [
-                "$open",
-                "$high",
-                "$low",
-                "$close",
-                "$volume",
-                "$factor",
-                "$prev_close",
-                "$up_limit_price",
-                "$down_limit_price",
-                "$limit_up",
-                "$limit_down",
-            ],
-        },
-    )
-    backtest_summary, backtest_report = summarize_backtest(portfolio_metric_dict)
-    if not backtest_summary.get("report_found"):
-        failures.append("Qlib backtest completed but no portfolio report was returned")
+        backtest_summary, backtest_report = summarize_backtest(portfolio_metric_dict)
+        if not backtest_summary.get("report_found"):
+            failures.append("Qlib backtest completed but no portfolio report was returned")
 
     source_coverage = (
         coverage.groupby("source")["coverage"].agg(["min", "mean"]).reset_index().to_dict(orient="records")
@@ -574,10 +615,15 @@ def main() -> int:
         "static_rows": int(len(static)),
         "feature_count": int(features.shape[1]),
         "feature_sources": source_coverage,
+        "validation_mode": "contract_smoke" if args.contract_smoke_only else "strategy_backtest",
         "signal": {
             "rows": int(len(signal)),
             "dates": signal_dates,
-            "instruments": int(signal.index.get_level_values("instrument").nunique()),
+            "instruments": (
+                int(signal.index.get_level_values("instrument").nunique())
+                if isinstance(signal.index, pd.MultiIndex)
+                else 0
+            ),
             "topk": int(args.topk),
             "drop": int(args.drop),
             "weights_abs_sum": float(weights.abs().sum()),
@@ -594,7 +640,8 @@ def main() -> int:
 
     coverage.to_csv(coverage_path, index=False)
     ic.to_csv(ic_path, index=False)
-    signal.to_parquet(signal_path)
+    if not args.contract_smoke_only:
+        signal.to_parquet(signal_path)
     if backtest_report is not None:
         backtest_report.to_csv(output_dir / "portfolio_report.csv")
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=to_jsonable), encoding="utf-8")

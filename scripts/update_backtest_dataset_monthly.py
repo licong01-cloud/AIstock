@@ -17,8 +17,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from dotenv import load_dotenv
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(REPOSITORY_ROOT / ".env", override=False)
 LEGACY_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
 CANONICAL_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml").resolve()
 PROFILE_PATH = LEGACY_PROFILE_PATH
@@ -35,6 +38,7 @@ from backend.services.dataset_release.cas_store import CASStoreError  # noqa: E4
 from backend.services.dataset_release.control_service import (  # noqa: E402
     DatasetReleaseControlService,
     DatasetReleaseProfileBinding,
+    resolve_previous_month_trading_cutoff,
 )
 from backend.services.dataset_release.control_store import (  # noqa: E402
     ControlStoreError,
@@ -53,6 +57,7 @@ from backend.services.dataset_release.profile import (  # noqa: E402
     load_dataset_profile,
 )
 from backend.services.dataset_release.direct_monthly import (  # noqa: E402
+    DIRECT_CANDIDATE_PARENT,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
     compact_status,
@@ -177,11 +182,7 @@ def _monthly(
         raise ValueError("monthly requires --candidate-only")
     profile_id = _selected_profile_id(service, args)
     if profile_id == "qe_hmm_full_v2":
-        return _direct_monthly(
-            service,
-            args,
-            observed_at=observed_at,
-        )
+        raise ValueError("qe_hmm_full_v2 must use the direct monthly path")
     preview = service.preview_monthly(
         profile_id=profile_id,
         cutoff_policy="auto-previous-month",
@@ -219,31 +220,34 @@ def _monthly(
 
 
 def _direct_monthly(
-    service: DatasetReleaseControlService,
     args: argparse.Namespace,
     *,
     observed_at: datetime,
 ) -> Mapping[str, Any]:
-    preview = service.preview_monthly(
-        profile_id="qe_hmm_full_v2",
-        cutoff_policy="auto-previous-month",
-        scope=args.scope,
-        candidate_only=True,
-        now=observed_at,
-    )
+    if not args.candidate_only:
+        raise ValueError("monthly requires --candidate-only")
     if args.scope != "full":
         raise ValueError("direct qe_hmm_full_v2 monthly supports the full candidate only")
-    cutoff = date.fromisoformat(str(preview["resolved_cutoff"]))
-    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
-    candidate_parent = Path(str(profile.candidate_root)).resolve(strict=True)
-    candidate_root = discover_latest_existing_direct_candidate(
+    cutoff = resolve_previous_month_trading_cutoff(observed_at)
+    candidate_parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
+    existing_root = discover_latest_existing_direct_candidate(
         candidate_parent,
         cutoff=cutoff,
-    ) or default_candidate_path(candidate_parent, cutoff=cutoff, observed_on=observed_at.date())
+    )
+    candidate_root = existing_root or default_candidate_path(
+        candidate_parent,
+        cutoff=cutoff,
+        observed_on=observed_at.date(),
+    )
+    baseline_root = discover_latest_validated_baseline(candidate_parent, cutoff=cutoff)
+    if existing_root is not None:
+        raw_state = json.loads((existing_root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+        raw_baseline = raw_state.get("baseline_root")
+        baseline_root = Path(str(raw_baseline)) if raw_baseline is not None else None
     layout = DirectMonthlyLayout.create(
         candidate_parent=candidate_parent,
         candidate_root=candidate_root,
-        baseline_root=discover_latest_validated_baseline(candidate_parent, cutoff=cutoff),
+        baseline_root=baseline_root,
         cutoff=cutoff,
     )
     state = DirectMonthlyRunner(
@@ -293,8 +297,7 @@ def _status(
 
 
 def _direct_status() -> Mapping[str, Any]:
-    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
-    parent = Path(str(profile.candidate_root)).resolve(strict=True)
+    parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
     states: list[tuple[date, datetime, Mapping[str, Any]]] = []
     for candidate in parent.glob("*-qe_hmm_full_v2-direct-*-candidate"):
         state_path = candidate / "direct_monthly_state.json"
@@ -307,7 +310,9 @@ def _direct_status() -> Mapping[str, Any]:
             layout = DirectMonthlyLayout.create(
                 candidate_parent=parent,
                 candidate_root=candidate,
-                baseline_root=Path(str(raw["baseline_root"])),
+                baseline_root=(
+                    Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None
+                ),
                 cutoff=cutoff,
             )
             state = read_state(layout)
@@ -547,26 +552,31 @@ def main(
 ) -> int:
     args = _parser().parse_args(argv)
     try:
+        observed = observed_at or datetime.now(UTC)
+        if args.profile == "qe_hmm_full_v2" and args.action == "monthly":
+            result = _direct_monthly(args, observed_at=observed)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "status":
+            result = _direct_status()
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
         control = service or build_control_service()
         _selected_profile_id(control, args)
         if args.action == "monthly":
             result = _monthly(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "initial-migration":
             result = _initial_migration(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "status":
-            result = (
-                _direct_status()
-                if _selected_profile_id(control, args) == "qe_hmm_full_v2"
-                else _status(control, args)
-            )
+            result = _status(control, args)
         elif args.action == "events":
             result = _events(control, args)
         elif args.action == "receipt":
@@ -577,7 +587,7 @@ def main(
             result = _reattest(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "catalog-existing":
             selected_cataloger = cataloger
