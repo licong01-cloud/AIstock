@@ -4,9 +4,9 @@ import hashlib
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 import yaml
 
 from backend.services.dataset_release.cas_store import CASStore
@@ -19,6 +19,7 @@ from backend.services.dataset_release.control_store import (
     ControlStore,
 )
 from scripts import update_backtest_dataset_monthly as cli
+from scripts.qlib_multi_dataset_smoke_backtest import contract_source_failures
 from backend.services.dataset_release.errors import ProfileValidationError
 from backend.services.dataset_release.profile import (
     CANONICAL_INITIAL_MIGRATION_PLAN_ID,
@@ -152,7 +153,7 @@ def test_monthly_routes_v2_to_direct_builder_without_creating_legacy_submission(
     monkeypatch.setattr(
         cli,
         "_direct_monthly",
-        lambda _service, args, *, observed_at: calls.append((args.scope, observed_at))
+        lambda args, *, observed_at: calls.append((args.scope, observed_at))
         or {
             "ok": True,
             "action": "monthly-direct",
@@ -177,6 +178,48 @@ def test_monthly_routes_v2_to_direct_builder_without_creating_legacy_submission(
     assert len(store._many("SELECT * FROM submissions", ())) == 1
 
 
+def test_contract_smoke_requires_presence_not_arbitrary_coverage_threshold() -> None:
+    coverage = pd.DataFrame(
+        [
+            {"source": "sector_data", "feature": "sw2_pct_change", "non_null": 1, "coverage": 0.001},
+            {"source": "sector_data", "feature": "sw2_pe", "non_null": 3, "coverage": 0.003},
+        ]
+    )
+
+    assert contract_source_failures(coverage, ["sector_data"]) == []
+    coverage.loc[coverage["feature"] == "sw2_pe", "non_null"] = 0
+    assert contract_source_failures(coverage, ["sector_data"]) == [
+        "Required feature source has empty fields: sector_data=sw2_pe"
+    ]
+
+
+def test_v2_monthly_does_not_open_legacy_control_or_profile_gate(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "build_control_service",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy control must not open")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_direct_monthly",
+        lambda args, *, observed_at: {
+            "ok": True,
+            "action": "monthly-direct",
+            "scope": args.scope,
+            "observed_at": observed_at.isoformat(),
+        },
+    )
+
+    assert (
+        cli.main(
+            ["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"],
+            observed_at=datetime(2026, 9, 3, tzinfo=UTC),
+        )
+        == 0
+    )
+    assert _output(capsys)["action"] == "monthly-direct"
+
+
 def test_direct_status_reads_latest_candidate_local_state_without_control_submission(
     tmp_path, monkeypatch
 ) -> None:
@@ -198,11 +241,7 @@ def test_direct_status_reads_latest_candidate_local_state_without_control_submis
     )
     for layout in (older, latest):
         write_state(layout, initial_state(layout))
-    monkeypatch.setattr(
-        cli,
-        "load_dataset_profile",
-        lambda _path: SimpleNamespace(candidate_root=parent),
-    )
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", parent)
 
     result = cli._direct_status()
 

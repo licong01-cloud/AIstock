@@ -8,6 +8,8 @@ import pytest
 
 from backend.services.dataset_release.direct_monthly import (
     DIRECT_COMPONENTS,
+    DIRECT_FACTOR_SCHEMA,
+    DIRECT_SECTOR_AUTHORITY,
     DIRECT_TERMINAL_STATUS,
     DirectMonthlyError,
     DirectMonthlyLayout,
@@ -19,10 +21,14 @@ from backend.services.dataset_release.direct_monthly import (
     discover_latest_validated_baseline,
     initial_state,
     read_state,
+    validate_direct_candidate_with_smoke,
     write_state,
     _run_qlib_component,
     _date_chunks,
+    _build_sector_frame_from_classification,
+    _ClassificationInterval,
     _filter_frame_to_pit,
+    _read_classification_intervals,
 )
 
 
@@ -336,6 +342,20 @@ def test_baseline_discovery_uses_latest_earlier_validated_metadata_only(tmp_path
     ).name == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
 
 
+def test_baseline_is_optional_for_first_direct_candidate(tmp_path) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+
+    assert discover_latest_validated_baseline(parent, cutoff=date(2026, 8, 31)) is None
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate",
+        baseline_root=None,
+        cutoff=date(2026, 8, 31),
+    )
+    assert initial_state(layout)["baseline_root"] is None
+
+
 def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(tmp_path) -> None:
     layout = _layout(tmp_path)
     write_state(layout, initial_state(layout))
@@ -351,3 +371,244 @@ def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(t
         cutoff=date(2026, 8, 31),
         observed_on=date(2026, 9, 3),
     )
+
+
+def test_sector_projection_uses_classification_without_index_membership(monkeypatch) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000001.SZ"),
+            (pd.Timestamp("2026-08-04"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0, 10.1]}, index=index)
+    moneyflow = pd.DataFrame({"mf_net_amt": [2.0, 3.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03", "2026-08-04"]),
+            "index_l2_code": ["801780.SI", "801780.SI"],
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "pct_change": [1.0, 0.99],
+            "vol": [10.0, 11.0],
+            "amount": [20.0, 21.0],
+            "pe": [12.0, 12.1],
+            "pb": [1.2, 1.3],
+            "total_mv": [1000.0, 1010.0],
+        }
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: published,
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        moneyflow,
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
+            )
+        },
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert list(result["l2_code_id"]) == [42, 42]
+    assert list(result["sw2_pct_change"]) == pytest.approx([1.0, 0.99])
+    assert list(result["sw2_mf_net_amt"]) == pytest.approx([2.0, 3.0])
+
+
+def test_classification_reader_merges_exact_identity_overlap_and_rejects_conflict(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    root = layout.industry_authority_root
+    root.mkdir(parents=True)
+    rows = [
+        {
+            "canonical_symbol": "000001.SZ",
+            "causal_use_from": "2021-08-02",
+            "causal_use_to_exclusive": None,
+            "eligible_from": "2018-08-01",
+            "eligible_to_exclusive": "2026-09-01",
+            "identity": {"l2_code": "480300"},
+            "unavailable_reason": None,
+        },
+        {
+            "canonical_symbol": "000001.SZ",
+            "causal_use_from": "2022-01-01",
+            "causal_use_to_exclusive": None,
+            "eligible_from": "2018-08-01",
+            "eligible_to_exclusive": "2026-09-01",
+            "identity": {"l2_code": "480300"},
+            "unavailable_reason": None,
+        },
+    ]
+    target = root / "classification_candidate.jsonl"
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    result = _read_classification_intervals(layout)
+
+    assert result["000001.SZ"] == (
+        _ClassificationInterval(date(2021, 8, 2), date(2026, 9, 1), "480300"),
+    )
+    rows[1]["identity"] = {"l2_code": "480200"}
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    with pytest.raises(DirectMonthlyError, match="intervals overlap"):
+        _read_classification_intervals(layout)
+
+
+def test_sector_published_fields_do_not_depend_on_moneyflow(monkeypatch) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03"]),
+            "index_l2_code": ["801780.SI"],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "pct_change": [1.0],
+            "vol": [10.0],
+            "amount": [20.0],
+            "pe": [12.0],
+            "pb": [1.2],
+            "total_mv": [1000.0],
+        }
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: published,
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
+            )
+        },
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert result.iloc[0]["sw2_pct_change"] == pytest.approx(1.0)
+    assert pd.isna(result.iloc[0]["sw2_mf_net_amt"])
+
+
+def test_sector_projection_preserves_classified_row_when_both_fact_sources_are_empty(
+    monkeypatch,
+) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: pd.DataFrame(),
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480300"),
+            )
+        },
+        l2_projection={"480300": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["l2_code_id"] == 42
+    assert pd.isna(result.iloc[0]["sw2_pct_change"])
+    assert pd.isna(result.iloc[0]["sw2_mf_net_amt"])
+
+
+def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    state = initial_state(layout)
+    state["status"] = "FAILED"
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+        state["components"][component]["receipt"] = {"status": "PASS", "component": component}
+    write_state(layout, state)
+    calls: list[str] = []
+
+    def handler(component: str):
+        def run(_layout: DirectMonthlyLayout):
+            calls.append(component)
+            if component == "factor_h5_static":
+                _layout.factor_root.mkdir(parents=True)
+                (_layout.factor_root / "meta.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": DIRECT_FACTOR_SCHEMA,
+                            "sector_authority": DIRECT_SECTOR_AUTHORITY,
+                            "end": _layout.cutoff.isoformat(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            return {"status": "PASS", "component": component}
+
+        return run
+
+    result = DirectMonthlyRunner(
+        {component: handler(component) for component in DIRECT_COMPONENTS},
+        validator=lambda _layout: {"status": "PASS"},
+    ).run(layout)
+
+    assert result["status"] == DIRECT_TERMINAL_STATUS
+    assert calls == ["factor_h5_static"]
+
+
+def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(
+    tmp_path, monkeypatch
+) -> None:
+    layout = _layout(tmp_path)
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return Completed()
+
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-31"), "000300.SH")],
+        names=["datetime", "instrument"],
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.validate_direct_candidate",
+        lambda _layout: {"status": "PASS"},
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.subprocess.run",
+        fake_run,
+    )
+    monkeypatch.setattr(pd, "read_hdf", lambda *_args, **_kwargs: pd.DataFrame({"close": [1.0]}, index=index))
+
+    result = validate_direct_candidate_with_smoke(layout, project_root=tmp_path)
+
+    assert result["status"] == "PASS"
+    assert len(commands) == 2
+    qe_shell = commands[0][-1]
+    assert "--contract-smoke-only" in qe_shell
+    assert "--require-nonempty-source sector_data" in qe_shell
+    assert "--min-feature-coverage" not in qe_shell

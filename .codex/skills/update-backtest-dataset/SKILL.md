@@ -29,14 +29,17 @@ description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset u
 - 其他组件只追加 8 月尾部或选择性重建真实失效分区；
 - 不得因为分钟组件重建而全量重导所有无关组件。
 
-本轮是第一个完整 canonical v2 candidate，旧的 7 月基线仍是 v1 股票池，因此四个组件都执行一次 `COMPONENT_REBUILD`；这不是由分钟重建扩散，而是 v1→v2 authority 迁移所需。完成首个 v2 基线后再评估按月尾部追加，不得在本轮为增量复用重新引入冻结、哈希或复杂 lineage。
+本轮已生成一个失败但可恢复的 canonical v2 candidate，其中 daily/minute/index 已 PASS。不得为了重新证明流程
+而重导这三个组件；只在新目录重建 BUG-1336 改变合同的 factor/static/sector。完成首个 v2 candidate 后再评估
+按月尾部追加，不得为增量复用重新引入冻结、哈希或复杂 lineage。
 
 ## 每月固定顺序
 
 1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
 2. PIT：更新/readback `aistock_equity_pit_canonical_v2` 到目标 cutoff。
 3. 数据：确认数据库补数和目标月数据已可用；分钟缺口优先 TDX，其次 Tushare。
-4. 行业：复用或生成同 cutoff 的 industry/P3A full authority。
+4. 行业：复用或生成同 cutoff 的股票行业分类 PIT candidate。月更 sector 字段按分类 PIT 映射申万 L2
+   published 日线；申万指数成员进出 authority 仅供成分研究，不是股票 sector 字段或月更发布前置。
 5. 计划：基于 cutoff、PIT、补录影响范围和旧候选组件选择 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`。
 6. 构建：只写新的 repo-external candidate 目录，不覆盖旧候选或 production。
 7. 验收：一次全量结构检查、分层数值抽样和 QE/HMM producer smoke。
@@ -51,6 +54,11 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 
 BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后，上述 `monthly --candidate-only` 命令在当前进程中直接顺序执行 daily、minute、factor/static/sector 和 12-index 四个组件，状态写入新 candidate 自身的 `direct_monthly_state.json`；它不依赖 backend 或 worker-scheduler 重启。
 
+BUG-1336 起，v2 的 `monthly/status` 不再打开旧 control store 或加载旧 profile 的 resource/source-freeze
+合同，也不要求更早 validated baseline。恢复失败候选时只根据小型 component metadata 重新打开合同已改变的
+组件；2026-08-31 现有候选因此复用已 PASS 的 daily/minute/index，只重建新的
+`factor_h5_static_candidate_v2`。
+
 同一天对同一 cutoff 重复执行会读取该状态，只跳过已经 `PASS` 的组件。没有状态文件的非空目录默认拒绝采用；仅允许采用由本轮已授权直接分钟导出产生、且只含 `components/logs/reports/work` 标准子目录的精确候选路径。
 
 ## 不可突破边界
@@ -59,6 +67,8 @@ BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后�
 - 月更读取数据库和 provider；数据库修复、DDL/DML、生产激活、node1、依赖安装和后端重启仍是独立动作。
 - PIT 固定使用 `aistock_equity_pit_canonical_v2 / shsz_a_252td_st_delist_asof_v2`，保留252交易日IPO暖机和历史退市生命周期。
 - moneyflow 固定股/元单位；static 固定121列和 `l2_code_id int16/-1`；指数固定12只；HMM benchmark 固定 `000300.SH`。
+- sector published 日线与 sector moneyflow 分别生成：资金流缺失不得清空同日已有的 `sw2_pct_change/pe/pb`；
+  股票缺少官方行业指数成员进出记录不得阻断分类 PIT 到 published L2 指数的投影。
 - `stk_limit` 缺失使用既有版本化A股规则计算器，不填零、不填 NaN、不直接标记不可交易。
 - 分钟缺口固定 TDX 优先、Tushare 次级，只补真实缺键；无法补齐时报告精确股票/日期。
 - 不保留八年全市场 DataFrame；SQL、写入和验证按股票/月流式分批。
@@ -74,7 +84,8 @@ BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后�
 - 7 月补录和 8 月新增分钟数据的物理覆盖；
 - ST、涨跌停、复权、QFQ、moneyflow、12指数和行业数据分层抽样；
 - 股票池、PIT、Qlib instruments、H5/static一致；
-- QE/HMM producer smoke PASS；
+- QE/HMM producer contract smoke PASS：验证 Qlib/H5/index 可读取且 sector 代表字段非空；不得用 85% 覆盖率、
+  IC、信号日期数或回测收益作为数据发布门禁。
 - production writes、pointer changes和旧候选覆盖为零。
 
 详细步骤见 `references/monthly-workflow.md` 和 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`。
