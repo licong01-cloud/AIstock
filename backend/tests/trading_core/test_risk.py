@@ -84,8 +84,22 @@ def test_risk_engine_blocks_buy_fill_at_limit_up() -> None:
 
 
 def test_risk_engine_blocks_sell_context_when_all_bars_at_limit_down() -> None:
-    with pytest.raises(RiskRuleError, match="limit down"):
+    with pytest.raises(RiskRuleError, match="limit down") as exc_info:
         RiskEngine().validate_order_execution_context(
             order=make_order(OrderSide.SELL),
             minute_bars=make_bars(close=9.0),
         )
+
+    assert exc_info.value.context["reason_code"] == "LIMIT_DOWN_SELL_BLOCKED"
+    assert exc_info.value.context["bar_time"] == make_bars(close=9.0)[0].bar_time.isoformat()
+
+
+def test_risk_engine_exposes_typed_buy_limit_state_context() -> None:
+    with pytest.raises(RiskRuleError, match="limit up") as exc_info:
+        RiskEngine().validate_order_execution_context(
+            order=make_order(OrderSide.BUY),
+            minute_bars=make_bars(close=11.0),
+        )
+
+    assert exc_info.value.context["reason_code"] == "LIMIT_UP_BUY_BLOCKED"
+    assert exc_info.value.context["bar_time"] == make_bars(close=11.0)[0].bar_time.isoformat()

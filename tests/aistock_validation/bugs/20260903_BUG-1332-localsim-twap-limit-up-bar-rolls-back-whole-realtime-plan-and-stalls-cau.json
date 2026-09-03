@@ -2,7 +2,11 @@
   "actual": "One limit-up BUY raises RiskRuleError, rolls back the full 94-order batch, stalls every causal cursor, and causes repeated scheduler retries.",
   "allowed_write_scope": [
     "backend/execution_algos/twap_algo.py",
+    "backend/services/simulation_execution/localsim/runtime.py",
+    "backend/services/trading_core/minute_execution.py",
+    "backend/services/trading_core/risk.py",
     "backend/tests/trading_core/test_minute_execution.py",
+    "backend/tests/trading_core/test_risk.py",
     "backend/tests/simulation_execution/test_localsim_runtime.py",
     "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json"
   ],
@@ -22,6 +26,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260903-86e2bb19aa3c",
       "timestamp": "2026-09-03T03:19:01.777473Z"
+    },
+    {
+      "action": "scope_clarification",
+      "actor": "codex",
+      "note": "Expanded scope to LocalSim runtime so a typed TWAP market-state no-fill is persisted as WAITING_FOR_MARKET_STATE instead of delivering only exception suppression.",
+      "timestamp": "2026-09-03T03:25:00Z"
+    },
+    {
+      "action": "source_validation",
+      "actor": "codex",
+      "note": "Typed limit-state handling, per-symbol LocalSim isolation, fail-fast negatives and required module gates passed in fresh Python processes without backend process control.",
+      "timestamp": "2026-09-03T03:46:07Z"
     }
   ],
   "evidence_uris": [
@@ -29,17 +45,36 @@
   ],
   "expected": "A limit-up BUY or limit-down SELL minute is a typed per-symbol no-fill market state. Its causal minute is durably consumed, the blocked order remains non-terminal for later bars, healthy symbols continue in the same plan, and missing or inconsistent authoritative limit data still fails loudly.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json",
       "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "backend/tests/simulation_execution/test_localsim_runtime.py"
+      "backend/tests/trading_core/test_risk.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
         "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/trading_core/test_risk.py",
         "backend/tests/simulation_execution/test_localsim_runtime.py"
       ],
       "impacted_modules": [
@@ -63,6 +98,17 @@
           "primary_module": "paper_v2",
           "risk_level": "critical",
           "rule_id": "execution_algos_runtime"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation"
         },
         {
           "file": "backend/tests/trading_core/test_minute_execution.py",
@@ -94,20 +140,32 @@
       ],
       "suggested_scope": [
         "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
         "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/trading_core/test_risk.py",
         "backend/tests/simulation_execution/test_localsim_runtime.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
       "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
       "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py"
     ]
   },
@@ -130,16 +188,30 @@
   "required_verification": [
     "l0",
     "paper_v2_backend",
+    "platform_api_backend",
     "simulation_core_l2"
   ],
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim changes and passed 107 direct trading-core plus LocalSim tests, including typed BUY/SELL limit states, later-bar recovery, healthy-peer isolation, historical residual and fail-fast negatives; no backend process control.",
+      "Fresh nox processes loaded the tracked source and passed validation_module_registry_l0 (8 passed), paper_v2_backend (1085 passed, 3 skipped, 2 xfailed), platform_api_backend (15 passed), and simulation_core_l2 (829 passed, 4 skipped); no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus required module gates; no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus all required module gates; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
