@@ -44,8 +44,8 @@
   },
   "first_seen_at": "2026-08-31T08:28:14.560054Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a5dfc84954eb587525b406a76c8e44f0a4d10cb1",
+  "fixed_at": "2026-08-31T11:21:13Z",
   "github_issue_number": 4057,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4057",
   "last_seen_at": "2026-08-31T08:28:14.560054Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4068",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,6 +81,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -91,7 +93,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1278",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e4a775fc5a111e42",
+    "recorded_at": "2026-08-31T11:22:28.967317Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4a9ab6b4fdc087264edb35da53d995c77f30e260",
+    "source_merge_commit": "a5dfc84954eb587525b406a76c8e44f0a4d10cb1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4068",
+    "validation_evidence": [
+      "validation-receipt: id=6164986ba87a4ed7 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/platform_api/test_health_contract.py -q --cov=backend.routers.health --cov-branch --cov-report=term-missing -p no:cacheprovider` result=`7 passed`",
+      "validation-receipt: id=ffa132b15c8c1ae7 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+      "validation-receipt: id=52503b3489bf677a commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`789 passed, 2 skipped; coverage passed`",
+      "validation-receipt: id=49f9e3a8bfe9cdb9 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed and ownership 14/14`",
+      "validation-receipt: id=6d78c3b301c1ce7f commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
+      "validation-receipt: id=e48e04dd8a9a1a04 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=compile plan=direct status=passed command=`python -m py_compile backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
+      "validation-receipt: id=eb9ccdaa71307bc6 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "9b42ed33119871a8fa7cc96ee61b5a10f005a294d1167034cfaae305deec2b6c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api",
     "validation"
@@ -101,6 +130,15 @@
     "fingerprint": "56277e9d09849e7b6f7bfd4f",
     "source_event_id": "FE-20260831-56277e9d0984"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6164986ba87a4ed7 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/platform_api/test_health_contract.py -q --cov=backend.routers.health --cov-branch --cov-report=term-missing -p no:cacheprovider` result=`7 passed`",
+    "validation-receipt: id=ffa132b15c8c1ae7 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+    "validation-receipt: id=52503b3489bf677a commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`789 passed, 2 skipped; coverage passed`",
+    "validation-receipt: id=49f9e3a8bfe9cdb9 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed and ownership 14/14`",
+    "validation-receipt: id=6d78c3b301c1ce7f commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
+    "validation-receipt: id=e48e04dd8a9a1a04 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=compile plan=direct status=passed command=`python -m py_compile backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
+    "validation-receipt: id=eb9ccdaa71307bc6 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
