@@ -4,6 +4,8 @@
     "backend/services/dataset_release/direct_monthly.py",
     "scripts/qlib_authoritative_smoke_backtest.py",
     "backend/tests/dataset_release/test_direct_monthly.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
   ],
   "assigned_agent": null,
@@ -33,7 +35,9 @@
     "changed_files": [
       "backend/services/dataset_release/direct_monthly.py",
       "scripts/qlib_authoritative_smoke_backtest.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -98,13 +102,17 @@
     "planned_files": [
       "backend/services/dataset_release/direct_monthly.py",
       "scripts/qlib_authoritative_smoke_backtest.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/direct_monthly.py",
       "scripts/qlib_authoritative_smoke_backtest.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ]
   },
   "first_seen_at": "2026-09-03T10:54:19.436577Z",
@@ -135,7 +143,7 @@
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
     "provisional": true,
-    "runtime_impact": "unknown",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []
