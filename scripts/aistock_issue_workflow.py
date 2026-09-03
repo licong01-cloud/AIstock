@@ -2001,6 +2001,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/dataset_release_control_store.py",
         "scripts/update_backtest_dataset_monthly.py",
         "scripts/qlib_multi_dataset_smoke_backtest.py",
+        "scripts/qlib_authoritative_smoke_backtest.py",
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_adaptive_scheduler.py",
         "scripts/nightly_session_runner.py",

@@ -1572,6 +1572,7 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
             "scripts/seed_dataset_refresh_audit.py",
             "scripts/update_backtest_dataset_monthly.py",
             "scripts/qlib_multi_dataset_smoke_backtest.py",
+            "scripts/qlib_authoritative_smoke_backtest.py",
             "backend/services/dataset_release/direct_monthly.py",
         ],
         root=isolated_workflow_root,

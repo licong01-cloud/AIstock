@@ -1367,6 +1367,7 @@ def validate_direct_candidate_with_smoke(
             "10",
             "--output",
             _windows_to_wsl(minute_output),
+            "--contract-smoke-only",
         ],
     )
     log_path = reports / "wsl_smoke.log"

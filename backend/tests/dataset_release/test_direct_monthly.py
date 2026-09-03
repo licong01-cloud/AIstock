@@ -5,6 +5,7 @@ import json
 
 import pandas as pd
 import pytest
+from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 
 from backend.services.dataset_release.direct_monthly import (
     DIRECT_COMPONENTS,
@@ -609,6 +610,27 @@ def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(
     assert result["status"] == "PASS"
     assert len(commands) == 2
     qe_shell = commands[0][-1]
+    minute_shell = commands[1][-1]
     assert "--contract-smoke-only" in qe_shell
     assert "--require-nonempty-source sector_data" in qe_shell
     assert "--min-feature-coverage" not in qe_shell
+    assert "--contract-smoke-only" in minute_shell
+
+
+def test_minute_contract_smoke_requires_field_presence_and_one_complete_stock_day() -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.date_range("2026-08-31 09:31:00", periods=240, freq="min"), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    minute = pd.DataFrame({"close": 10.0, "factor": 1.0}, index=index)
+
+    failures, non_null = minute_contract_failures(minute)
+
+    assert failures == []
+    assert non_null == {"close": 240, "factor": 240}
+    minute["factor"] = float("nan")
+    failures, _ = minute_contract_failures(minute)
+    assert "minute field has no values: factor" in failures
+    duplicate = pd.concat([minute.iloc[:1], minute])
+    failures, _ = minute_contract_failures(duplicate)
+    assert "minute provider contains duplicate datetime/instrument keys" in failures
