@@ -287,7 +287,7 @@ export default function QlibPage() {
   );
   const [binStart, setBinStart] = useState<string>(start);
   const [binEnd, setBinEnd] = useState<string>(end);
-  const [binRunHealthCheck, setBinRunHealthCheck] = useState<boolean>(true);
+  const [binRunHealthCheck, setBinRunHealthCheck] = useState<boolean>(false);
   const [binLoading, setBinLoading] = useState<boolean>(false);
   const [binError, setBinError] = useState<string | null>(null);
   const [binResultV2, setBinResultV2] = useState<UnifiedBinExportResponseV2 | null>(null);

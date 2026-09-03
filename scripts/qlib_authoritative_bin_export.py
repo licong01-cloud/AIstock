@@ -23,7 +23,7 @@ from backend.qlib_exporter.authoritative_bin_exporter import (  # noqa: E402
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
     export_stock_minute_csv,
-    export_stock_minute_csv_chunked,
+    # The retired chunked minute exporter is intentionally not imported.
     normalize_stock_export_exchanges,
     rewrite_stock_all_txt_for_ipo_filter,
     rewrite_stock_all_txt_from_pit_spans,
@@ -156,17 +156,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wsl-conda-sh", default=os.getenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh"))
     parser.add_argument("--wsl-conda-env", default=os.getenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu"))
     parser.add_argument("--rdagent-root-wsl", default=os.getenv("QLIB_RDAGENT_ROOT_WSL", "/mnt/f/Dev/RD-Agent-main"))
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip optional full-window DB/bin validation; export invariants and caller smoke still apply.",
+    )
     parser.add_argument("--validate-max-errors", type=int, default=50)
-    parser.add_argument("--minute-chunked-export", action="store_true", help="Use chunked SQL/CSV export for large stock_minute datasets.")
-    parser.add_argument("--minute-code-batch-size", type=int, default=20)
-    parser.add_argument("--minute-chunk-months", type=int, default=3)
     parser.add_argument("--overwrite-csv", action="store_true")
     parser.add_argument(
         "--resume-csv",
         action="store_true",
         help=(
             "Resume daily exports by reusing structurally complete atomic CSV files, or resume a "
-            "chunked stock_minute export after each file's last timestamp."
+            "stock_minute export from each file's last timestamp."
         ),
     )
     return parser
@@ -174,6 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.skip_validation and args.stage != "all":
+        raise ValueError("--skip-validation is only valid with --stage all")
     start = parse_date(args.start)
     end = parse_date(args.end)
     basis_start = parse_date(args.basis_start) if args.basis_start else start
@@ -229,26 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
 
     if args.stage in {"export", "all"}:
-        if args.dataset == "stock_minute" and args.minute_chunked_export:
-            summary = export_stock_minute_csv_chunked(
-                snapshot_id=args.snapshot_id,
-                start=start,
-                end=end,
-                csv_root=csv_root,
-                exchanges=exchanges,
-                exclude_st=args.exclude_st,
-                exclude_delisted_or_paused=args.exclude_delisted_or_paused,
-                ts_codes=codes,
-                universe_key=pit_universe_key,
-                basis_start=basis_start,
-                basis_end=basis_end,
-                strict_limit=args.strict_limit,
-                code_batch_size=args.minute_code_batch_size,
-                chunk_months=args.minute_chunk_months,
-                overwrite_csv=args.overwrite_csv,
-                resume_csv=args.resume_csv,
-            )
-        elif args.dataset == "stock_minute":
+        if args.dataset == "stock_minute":
             summary = export_stock_minute_csv(
                 snapshot_id=args.snapshot_id,
                 start=start,
@@ -372,7 +357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
         )
 
-    if args.stage in {"validate", "all"}:
+    if args.stage in {"validate", "all"} and not args.skip_validation:
         validator = validate_minute_bin_against_db if args.dataset == "stock_minute" else validate_daily_bin_against_db
         validation = validator(
             qlib_dir=bin_dir,
@@ -398,6 +383,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 encoding="utf-8",
             )
             return 3
+    elif args.stage == "all":
+        result["validation"] = {
+            "status": "SKIPPED",
+            "reason": "explicit_skip_validation",
+        }
 
     report_path = reports_dir / f"{args.snapshot_id}_{args.dataset}_{args.stage}.json"
     report_path.write_text(json.dumps(result, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
