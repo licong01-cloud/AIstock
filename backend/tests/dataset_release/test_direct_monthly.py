@@ -10,6 +10,7 @@ from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 from backend.services.dataset_release.direct_monthly import (
     DIRECT_COMPONENTS,
     DIRECT_FACTOR_SCHEMA,
+    DIRECT_INDEX_CODES,
     DIRECT_SECTOR_AUTHORITY,
     DIRECT_TERMINAL_STATUS,
     DirectMonthlyError,
@@ -591,9 +592,12 @@ def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(
         commands.append(command)
         return Completed()
 
-    index = pd.MultiIndex.from_tuples(
-        [(pd.Timestamp("2026-08-31"), "000300.SH")],
-        names=["datetime", "instrument"],
+    index_frame = pd.DataFrame(
+        {
+            "trade_date": [date(2026, 8, 31)] * len(DIRECT_INDEX_CODES),
+            "ts_code": list(DIRECT_INDEX_CODES),
+            "close": [1.0] * len(DIRECT_INDEX_CODES),
+        }
     )
     monkeypatch.setattr(
         "backend.services.dataset_release.direct_monthly.validate_direct_candidate",
@@ -603,7 +607,7 @@ def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(
         "backend.services.dataset_release.direct_monthly.subprocess.run",
         fake_run,
     )
-    monkeypatch.setattr(pd, "read_hdf", lambda *_args, **_kwargs: pd.DataFrame({"close": [1.0]}, index=index))
+    monkeypatch.setattr(pd, "read_hdf", lambda *_args, **_kwargs: index_frame)
 
     result = validate_direct_candidate_with_smoke(layout, project_root=tmp_path)
 
