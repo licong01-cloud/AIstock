@@ -94,8 +94,20 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["nightly_retries_failed_or_missing_sessions_plus_new_impact"] is True
     assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
     assert evidence["bounded_dual_runner_roles"] is True
+    assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+
+
+def test_runner_lifecycle_contract_rejects_missing_supervisor(tmp_path: Path) -> None:
+    supervisor = tmp_path / "missing-supervisor.ps1"
+
+    evidence = build_contract_evidence(
+        sorted(Path(".github/workflows").glob("*.yml")),
+        runner_supervisor_path=supervisor,
+    )
+
+    assert evidence["runner_lifecycle_is_pinned_and_supervised"] is False
 
 
 def test_pr_ci_frontend_dependency_attach_cannot_be_removed(tmp_path: Path) -> None:
@@ -272,6 +284,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "javascript_actions_use_approved_native_node24_majors",
         "merge_quality_contexts_are_change_scoped",
         "bounded_dual_runner_roles",
+        "runner_lifecycle_is_pinned_and_supervised",
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
         "pr_ci_selected_lanes_reuse_ci_verdict_runner",

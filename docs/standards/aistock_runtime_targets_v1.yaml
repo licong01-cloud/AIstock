@@ -12,6 +12,8 @@ non_runtime_source_paths:
   - scripts/backfill_tushare_daily_basic_fields.py
   - scripts/cleanup_simulation_history.py
   - scripts/configure_aistock_github_runner.ps1
+  - scripts/start_aistock_github_runner.ps1
+  - scripts/supervise_aistock_github_runner.ps1
   - scripts/ingest_tushare_daily_basic.py
   - scripts/localsim_history_prune_core.py
   - scripts/prune_localsim_history.py

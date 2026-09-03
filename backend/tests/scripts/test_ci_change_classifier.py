@@ -760,6 +760,8 @@ def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: P
         "scripts/ci_workflow_policy_scan.py": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
         "scripts/aistock_runner_health.py": "backend/tests/scripts/test_aistock_runner_health.py",
         "scripts/configure_aistock_github_runner.ps1": "backend/tests/scripts/test_configure_aistock_github_runner.py",
+        "scripts/start_aistock_github_runner.ps1": "backend/tests/scripts/test_start_aistock_github_runner.py",
+        "scripts/supervise_aistock_github_runner.ps1": "backend/tests/scripts/test_start_aistock_github_runner.py",
     }
 
     for source, test_target in expected.items():
