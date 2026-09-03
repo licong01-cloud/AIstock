@@ -144,7 +144,7 @@ def build_runner_health_report(
     workflow: str = DEFAULT_WORKFLOW,
     required_labels: list[str] | None = None,
     required_roles: Mapping[str, list[str]] | None = None,
-    stale_queued_minutes: int = 30,
+    stale_queued_minutes: int = 10,
     runners_payload: dict[str, Any] | None = None,
     runs_payload: dict[str, Any] | None = None,
     token: str | None = None,
@@ -174,6 +174,8 @@ def build_runner_health_report(
     role_matches = _runner_role_matches(runners, required_roles or {})
     queued_runs = list(runs_payload.get("workflow_runs") or runs_payload.get("runs") or [])
     stale_runs = _stale_queued_runs(queued_runs, stale_minutes=stale_queued_minutes, now=current_time)
+    idle_matching = [runner for runner in matching if not bool(runner.get("busy"))]
+    online_but_not_accepting_work = bool(stale_runs and idle_matching)
     blocking: list[str] = []
     warnings: list[str] = []
     if errors:
@@ -204,6 +206,11 @@ def build_runner_health_report(
             blocking.append("runner roles do not provide distinct online capacity")
     if stale_runs:
         warnings.append(f"{len(stale_runs)} queued {workflow} run(s) exceed {stale_queued_minutes} minutes")
+    if online_but_not_accepting_work:
+        blocking.append(
+            "online idle runner matches required labels but queued work exceeds "
+            f"{stale_queued_minutes} minutes; inspect a stuck self-update or listener"
+        )
     gate = "blocked" if blocking else "ready"
     return {
         "schema_version": SCHEMA_VERSION,
@@ -218,6 +225,7 @@ def build_runner_health_report(
         "all_runners_count": runners_payload.get("total_count", len(runners)),
         "all_runners": [_runner_summary(runner) for runner in runners],
         "online_matching_runners": matching,
+        "online_but_not_accepting_work": online_but_not_accepting_work,
         "runner_roles": role_matches,
         "stale_queued_runs": stale_runs,
         "next_actions": _next_actions(gate, required),
@@ -234,7 +242,8 @@ def _next_actions(gate: str, required_labels: list[str]) -> list[str]:
         return ["continue AIstock Nightly L3 + DR on the matching self-hosted runner"]
     return [
         "configure AISTOCK_RUNNER_HEALTH_TOKEN with repository Administration read permission if runner API access is denied",
-        "start or register the AIstock self-hosted Windows GitHub Actions runner",
+        "inspect runner self-update state and the supervised listener before restarting or re-registering it",
+        "start or register the AIstock self-hosted Windows GitHub Actions runner with automatic updates disabled",
         "verify runner labels include: " + ", ".join(required_labels),
         "rerun AIstock Nightly L3 + DR after the runner is online",
     ]
@@ -315,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ROLE=LABEL,LABEL",
         help="Require one distinct online runner per named role.",
     )
-    doctor.add_argument("--stale-queued-minutes", type=int, default=30)
+    doctor.add_argument("--stale-queued-minutes", type=int, default=10)
     doctor.add_argument("--runners-json", help="Use a local runners API payload for tests/offline dry-runs.")
     doctor.add_argument("--runs-json", help="Use a local workflow-runs API payload for tests/offline dry-runs.")
     doctor.add_argument("--output-json")

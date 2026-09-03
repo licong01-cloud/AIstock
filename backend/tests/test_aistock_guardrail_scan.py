@@ -242,6 +242,8 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert {
         "scripts/aistock_runner_health.py",
         "scripts/configure_aistock_github_runner.ps1",
+        "scripts/start_aistock_github_runner.ps1",
+        "scripts/supervise_aistock_github_runner.ps1",
     } <= set(runtime_catalog["non_runtime_source_paths"])
 
 
