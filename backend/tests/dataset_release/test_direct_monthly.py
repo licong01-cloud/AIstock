@@ -5,6 +5,7 @@ import json
 
 import pandas as pd
 import pytest
+from scripts import update_backtest_dataset_monthly as cli
 from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 
 from backend.services.dataset_release.direct_monthly import (
@@ -16,6 +17,7 @@ from backend.services.dataset_release.direct_monthly import (
     DirectMonthlyError,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
+    cleanup_terminal_candidate,
     compact_status,
     component_plan,
     default_candidate_path,
@@ -356,6 +358,125 @@ def test_baseline_is_optional_for_first_direct_candidate(tmp_path) -> None:
         cutoff=date(2026, 8, 31),
     )
     assert initial_state(layout)["baseline_root"] is None
+
+
+def test_missing_legacy_baseline_does_not_hide_terminal_candidate(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+    layout.baseline_root.rmdir()
+
+    restored = DirectMonthlyLayout.create(
+        candidate_parent=layout.candidate_parent,
+        candidate_root=layout.candidate_root,
+        baseline_root=layout.baseline_root,
+        cutoff=layout.cutoff,
+    )
+
+    assert read_state(restored)["status"] == DIRECT_TERMINAL_STATUS
+    assert discover_latest_existing_direct_candidate(
+        layout.candidate_parent,
+        cutoff=layout.cutoff,
+    ) == layout.candidate_root
+
+
+def test_cleanup_terminal_candidate_removes_only_disposable_paths_and_detaches_baseline(
+    tmp_path,
+) -> None:
+    layout = _layout(tmp_path)
+    layout.work_root.mkdir(parents=True)
+    (layout.work_root / "source.csv").write_text("temporary", encoding="utf-8")
+    legacy_factor = layout.components_root / "factor_h5_static_candidate"
+    legacy_factor.mkdir(parents=True)
+    (legacy_factor / "old.h5").write_text("old", encoding="utf-8")
+    layout.factor_root.mkdir(parents=True)
+    (layout.factor_root / "current.h5").write_text("current", encoding="utf-8")
+    daily = layout.components_root / "daily_bin_candidate"
+    daily.mkdir()
+    (daily / "keep.bin").write_text("keep", encoding="utf-8")
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    state["components"]["factor_h5_static"]["receipt"] = {
+        "path": str(layout.factor_root),
+    }
+    write_state(layout, state)
+
+    plan = cleanup_terminal_candidate(layout, apply=False)
+    assert plan["status"] == "PLAN_ONLY"
+    assert plan["targets"] == [
+        str(layout.work_root.relative_to(layout.candidate_root)),
+        str(legacy_factor.relative_to(layout.candidate_root)),
+    ]
+    assert plan["baseline_detach"] is True
+    assert layout.work_root.exists()
+
+    applied = cleanup_terminal_candidate(layout, apply=True)
+    assert applied["status"] == "APPLIED"
+    assert not layout.work_root.exists()
+    assert not legacy_factor.exists()
+    assert layout.factor_root.is_dir()
+    assert (daily / "keep.bin").is_file()
+
+    layout.baseline_root.rmdir()
+    detached = DirectMonthlyLayout.create(
+        candidate_parent=layout.candidate_parent,
+        candidate_root=layout.candidate_root,
+        baseline_root=None,
+        cutoff=layout.cutoff,
+    )
+    assert read_state(detached)["baseline_root"] is None
+
+
+def test_cleanup_refuses_legacy_factor_without_active_v2_receipt(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy_factor = layout.components_root / "factor_h5_static_candidate"
+    legacy_factor.mkdir(parents=True)
+    layout.factor_root.mkdir(parents=True)
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+
+    with pytest.raises(DirectMonthlyError, match="cannot prove the active v2 factor"):
+        cleanup_terminal_candidate(layout, apply=True)
+
+    assert legacy_factor.is_dir()
+
+
+def test_direct_cleanup_cli_plans_then_applies_without_touching_components(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    layout = _layout(tmp_path)
+    layout.work_root.mkdir(parents=True)
+    (layout.work_root / "source.csv").write_text("temporary", encoding="utf-8")
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", layout.candidate_parent)
+
+    assert cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest"]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned["status"] == "PLAN_ONLY"
+    assert layout.work_root.is_dir()
+
+    assert (
+        cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest", "--apply"])
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["status"] == "APPLIED"
+    assert not layout.work_root.exists()
+    assert layout.candidate_root.is_dir()
 
 
 def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(tmp_path) -> None:

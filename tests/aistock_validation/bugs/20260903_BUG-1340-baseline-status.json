@@ -1,6 +1,9 @@
 {
   "actual": "qe_hmm_full_v2 direct candidate 已CANDIDATE_READY且不再依赖legacy baseline；删除旧v1候选后，direct_monthly_state.json残留baseline_root，DirectMonthlyLayout.create(strict=True)导致status --latest跳过有效候选并失败。需要提供简单、无冻结/哈希/资源门禁的精确清理流程：终态候选可解除废弃baseline引用，删除work和失效组件后仍可readback；不得删除有效组件、8月authority、生产数据或共享CAS。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/direct_monthly.py",
+    "backend/tests/dataset_release/test_direct_monthly.py",
+    "scripts/update_backtest_dataset_monthly.py",
     "tests/aistock_validation/bugs/20260903_BUG-1340-baseline-status.json"
   ],
   "assigned_agent": null,
@@ -25,7 +28,11 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/update_backtest_dataset_monthly.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +42,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/update_backtest_dataset_monthly.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/update_backtest_dataset_monthly.py"
+    ]
   },
   "first_seen_at": "2026-09-03T17:23:45.177393Z",
   "fix_branch": null,
