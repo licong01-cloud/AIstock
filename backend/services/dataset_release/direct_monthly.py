@@ -1395,16 +1395,34 @@ def validate_direct_candidate_with_smoke(
                     f"direct candidate WSL smoke failed with code {completed.returncode}"
                 )
     index_frame = pd.read_hdf(layout.components_root / "index_context" / "index_daily.h5", key="data")
-    if index_frame.empty or not isinstance(index_frame.index, pd.MultiIndex):
-        raise DirectMonthlyError("HMM index input smoke found an empty or invalid index frame")
-    instruments = index_frame.index.get_level_values("instrument").astype(str)
-    dates = pd.to_datetime(index_frame.index.get_level_values("datetime")).date
-    if "000300.SH" not in set(instruments) or max(dates) != layout.cutoff:
-        raise DirectMonthlyError("HMM benchmark input does not reach the candidate cutoff")
+    if index_frame.empty:
+        raise DirectMonthlyError("HMM index input smoke found an empty index frame")
+    if isinstance(index_frame.index, pd.MultiIndex) and set(index_frame.index.names) >= {
+        "datetime",
+        "instrument",
+    }:
+        coordinates = pd.DataFrame(
+            {
+                "trade_date": index_frame.index.get_level_values("datetime"),
+                "ts_code": index_frame.index.get_level_values("instrument"),
+            }
+        )
+    elif {"trade_date", "ts_code"}.issubset(index_frame.columns):
+        coordinates = index_frame.loc[:, ["trade_date", "ts_code"]].copy()
+    else:
+        raise DirectMonthlyError("HMM index input lacks trade_date/ts_code coordinates")
+    coordinates["trade_date"] = pd.to_datetime(coordinates["trade_date"]).dt.date
+    coordinates["ts_code"] = coordinates["ts_code"].astype(str).str.upper()
+    observed_codes = set(coordinates["ts_code"])
+    if observed_codes != set(DIRECT_INDEX_CODES):
+        raise DirectMonthlyError("HMM index input does not contain the exact 12-index contract")
+    latest_by_code = coordinates.groupby("ts_code")["trade_date"].max()
+    if any(value != layout.cutoff for value in latest_by_code.values):
+        raise DirectMonthlyError("HMM index input does not reach the candidate cutoff for every index")
     return {
         **structural,
         "qe_multi_dataset_smoke": "PASS",
-        "minute_nested_executor_smoke": "PASS",
+        "minute_provider_contract_smoke": "PASS",
         "hmm_index_input_smoke": "PASS",
         "smoke_reports": str(reports),
     }
