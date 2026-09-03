@@ -200,7 +200,8 @@
       "Fresh pytest process loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim changes and passed 107 direct trading-core plus LocalSim tests, including typed BUY/SELL limit states, later-bar recovery, healthy-peer isolation, historical residual and fail-fast negatives; no backend process control.",
       "Fresh nox processes loaded the tracked source and passed validation_module_registry_l0 (8 passed), paper_v2_backend (1085 passed, 3 skipped, 2 xfailed), platform_api_backend (15 passed), and simulation_core_l2 (829 passed, 4 skipped); no backend process control.",
       "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus required module gates; no backend process control.",
-      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus all required module gates; no backend process control."
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus all required module gates; no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source at commit 81bbf0d75 and passed direct plus all required module gates; no backend process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
