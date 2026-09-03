@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -75,10 +76,14 @@ class DirectMonthlyLayout:
     ) -> "DirectMonthlyLayout":
         parent = candidate_parent.expanduser().resolve(strict=True)
         candidate = candidate_root.expanduser().resolve(strict=False)
-        baseline = baseline_root.expanduser().resolve(strict=True) if baseline_root is not None else None
+        baseline = baseline_root.expanduser().resolve(strict=False) if baseline_root is not None else None
         if candidate.parent != parent or _CANDIDATE_NAME.fullmatch(candidate.name) is None:
             raise DirectMonthlyError("direct candidate must be a canonical direct child of candidate_root")
-        if baseline is not None and (baseline.parent != parent or baseline == candidate or not baseline.is_dir()):
+        if baseline is not None and (
+            baseline.parent != parent
+            or baseline == candidate
+            or (baseline.exists() and not baseline.is_dir())
+        ):
             raise DirectMonthlyError("baseline candidate must be a different direct child of candidate_root")
         if candidate.exists() and not candidate.is_dir():
             raise DirectMonthlyError("direct candidate path exists and is not a directory")
@@ -355,6 +360,69 @@ def compact_status(value: Mapping[str, Any]) -> dict[str, Any]:
         },
         "source_freeze": False,
         "full_history_content_hash": False,
+        "production_writes": 0,
+        "production_pointer_changes": 0,
+    }
+
+
+def cleanup_terminal_candidate(
+    layout: DirectMonthlyLayout,
+    *,
+    apply: bool,
+) -> dict[str, Any]:
+    """Remove only disposable files owned by one terminal direct candidate."""
+
+    state = read_state(layout)
+    if state is None or state.get("status") != DIRECT_TERMINAL_STATUS:
+        raise DirectMonthlyError("direct cleanup requires a terminal candidate")
+
+    targets: list[Path] = []
+    if layout.work_root.exists():
+        if layout.work_root.is_symlink() or not layout.work_root.is_dir():
+            raise DirectMonthlyError("direct cleanup work target is invalid")
+        targets.append(layout.work_root)
+
+    legacy_factor = layout.components_root / "factor_h5_static_candidate"
+    if legacy_factor.exists():
+        if legacy_factor.is_symlink() or not legacy_factor.is_dir():
+            raise DirectMonthlyError("direct cleanup legacy factor target is invalid")
+        factor_record = state["components"]["factor_h5_static"]
+        factor_receipt = factor_record.get("receipt")
+        active_factor_path = (
+            Path(str(factor_receipt.get("path"))).expanduser().resolve(strict=False)
+            if isinstance(factor_receipt, Mapping) and factor_receipt.get("path")
+            else None
+        )
+        if (
+            active_factor_path != layout.factor_root.resolve(strict=False)
+            or not layout.factor_root.is_dir()
+            or layout.factor_root.is_symlink()
+        ):
+            raise DirectMonthlyError("direct cleanup cannot prove the active v2 factor component")
+        targets.append(legacy_factor)
+
+    relative_targets = [str(path.relative_to(layout.candidate_root)) for path in targets]
+    detach_baseline = layout.baseline_root is not None
+    if apply:
+        for path in targets:
+            shutil.rmtree(path)
+        if detach_baseline:
+            detached_layout = DirectMonthlyLayout.create(
+                candidate_parent=layout.candidate_parent,
+                candidate_root=layout.candidate_root,
+                baseline_root=None,
+                cutoff=layout.cutoff,
+            )
+            detached_state = dict(state)
+            detached_state["baseline_root"] = None
+            write_state(detached_layout, detached_state)
+
+    return {
+        "action": "cleanup-direct",
+        "status": "APPLIED" if apply else "PLAN_ONLY",
+        "candidate_root": str(layout.candidate_root),
+        "targets": relative_targets,
+        "baseline_detach": detach_baseline,
         "production_writes": 0,
         "production_pointer_changes": 0,
     }

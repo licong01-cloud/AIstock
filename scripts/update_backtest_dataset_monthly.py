@@ -3,8 +3,9 @@
 
 The canonical v2 profile executes the direct component builders in-process.
 Legacy v1 and catalog commands retain the bounded control-client behavior.
-Neither path performs database repair, activation, cleanup, or production data
-mutation.
+Neither path performs database repair, activation, or production data mutation.
+The direct cleanup action is limited to disposable files inside one terminal
+candidate and never touches production or shared CAS storage.
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ from backend.services.dataset_release.direct_monthly import (  # noqa: E402
     DIRECT_CANDIDATE_PARENT,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
+    cleanup_terminal_candidate,
     compact_status,
     default_candidate_path,
     discover_latest_existing_direct_candidate,
@@ -104,6 +106,13 @@ def _parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="read bounded durable status")
     status.add_argument("--latest", action="store_true", help="select newest submission")
+
+    cleanup = subparsers.add_parser(
+        "cleanup",
+        help="plan or apply terminal direct-candidate intermediate cleanup",
+    )
+    cleanup.add_argument("--latest", action="store_true", help="select newest direct candidate")
+    cleanup.add_argument("--apply", action="store_true", help="remove the exact planned targets")
 
     events = subparsers.add_parser("events", help="read one bounded event page")
     event_target = events.add_mutually_exclusive_group(required=True)
@@ -328,6 +337,30 @@ def _direct_status() -> Mapping[str, Any]:
         "action": "status-direct",
         **compact_status(states[-1][2]),
         "bounded_read": True,
+        "execution_started_by_cli": False,
+        "production_activation": "not_requested",
+    }
+
+
+def _direct_cleanup(args: argparse.Namespace) -> Mapping[str, Any]:
+    if not args.latest:
+        raise ValueError("cleanup requires --latest")
+    status = _direct_status()
+    candidate = Path(str(status["candidate_root"]))
+    raw = json.loads((candidate / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    cutoff = date.fromisoformat(str(raw["cutoff"]))
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=DIRECT_CANDIDATE_PARENT.resolve(strict=True),
+        candidate_root=candidate,
+        baseline_root=(
+            Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None
+        ),
+        cutoff=cutoff,
+    )
+    result = cleanup_terminal_candidate(layout, apply=bool(args.apply))
+    return {
+        "ok": True,
+        **result,
         "execution_started_by_cli": False,
         "production_activation": "not_requested",
     }
@@ -561,6 +594,12 @@ def main(
             result = _direct_status()
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "cleanup":
+            result = _direct_cleanup(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.action == "cleanup":
+            raise ValueError("cleanup is available only for qe_hmm_full_v2")
         control = service or build_control_service()
         _selected_profile_id(control, args)
         if args.action == "monthly":
