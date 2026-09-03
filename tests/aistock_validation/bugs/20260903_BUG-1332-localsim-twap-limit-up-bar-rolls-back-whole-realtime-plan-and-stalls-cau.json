@@ -266,7 +266,8 @@
     "validation-receipt: id=f626e9eb36930a40 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`1085 passed, 3 skipped, 2 xfailed`",
     "validation-receipt: id=f969f40bd9cc7d64 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
     "validation-receipt: id=430ef2bb25fc2cb8 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`829 passed, 4 skipped`",
-    "validation-receipt: id=cc2f3afbc8f0dbdf commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+    "validation-receipt: id=cc2f3afbc8f0dbdf commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`",
+    "PR #4224 CI verdict and CodeQL verdict -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
