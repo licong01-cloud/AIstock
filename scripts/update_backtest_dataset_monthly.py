@@ -57,6 +57,7 @@ from backend.services.dataset_release.direct_monthly import (  # noqa: E402
     DirectMonthlyRunner,
     compact_status,
     default_candidate_path,
+    discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
     production_handlers,
     read_state,
@@ -235,11 +236,10 @@ def _direct_monthly(
     cutoff = date.fromisoformat(str(preview["resolved_cutoff"]))
     profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
     candidate_parent = Path(str(profile.candidate_root)).resolve(strict=True)
-    candidate_root = default_candidate_path(
+    candidate_root = discover_latest_existing_direct_candidate(
         candidate_parent,
         cutoff=cutoff,
-        observed_on=observed_at.date(),
-    )
+    ) or default_candidate_path(candidate_parent, cutoff=cutoff, observed_on=observed_at.date())
     layout = DirectMonthlyLayout.create(
         candidate_parent=candidate_parent,
         candidate_root=candidate_root,

@@ -328,7 +328,6 @@ def production_handlers(*, project_root: Path) -> Mapping[str, ComponentHandler]
             component="daily_bin",
             dataset="stock_daily",
             start=DIRECT_START_DATE,
-            chunked=False,
         ),
         "minute_bin": lambda layout: _run_qlib_component(
             layout,
@@ -336,7 +335,6 @@ def production_handlers(*, project_root: Path) -> Mapping[str, ComponentHandler]
             component="minute_bin",
             dataset="stock_minute",
             start=DIRECT_MINUTE_START_DATE,
-            chunked=True,
         ),
         "factor_h5_static": build_factor_h5_static_component,
         "index_context": build_index_context_component,
@@ -376,6 +374,37 @@ def default_candidate_path(candidate_parent: Path, *, cutoff: date, observed_on:
     )
 
 
+def discover_latest_existing_direct_candidate(
+    candidate_parent: Path,
+    *,
+    cutoff: date,
+) -> Path | None:
+    candidates: list[tuple[datetime, Path]] = []
+    pattern = f"{cutoff.strftime('%Y%m%d')}-qe_hmm_full_v2-direct-*-candidate"
+    for candidate in candidate_parent.glob(pattern):
+        state_path = candidate / "direct_monthly_state.json"
+        if not state_path.is_file():
+            continue
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+            layout = DirectMonthlyLayout.create(
+                candidate_parent=candidate_parent,
+                candidate_root=candidate,
+                baseline_root=Path(str(raw["baseline_root"])),
+                cutoff=cutoff,
+            )
+            state = read_state(layout)
+            updated_at = datetime.fromisoformat(str(state["updated_at"])) if state else None
+        except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError, DirectMonthlyError):
+            continue
+        if updated_at is not None:
+            candidates.append((updated_at, candidate))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1].name))
+    return candidates[-1][1]
+
+
 def _run_qlib_component(
     layout: DirectMonthlyLayout,
     *,
@@ -383,7 +412,6 @@ def _run_qlib_component(
     component: str,
     dataset: str,
     start: date,
-    chunked: bool,
 ) -> Mapping[str, Any]:
     snapshot_id = f"{component}_candidate"
     output = layout.components_root / snapshot_id
@@ -424,23 +452,13 @@ def _run_qlib_component(
         "pit_spans",
         "--universe-key",
         DIRECT_UNIVERSE_KEY,
-        "--no-validate-values",
     ]
-    if chunked:
-        command.extend(
-            [
-                "--minute-chunked-export",
-                "--minute-code-batch-size",
-                "50",
-                "--minute-chunk-months",
-                "3",
-            ]
-        )
-        csv_root = layout.work_root / snapshot_id / "stock_minute_1min"
-        if csv_root.exists():
-            command.append("--resume-csv")
-    elif dataset == "stock_daily":
+    if dataset == "stock_daily":
+        command.append("--no-validate-values")
+    if dataset in {"stock_daily", "stock_minute"}:
         command.append("--resume-csv")
+    if dataset == "stock_minute":
+        command.append("--skip-validation")
     log_root = layout.candidate_root / "logs"
     log_root.mkdir(parents=True, exist_ok=True)
     with (log_root / f"{component}.stdout.log").open("a", encoding="utf-8") as stdout, (

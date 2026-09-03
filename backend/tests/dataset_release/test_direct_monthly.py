@@ -15,8 +15,11 @@ from backend.services.dataset_release.direct_monthly import (
     compact_status,
     component_plan,
     default_candidate_path,
+    discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
+    initial_state,
     read_state,
+    write_state,
     _run_qlib_component,
     _date_chunks,
     _filter_frame_to_pit,
@@ -212,11 +215,49 @@ def test_daily_component_always_uses_structural_csv_resume(tmp_path, monkeypatch
         component="daily_bin",
         dataset="stock_daily",
         start=date(2018, 8, 1),
-        chunked=False,
     )
 
     assert receipt["status"] == "PASS"
     assert "--resume-csv" in captured["command"]
+
+
+def test_minute_component_uses_index_friendly_resume_without_full_history_validation(
+    tmp_path, monkeypatch
+) -> None:
+    layout = _layout(tmp_path)
+    captured: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        calendar = layout.components_root / "minute_bin_candidate" / "calendars" / "1min.txt"
+        calendar.parent.mkdir(parents=True)
+        calendar.write_text("2026-08-31 15:00:00\n", encoding="utf-8")
+        return Completed()
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.subprocess.run",
+        fake_run,
+    )
+
+    receipt = _run_qlib_component(
+        layout,
+        project_root=tmp_path,
+        component="minute_bin",
+        dataset="stock_minute",
+        start=date(2024, 1, 2),
+    )
+
+    command = captured["command"]
+    assert receipt["status"] == "PASS"
+    assert "--resume-csv" in command
+    assert "--skip-validation" in command
+    assert "--no-validate-values" not in command
+    assert "--minute-chunked-export" not in command
+    assert "--minute-code-batch-size" not in command
+    assert "--minute-chunk-months" not in command
 
 
 def test_existing_nonempty_candidate_without_state_is_never_adopted(tmp_path) -> None:
@@ -293,3 +334,20 @@ def test_baseline_discovery_uses_latest_earlier_validated_metadata_only(tmp_path
         cutoff=date(2026, 8, 31),
         observed_on=date(2026, 9, 2),
     ).name == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+
+
+def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    write_state(layout, initial_state(layout))
+
+    selected = discover_latest_existing_direct_candidate(
+        layout.candidate_parent,
+        cutoff=date(2026, 8, 31),
+    )
+
+    assert selected == layout.candidate_root
+    assert selected != default_candidate_path(
+        layout.candidate_parent,
+        cutoff=date(2026, 8, 31),
+        observed_on=date(2026, 9, 3),
+    )

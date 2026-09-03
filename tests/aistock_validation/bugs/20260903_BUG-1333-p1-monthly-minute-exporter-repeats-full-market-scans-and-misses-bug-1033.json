@@ -1,6 +1,14 @@
 {
-  "actual": "The canonical v2 direct-monthly minute exporter uses nested 50-code x 3-month ANY(array) queries, batch-level resume, repeated full-market auxiliary-frame processing, and full-history structural validation. Live 2026-08-31 candidate regressed from the verified 2026-05-03 baseline of 618,578,712 CSV rows in 1h49 plus 28m dump to projected 30+ hours. Implement one shared order-stable exporter for CLI/backend/UI that reuses per-file checkpoints, queries only each symbol's missing interval through the BUG-1033 equality/index-pruned path, scopes auxiliary joins to affected symbol-dates, retains only required affected-window validation plus deterministic historical samples and consumer smoke, and preserves the existing candidate without production activation. Acceptance: resume the current candidate and complete the full minute CSV+Bin stage within 4 hours on this host without full-history hashes, source freeze, resource gates, or full-history value rescans.",
+  "actual": "The canonical v2 direct-monthly minute exporter used nested 50-code x 3-month ANY(array) queries, batch-level resume, repeated full-market auxiliary-frame processing, and a repeated full-history structural DB/Bin scan. The live 2026-08-31 candidate regressed from the verified 2026-05-03 baseline of 618,578,712 CSV rows in 1h49 plus a 28-minute dump to a projected 30+ hours.",
   "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/qlib_exporter/router.py",
+    "backend/services/dataset_release/direct_monthly.py",
+    "backend/tests/dataset_release/test_direct_monthly.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "frontend/src/app/qlib/page.tsx",
+    "scripts/qlib_authoritative_bin_export.py",
+    "scripts/update_backtest_dataset_monthly.py",
     "tests/aistock_validation/bugs/20260903_BUG-1333-p1-monthly-minute-exporter-repeats-full-market-scans-and-misses-bug-1033.json"
   ],
   "assigned_agent": null,
@@ -12,7 +20,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-03T03:23:07.209031Z",
-  "description": "The canonical v2 direct-monthly minute exporter uses nested 50-code x 3-month ANY(array) queries, batch-level resume, repeated full-market auxiliary-frame processing, and full-history structural validation. Live 2026-08-31 candidate regressed from the verified 2026-05-03 baseline of 618,578,712 CSV rows in 1h49 plus 28m dump to projected 30+ hours. Implement one shared order-stable exporter for CLI/backend/UI that reuses per-file checkpoints, queries only each symbol's missing interval through the BUG-1033 equality/index-pruned path, scopes auxiliary joins to affected symbol-dates, retains only required affected-window validation plus deterministic historical samples and consumer smoke, and preserves the existing candidate without production activation. Acceptance: resume the current candidate and complete the full minute CSV+Bin stage within 4 hours on this host without full-history hashes, source freeze, resource gates, or full-history value rescans.",
+  "description": "Replace every formal CLI/backend/UI minute export entry with the BUG-1033 per-symbol equality/index-pruned path. Reuse each CSV from its last complete row, query only that symbol's missing interval, rebuild only a symbol whose QFQ basis changed or whose tail is malformed, reuse one read-only DB connection, and skip the duplicate full-history DB/Bin scan in the direct-monthly chain. A rerun on a later operator date must select the latest existing candidate for the same cutoff instead of creating a new directory. Preserve the existing candidate without production activation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -21,8 +29,11 @@
       "timestamp": "2026-09-03T03:23:07.209012Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "real DB benchmark: 10 symbols, 249600 rows, 2026-04-01..2026-08-31, 5.553 seconds",
+    "preserved candidate: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260902-candidate, 5136 CSV files, 73.9 GiB"
+  ],
+  "expected": "The interrupted 2026-08-31 candidate resumes without discarding its 73.9 GiB of valid CSV data, full minute CSV plus Qlib Bin generation completes within four hours on this host, and no formal export path can select the retired compressed-chunk ANY query mode.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +46,29 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "frontend/src/app/qlib/page.tsx",
+      "scripts/qlib_authoritative_bin_export.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1333-p1-monthly-minute-exporter-repeats-full-market-scans-and-misses-bug-1033.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "frontend/src/app/qlib/page.tsx",
+      "scripts/qlib_authoritative_bin_export.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1333-p1-monthly-minute-exporter-repeats-full-market-scans-and-misses-bug-1033.json"
+    ]
   },
   "first_seen_at": "2026-09-03T03:23:07.209031Z",
   "fix_branch": null,
@@ -61,15 +92,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "fresh_process_evidence": [
+      "BUG1333_FRESH_PROCESS_MINUTE_EXPORT_OK: isolated Python imported the task worktree and verified the optimized minute exporter and direct-monthly entrypoint"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

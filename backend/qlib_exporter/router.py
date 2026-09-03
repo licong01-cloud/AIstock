@@ -64,7 +64,7 @@ from .authoritative_bin_exporter import (
     DEFAULT_PIT_UNIVERSE_KEY,
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
-    export_stock_minute_csv_chunked,
+    export_stock_minute_csv,
     normalize_stock_export_exchanges,
     resolve_stock_universe_from_pit_spans,
     rewrite_stock_all_txt_for_ipo_filter,
@@ -1272,7 +1272,7 @@ def _export_minute_to_csv_for_dump_bin(
     if dump_freq != MINUTE_FREQ_QLIB:
         raise HTTPException(status_code=400, detail=f"unsupported minute freq for authoritative export: {freq}")
 
-    summary = export_stock_minute_csv_chunked(
+    summary = export_stock_minute_csv(
         snapshot_id=snapshot_id,
         start=start,
         end=end,
@@ -1284,8 +1284,6 @@ def _export_minute_to_csv_for_dump_bin(
         basis_start=basis_start,
         basis_end=basis_end,
         strict_limit=True,
-        code_batch_size=100,
-        chunk_months=3,
         overwrite_csv=True,
     )
     return Path(summary.csv_dir)
@@ -3078,7 +3076,7 @@ class UnifiedBinExportRequestV2(BaseModel):
         description="股票池口径：legacy_static=旧静态过滤；pit_spans=使用 market.stock_universe_pit_spans",
     )
     universe_key: Optional[str] = Field(DEFAULT_PIT_UNIVERSE_KEY, description="PIT 股票池 key")
-    run_health_check: bool = Field(True)
+    run_health_check: bool = Field(False)
     index_data_source: Literal["tushare", "tdx"] = Field("tushare")
 
     @model_validator(mode="after")
