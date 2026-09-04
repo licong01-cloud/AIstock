@@ -35,6 +35,7 @@ from .qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
     QE_DATASET_START_DATE,
+    QE_DIRECT_V2_DATASET_BINDING_PARAM,
     QE_FROZEN_BIN_SNAPSHOT_ID,
     QE_FROZEN_BIN_UNIVERSE_KEY,
     QE_FROZEN_CALENDAR_SHA256,
@@ -47,9 +48,12 @@ from .qe_dataset_contract import (
     QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
     QE_FORMAL_DATASET_REQUEST_PARAM,
     QE_ST_PIT_UNIVERSE_KEY,
+    QEDirectV2DatasetBinding,
     QEFormalDatasetBinding,
     QEFormalDatasetRequest,
     require_qe_dataset_window,
+    require_qe_direct_v2_dataset_binding,
+    require_qe_direct_v2_dataset_window,
     require_qe_formal_dataset_binding_projection,
     require_qe_formal_dataset_request,
     require_qe_formal_dataset_window,
@@ -60,6 +64,7 @@ from .payload_summary import compact_experiment_row
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
+QE_DIRECT_V2_DATASET_BINDING_FILE = "qe_direct_v2_dataset_binding.json"
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -122,6 +127,19 @@ def _formal_dataset_request(
     if raw is None:
         return None
     return require_qe_formal_dataset_request(raw)
+
+
+def _direct_v2_dataset_binding(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEDirectV2DatasetBinding | None:
+    raw = (custom_params or {}).get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+    if raw is None:
+        return None
+    if _formal_dataset_request(custom_params) is not None:
+        raise ValueError(
+            "QE dataset request cannot select formal and direct-v2 bindings together"
+        )
+    return require_qe_direct_v2_dataset_binding(raw)
 
 
 def _requires_qe_custom_loaders(
@@ -511,6 +529,7 @@ QE_STRATEGY_RUNTIME_HELPER_FILES = (
     "qe_event_risk_policy.py",
     "qe_build_frozen_risk_policy.py",
     "qe_build_frozen_suspend_filter.py",
+    "qe_validate_direct_v2_dataset.py",
     "qe_suspend_filter_strategy.py",
     "qe_suspend_filter_score_weighted_strategy.py",
     "score_weighted_strategy_v2.py",
@@ -530,7 +549,15 @@ QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
     AISTOCK_PROJECT_ROOT / "scripts",
 ]
-AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {}
+AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {
+    "qe_validate_direct_v2_dataset.py": (
+        AISTOCK_PROJECT_ROOT
+        / "backend"
+        / "services"
+        / "quantevolver"
+        / "qe_validate_direct_v2_dataset.py"
+    ),
+}
 
 
 class ConfigComposer:
@@ -1349,9 +1376,16 @@ class ConfigComposer:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
         formal_request = _formal_dataset_request(custom_params)
         formal_binding = formal_request.binding() if formal_request is not None else None
+        direct_binding = _direct_v2_dataset_binding(custom_params)
         if formal_binding is not None:
             require_qe_formal_dataset_window(
                 formal_binding,
+                start_date=backtest_start,
+                end_date=backtest_end,
+            )
+        elif direct_binding is not None:
+            require_qe_direct_v2_dataset_window(
+                direct_binding,
                 start_date=backtest_start,
                 end_date=backtest_end,
             )
@@ -1364,6 +1398,14 @@ class ConfigComposer:
                 "reason_code=qe_frozen_build_spec_invalid: "
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
+            )
+        if (
+            direct_binding is not None
+            and provider_uri_day != direct_binding.provider_uri_day
+        ):
+            raise RuntimeError(
+                "reason_code=qe_direct_v2_provider_mismatch: "
+                "risk-policy provider_uri_day differs from the selected direct-v2 binding"
             )
 
         dataset_identity = {
@@ -1422,6 +1464,27 @@ class ConfigComposer:
                 "manifest_sha256": pins.suspend_manifest_sha256,
                 "source_contract": pins.suspend_source_contract,
             }
+        elif direct_binding is not None:
+            day_pins = dict(direct_binding.day_pins)
+            suspend_pins = dict(direct_binding.suspend_pins)
+            dataset_identity = {
+                "contract_id": direct_binding.release_id,
+                "st_universe_key": f"shsz_st_pit_qe_dataset_{direct_binding.release_id}",
+                "source_universe_key": day_pins["universe_key"],
+                "rule_version": day_pins["rule_version"],
+                "binding_schema_version": direct_binding.schema_version,
+            }
+            qlib_pins = dict(day_pins)
+            suspend_identity = {
+                "dataset_id": suspend_pins["dataset_id"],
+                "provider_uri": direct_binding.suspend_data_dir,
+                "universe_key": day_pins["universe_key"],
+                "parquet_sha256": suspend_pins["parquet_sha256"],
+                "metadata_name": "meta.json",
+                "metadata_sha256": suspend_pins["metadata_sha256"],
+                "metadata_schema_version": suspend_pins["schema_version"],
+                "source_contract": suspend_pins["source_contract"],
+            }
 
         payload = {
             "schema_version": "qe_frozen_build_spec_v1",
@@ -1460,10 +1523,15 @@ class ConfigComposer:
             source="ConfigComposer._prepare_risk_policy_runtime",
         )
         formal_binding = _formal_dataset_binding(custom_params)
+        direct_binding = _direct_v2_dataset_binding(custom_params)
         custom_params["risk_policy"]["st_universe_key"] = (
             formal_binding.qe_runtime_universe_key
             if formal_binding is not None
-            else QE_ST_PIT_UNIVERSE_KEY
+            else (
+                f"shsz_st_pit_qe_dataset_{direct_binding.release_id}"
+                if direct_binding is not None
+                else QE_ST_PIT_UNIVERSE_KEY
+            )
         )
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
@@ -1626,6 +1694,11 @@ class ConfigComposer:
         Returns:
             包含conf.yaml内容、factor.py内容、WSL命令、实验目录等信息
         """
+        if _direct_v2_dataset_binding(custom_params) is not None:
+            raise ValueError(
+                "QE direct-v2 candidate runs require compose_experiment_in_memory; "
+                "the legacy workspace API cannot preserve the explicit component paths"
+            )
         experiment_id = self._generate_unique_experiment_id()
         experiment_name = experiment_id  # 两者统一
 
@@ -1997,9 +2070,16 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         formal_dataset_binding = _formal_dataset_binding(custom_params)
+        direct_v2_dataset_binding = _direct_v2_dataset_binding(custom_params)
         if formal_dataset_binding is not None:
             require_qe_formal_dataset_window(
                 formal_dataset_binding,
+                start_date=self._parse_date(data_split["train_start"]),
+                end_date=self._parse_date(data_split["backtest_end"]),
+            )
+        elif direct_v2_dataset_binding is not None:
+            require_qe_direct_v2_dataset_window(
+                direct_v2_dataset_binding,
                 start_date=self._parse_date(data_split["train_start"]),
                 end_date=self._parse_date(data_split["backtest_end"]),
             )
@@ -2073,6 +2153,10 @@ class ConfigComposer:
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
         qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
+        if direct_v2_dataset_binding is not None:
+            qlib_data_path = direct_v2_dataset_binding.provider_uri_day
+            qlib_minute_path = direct_v2_dataset_binding.provider_uri_1min
+            factor_data_dir = direct_v2_dataset_binding.factor_data_dir
         prediction_store_base_url = self._prediction_store_base_url(
             node_id=node_id,
             node_callback_url=rdagent_cfg.get("callback_url"),
@@ -2087,6 +2171,14 @@ class ConfigComposer:
         if formal_dataset_binding is not None:
             experiment_files[QE_FORMAL_DATASET_BINDING_FILE] = json.dumps(
                 formal_dataset_binding.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        if direct_v2_dataset_binding is not None:
+            experiment_files[QE_DIRECT_V2_DATASET_BINDING_FILE] = json.dumps(
+                direct_v2_dataset_binding.as_dict(),
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -2340,6 +2432,12 @@ class ConfigComposer:
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
             long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
+            direct_v2_validation_enabled=direct_v2_dataset_binding is not None,
+            index_context_path=(
+                direct_v2_dataset_binding.index_context_path
+                if direct_v2_dataset_binding is not None
+                else None
+            ),
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2363,6 +2461,12 @@ class ConfigComposer:
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
             long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
+            direct_v2_validation_enabled=direct_v2_dataset_binding is not None,
+            index_context_path=(
+                direct_v2_dataset_binding.index_context_path
+                if direct_v2_dataset_binding is not None
+                else None
+            ),
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2393,6 +2497,8 @@ class ConfigComposer:
         }
         if formal_dataset_binding is not None:
             result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
+        if direct_v2_dataset_binding is not None:
+            result["direct_v2_dataset_binding"] = direct_v2_dataset_binding.as_dict()
         return result
 
     # ── 内存生成辅助方法 ──
@@ -2849,6 +2955,11 @@ class ConfigComposer:
                 custom_params = _json.loads(custom_params)
             except Exception as e:
                 raise ValueError(f"custom_params JSON 解析失败: {custom_params!r}") from e
+        if _direct_v2_dataset_binding(custom_params) is not None:
+            raise ValueError(
+                "QE direct-v2 candidate runs cannot use regenerate_experiment; "
+                "recompose from the persisted direct-v2 binding instead"
+            )
 
         # 创建实验目录 (本地)
         exp_dir = _qe_experiment_dir(experiment_name)
@@ -3628,6 +3739,7 @@ class ConfigComposer:
             "sector_risk_overlay_data_source",
             "_seed_ensemble_config",
             QE_FORMAL_DATASET_REQUEST_PARAM,
+            QE_DIRECT_V2_DATASET_BINDING_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -4533,6 +4645,7 @@ class ConfigComposer:
             factor_names,
         )
         formal_dataset_binding = _formal_dataset_binding(custom_params)
+        direct_v2_dataset_binding = _direct_v2_dataset_binding(custom_params)
         metadata_kwargs: Dict[str, Any] = {
             "start_date": train_start,
             "end_date": test_end,
@@ -4542,6 +4655,17 @@ class ConfigComposer:
         factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
             **metadata_kwargs
         )
+        if direct_v2_dataset_binding is not None:
+            factor_cache_universe_metadata = {
+                **factor_cache_universe_metadata,
+                "universe_key": str(direct_v2_dataset_binding.day_pins["universe_key"]),
+                "universe_rule_version": str(
+                    direct_v2_dataset_binding.day_pins["rule_version"]
+                ),
+                "universe_fingerprint_sha256": str(
+                    direct_v2_dataset_binding.day_pins["instruments_sha256"]
+                ),
+            }
 
         lines: list[str] = []
         lines.append('"""')
@@ -4578,7 +4702,17 @@ class ConfigComposer:
                 "end": formal_dataset_binding.cutoff.isoformat(),
                 "canonical_pit_dataset_binding": formal_dataset_binding.as_dict(),
             }
+        elif direct_v2_dataset_binding is not None:
+            expected_dataset_meta = dict(direct_v2_dataset_binding.factor_meta)
         lines.append("QE_DATASET_EXPECTED_META = " + repr(expected_dataset_meta))
+        lines.append(
+            "QE_DATASET_EXPECTED_META_SHA256 = "
+            + repr(
+                direct_v2_dataset_binding.factor_meta_sha256
+                if direct_v2_dataset_binding is not None
+                else ""
+            )
+        )
         lines.append(
             "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
@@ -4590,6 +4724,11 @@ class ConfigComposer:
         lines.append("        raise RuntimeError(f'QE factor_data dataset contract missing: {meta_path}')")
         lines.append("    with open(meta_path, 'r', encoding='utf-8') as meta_file:")
         lines.append("        actual = _json.load(meta_file)")
+        lines.append("    if QE_DATASET_EXPECTED_META_SHA256:")
+        lines.append("        with open(meta_path, 'rb') as meta_file:")
+        lines.append("            actual_sha256 = hashlib.sha256(meta_file.read()).hexdigest()")
+        lines.append("        if actual_sha256 != QE_DATASET_EXPECTED_META_SHA256:")
+        lines.append("            raise RuntimeError('QE factor_data dataset metadata hash mismatch: ' + actual_sha256)")
         lines.append("    mismatches = {")
         lines.append("        key: {'expected': expected, 'actual': actual.get(key)}")
         lines.append("        for key, expected in QE_DATASET_EXPECTED_META.items()")
@@ -5553,6 +5692,8 @@ class ConfigComposer:
         resource_session_token: Optional[str] = None,
         phase_pipeline_enabled: bool = False,
         long_trend_postprocess_enabled: bool = False,
+        direct_v2_validation_enabled: bool = False,
+        index_context_path: Optional[str] = None,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -5616,6 +5757,14 @@ class ConfigComposer:
         effective_factor_data_dir = str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "").strip()
         if effective_factor_data_dir:
             env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
+        if index_context_path:
+            env_lines.append(
+                "export QE_INDEX_CONTEXT_PATH="
+                + _quote_qe_shell_path(
+                    index_context_path,
+                    field_name="index_context_path",
+                )
+            )
 
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
@@ -5662,6 +5811,9 @@ class ConfigComposer:
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
         if resource_session_id:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
+        if direct_v2_validation_enabled:
+            core_parts.append(scrub_credentials)
+            core_parts.append("python qe_validate_direct_v2_dataset.py")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
             core_parts.append(scrub_credentials)
@@ -5699,7 +5851,9 @@ class ConfigComposer:
                               resource_source_run_key: Optional[str] = None,
                               resource_session_token: Optional[str] = None,
                               phase_pipeline_enabled: bool = False,
-                              long_trend_postprocess_enabled: bool = False) -> str:
+                              long_trend_postprocess_enabled: bool = False,
+                              direct_v2_validation_enabled: bool = False,
+                              index_context_path: Optional[str] = None) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -5728,6 +5882,8 @@ class ConfigComposer:
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
+            direct_v2_validation_enabled=direct_v2_validation_enabled,
+            index_context_path=index_context_path,
         )
         env_block = "\n".join(env_lines)
         scrub_credentials = _qe_subprocess_credential_scrub_command()
@@ -5749,6 +5905,11 @@ _FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
+        direct_validation_manual = (
+            f"{scrub_credentials}\npython qe_validate_direct_v2_dataset.py"
+            if direct_v2_validation_enabled
+            else ""
+        )
 
         # 分钟线使用 qrun_limit_minute.py（含内存 patch + benchmark），日线使用 qrun_limit.py
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
@@ -5768,6 +5929,8 @@ cd -- {quoted_wsl_path}
 {manual_runtime_guard_block}
 {manual_conda_chain}
 {scrub_credentials}
+
+{direct_validation_manual}
 
 {_link_data_manual}
 
@@ -5803,6 +5966,8 @@ cd -- {quoted_wsl_path}
 # 设置环境变量
 {env_block}
 
+{direct_validation_manual}
+
 {_link_data_manual}
 
 # 运行QLib回测
@@ -5827,6 +5992,8 @@ cd -- {quoted_wsl_path}
 
 # 设置环境变量
 {env_block}
+
+{direct_validation_manual}
 
 {_link_data_manual}
 
