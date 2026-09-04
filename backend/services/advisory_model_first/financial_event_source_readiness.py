@@ -657,13 +657,15 @@ def evaluate_readiness(
     if int(parent_identity["instrument_count"]) != PARENT_INSTRUMENT_COUNT:
         failures.append("PARENT_INSTRUMENT_COUNT_MISMATCH")
     source_counts = projection.groupby("source_type").size().to_dict() if not projection.empty else {}
+    # ALGO-COMPLEXITY-001: this loop is fixed at three source types and eleven
+    # report periods; it neither joins market panels nor grows with row count.
     for source_type in SOURCE_TABLES:
         if int(source_counts.get(source_type, 0)) <= 0:
             failures.append(f"SOURCE_EMPTY:{source_type}")
         source_periods = set(projection.loc[projection["source_type"].eq(source_type), "report_period"].tolist())
         missing_periods = [item.isoformat() for item in EXPECTED_REPORT_PERIODS if item not in source_periods]
         if missing_periods:
-            failures.append(f"REPORT_PERIOD_COVERAGE_GAP:{source_type}:{','.join(missing_periods)}")
+            failures.append(f"REPORT_PERIOD_COVERAGE_GAP:{source_type}:{missing_periods!r}")
     if len(projection) < thresholds.min_projection_rows:
         failures.append("PROJECTION_SUPPORT_BELOW_MINIMUM")
     qualifying_count = int(projection.get("should_signal", pd.Series(dtype=bool)).astype(bool).sum())
@@ -1134,6 +1136,21 @@ def build_financial_event_source_bundle(
                 )
             shutil.rmtree(temporary)
             return final
+        for prior_bundle in bundle_root.iterdir():
+            if not prior_bundle.is_dir() or prior_bundle.name.startswith(".financial-event-source-"):
+                continue
+            prior_request_path = prior_bundle / "source_request.json"
+            if not prior_request_path.is_file():
+                continue
+            prior_request = _read_json(prior_request_path)
+            if prior_request.get("request_id") == request["request_id"]:
+                _raise(
+                    "the live source changed after this request identity was first published",
+                    "ADVISORY_N3_FINANCIAL_EVENT_SOURCE_SNAPSHOT_DRIFT",
+                    request_id=request["request_id"],
+                    prior_bundle_id=prior_bundle.name,
+                    current_bundle_id=bundle_id,
+                )
         next_task = READY_NEXT_TASK if source_state == READY_STATE else NOT_READY_NEXT_TASK
         receipt = {
             "schema_version": "advisory_n3_financial_event_source_readiness_receipt_v1",
@@ -1270,20 +1287,16 @@ def deliver_financial_event_source_bundle(
     registry_summary = AdvisoryResearchTrialRegistryV1(registry_path).append_batch((record,))
     route = Path(route_path).resolve()
     route.parent.mkdir(parents=True, exist_ok=True)
-    route_payload = "\n".join(
-        (
-            "# Advisory model-first current route",
-            "",
-            f"- experiment_id: `{EXPERIMENT_ID}`",
-            f"- source_state: `{inspected['source_state']}`",
-            f"- next_task: `{inspected['next_task']}`",
-            f"- bundle_id: `{inspected['bundle_id']}`",
-            "- decision_use: `NAVIGATION_ONLY`",
-            "- evidence_class: `EXPLORATORY_NON_VINTAGE`",
-            "- sealed_holdout_accessed: `false`",
-            "- runtime_eligible: `false`",
-            "",
-        )
+    route_payload = (
+        "# Advisory model-first current route\n\n"
+        f"- experiment_id: `{EXPERIMENT_ID}`\n"
+        f"- source_state: `{inspected['source_state']}`\n"
+        f"- next_task: `{inspected['next_task']}`\n"
+        f"- bundle_id: `{inspected['bundle_id']}`\n"
+        "- decision_use: `NAVIGATION_ONLY`\n"
+        "- evidence_class: `EXPLORATORY_NON_VINTAGE`\n"
+        "- sealed_holdout_accessed: `false`\n"
+        "- runtime_eligible: `false`\n"
     )
     encoded = route_payload.encode("utf-8")
     if route.exists() and route.read_bytes() == encoded:

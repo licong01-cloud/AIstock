@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ from backend.services.advisory_model_first.financial_event_source_readiness impo
     build_financial_event_source_bundle,
     deliver_financial_event_source_bundle,
     inspect_financial_event_source_bundle,
+    verify_margin_route_receipt,
 )
 from backend.services.event_signal.tushare_event_raw_sync import source_row_hash
 
@@ -120,7 +122,12 @@ def _snapshot() -> dict:
     }
 
 
-def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, FakeConnection]:
+def _build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    snapshot: dict | None = None,
+) -> tuple[Path, FakeConnection]:
     parent = tmp_path / "parent.parquet"
     margin_receipt = tmp_path / "margin_receipt.json"
     _parent(parent)
@@ -128,7 +135,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, FakeC
     connection = FakeConnection()
     monkeypatch.setattr(
         "backend.services.advisory_model_first.financial_event_source_readiness.read_database_snapshot",
-        lambda *_args, **_kwargs: _snapshot(),
+        lambda *_args, **_kwargs: snapshot or _snapshot(),
     )
     bundle = build_financial_event_source_bundle(
         parent_path=parent,
@@ -198,3 +205,39 @@ def test_delivery_is_registry_and_route_exact_noop(monkeypatch: pytest.MonkeyPat
     assert second["registry"]["duplicate_noop_count"] == 1
     assert second["route_write"] == "exact_noop"
     assert NOT_READY_NEXT_TASK in route.read_text(encoding="utf-8")
+
+
+def test_margin_receipt_must_be_selected_zero_route(tmp_path: Path) -> None:
+    receipt = tmp_path / "margin_receipt.json"
+    _margin_receipt(receipt)
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload["selected_trial_count"] = 1
+    receipt.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        verify_margin_route_receipt(receipt, expected_sha256=None)
+    assert exc_info.value.reason_code == "ADVISORY_N3_FINANCIAL_EVENT_ROUTE_INVALID"
+
+
+def test_delivery_rejects_paths_not_bound_by_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bundle, _ = _build(monkeypatch, tmp_path)
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        deliver_financial_event_source_bundle(
+            bundle_path=bundle,
+            registry_path=tmp_path / "other_registry.jsonl",
+            route_path=tmp_path / "current_route.md",
+        )
+    assert exc_info.value.reason_code == "ADVISORY_N3_FINANCIAL_EVENT_BUNDLE_INVALID"
+
+
+def test_same_request_rejects_changed_live_source_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _build(monkeypatch, tmp_path)
+    changed = copy.deepcopy(_snapshot())
+    changed["raw_rows_by_source"]["tushare_forecast"].append(
+        {
+            **_raw("tushare_forecast", 99, "000002.SZ"),
+            "source_record_key": "new-key-in-same-request",
+        }
+    )
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        _build(monkeypatch, tmp_path, snapshot=changed)
+    assert exc_info.value.reason_code == "ADVISORY_N3_FINANCIAL_EVENT_SOURCE_SNAPSHOT_DRIFT"
