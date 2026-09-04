@@ -21,6 +21,7 @@ from backend.services.advisory_model_first.financial_event_information_set_pipel
     attach_event_outcomes,
     build_event_feature_panel,
     evaluate_event_models,
+    prepare_financial_event_information_set_request,
     run_event_crossfit,
     validate_event_feature_support,
 )
@@ -68,6 +69,90 @@ def _paths(dates: list[str]) -> list[dict[str, object]]:
         }
         for index, validation in enumerate(combinations(range(8), 2))
     ]
+
+
+def test_prepare_binds_authoritative_n2b_audit_receipt(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    source_path = tmp_path / "source"
+    n2b_path = tmp_path / "n2b"
+    n1_path = tmp_path / "n1"
+    for path in (source_path, n2b_path, n1_path):
+        path.mkdir()
+
+    source = {
+        "request": {
+            "request_sha256": "b" * 64,
+            "registry_path": (tmp_path / "trial_registry.jsonl").as_posix(),
+            "route_path": (tmp_path / "current_route.md").as_posix(),
+        },
+        "receipt": {"next_task": "N3_FINANCIAL_EVENT_INFORMATION_SET_MVE_DESIGN"},
+    }
+    n2b = {
+        "record": SimpleNamespace(dataset_identity="d" * 64, policy_identity="p" * 64),
+        "request": SimpleNamespace(request_sha256="q" * 64),
+        "receipt": SimpleNamespace(receipt_sha256="r" * 64),
+    }
+    n1 = {
+        "request": SimpleNamespace(
+            request_sha256="n" * 64,
+            split_policy_sha256="s" * 64,
+            qlib_daily_root="/tmp/qlib",
+            market_calendar_identity=SimpleNamespace(
+                sha256="c" * 64,
+                row_count=2,
+                cutoff_trade_date="2026-03-10",
+            ),
+            data_cutoff="2026-03-10",
+        )
+    }
+    referenced: dict[str, object] = {}
+
+    class _Reference:
+        def __init__(self, path, role: str) -> None:
+            self.path = path
+            self.role = role
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return {"role": self.role, "artifact_uri": self.path.as_posix()}
+
+    def fake_reference(path, *, role: str):
+        reference = _Reference(path, role)
+        referenced[role] = reference
+        return reference
+
+    monkeypatch.setattr(pipeline, "_require_formal_environment", lambda: None)
+    monkeypatch.setattr(pipeline, "_read_source_bundle", lambda _: source)
+    monkeypatch.setattr(pipeline, "_read_n2b_bundle", lambda _: n2b)
+    monkeypatch.setattr(pipeline, "_read_n1_bundle", lambda _: n1)
+    monkeypatch.setattr(pipeline, "_validate_bound_sources", lambda **_: None)
+    monkeypatch.setattr(pipeline, "_cross_os_git_dirty_paths", lambda _: [])
+    monkeypatch.setattr(pipeline, "_cross_os_git_commit", lambda _: "a" * 40)
+    monkeypatch.setattr(pipeline, "_git_origin_main_commit", lambda _: "a" * 40)
+    monkeypatch.setattr(
+        pipeline,
+        "_load_and_verify_calendar",
+        lambda _: pd.DatetimeIndex(["2026-03-09", "2026-03-10"]),
+    )
+    monkeypatch.setattr(pipeline, "evidence_reference_for_file", fake_reference)
+    monkeypatch.setattr(pipeline, "sha256_file", lambda _: "e" * 64)
+    monkeypatch.setattr(
+        pipeline,
+        "build_financial_event_request",
+        lambda **kwargs: SimpleNamespace(request_sha256="f" * 64, **kwargs),
+    )
+    monkeypatch.setattr(pipeline, "_write_immutable_request", lambda *_: None)
+
+    prepare_financial_event_information_set_request(
+        source_bundle_path=source_path,
+        n2b_bundle_path=n2b_path,
+        n1_bundle_path=n1_path,
+        repository_root=tmp_path,
+        output_root=tmp_path / "output",
+        output_path=tmp_path / "request.json",
+    )
+
+    receipt_reference = referenced["n3_event_n2b_receipt"]
+    assert receipt_reference.path == n2b_path / "audit_receipt.json"
 
 
 def _event_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DatetimeIndex]:
@@ -324,9 +409,7 @@ def test_calendar_rebuild_uses_n1_data_cutoff_not_declared_asset_cutoff(
 ) -> None:
     calendar = pd.bdate_range("2023-01-02", "2026-03-10")
     identity_window = calendar[calendar >= pd.Timestamp("2023-09-01")]
-    identity_hash = canonical_json_sha256(
-        {"market_sessions": [item.date().isoformat() for item in identity_window]}
-    )
+    identity_hash = canonical_json_sha256({"market_sessions": [item.date().isoformat() for item in identity_window]})
     observed: list[tuple[str, str]] = []
     monkeypatch.setattr(pipeline, "initialize_qlib", lambda root: observed.append(("root", str(root))))
 
