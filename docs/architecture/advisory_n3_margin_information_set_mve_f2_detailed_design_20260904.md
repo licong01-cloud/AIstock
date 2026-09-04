@@ -1,7 +1,7 @@
-# Advisory N3 融资融券信息集 Learnability MVE F2 详细设计 v1.6
+# Advisory N3 融资融券信息集 Learnability MVE F2 详细设计 v1.7
 
 > 日期：2026-09-04
-> 状态：`DESIGN_REVIEWED_READY_FOR_IMPLEMENTATION`
+> 状态：`IMPLEMENTED_LOCAL_REVIEWED_FORMAL_RUN_PENDING`
 > tier：`F2`
 > research stage：`N3_MARGIN_INFORMATION_SET_MVE`
 > objective contract：`ALPHA_RANKING`
@@ -231,6 +231,8 @@ candidate margin H5 + daily calendar  |
 
 任一模型 Top5 包含 unknown/nonfinite label 时，该模型当日 Top5 指标 typed unavailable；不得以少于五只的均值替代。推断使用 20 日 moving-block bootstrap、2,000 repetitions、seed `20260904`。
 
+N2-B 历史 `arm_top5_daily` 的展示口径使用 `slot_return_bps`，其中涨停未成交槽位按 0 进入五槽位收益；本 MVE 的 learnability 标签按预注册使用原始 `economic_net_excess_bps`，因此 2025-04-14 与 2025-10-23 两日的 current-parent Top5 含 nonfinite label，必须标为不可评价。current-parent parity 由三部分组成：386 日 RankIC 全量一致、386 日 Top5 instrument set 全量一致、其余 384 个 economic-label 可评价日 Top5 数值一致；不得把这两个不可评价日填零、改用四只均值或为了追平旧展示口径而更换标签。
+
 ### 8.2 Source 与 intervention support
 
 source support 预注册为：
@@ -345,7 +347,7 @@ exact retry 必须返回相同 bundle id，registry duplicate no-op、route exac
 4. `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`
 5. `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py`
 6. `backend/tests/advisory_model_first/test_margin_information_set_delivery.py`
-7. CI/ownership 的 exact classifier/catalog mapping（仅在实际路径无法自动覆盖时）
+7. CI/ownership 的 exact classifier/catalog mapping（实际 CI 首轮确认薄 CLI 未自动覆盖，因此实现范围包含 `scripts/ci_change_classifier.py` 与 `backend/tests/scripts/test_ci_change_classifier.py` 的单文件映射及直接测试）
 8. 本详细设计与顶层 Advisory 蓝图的事实/进度更新
 
 顺序：contracts -> target-free source projection -> feature builder -> cross-fit -> paired evaluator -> artifact/inspect -> registry/route -> thin CLI -> tests。任何扩展文件必须先更新设计与 acceptance matrix，不能边实现边扩大平台。
@@ -426,19 +428,19 @@ sealed_holdout_access = false
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-960 | §1、§5.1、§9 route | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_formal_v5_20260904/qe_alpha_generator_mve_bundles/9327330c11082d656463a85007f03744c47ad52224c764e006235025b5c8fc64/receipt.json` | DESIGN_READY | none |
-| F-961 | §1.1、§3、§13 source choice | artifact: `docs/architecture/advisory_n3_margin_information_set_mve_f2_detailed_design_20260904.md` | DESIGN_READY | none |
-| F-962 | planned `margin_information_set_contracts.py`、source projection | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py` | DESIGN_READY | none |
-| F-963 | planned exact-calendar feature builder | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` | DESIGN_READY | none |
-| F-964 | planned full-key left join、typed missing | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` | DESIGN_READY | none |
-| F-965 | planned frozen schema/model specs | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py` | DESIGN_READY | none |
-| F-966 | planned `run_margin_crossfit` | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` | DESIGN_READY | none |
-| F-967 | planned paired evaluator | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` | DESIGN_READY | none |
-| F-968 | planned support/multiplicity/stability receipt | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` | DESIGN_READY | none |
-| F-969 | planned receipt and `_write_route_page` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | DESIGN_READY | none |
-| F-970 | planned `prepare/run/inspect/_deliver_bundle` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | DESIGN_READY | none |
-| F-971 | planned chunk loader/resource guard | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | DESIGN_READY | none |
-| F-972 | frozen false gates、thin CLI、exact CI mapping | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py` | DESIGN_READY | none |
+| F-960 | §1、§5.1、§9 route | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_formal_v5_20260904/qe_alpha_generator_mve_bundles/9327330c11082d656463a85007f03744c47ad52224c764e006235025b5c8fc64/receipt.json` | FORMAL_INPUT_VERIFIED | none |
+| F-961 | §1.1、§3、§13 source choice | artifact: `docs/architecture/advisory_n3_margin_information_set_mve_f2_detailed_design_20260904.md` | DESIGN_AND_SOURCE_SPIKE_VERIFIED | none |
+| F-962 | `margin_information_set_contracts.py`；source request/receipt/projection identity | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-963 | exact-calendar feature builder；严格 D-5 < D-1 < D < T | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` future/label poison 与 lag-order tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-964 | full-key left join、typed missing、仅结构 flag 填零 | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` missing-key retention | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-965 | frozen schema/model specs | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py` exact three-trial/schema tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-966 | `run_margin_crossfit` | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` 28 paths、84 folds、每 row 7 OOF | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-967 | paired evaluator 与 current-parent parity | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n2b_independent_package_alpha_audit_survivors_v2_r3_20260902/independent_package_alpha_audit_bundles/bcdcb31de4dc1409f74fd5f4ef760e6bd8f6da8230aac4dbc1eadef8b2d50518/arm_signal_outcomes.parquet` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-968 | source/intervention support、单侧 multiplicity、MDE、stability | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py` support/evidence-class/one-sided-alpha tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-969 | receipt and `_write_route_page` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` 0/1 route 与 insufficient-support 分型 | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-970 | `prepare/run/inspect/_deliver_bundle` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` source/MVE immutable bundle、mutation/partial/extra、registry/route no-op tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-971 | chunk loader/resource guard/source 落盘后全量 readback | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-972 | frozen false gates、thin CLI、exact CI mapping | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py`; `backend/tests/scripts/test_ci_change_classifier.py`; command: `python -m nox -s advisory_modeling_backend` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
 
 ## 18. DESIGN-COMPLIANCE-001
 
@@ -449,6 +451,6 @@ sealed_holdout_access = false
 
 ## 19. Source feasibility conclusion / 数据可行性结论
 
-当前结论仅为 `SOURCE_READY_DESIGN_EVIDENCE`：margin candidate 文件真实存在、可由 WSL/Windows 读取、schema/覆盖/时钟足以实施本设计；两个独立快照在1,279,108个共同键上八字段逐值完全一致。target-free原型在10.90秒内为全部1,710,301键计算十二项特征，每项在386日均有finite值，最小日支持2,049。DEV 表为空、candidate release 未做 full-history content freeze、candidate state 会被后续验证更新、历史 key membership 有漂移，均已通过固定H5/calendar hash、prepare前后state冻结、双快照共同键、task-owned source projection 和非vintage evidence label显式处理。
+当前结论为 `SOURCE_READY_AND_IMPLEMENTATION_LOCAL_VERIFIED`：margin candidate 文件真实存在、可由 WSL/Windows 读取、schema/覆盖/时钟足以实施本设计；两个独立快照在1,279,108个共同键上八字段逐值完全一致。target-free原型在10.90秒内为全部1,710,301键计算十二项特征，每项在386日均有finite值，最小日支持2,049。DEV 表为空、candidate release 未做 full-history content freeze、candidate state 会被后续验证更新、历史 key membership 有漂移，均已通过固定H5/calendar hash、prepare前后state冻结、双快照共同键、task-owned source projection 和非vintage evidence label显式处理。
 
-本轮尚未实现代码、未生成 frozen request、未读取 H20 outcome 做模型训练、未运行正式经济实验、未形成 candidate，也未更新 trial registry/route。下一任务必须先完成 §11 源码与直接测试，合入 clean main 后才允许启动正式 `N3_MARGIN_INFORMATION_SET_MVE`。
+§11 的两个模块、薄 CLI 和三组 direct tests 已在独立实现分支完成。当前 direct tests 为 `37 passed`，Advisory 相关矩阵为 `831 passed/16 skipped`，changed-file Ruff/format、py_compile、CLI typed failure 与真实 N2-B read-only parent parity 均通过；parity 明确保留两个 nonfinite economic-label 日为不可评价。代码尚未合入 `main`，也未生成正式 frozen request、未执行 H20 模型训练、未发布正式 source/MVE bundle、未形成 candidate、未追加正式 registry 或 route。下一步是完成最终 L0/F2/ownership 审核并合入；只有 clean main 源码身份成立后才启动一次正式 `N3_MARGIN_INFORMATION_SET_MVE`。
