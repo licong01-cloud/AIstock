@@ -205,7 +205,12 @@ jobs:
         continue-on-error: true
         env:
           BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
+          AISTOCK_CI_CLASSIFIER_SUMMARY: tmp/validation/ci_change_classifier/summary.json
+          AISTOCK_CI_REPO_ROOT: ${{ github.workspace }}
+          AISTOCK_CI_TEST_COLLECTION_RECEIPT: tmp/validation/ci_change_classifier/collected_tests.txt
+          PYTEST_ADDOPTS: -p scripts.ci_plan_coverage
         run: |
+          rm -f "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}"
           mapfile -t backend_sessions < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r')
           backend_failures=()
           for session in "${backend_sessions[@]}"; do
@@ -213,6 +218,12 @@ jobs:
               backend_failures+=("${session}")
             fi
           done
+          if ! python scripts/ci_plan_coverage.py \
+            --classifier-summary "${AISTOCK_CI_CLASSIFIER_SUMMARY}" \
+            --receipt "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}" \
+            --output-json tmp/validation/ci_change_classifier/test-plan-coverage.json; then
+            backend_failures+=("changed_test_plan_coverage")
+          fi
           if (( ${#backend_failures[@]} > 0 )); then
             printf 'Selected backend session failed: %s\n' "${backend_failures[@]}" >&2
             exit 1
