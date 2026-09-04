@@ -136,6 +136,79 @@ def test_tushare_monthly_snapshot_is_crosscheck_only(monkeypatch) -> None:
 
     assert result["checked_month_count"] == 1
     assert result["mismatch_month_count"] == 0
+    assert result["blocking_error_count"] == 0
+    assert result["authority_effect"] == "advisory_only_l1_official_wins"
+
+    backcast = subject._crosscheck_tushare(
+        config=subject.DatabaseConfig("dev", "127.0.0.1", 5433, "u", "p", "aistock_dev", ".env"),
+        pool_ids=("csi300",),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+        fetcher=lambda _code, _start, _end: pd.DataFrame(
+            [{"con_code": "001872.SZ", "trade_date": "20240131"}]
+        ),
+    )
+
+    assert backcast["mismatch_month_count"] == 1
+    assert backcast["blocking_error_count"] == 0
+    assert backcast["mismatch_examples"][0]["extra_in_database"] == ["000001.SZ"]
+
+
+def test_tushare_successor_code_backcast_does_not_override_official_pit(monkeypatch) -> None:
+    class Repository:
+        def __init__(self, _factory):
+            pass
+
+        def fetch_pool_coverage(self, pool_ids):
+            return {
+                pool_id: type(
+                    "Coverage",
+                    (),
+                    {"first_effective_from": subject.POOL_DEFINITIONS[pool_id].history_start},
+                )()
+                for pool_id in pool_ids
+            }
+
+    interval = type("Interval", (), {"ts_code": "000022.SZ"})()
+    resolved = type(
+        "Resolved",
+        (),
+        {"intervals": (interval,), "membership_revision": "official:test"},
+    )()
+    monkeypatch.setattr(subject, "CoreIndexMembershipRepository", Repository)
+    monkeypatch.setattr(subject, "resolve_universe", lambda *_args, **_kwargs: resolved)
+    monkeypatch.setattr(
+        subject,
+        "_crosscheck_tushare",
+        lambda **_kwargs: {
+            "checked_month_count": 1,
+            "upstream_unavailable_month_count": 0,
+            "mismatch_month_count": 1,
+            "blocking_error_count": 0,
+            "authority_effect": "advisory_only_l1_official_wins",
+            "mismatch_examples": [
+                {
+                    "pool_id": "csi1000",
+                    "snapshot_date": "2018-08-31",
+                    "missing_in_database": ["001872.SZ"],
+                    "extra_in_database": ["000022.SZ"],
+                }
+            ],
+        },
+    )
+
+    result = subject.validate_full_database(
+        subject.DatabaseConfig("dev", "127.0.0.1", 5433, "u", "p", "aistock_dev", ".env"),
+        pool_ids=("csi1000",),
+        start_date=date(2018, 8, 1),
+        end_date=date(2018, 8, 31),
+        candidate_root=None,
+        tushare_fetcher=lambda *_args: None,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["error_count"] == 0
+    assert result["tushare_crosscheck"]["mismatch_month_count"] == 1
 
 
 def test_migration_is_one_table_without_freeze_hash_or_extension() -> None:
