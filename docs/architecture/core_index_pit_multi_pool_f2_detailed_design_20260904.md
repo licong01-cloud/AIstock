@@ -380,6 +380,7 @@ P0 五个指数作为一个初始批次按以下顺序执行：
 一次完成：
 
 - `backend/migrations/core_index_membership_pit_20260904.sql`：唯一成员 PIT 表；
+- `scripts/build_core_index_membership_authority.py`：以官方当前成分表和官方调入/调出事件反向重建初始历史，输出 repo-external authority JSON；
 - `scripts/prepare_core_index_membership_pit.py`：官方成分变更与 Tushare 快照核对、DEV/生产 plan/apply/readback；
 - `backend/services/core_index_membership.py`：`UniverseSelection`、repository 和共享 resolver；
 - `backend/services/dataset_release/index_pool_sidecar.py`：primitive/union sidecar 渲染；
@@ -426,6 +427,7 @@ P0 五个指数作为一个初始批次按以下顺序执行：
 
 - `backend/tests/core_index_membership/test_membership_repository.py`：约束、半开区间、增量 upsert/readback；
 - `backend/tests/core_index_membership/test_universe_resolver.py`：单指数、并集、重复股票、多区间、order-invariant、canonical PIT 相交；
+- `backend/tests/scripts/test_build_core_index_membership_authority.py`：官方调整链反向重建、半开区间、连续性和失败关闭；
 - `backend/tests/scripts/test_prepare_core_index_membership_pit.py`：官方生效日与 Tushare 快照分工；
 - DEV/生产完整校验命令只在首次固化各执行一次；生产 DDL/DML 分别保留授权和 readback 状态。
 
