@@ -3,7 +3,7 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
     "backend/services/quantevolver/qe_dataset_contract.py",
-    "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
     "scripts/qe_build_frozen_suspend_filter.py",
     "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
     "tests/aistock_validation/bugs/20260903_BUG-1341-qe-composer-cannot-bind-2026-08-31-direct-v2-factor-dataset-contract.json"
@@ -52,7 +52,7 @@
     "planned_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/qe_dataset_contract.py",
-      "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "scripts/qe_build_frozen_suspend_filter.py",
       "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
     ],
@@ -60,7 +60,7 @@
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/qe_dataset_contract.py",
-      "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "scripts/qe_build_frozen_suspend_filter.py",
       "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
     ]
@@ -80,7 +80,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py -q",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -119,7 +119,7 @@
     "source_event_id": "FE-20260903-652d0e8bef9b"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
+    "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
     "WSL rdagent-gpu real candidate direct-v2 binding, factor contract and suspend artifact preflight -> passed; suspend trade dates=115, rows=781, old path hits=0",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
     "python -m nox -s qe_read_backend -> 133 passed",
