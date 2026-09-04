@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1349",
-  "closed_at": null,
+  "closed_at": "2026-09-04T07:12:38Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-09-04T06:39:23.578059Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8d29efb1edaae4624a5ad645e03747a4f7236f42",
+  "fixed_at": "2026-09-04T07:12:38Z",
   "github_issue_number": 4258,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4258",
   "last_seen_at": "2026-09-04T06:39:23.578059Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4263",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -139,7 +141,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1349",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8390652e1fa63e20",
+    "recorded_at": "2026-09-04T07:14:32.517918Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "29591bf17b5516c6c5776ccc84083fbe14e28e44",
+    "source_merge_commit": "8d29efb1edaae4624a5ad645e03747a4f7236f42",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4263",
+    "validation_evidence": [
+      "python -m pytest backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py -q -> 20 passed",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and ownership 14/14",
+      "python -m nox -s advisory_modeling_backend -> passed: 794 tests and 16 skipped on source-identical commit 493c9f7a2; later base changes are CI workflow and BUG-1348 metadata only",
+      "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2 -> passed: 10 design items and 10 matrix rows"
+    ],
+    "validation_evidence_digest": "b3eb79d42bec87c805fb45424ea55b076c66d564a3f77548f0c26d204edb830d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -148,6 +174,12 @@
     "fingerprint": "1c0bb48f8b963c32909e46cb",
     "source_event_id": "FE-20260904-1c0bb48f8b96"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py -q -> 20 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and ownership 14/14",
+    "python -m nox -s advisory_modeling_backend -> passed: 794 tests and 16 skipped on source-identical commit 493c9f7a2; later base changes are CI workflow and BUG-1348 metadata only",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2 -> passed: 10 design items and 10 matrix rows"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
