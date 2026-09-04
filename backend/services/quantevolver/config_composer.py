@@ -1466,6 +1466,7 @@ class ConfigComposer:
             }
         elif direct_binding is not None:
             day_pins = dict(direct_binding.day_pins)
+            selection_pins = dict(direct_binding.selection_pins)
             suspend_pins = dict(direct_binding.suspend_pins)
             dataset_identity = {
                 "contract_id": direct_binding.release_id,
@@ -1474,7 +1475,11 @@ class ConfigComposer:
                 "rule_version": day_pins["rule_version"],
                 "binding_schema_version": direct_binding.schema_version,
             }
-            qlib_pins = dict(day_pins)
+            qlib_pins = {
+                **day_pins,
+                "instruments_file": f"{selection_pins['stock_pool']}.txt",
+                "instruments_sha256": selection_pins["instruments_sha256"],
+            }
             suspend_identity = {
                 "dataset_id": suspend_pins["dataset_id"],
                 "provider_uri": direct_binding.suspend_data_dir,
@@ -4060,6 +4065,20 @@ class ConfigComposer:
         lines.append("    expression_cache: null")
         lines.append("")
         stock_pool = (custom_params or {}).get("stock_pool", "all")
+        direct_binding = _direct_v2_dataset_binding(custom_params)
+        if direct_binding is not None:
+            requested_stock_pool = str(stock_pool or "all").strip()
+            if requested_stock_pool not in {"all", direct_binding.selection_pins["stock_pool"]}:
+                raise ValueError(
+                    "reason_code=qe_direct_v2_stock_pool_outside_binding: "
+                    f"stock_pool={requested_stock_pool!r}"
+                )
+            stock_pool = direct_binding.selection_pins["stock_pool"]
+            logger.info(
+                "QE direct-v2 selection universe bound: requested_stock_pool=%s resolved_stock_pool=%s",
+                requested_stock_pool,
+                stock_pool,
+            )
         # Training label selection. label_type controls price basis; label_horizon controls horizon.
         _LABEL_FIELDS = {
             "close": "$close",
@@ -4663,7 +4682,7 @@ class ConfigComposer:
                     direct_v2_dataset_binding.day_pins["rule_version"]
                 ),
                 "universe_fingerprint_sha256": str(
-                    direct_v2_dataset_binding.day_pins["instruments_sha256"]
+                    direct_v2_dataset_binding.selection_pins["instruments_sha256"]
                 ),
             }
 

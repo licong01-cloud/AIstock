@@ -1,8 +1,12 @@
 {
-  "actual": "MA-E19R3 qe_mae19r3_20260904_083639_20260831 Loop1 failed before training with BENCH-FATAL bench_empty although QE_INDEX_CONTEXT_PATH names the verified 12-index 2026-08-31 component.",
+  "actual": "After BUG-1353 adds 000300.SH to the direct-v2 daily Qlib provider catalog, QE ConfigComposer still emits market=all and fingerprints instruments/all.txt. A new MA-E19R3 run would therefore include the benchmark-only index in the model/selection universe and frozen risk policy instead of using instruments/stock_universe.txt.",
   "allowed_write_scope": [
-    "scripts/qrun_limit_minute.py",
-    "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+    "scripts/qe_build_frozen_risk_policy.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+    "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
     "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
   ],
   "assigned_agent": null,
@@ -14,30 +18,52 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-04T07:52:29.871017Z",
-  "description": "MA-E19R3 qe_mae19r3_20260904_083639_20260831 Loop1 failed before training with BENCH-FATAL bench_empty although QE_INDEX_CONTEXT_PATH names the verified 12-index 2026-08-31 component.",
+  "description": "BUG-1353 correctly makes 000300.SH available to Qlib's normal benchmark reader by adding it to the daily provider catalog, while publishing stock_universe.txt as the benchmark-free PIT selection universe. QE direct-v2 binding v1 only pins all.txt and ConfigComposer keeps stock_pool=all, so the repaired candidate would contaminate training, inference, factor-cache identity and the frozen risk policy with the benchmark. The consumer must bind and validate stock_universe.txt explicitly without changing Qlib or benchmark read semantics.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260904-81f4b5062e36",
       "timestamp": "2026-09-04T07:52:29.871001Z"
+    },
+    {
+      "action": "scope_corrected_after_producer_fix",
+      "actor": "codex",
+      "note": "BUG-1353 established Qlib daily-bin benchmark delivery as the correct path. BUG-1351 is narrowed to the QE direct-v2 consumer selecting and fingerprinting provider-catalog all.txt instead of benchmark-free stock_universe.txt; qrun and Qlib source are excluded.",
+      "timestamp": "2026-09-04T10:20:21.172851Z"
+    },
+    {
+      "action": "real_candidate_selection_contract_verified",
+      "actor": "codex",
+      "note": "WSL rdagent-gpu fresh process validated the real 2026-08-31 candidate with direct-v2 binding v2. stock_universe SHA256=8979d78a7c3b322a3d9696f21e880dcd79c9a0bff0aa59d160f6a1f957640392 differs from provider-catalog all.txt SHA256=f5e79d087a709f674ff7f66cb6f5c2f242fb439b737e6dd42a542de26f805ca6; benchmark remains excluded from selection.",
+      "timestamp": "2026-09-04T10:20:21.172851Z"
     }
   ],
   "evidence_uris": [
     "rdagent_assets/qe_workspace/qe_mae19r3_20260904_083639_20260831/Loop01/run.log"
   ],
-  "expected": "A direct-v2 TWAP run loads 000300.SH from the explicitly bound and prevalidated index_daily.h5 when the equity Qlib bin has no index rows, while legacy Qlib-bin benchmark behavior and bench_empty fail-closed semantics remain unchanged.",
+  "expected": "A direct-v2 TWAP run continues to load 000300.SH through Qlib's normal daily-bin benchmark path, while training, inference, factor-cache identity and frozen risk policy use the hash-pinned instruments/stock_universe.txt. The validator must fail closed if the benchmark enters the stock pool or the three instruments files drift; legacy runs remain unchanged and no Qlib source fallback is introduced.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "scripts/qrun_limit_minute.py",
-      "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "implementation_readback",
     "ownership": {
       "changed_files": [
-        "scripts/qrun_limit_minute.py",
-        "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+        "scripts/qe_build_frozen_risk_policy.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
       ],
       "impacted_modules": [
         "qe.sector_risk_overlay",
@@ -46,11 +72,14 @@
         "qe.enhanced_metrics",
         "qe.data_completeness",
         "qe.long_trend_evaluation",
-        "tests.backend"
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "validation.module_quality",
+        "tests.validation_history"
       ],
       "matched_rules": [
         {
-          "file": "scripts/qrun_limit_minute.py",
+          "file": "backend/services/quantevolver/config_composer.py",
           "impact_modules": [
             "qe.core",
             "qe.auto_evolution",
@@ -63,31 +92,80 @@
           "rule_id": "qe_sector_risk_overlay"
         },
         {
-          "file": "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "file": "backend/services/quantevolver/qe_dataset_contract.py",
+          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "scripts/qe_build_frozen_risk_policy.py",
+          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.sector_risk_overlay"],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_frozen_data_plane"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+          "impact_modules": ["qe.core", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness", "qe.long_trend_evaluation"],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json",
+          "impact_modules": ["tests.validation_history"],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
-        "scripts/qrun_limit_minute.py",
-        "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+        "scripts/qe_build_frozen_risk_policy.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "scripts/qrun_limit_minute.py",
-      "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "scripts/qrun_limit_minute.py",
-      "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ]
   },
   "first_seen_at": "2026-09-04T07:52:29.871017Z",
@@ -105,10 +183,12 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "cd rdagent_assets/qe_workspace/qe_mae19r3_20260904_083639_20260831/Loop01 && python qrun_limit_minute.py conf.yaml",
+  "reproduce_command": "Generate a direct-v2 MA-E19R3 config after BUG-1353 and inspect conf.yaml plus qe_frozen_build_spec.json: before this fix both select instruments/all.txt, which now contains benchmark-only 000300.SH.",
   "required_verification": [
     "l0",
-    "qe_sector_risk_overlay_backend"
+    "validation_module_registry_l0",
+    "qe_sector_risk_overlay_backend",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -131,7 +211,7 @@
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "QE minute qrun ignores bound index context and rejects direct-v2 benchmark",
+  "title": "QE direct-v2 consumer includes benchmark-only 000300 in stock selection universe",
   "trigger_condition": {
     "fingerprint": "81f4b5062e36da13890189d7",
     "source_event_id": "FE-20260904-81f4b5062e36"
