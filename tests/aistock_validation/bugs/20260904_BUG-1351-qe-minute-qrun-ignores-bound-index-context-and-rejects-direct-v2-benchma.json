@@ -93,42 +93,73 @@
         },
         {
           "file": "backend/services/quantevolver/qe_dataset_contract.py",
-          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_services"
         },
         {
           "file": "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
-          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_services"
         },
         {
           "file": "scripts/qe_build_frozen_risk_policy.py",
-          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.sector_risk_overlay"],
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay"
+          ],
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_frozen_data_plane"
         },
         {
           "file": "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
-          "impact_modules": ["qe.core", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness", "qe.long_trend_evaluation"],
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
           "primary_module": "qe.sector_risk_overlay",
           "risk_level": "high",
           "rule_id": "qe_sector_risk_overlay"
         },
         {
           "file": "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
-          "impact_modules": ["qe.single_experiment", "qe.custom_evolution", "qe.auto_evolution", "qe.enhanced_metrics", "qe.data_completeness"],
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_services"
         },
         {
           "file": "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json",
-          "impact_modules": ["tests.validation_history"],
+          "impact_modules": [
+            "tests.validation_history"
+          ],
           "primary_module": "validation.module_quality",
           "risk_level": "high",
           "rule_id": "validation_bug_registry"
@@ -195,7 +226,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
     "fresh_process_evidence": [
-      "BUG1351_REAL_CANDIDATE_WSL_PASS: WSL rdagent-gpu fresh process imported the final task-worktree direct-v2 v2 contract and validator, verified the immutable 2026-08-31 candidate, and proved stock_universe.txt is hash-distinct from all.txt with 000300.SH excluded from selection"
+      "BUG1351_REAL_CANDIDATE_WSL_PASS: WSL rdagent-gpu fresh process imported the final task-worktree direct-v2 v2 contract and validator, verified the immutable 2026-08-31 candidate, proved stock_universe.txt is hash-distinct from all.txt with 000300.SH excluded from selection, and wrote 0 candidate files"
     ],
     "health_ref": "http://127.0.0.1:8001/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
