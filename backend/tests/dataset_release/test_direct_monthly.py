@@ -3,12 +3,17 @@ from __future__ import annotations
 from datetime import date
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 from scripts import update_backtest_dataset_monthly as cli
+from scripts import qlib_authoritative_bin_export as authoritative_cli
 from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 
 from backend.services.dataset_release.direct_monthly import (
+    DIRECT_BENCHMARK_CODE,
+    DIRECT_BENCHMARK_FIELDS,
+    DIRECT_BENCHMARK_SCHEMA,
     DIRECT_COMPONENTS,
     DIRECT_FACTOR_SCHEMA,
     DIRECT_INDEX_CODES,
@@ -21,6 +26,7 @@ from backend.services.dataset_release.direct_monthly import (
     DirectMonthlyLayout,
     DirectMonthlyRunner,
     cleanup_terminal_candidate,
+    build_daily_benchmark_component,
     build_suspend_d_component,
     compact_status,
     component_plan,
@@ -67,6 +73,227 @@ def test_component_plan_includes_same_release_suspend_sidecar() -> None:
     assert next(item for item in plan if item.component == "suspend_d").reason == (
         "same_release_canonical_v2_suspend_history"
     )
+
+
+def test_authoritative_cli_isolated_dump_has_no_db_or_postprocess(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_dump(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(authoritative_cli, "run_wsl_dump", fake_dump)
+    monkeypatch.setattr(
+        authoritative_cli,
+        "require_readonly_pit_coverage",
+        lambda *_args, **_kwargs: pytest.fail("isolated dump must not read PIT/DB state"),
+    )
+    result = authoritative_cli.main(
+        [
+            "--dataset",
+            "stock_daily",
+            "--stage",
+            "dump",
+            "--snapshot-id",
+            "benchmark_daily",
+            "--start",
+            "2018-08-01",
+            "--end",
+            "2018-08-01",
+            "--csv-root",
+            str(tmp_path / "csv"),
+            "--bin-root",
+            str(tmp_path / "bin"),
+            "--isolated-dump-only",
+        ]
+    )
+
+    assert result == 0
+    assert captured["dump_subcmd"] == "dump_all"
+    assert captured["freq"] == "day"
+    assert captured["max_workers"] is None
+    assert json.loads(capsys.readouterr().out)["isolated_dump_only"] is True
+
+
+def _prepare_benchmark_inputs(layout: DirectMonthlyLayout, *, dates: list[str]) -> pd.DataFrame:
+    daily = layout.components_root / "daily_bin_candidate"
+    (daily / "calendars").mkdir(parents=True)
+    (daily / "calendars" / "day.txt").write_text("\n".join(dates) + "\n", encoding="utf-8")
+    (daily / "instruments").mkdir()
+    (daily / "instruments" / "all.txt").write_text(
+        "000001.SZ\t2018-08-01\t2026-08-31\n"
+        "000004.SZ\t2018-08-01\t2022-04-29\n"
+        "000004.SZ\t2023-06-28\t2025-04-29\n",
+        encoding="utf-8",
+    )
+    (daily / "features").mkdir()
+    (daily / "meta_export.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "daily_bin_candidate",
+                "end": layout.cutoff.isoformat(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+            }
+        ),
+        encoding="utf-8",
+    )
+    layout.reports_root.mkdir(parents=True)
+    (layout.reports_root / "daily_bin_candidate_stock_daily_all.json").write_text(
+        json.dumps({"dataset": "stock_daily", "stage": "all"}), encoding="utf-8"
+    )
+    index = layout.components_root / "index_context"
+    index.mkdir()
+    frame = pd.DataFrame(
+        {
+            "trade_date": dates,
+            "ts_code": [DIRECT_BENCHMARK_CODE] * len(dates),
+            "open": np.arange(len(dates), dtype=float) + 10.0,
+            "high": np.arange(len(dates), dtype=float) + 11.0,
+            "low": np.arange(len(dates), dtype=float) + 9.0,
+            "close": np.arange(len(dates), dtype=float) + 10.5,
+            "volume": np.arange(len(dates), dtype=float) + 100.0,
+            "amount": np.arange(len(dates), dtype=float) + 1000.0,
+        }
+    )
+    frame.to_hdf(index / "index_daily.h5", key="data", mode="w", format="fixed")
+    (index / "meta.json").write_text(
+        json.dumps({"end": layout.cutoff.isoformat()}), encoding="utf-8"
+    )
+    return frame
+
+
+def _fake_benchmark_dump(*, frame, staging_root, project_root):
+    del project_root
+    output = staging_root / "qlib"
+    (output / "calendars").mkdir(parents=True)
+    (output / "calendars" / "day.txt").write_text(
+        "\n".join(frame["date"].tolist()) + "\n", encoding="utf-8"
+    )
+    feature = output / "features" / DIRECT_BENCHMARK_CODE.lower()
+    feature.mkdir(parents=True)
+    for field in DIRECT_BENCHMARK_FIELDS:
+        np.hstack(([0], frame[field].to_numpy(dtype="float32"))).astype("<f4").tofile(
+            feature / f"{field}.day.bin"
+        )
+    return output
+
+
+def test_daily_benchmark_completion_uses_index_h5_and_preserves_stock_spans(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    layout = _layout(tmp_path)
+    dates = ["2026-08-27", "2026-08-28", "2026-08-31"]
+    _prepare_benchmark_inputs(layout, dates=dates)
+    original = (layout.components_root / "daily_bin_candidate" / "instruments" / "all.txt").read_bytes()
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._run_daily_benchmark_dump",
+        _fake_benchmark_dump,
+    )
+
+    result = build_daily_benchmark_component(layout, project_root=tmp_path)
+    daily = layout.components_root / "daily_bin_candidate"
+    receipt = json.loads(
+        (layout.reports_root / "daily_benchmark_000300_completion.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    benchmark_line = "000300.SH\t2018-08-01\t2026-08-31"
+
+    assert result["status"] == "PASS"
+    assert result["action"] == "BENCHMARK_ONLY_COMPLETION"
+    assert (daily / "features" / "000300.sh").is_dir()
+    assert {path.name for path in (daily / "features" / "000300.sh").iterdir()} == {
+        f"{field}.day.bin" for field in DIRECT_BENCHMARK_FIELDS
+    }
+    assert (daily / "instruments" / "stock_universe.txt").read_bytes() == original
+    assert (daily / "instruments" / "benchmark.txt").read_text(encoding="utf-8").splitlines() == [
+        benchmark_line
+    ]
+    all_lines = (daily / "instruments" / "all.txt").read_text(encoding="utf-8").splitlines()
+    assert all_lines[:-1] == original.decode("utf-8").splitlines()
+    assert all_lines[-1] == benchmark_line
+    assert "000300.SH" not in (daily / "instruments" / "stock_universe.txt").read_text(
+        encoding="utf-8"
+    )
+    meta = json.loads((daily / "meta_export.json").read_text(encoding="utf-8"))
+    assert meta["benchmark_only"]["selection_eligible"] is False
+    assert meta["benchmark_only"]["selection_universe"] == "instruments/stock_universe.txt"
+    assert receipt["schema_version"] == DIRECT_BENCHMARK_SCHEMA
+    assert receipt["stock_universe_preserved"] is True
+    assert receipt["calendar_offset"] == 0
+    assert receipt["full_history_content_hash"] is False
+    report = json.loads(
+        (layout.reports_root / "daily_bin_candidate_stock_daily_all.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["benchmark_only_completion"]["rows"] == len(dates)
+
+    replay = build_daily_benchmark_component(layout, project_root=tmp_path)
+    assert replay["action"] == "REUSE_COMPLETED_DIRECT_OUTPUT"
+
+
+def test_daily_benchmark_completion_rejects_calendar_gap(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    _prepare_benchmark_inputs(layout, dates=["2026-08-28", "2026-08-31"])
+    frame = pd.read_hdf(
+        layout.components_root / "index_context" / "index_daily.h5", key="data"
+    )
+    frame = frame.iloc[[0]]
+    frame.to_hdf(
+        layout.components_root / "index_context" / "index_daily.h5",
+        key="data",
+        mode="w",
+        format="fixed",
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._run_daily_benchmark_dump",
+        _fake_benchmark_dump,
+    )
+
+    with pytest.raises(DirectMonthlyError, match="exactly match"):
+        build_daily_benchmark_component(layout, project_root=tmp_path)
+    assert not (
+        layout.components_root / "daily_bin_candidate" / "features" / "000300.sh"
+    ).exists()
+
+
+def test_terminal_candidate_reopens_only_missing_benchmark_stage(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._terminal_candidate_requires_benchmark_repair",
+        lambda _layout: True,
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._component_output_complete",
+        lambda _layout, component: component != "index_context",
+    )
+    calls: list[str] = []
+
+    def handler(component: str):
+        def run(_layout):
+            calls.append(component)
+            return {"status": "PASS", "component": component}
+
+        return run
+
+    result = DirectMonthlyRunner(
+        {component: handler(component) for component in DIRECT_COMPONENTS},
+        validator=lambda _layout: {"status": "PASS"},
+    ).run(layout)
+
+    assert result["status"] == DIRECT_TERMINAL_STATUS
+    assert calls == ["index_context"]
 
 
 def test_legacy_four_component_state_resumes_only_missing_suspend_d(tmp_path) -> None:

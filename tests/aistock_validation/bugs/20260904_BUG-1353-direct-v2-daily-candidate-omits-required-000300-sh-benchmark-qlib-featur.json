@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/direct_monthly.py",
     "backend/tests/dataset_release/test_direct_monthly.py",
+    "scripts/qlib_authoritative_bin_export.py",
     "tests/aistock_validation/bugs/20260904_BUG-1353-direct-v2-daily-candidate-omits-required-000300-sh-benchmark-qlib-featur.json"
   ],
   "assigned_agent": null,
@@ -32,13 +33,15 @@
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/qlib_authoritative_bin_export.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "scripts/qlib_authoritative_bin_export.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -68,6 +71,17 @@
           "primary_module": "qlib_data",
           "risk_level": "critical",
           "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/qlib_authoritative_bin_export.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
         }
       ],
       "risk_levels": [
@@ -75,18 +89,21 @@
       ],
       "suggested_scope": [
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py"
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "scripts/qlib_authoritative_bin_export.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/qlib_authoritative_bin_export.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/qlib_authoritative_bin_export.py"
     ]
   },
   "first_seen_at": "2026-09-04T08:27:34.156511Z",
@@ -104,7 +121,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "Initialize Qlib with the candidate daily_bin_candidate and call D.features(['000300.SH'], ['/Ref(,1)-1'], start_time='2024-07-01', end_time='2026-06-29', freq='day').",
+  "reproduce_command": "Initialize Qlib with the candidate daily_bin_candidate and call D.features(['000300.SH'], ['$close/Ref($close,1)-1'], start_time='2024-07-01', end_time='2026-06-29', freq='day').",
   "required_verification": [
     "l0",
     "qlib_data_backend"
