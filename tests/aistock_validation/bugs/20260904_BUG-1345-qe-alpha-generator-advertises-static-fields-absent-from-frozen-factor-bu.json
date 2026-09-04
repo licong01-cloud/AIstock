@@ -32,16 +32,24 @@
   ],
   "expected": "Phase A must bind the concrete frozen source schema and expose only fields that are physically readable, or fail before any LLM call; no missing field may reach economic projection.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1345-qe-alpha-generator-advertises-static-fields-absent-from-frozen-factor-bu.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
       "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
       "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
       "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
-      "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
-      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1345-qe-alpha-generator-advertises-static-fields-absent-from-frozen-factor-bu.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
@@ -158,10 +166,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
