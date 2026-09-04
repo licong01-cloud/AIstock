@@ -161,7 +161,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
     "fresh_process_evidence": [
-      "BUG1362_FRESH_PROCESS_IMPORT_OK: WSL rdagent-gpu imported ConfigComposer and qrun_limit_minute persistent source from final task HEAD cb5aa5eb"
+      "BUG1362_FRESH_PROCESS_IMPORT_OK: WSL rdagent-gpu imported ConfigComposer and qrun_limit_minute persistent source from final task HEAD cb5aa5eb",
+      "WSL rdagent-gpu persistent-source import -> passed BUG1362_FRESH_PROCESS_IMPORT_OK at 4ec62da"
     ],
     "health_ref": "http://127.0.0.1:8001/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
