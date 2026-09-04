@@ -49,8 +49,8 @@
   },
   "first_seen_at": "2026-09-04T03:27:26.972359Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "11a032c622eac6bdb7befd50d194b1868f242732",
+  "fixed_at": "2026-09-04T05:36:36Z",
   "github_issue_number": 4247,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4247",
   "last_seen_at": "2026-09-04T03:27:26.972359Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4251",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -96,7 +97,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1346",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d06eca59a85c55bf",
+    "recorded_at": "2026-09-04T05:37:33.146666Z",
+    "runtime_contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a64deb7aaf53f1f3c844c954e201a9d38a777241",
+    "source_merge_commit": "11a032c622eac6bdb7befd50d194b1868f242732",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4251",
+    "validation_evidence": [
+      "validation-receipt: id=bec17b22b0beff21 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state backend/tests/simulation_execution/test_localsim_runtime.py::test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual -q -p no:cacheprovider` result=`5 passed`",
+      "validation-receipt: id=df33acfa99259a11 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+      "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "df36b69b3447942fe9e7f5c34446fcdb6467d40a6cb1c3e5698e5d1886894779"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -105,6 +129,11 @@
     "fingerprint": "b7bab0e1edab3b850ba8a1a3",
     "source_event_id": "FE-20260904-b7bab0e1edab"
   },
+  "validation_evidence": [
+    "validation-receipt: id=bec17b22b0beff21 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state backend/tests/simulation_execution/test_localsim_runtime.py::test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual -q -p no:cacheprovider` result=`5 passed`",
+    "validation-receipt: id=df33acfa99259a11 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+    "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
