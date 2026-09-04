@@ -28,34 +28,46 @@ def _outcome_loader(
     missing: set[date] | None = None,
     price_by_date: dict[date, Decimal] | None = None,
     adjustment_by_date: dict[date, Decimal] | None = None,
+    one_word_down_dates: set[date] | None = None,
 ):
     missing = missing or set()
     price_by_date = price_by_date or {}
     adjustment_by_date = adjustment_by_date or {}
+    one_word_down_dates = one_word_down_dates or set()
 
     def load(symbols: list[str], start_date: date, end_date: date):
         rows = {symbol: {} for symbol in symbols}
         adjustment_rows = {symbol: {} for symbol in symbols}
+        limit_rows = {symbol: {} for symbol in symbols}
         for symbol in symbols:
             for trade_date in _weekdays(start_date, end_date):
                 if trade_date in missing:
                     continue
                 price = price_by_date.get(trade_date, Decimal("9"))
                 adjustment = adjustment_by_date.get(trade_date, Decimal("1"))
+                one_word_down = trade_date in one_word_down_dates
+                up_limit = price + Decimal("1")
+                down_limit = price if one_word_down else price - Decimal("1")
                 rows[symbol][trade_date.isoformat()] = {
                     "symbol": symbol,
                     "trade_date": trade_date.isoformat(),
                     "open": price,
-                    "high": price + Decimal("0.2"),
-                    "low": price - Decimal("0.2"),
+                    "high": price if one_word_down else price + Decimal("0.2"),
+                    "low": price if one_word_down else price - Decimal("0.2"),
                     "close": price,
                     "volume": 100000,
                     "amount": 1000000,
                     "price_basis": "raw_cny",
                     "is_suspended": False,
                     "adj_factor": adjustment,
+                    "up_limit": up_limit,
+                    "down_limit": down_limit,
                 }
                 adjustment_rows[symbol][trade_date.isoformat()] = format(adjustment, "f")
+                limit_rows[symbol][trade_date.isoformat()] = {
+                    "up_limit": format(up_limit, "f"),
+                    "down_limit": format(down_limit, "f"),
+                }
         identity = {
             "source": "fake-outcome",
             "start_date": start_date.isoformat(),
@@ -72,7 +84,20 @@ def _outcome_loader(
             "rows_sha256": canonical_sha256(adjustment_rows),
         }
         adjustment_identity["identity_sha256"] = canonical_sha256(adjustment_identity)
-        return {"rows": rows, "identity": identity, "adjustment_identity": adjustment_identity}
+        limit_identity = {
+            "source": "fake-limit",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "symbol_set": symbols,
+            "rows_sha256": canonical_sha256(limit_rows),
+        }
+        limit_identity["identity_sha256"] = canonical_sha256(limit_identity)
+        return {
+            "rows": rows,
+            "identity": identity,
+            "adjustment_identity": adjustment_identity,
+            "limit_identity": limit_identity,
+        }
 
     return load
 
@@ -140,6 +165,32 @@ def test_h1_buy_terminal_is_deferred_for_t1_lock(service_factory) -> None:
     assert event["effective_terminal_trade_date"] == date(2026, 9, 7)
     assert event["deferred_trading_days"] == 1
     assert "TERMINAL_T1_LOCKED" in event["reason_codes"]
+
+
+def test_terminal_one_word_limit_down_defers_liquidation_and_binds_limit_identity(
+    service_factory,
+) -> None:
+    clock = [datetime(2026, 9, 3, 16, 0, tzinfo=CHINA_TZ)]
+    service = service_factory(
+        now=lambda: clock[0],
+        outcome=_outcome_loader(one_word_down_dates={date(2026, 9, 8)}),
+    )
+    card = service.materialize()["card_set"].cards[0]
+
+    clock[0] = datetime(2026, 9, 9, 16, 0, tzinfo=CHINA_TZ)
+    service.materialize()
+    event = next(
+        item
+        for item in service.store.list_events(event_type="OUTCOME_EVALUATED")
+        if item["card_id"] == card.card_id and item["horizon_trading_days"] == 3
+    )
+
+    assert event["maturity_status"].value == "DEFERRED_THEN_MATURED"
+    assert event["effective_terminal_trade_date"] == date(2026, 9, 9)
+    assert "TERMINAL_ONE_WORD_LIMIT_DOWN" in event["reason_codes"]
+    assert event["limit_identity_sha256"] == service.dependencies.outcome_snapshot_loader(
+        [card.canonical_symbol], date(2026, 9, 4), date(2026, 9, 9)
+    )["limit_identity"]["identity_sha256"]
 
 
 def test_incomplete_terminal_defer_does_not_advance_success_watermark(service_factory) -> None:

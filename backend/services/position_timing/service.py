@@ -733,17 +733,16 @@ class PositionTimingService:
         max_index = nominal_index + 5
         terminal_row: Mapping[str, Any] | None = None
         terminal_date: date | None = None
+        terminal_unavailable_reasons: list[str] = []
         for index in range(start_index, min(len(timeline), max_index + 1)):
             candidate_date = timeline[index]
             row = _outcome_row(snapshot, card.canonical_symbol, candidate_date)
-            if (
-                _positive_decimal((row or {}).get("close")) is not None
-                and _positive_decimal((row or {}).get("adj_factor")) is not None
-                and not bool((row or {}).get("is_suspended"))
-            ):
+            terminal_status = _terminal_sellability_status(row)
+            if terminal_status == "SELLABLE":
                 terminal_row = row
                 terminal_date = candidate_date
                 break
+            terminal_unavailable_reasons.append(terminal_status)
         if terminal_row is None or terminal_date is None:
             if len(timeline) <= max_index:
                 return None
@@ -755,7 +754,11 @@ class PositionTimingService:
                 deferred_trading_days=5,
                 fill=fill,
                 snapshot=snapshot,
-                reason_codes=(*reason_codes, "TERMINAL_VALUE_UNAVAILABLE_AFTER_MAX_DEFER"),
+                reason_codes=(
+                    *reason_codes,
+                    *tuple(dict.fromkeys(terminal_unavailable_reasons)),
+                    "TERMINAL_SELL_UNAVAILABLE_AFTER_MAX_DEFER",
+                ),
             )
 
         terminal_close = _positive_decimal(terminal_row.get("close"))
@@ -825,6 +828,7 @@ class PositionTimingService:
         maturity = MaturityStatus.MATURED if deferred == 0 else MaturityStatus.DEFERRED_THEN_MATURED
         if deferred > 0 and "TERMINAL_T1_LOCKED" not in reason_codes:
             reason_codes.append("TERMINAL_VALUE_DEFERRED")
+        reason_codes.extend(terminal_unavailable_reasons)
         return self._outcome_event(
             card=card,
             horizon=horizon,
@@ -1101,7 +1105,7 @@ class PositionTimingService:
             net_lift_bps=net_lift_bps,
             dataset_identity_sha256=_identity_hash(snapshot.get("identity")),
             calendar_identity_sha256=_identity_hash(card.calendar_identity),
-            limit_identity_sha256=_identity_hash(card.limit_identity),
+            limit_identity_sha256=_identity_hash(snapshot.get("limit_identity")),
             board_lot_identity_sha256=_identity_hash(card.board_lot_identity),
             adjustment_identity_sha256=_identity_hash(snapshot.get("adjustment_identity")),
             cost_policy_sha256=card.cost_policy_sha256,
@@ -2634,25 +2638,41 @@ def _valid_outcome_snapshot_identity(snapshot: Mapping[str, Any]) -> bool:
     rows = snapshot.get("rows")
     identity = snapshot.get("identity")
     adjustment_identity = snapshot.get("adjustment_identity")
+    limit_identity = snapshot.get("limit_identity")
     if not isinstance(rows, Mapping) or not isinstance(identity, Mapping):
         return False
     if str(identity.get("rows_sha256") or "") != canonical_sha256(dict(rows)):
         return False
     if not isinstance(adjustment_identity, Mapping) or not _valid_identity_hash(adjustment_identity):
         return False
+    if not isinstance(limit_identity, Mapping) or not _valid_identity_hash(limit_identity):
+        return False
     adjustment_rows: dict[str, dict[str, str]] = {}
+    limit_rows: dict[str, dict[str, dict[str, str]]] = {}
     for symbol, by_date in rows.items():
         if not isinstance(by_date, Mapping):
             return False
         values: dict[str, str] = {}
+        symbol_limits: dict[str, dict[str, str]] = {}
         for trade_date, row in by_date.items():
             if not isinstance(row, Mapping):
                 return False
             factor = _positive_decimal(row.get("adj_factor"))
             if factor is not None:
                 values[str(trade_date)] = format(factor, "f")
+            up_limit = _positive_decimal(row.get("up_limit"))
+            down_limit = _positive_decimal(row.get("down_limit"))
+            if up_limit is not None and down_limit is not None:
+                symbol_limits[str(trade_date)] = {
+                    "up_limit": format(up_limit, "f"),
+                    "down_limit": format(down_limit, "f"),
+                }
         adjustment_rows[str(symbol)] = values
-    return str(adjustment_identity.get("rows_sha256") or "") == canonical_sha256(adjustment_rows)
+        limit_rows[str(symbol)] = symbol_limits
+    return (
+        str(adjustment_identity.get("rows_sha256") or "") == canonical_sha256(adjustment_rows)
+        and str(limit_identity.get("rows_sha256") or "") == canonical_sha256(limit_rows)
+    )
 
 
 def _identity_hash(identity: Any) -> str:
@@ -2668,6 +2688,27 @@ def _outcome_row(snapshot: Mapping[str, Any], symbol: str, trade_date: date) -> 
         return None
     row = symbol_rows.get(trade_date.isoformat())
     return dict(row) if isinstance(row, Mapping) else None
+
+
+def _terminal_sellability_status(row: Mapping[str, Any] | None) -> str:
+    if not isinstance(row, Mapping):
+        return "TERMINAL_MARKET_DATA_UNAVAILABLE"
+    if bool(row.get("is_suspended")):
+        return "TERMINAL_SUSPENDED"
+    prices = {
+        name: _positive_decimal(row.get(name))
+        for name in ("open", "high", "low", "close")
+    }
+    if any(value is None for value in prices.values()):
+        return "TERMINAL_MARKET_DATA_UNAVAILABLE"
+    if _positive_decimal(row.get("adj_factor")) is None:
+        return "TERMINAL_ADJUSTMENT_UNAVAILABLE"
+    down_limit = _positive_decimal(row.get("down_limit"))
+    if down_limit is None:
+        return "TERMINAL_LIMIT_AUTHORITY_UNAVAILABLE"
+    if all(abs(value - down_limit) < Decimal("0.005") for value in prices.values() if value is not None):
+        return "TERMINAL_ONE_WORD_LIMIT_DOWN"
+    return "SELLABLE"
 
 
 def _enum_value(value: Any) -> str:
@@ -3016,6 +3057,17 @@ def _default_outcome_snapshot_loader(
             adjustment_rows = [dict(row) for row in cur.fetchall()]
             cur.execute(
                 """
+                SELECT ts_code, trade_date, up_limit, down_limit
+                FROM market.stk_limit
+                WHERE ts_code = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                ORDER BY ts_code, trade_date
+                """,
+                (validated, start_date, end_date),
+            )
+            limit_rows = [dict(row) for row in cur.fetchall()]
+            cur.execute(
+                """
                 SELECT ts_code, trade_date
                 FROM market.suspend_d
                 WHERE ts_code = ANY(%s)
@@ -3048,6 +3100,36 @@ def _default_outcome_snapshot_loader(
                 "is_suspended": False,
             },
         )["adj_factor"] = factor
+    limit_map: dict[str, dict[str, dict[str, str]]] = {symbol: {} for symbol in validated}
+    for source_row in limit_rows:
+        symbol = str(source_row.get("ts_code") or "").strip().upper()
+        observed_date = source_row.get("trade_date")
+        up_limit = _positive_decimal(source_row.get("up_limit"))
+        down_limit = _positive_decimal(source_row.get("down_limit"))
+        if (
+            symbol not in limit_map
+            or not isinstance(observed_date, date)
+            or up_limit is None
+            or down_limit is None
+            or down_limit >= up_limit
+        ):
+            continue
+        key = observed_date.isoformat()
+        if key in limit_map[symbol]:
+            raise ValueError(f"OUTCOME_LIMIT_IDENTITY_CONFLICT:{symbol}:{key}")
+        limit_map[symbol][key] = {
+            "up_limit": format(up_limit, "f"),
+            "down_limit": format(down_limit, "f"),
+        }
+        rows[symbol].setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "trade_date": key,
+                "price_basis": "raw_cny",
+                "is_suspended": False,
+            },
+        ).update({"up_limit": up_limit, "down_limit": down_limit})
     for source_row in suspension_rows:
         symbol = str(source_row.get("ts_code") or "").strip().upper()
         observed_date = source_row.get("trade_date")
@@ -3072,8 +3154,17 @@ def _default_outcome_snapshot_loader(
         "corporate_action_valuation": "RAW_CLOSE_TIMES_ADJ_FACTOR_RATIO_V1",
     }
     adjustment_identity["identity_sha256"] = canonical_sha256(adjustment_identity)
+    limit_identity = {
+        "source": "market.stk_limit",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "symbol_set": validated,
+        "rows_sha256": canonical_sha256(limit_map),
+        "terminal_sellability_policy": "ONE_WORD_LIMIT_DOWN_DEFERS_TERMINAL_V1",
+    }
+    limit_identity["identity_sha256"] = canonical_sha256(limit_identity)
     identity = {
-        "source": "market.kline_daily_raw+market.suspend_d+market.adj_factor",
+        "source": "market.kline_daily_raw+market.suspend_d+market.stk_limit+market.adj_factor",
         "table_contract": "POSITION_TIMING_OUTCOME_RAW_V1",
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -3081,7 +3172,12 @@ def _default_outcome_snapshot_loader(
         "rows_sha256": canonical_sha256(rows),
     }
     identity["identity_sha256"] = canonical_sha256(identity)
-    return {"rows": rows, "identity": identity, "adjustment_identity": adjustment_identity}
+    return {
+        "rows": rows,
+        "identity": identity,
+        "adjustment_identity": adjustment_identity,
+        "limit_identity": limit_identity,
+    }
 
 
 def _source_commit() -> str:

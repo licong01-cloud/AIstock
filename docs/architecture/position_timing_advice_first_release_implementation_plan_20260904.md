@@ -2,11 +2,11 @@
 
 > 日期：2026-09-04
 >
-> 状态：`IMPLEMENTATION_BLOCK_ONE_SOURCE_MERGED_BLOCK_TWO_AND_SCOPE_QUEUED`
+> 状态：`FIRST_RELEASE_SOURCE_IMPLEMENTED_RUNTIME_ACTIVATION_SEPARATE`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
-> 适用分支：`feature/position-timing-first-release-20260904`
+> 当前实现分支：`feature/position-timing-first-release-block2-20260905`
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
@@ -23,6 +23,17 @@
 - 同次 DEV readback 显示全局 canonical PIT pointer 仍指向 legacy `shsz_st_pit_active_v1`。L1 产品 universe 因而明确不依赖该研究 pointer 迁移；历史 L2 才要求绑定 canonical v2/QE dataset identity。这是去除无关上线门禁，不是把 legacy pointer 冒充 canonical v2。
 - 块一已由 PR `#4277` 合入 `main`，merge commit 为 `7c9fdd9cf86aa472fb2e84bac6211eb2378350ed`。这不等于生产进程重启、生产页面 readback、真实盘中提醒或完整首发完成。
 - 本次新增 F-027 轻量分析范围设计后，F2 validator 为 27/27、0 warning，docs L0 为 0 finding，`git diff --check` 通过；这只证明设计闭合，源码状态仍为 queued。
+
+## 0.1 2026-09-05 首发源码检查点
+
+`PT-NEXT-001` 已在同一个块二任务内实现，没有拆出新产品或审批阶段：
+
+- `analysis_scope/current.json`、唯一 scope PUT 与既有 intents/page 复选框已经落地；真实持仓始终分析，自选默认不选且只允许 active confirmed watchlist 显式 opt-in，失效来源保留 typed warning 并可移除，历史卡片不改写。
+- `alerts.py` 是块二唯一新增服务文件；页面可见且存在今日有效 trigger 时每 60 秒只读轮询，服务按 50 只分批复用 TDX quote，执行 5 分钟/30 秒、持仓/意图与方向性可交易性复核。claim 原子追加唯一 `ALERT_EMISSION_AUTHORIZED`，不接 notification service、SSE、worker、scheduler 或订单路径。
+- 同一个 materialize POST 已加入五 horizon `OUTCOME_EVALUATED`：卡片仍只在 T+1 有效，标签终值遇停牌、一字跌停或必要 authority 缺失时最多顺延 5 个交易日；candidate/do-nothing 只比较动作边际数量并逐腿计费，公司行动由 hash-bound adj-factor ratio 进入持股路径，终值可卖性绑定独立的历史 `market.stk_limit` identity。成功水位不会越过 pending/失败 key，evidence 区分 pending-derived、pending-materialization、materialization-missing 与 unavailable。
+- 首发仍为 8 个 API、一个页面、一个 artifact root、0 DDL/DML、0 新依赖、0 自动交易。L2 pipeline、L3、分钟新信号和外部通知仍未实现，符合批准范围。
+- 当前集中验证：`position_timing_first_release` 完整通过（后端 71 项、TypeScript、frontend lint、production build、目标 Playwright 1 项）；Ruff 与 validation catalog integrity 通过。仓库既有 frontend hook/autoprefixer warnings 未来自本变更路径且不阻断。
+- `production_ddl_gate=noop`、`production_dependency_gate=noop`。生产 8001/3000 进程未重启，生产 artifact 未写入，运行态激活与 readback 继续单独报告。
 
 ## 1. 执行结论
 
@@ -44,11 +55,11 @@
 | backend router | 1 |
 | frontend 页面 | 1 |
 | 既有 runtime composition 文件改动 | 2 |
-| API | 7 |
+| API | 8 |
 | 数据库 DDL/DML | 0 |
 | 新依赖 | 0 |
 | worker / scheduler / SSE / queue | 0 |
-| source PR | 1 |
+| 增量 source PR | 2（块一 + 块二） |
 | 集中 nox 入口 | 1 |
 
 ## 2. 首发的完整结果
@@ -319,8 +330,8 @@ production_dependency_gate = noop
 
 | 顺序 | task_id | 状态 | 一次性交付边界 |
 |---:|---|---|---|
-| 1 | `PT-NEXT-001` | `READY_FOR_IMPLEMENTATION` | 在同一个块二任务中先实现 F-027 轻量分析范围，再完成 L1a 与 prospective outcome；只改既有 position_timing 包/router/page 与既有测试，不拆新阶段、PR 审批或发布平台 |
+| 1 | `PT-NEXT-001` | `SOURCE_IMPLEMENTED_AND_LOCALLY_VERIFIED` | 已在同一个块二任务中完成 F-027、L1a 与 prospective outcome；只增加批准的 `alerts.py`，未拆新阶段、审批或发布平台 |
 | 2 | `PT-NEXT-002` | `WAIT_FOR_PROSPECTIVE_DATA` | 按冻结契约执行一次 L2 Ridge+GBDT learnability audit；结果不阻塞 L1/L1a |
 | 3 | `PT-NEXT-003` | `DEFERRED` | 独立评估 L4b-1 分钟执行窗口；L4b-2 仍在范围外 |
 
-下一次实现从 `PT-NEXT-001` 开始。任务表只表示开发顺序，不增加 MDE、样本数、HMM/Selection 可用性、最低金额或人工审批条件。
+首发源码任务 `PT-NEXT-001` 已完成；后续若继续研究则从 `PT-NEXT-002` 开始，但 prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a。
