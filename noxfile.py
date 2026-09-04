@@ -2570,6 +2570,51 @@ def position_timing_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def position_timing_first_release(session: nox.Session) -> None:
+    """Run the one concentrated source gate for the human-only first release."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    _ensure_frontend_node_modules(session)
+    frontend_env = _env(
+        {
+            "BACKEND_PORT": "8012",
+            "FRONTEND_PORT": "3012",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+        }
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
+        session.run("npm", "run", "build", env=frontend_env, external=True)
+    finally:
+        os.chdir(old_cwd)
+    _run_mocked_frontend_target(session, "tests/position-timing/position-timing.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def rl_execution_smoke(session: nox.Session) -> None:
     """Module-visibility smoke for backend.services.rl_execution.
 

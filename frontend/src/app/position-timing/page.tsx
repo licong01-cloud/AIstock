@@ -21,6 +21,15 @@ type IntentRow = {
   pre_action_qty: number;
   intent?: Intent | null;
   normalization_reason?: string | null;
+  analysis_selected: boolean;
+  analysis_effective: boolean;
+  analysis_locked: boolean;
+  analysis_reason_code: string;
+};
+
+type IntentList = {
+  items: IntentRow[];
+  scope_warnings: Array<{ canonical_symbol: string; reason_code: string }>;
 };
 
 type Trigger = {
@@ -97,7 +106,38 @@ type Evidence = {
     min_commission_scope_verification: string;
     thresholds_cny: Record<string, number>;
   };
+  outcome_evidence: {
+    status: string;
+    coverage_counts?: {
+      matured: number;
+      pending: number;
+      unavailable: number;
+      materialization_missing: number;
+    };
+    paired_matured?: { count: number; mean_net_lift_bps?: string | number | null };
+    intervention_intent?: { count: number; mean_net_lift_bps?: string | number | null };
+  };
 };
+
+type AlertEdge = {
+  card_id: string;
+  canonical_symbol: string;
+  status: string;
+  system_edge_eligibility: boolean;
+  already_alerted: boolean;
+  trigger_id?: string;
+  eligibility_identity?: string;
+  quote_price_raw?: string | number;
+  quote_open_raw?: string | number;
+  quote_observed_at?: string;
+  alert_evaluated_at?: string;
+  quote_source?: string;
+  position_snapshot_sha256: string;
+  intent_snapshot_sha256: string;
+  trigger?: Trigger;
+};
+
+type AlertPoll = { status: string; items: AlertEdge[] };
 
 type Draft = { notional: string; exposure: string };
 
@@ -172,16 +212,20 @@ export default function PositionTimingPage() {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [loading, setLoading] = useState(true);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
+  const [savingScopeSymbol, setSavingScopeSymbol] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [scopeWarnings, setScopeWarnings] = useState<IntentList["scope_warnings"]>([]);
+  const [alertEdges, setAlertEdges] = useState<AlertEdge[]>([]);
 
   const loadReadModels = useCallback(async () => {
     const [intentPayload, cardsPayload, evidencePayload] = await Promise.all([
-      requestJson<{ items: IntentRow[] }>("/intents"),
+      requestJson<IntentList>("/intents"),
       requestJson<CurrentCards>("/cards/current"),
       requestJson<Evidence>("/evidence"),
     ]);
     setIntentRows(intentPayload.items);
+    setScopeWarnings(intentPayload.scope_warnings || []);
     setCurrent(cardsPayload);
     setEvidence(evidencePayload);
     setDrafts((previous) => {
@@ -254,8 +298,9 @@ export default function PositionTimingPage() {
           }),
         });
         setNotice(`${symbol} 意图已保存；已签发卡片不改写，新值进入下一决策日。`);
-        const payload = await requestJson<{ items: IntentRow[] }>("/intents");
+        const payload = await requestJson<IntentList>("/intents");
         setIntentRows(payload.items);
+        setScopeWarnings(payload.scope_warnings || []);
       } catch (saveError) {
         setError(saveError instanceof Error ? saveError.message : "保存失败");
       } finally {
@@ -264,6 +309,105 @@ export default function PositionTimingPage() {
     },
     [drafts],
   );
+
+  const saveAnalysisScope = useCallback(async (symbol: string, analysisEnabled: boolean) => {
+    setSavingScopeSymbol(symbol);
+    setError(null);
+    try {
+      const result = await requestJson<{ status: string; analysis_reason_code: string }>(
+        `/analysis-scope/${encodeURIComponent(symbol)}`,
+        { method: "PUT", body: JSON.stringify({ analysis_enabled: analysisEnabled }) },
+      );
+      setNotice(
+        result.analysis_reason_code === "HOLDING_ALWAYS_INCLUDED"
+          ? `${symbol} 是真实持仓，始终纳入择时分析。`
+          : `${symbol} 分析范围已${analysisEnabled ? "启用" : "关闭"}；只影响下一次尚未签发的卡片。`,
+      );
+      const payload = await requestJson<IntentList>("/intents");
+      setIntentRows(payload.items);
+      setScopeWarnings(payload.scope_warnings || []);
+    } catch (scopeError) {
+      setError(scopeError instanceof Error ? scopeError.message : "更新分析范围失败");
+    } finally {
+      setSavingScopeSymbol(null);
+    }
+  }, []);
+
+  const pollAlerts = useCallback(async () => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    try {
+      const payload = await requestJson<AlertPoll>("/alerts/poll");
+      setAlertEdges(payload.items || []);
+      for (const edge of payload.items || []) {
+        if (!edge.system_edge_eligibility || edge.already_alerted || !edge.trigger_id || !edge.eligibility_identity) continue;
+        try {
+          const claim = await requestJson<{ granted: boolean }>(
+            `/alerts/${encodeURIComponent(edge.trigger_id)}/claim`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                card_id: edge.card_id,
+                eligibility_identity: edge.eligibility_identity,
+                quote_price_raw: edge.quote_price_raw,
+                quote_open_raw: edge.quote_open_raw,
+                quote_observed_at: edge.quote_observed_at,
+                alert_evaluated_at: edge.alert_evaluated_at,
+                quote_source: edge.quote_source,
+                position_snapshot_sha256: edge.position_snapshot_sha256,
+                intent_snapshot_sha256: edge.intent_snapshot_sha256,
+              }),
+            },
+          );
+          if (claim.granted) {
+            setAlertEdges((currentEdges) => currentEdges.map((item) => (
+              item.card_id === edge.card_id && item.trigger_id === edge.trigger_id
+                ? { ...item, already_alerted: true }
+                : item
+            )));
+            setNotice(
+              `${edge.canonical_symbol} 已到达冻结${edge.trigger?.side === "SELL" ? "卖出" : "买入"}条件：${edge.trigger?.branch || edge.trigger_id}。请人工核对后决策。`,
+            );
+          }
+        } catch (claimError) {
+          const message = claimError instanceof Error ? claimError.message : "CLAIM_UNAVAILABLE";
+          setAlertEdges((currentEdges) => currentEdges.map((item) => (
+            item.card_id === edge.card_id && item.trigger_id === edge.trigger_id
+              ? { ...item, status: `CLAIM_UNAVAILABLE: ${message}`, system_edge_eligibility: false }
+              : item
+          )));
+        }
+      }
+    } catch (pollError) {
+      setAlertEdges((currentEdges) => currentEdges.length ? currentEdges : [{
+        card_id: "poll-unavailable",
+        canonical_symbol: "-",
+        status: pollError instanceof Error ? `QUOTE_UNAVAILABLE: ${pollError.message}` : "QUOTE_UNAVAILABLE",
+        system_edge_eligibility: false,
+        already_alerted: false,
+        position_snapshot_sha256: "",
+        intent_snapshot_sha256: "",
+      }]);
+    }
+  }, []);
+
+  const hasValidTriggers = current?.status === "VALID_TODAY" && cards.some((card) => card.triggers.length > 0);
+
+  useEffect(() => {
+    if (!hasValidTriggers) {
+      setAlertEdges([]);
+      return undefined;
+    }
+    void pollAlerts();
+    const timer = window.setInterval(() => void pollAlerts(), 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void pollAlerts();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [hasValidTriggers, pollAlerts]);
 
   return (
     <main className="pv2-shell">
@@ -274,7 +418,7 @@ export default function PositionTimingPage() {
             <h1>持仓与自选择时建议</h1>
             <p>
               面向人工交易的 T+1 日频行动卡。系统只给出买入、卖出、持有或等待建议，
-              <strong>不生成订单、不自动交易</strong>；盘中分钟级到价提醒将在实现块二接入。
+              <strong>不生成订单、不自动交易</strong>；页面可见时每分钟复核一次冻结到价条件。
             </p>
           </div>
           <button className="pv2-button-primary" type="button" onClick={() => void initialize()} disabled={loading}>
@@ -300,6 +444,23 @@ export default function PositionTimingPage() {
         <MetricCard label="买入方向" value={(actionCounts.OPEN || 0) + (actionCounts.ADD || 0)} hint="OPEN + ADD" tone="success" />
         <MetricCard label="卖出方向" value={(actionCounts.REDUCE || 0) + (actionCounts.EXIT || 0)} hint="REDUCE + EXIT" tone="warning" />
       </div>
+
+      <SectionCard title="盘中到价提醒" eyebrow="one-minute read-only quote polling">
+        <p>仅在页面可见且卡片于今日有效时轮询；报价陈旧、未来偏斜或持仓/意图变化都会显式停止弹窗。</p>
+        {alertEdges.length === 0 ? (
+          <p>{hasValidTriggers ? "尚无可展示的触发边。" : "当前没有今日有效的冻结触发条件。"}</p>
+        ) : (
+          <div className="pv2-grid pv2-grid-2" data-testid="timing-alert-list">
+            {alertEdges.map((edge) => (
+              <div className="pv2-card" key={`${edge.card_id}-${edge.trigger_id || edge.status}`}>
+                <strong>{edge.canonical_symbol}</strong> · <span className="pv2-mono">{edge.status}</span>
+                {edge.trigger ? <p>{edge.trigger.branch}；现价 {money(edge.quote_price_raw)}</p> : null}
+                {edge.already_alerted ? <p>提醒发送权已授予；此处保留非模态可见记录，不重复弹窗。</p> : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       <SectionCard title="当前 / 最近行动卡" eyebrow="immutable T+1 advice">
         {cards.length === 0 ? (
@@ -374,10 +535,28 @@ export default function PositionTimingPage() {
       </SectionCard>
 
       <SectionCard title="下一决策日意图" eyebrow="timing-owned user input">
-        <p>计划满仓金额用于把目标暴露换算为合法股数；保存后不会改写今天已经签发的卡片。</p>
+        <p>真实持仓始终分析；自选股须显式勾选。范围和意图更新只影响下一张尚未签发的卡片。</p>
+        {scopeWarnings.length ? (
+          <div className="pv2-card" role="status" style={{ marginBottom: 12 }}>
+            <strong>分析范围提示：</strong>{" "}
+            {scopeWarnings.map((item) => (
+              <span key={item.canonical_symbol} style={{ marginRight: 12 }}>
+                {item.canonical_symbol} {item.reason_code}{" "}
+                <button
+                  className="pv2-button"
+                  type="button"
+                  disabled={savingScopeSymbol === item.canonical_symbol}
+                  onClick={() => void saveAnalysisScope(item.canonical_symbol, false)}
+                >
+                  移除失效选择
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="pv2-table-wrap">
           <table className="pv2-table">
-            <thead><tr><th>标的</th><th>来源</th><th>当前数量</th><th>计划满仓金额</th><th>目标暴露</th><th>操作</th></tr></thead>
+            <thead><tr><th>标的</th><th>来源</th><th>择时分析</th><th>当前数量</th><th>计划满仓金额</th><th>目标暴露</th><th>操作</th></tr></thead>
             <tbody>
               {intentRows.map((row) => {
                 const draft = drafts[row.canonical_symbol] || { notional: "", exposure: "0.25" };
@@ -387,6 +566,19 @@ export default function PositionTimingPage() {
                     <td>
                       {row.primary_source_role}{row.source_roles.length > 1 ? " + WATCHLIST" : ""}
                       {row.normalization_reason ? <><br /><span style={{ color: "#b42318" }}>{row.normalization_reason}</span></> : null}
+                    </td>
+                    <td>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={row.analysis_effective}
+                          disabled={row.analysis_locked || Boolean(row.normalization_reason) || savingScopeSymbol === row.canonical_symbol}
+                          onChange={(event) => void saveAnalysisScope(row.canonical_symbol, event.target.checked)}
+                          aria-label={`${row.canonical_symbol} 纳入择时分析`}
+                        />{" "}
+                        {row.analysis_locked ? "持仓始终分析" : row.analysis_selected ? "已选择" : "未选择"}
+                      </label>
+                      <br /><span className="pv2-mono">{row.analysis_reason_code}</span>
                     </td>
                     <td>{row.pre_action_qty}</td>
                     <td>
@@ -427,11 +619,17 @@ export default function PositionTimingPage() {
       </SectionCard>
 
       <SectionCard title="证据与口径" eyebrow="research evidence is not stock confidence">
-        <div className="pv2-grid pv2-grid-3">
+        <div className="pv2-grid pv2-grid-4">
           <MetricCard label="卡片证据层" value={evidence?.product_evidence_tier || "-"} hint="不显示个股胜率" />
           <MetricCard label="已签发事件" value={evidence?.event_counts?.CARD_ISSUED || 0} hint="append-only CARD_ISSUED" />
+          <MetricCard label="已评价 horizon" value={evidence?.outcome_evidence?.coverage_counts?.matured || 0} hint={`待到期 ${evidence?.outcome_evidence?.coverage_counts?.pending || 0} · 不可用 ${evidence?.outcome_evidence?.coverage_counts?.unavailable || 0}`} />
           <MetricCard label="L2 状态" value={evidence?.l2_runtime_status || "-"} hint="不阻塞规则卡" />
         </div>
+        <p>
+          prospective outcome：{evidence?.outcome_evidence?.status || "-"}；配对成熟样本 {evidence?.outcome_evidence?.paired_matured?.count || 0}，
+          动作意图样本 {evidence?.outcome_evidence?.intervention_intent?.count || 0}；物化缺失 {evidence?.outcome_evidence?.coverage_counts?.materialization_missing || 0}。
+          这些是冻结政策的反事实结果，不代表用户实际成交。
+        </p>
         <p>
           最低佣金按父订单估算，券商聚合口径为 <span className="pv2-mono">{evidence?.cost_disclosure?.min_commission_scope_verification || "-"}</span>。
           满仓 / 半仓 / 四分之一仓基准阈值：

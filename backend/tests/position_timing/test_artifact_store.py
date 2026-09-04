@@ -33,7 +33,7 @@ def test_card_set_and_card_events_are_immutable_and_retry_safe(service_factory) 
     second = service.materialize()
     assert first["created"] is True
     assert second["created"] is False
-    assert service.store.event_counts() == {"CARD_ISSUED": 2}
+    assert service.store.event_counts() == {"CARD_ISSUED": 1}
     date_root = service.store.root / "cards" / "2026-09-03"
     assert len(list(date_root.glob("*/card_set-*.json"))) == 1
 
@@ -44,7 +44,7 @@ def test_concurrent_first_materialization_publishes_one_card_set_and_one_event_p
         results = list(pool.map(lambda _: service.materialize(), range(4)))
     assert sum(1 for result in results if result["created"]) == 1
     assert len({result["card_set_artifact_sha256"] for result in results}) == 1
-    assert service.store.event_counts() == {"CARD_ISSUED": 2}
+    assert service.store.event_counts() == {"CARD_ISSUED": 1}
     date_root = service.store.root / "cards" / "2026-09-03"
     assert len(list(date_root.glob("*/card_set-*.json"))) == 1
 
@@ -71,6 +71,25 @@ def test_intent_write_stays_inside_injected_timing_root(service_factory) -> None
     )
     paths = [path.relative_to(service.store.root).as_posix() for path in service.store.root.rglob("*") if path.is_file()]
     assert paths == ["intents/000001.SZ.json"]
+
+
+def test_analysis_scope_atomic_update_is_exact_idempotent_and_hash_bound(service_factory) -> None:
+    service = service_factory()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(
+            pool.map(
+                lambda _: service.put_analysis_scope(raw_symbol="600000.SH", analysis_enabled=True),
+                range(4),
+            )
+        )
+    assert sum(1 for result in results if result["changed"]) == 1
+    assert len({result["scope_sha256"] for result in results}) == 1
+    path = service.store.root / "analysis_scope" / "current.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["selected_watchlist_symbols"] = []
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(PositionTimingArtifactError, match="invalid analysis scope artifact"):
+        service.store.get_analysis_scope()
 
 
 def test_card_set_read_fails_closed_on_semantic_identity_tamper(service_factory) -> None:
