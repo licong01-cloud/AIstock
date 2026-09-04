@@ -287,10 +287,11 @@ class CoreIndexMembershipRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT trade_date
-                      FROM market.kline_daily_raw
-                     WHERE trade_date BETWEEN %s AND %s
-                     ORDER BY trade_date
+                    SELECT cal_date
+                      FROM market.trading_calendar
+                     WHERE is_trading IS TRUE
+                       AND cal_date BETWEEN %s AND %s
+                     ORDER BY cal_date
                     """,
                     (start_date, end_date),
                 )
