@@ -7,6 +7,7 @@
     "scripts/qe_build_frozen_risk_policy.py",
     "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
     "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
   ],
   "assigned_agent": null,
@@ -52,6 +53,7 @@
       "scripts/qe_build_frozen_risk_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ],
     "changed_files_source": "implementation_readback",
@@ -63,6 +65,7 @@
         "scripts/qe_build_frozen_risk_policy.py",
         "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
         "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "noxfile.py",
         "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
       ],
       "impacted_modules": [
@@ -74,7 +77,12 @@
         "qe.long_trend_evaluation",
         "qe.single_experiment",
         "qe.custom_evolution",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
         "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
         "tests.validation_history"
       ],
       "matched_rules": [
@@ -156,6 +164,19 @@
           "rule_id": "qe_services"
         },
         {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
           "file": "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json",
           "impact_modules": [
             "tests.validation_history"
@@ -175,6 +196,7 @@
         "scripts/qe_build_frozen_risk_policy.py",
         "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
         "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "noxfile.py",
         "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
       ],
       "unmatched_files": []
@@ -186,6 +208,7 @@
       "scripts/qe_build_frozen_risk_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
@@ -196,6 +219,7 @@
       "scripts/qe_build_frozen_risk_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
     ]
   },
@@ -219,7 +243,8 @@
     "l0",
     "validation_module_registry_l0",
     "qe_sector_risk_overlay_backend",
-    "qe_read_backend"
+    "qe_read_backend",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "runtime_contract": {
