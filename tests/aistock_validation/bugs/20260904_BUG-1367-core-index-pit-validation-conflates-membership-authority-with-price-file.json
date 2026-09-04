@@ -29,13 +29,20 @@
   ],
   "expected": "Membership/schema/interval/order errors determine authority status. Existing physical price gaps are reported separately with exact lists and counts for targeted repair or explicit missing-data handling.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "docs/architecture/core_index_pit_multi_pool_f2_detailed_design_20260904.md",
+      "scripts/prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1367-core-index-pit-validation-conflates-membership-authority-with-price-file.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/prepare_core_index_membership_pit.py",
       "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
-      "docs/architecture/core_index_pit_multi_pool_f2_detailed_design_20260904.md"
+      "docs/architecture/core_index_pit_multi_pool_f2_detailed_design_20260904.md",
+      "scripts/prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1367-core-index-pit-validation-conflates-membership-authority-with-price-file.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/prepare_core_index_membership_pit.py",
@@ -136,10 +143,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
