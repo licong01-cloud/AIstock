@@ -752,7 +752,25 @@ def rewrite_stock_all_txt_for_ipo_filter(
     return summary
 
 
-def _load_adj_factors(code: str, basis_start: date, basis_end: date) -> pd.DataFrame:
+def _read_sql(
+    sql: str,
+    *,
+    params: dict[str, object],
+    connection: Any | None = None,
+) -> pd.DataFrame:
+    if connection is not None:
+        return pd.read_sql(sql, connection, params=params)
+    with get_conn() as owned_connection:
+        return pd.read_sql(sql, owned_connection, params=params)
+
+
+def _load_adj_factors(
+    code: str,
+    basis_start: date,
+    basis_end: date,
+    *,
+    connection: Any | None = None,
+) -> pd.DataFrame:
     sql = """
         SELECT ts_code, trade_date, adj_factor
         FROM market.adj_factor
@@ -761,8 +779,11 @@ def _load_adj_factors(code: str, basis_start: date, basis_end: date) -> pd.DataF
           AND trade_date <= %(basis_end)s
         ORDER BY trade_date
     """
-    with get_conn() as conn:
-        df = pd.read_sql(sql, conn, params={"code": code, "basis_start": basis_start, "basis_end": basis_end})
+    df = _read_sql(
+        sql,
+        params={"code": code, "basis_start": basis_start, "basis_end": basis_end},
+        connection=connection,
+    )
     if df.empty:
         raise RuntimeError(f"{code}: no adj_factor rows in basis window {basis_start}~{basis_end}")
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
@@ -777,7 +798,13 @@ def _load_adj_factors(code: str, basis_start: date, basis_end: date) -> pd.DataF
     return df[["ts_code", "trade_date", "adj_factor", "qfq_factor"]]
 
 
-def _load_limits(code: str, start: date, end: date) -> pd.DataFrame:
+def _load_limits(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    connection: Any | None = None,
+) -> pd.DataFrame:
     sql = """
         SELECT ts_code,
                trade_date,
@@ -790,8 +817,11 @@ def _load_limits(code: str, start: date, end: date) -> pd.DataFrame:
           AND trade_date <= %(end)s
         ORDER BY trade_date
     """
-    with get_conn() as conn:
-        df = pd.read_sql(sql, conn, params={"code": code, "start": start, "end": end})
+    df = _read_sql(
+        sql,
+        params={"code": code, "start": start, "end": end},
+        connection=connection,
+    )
     if df.empty:
         return pd.DataFrame(columns=["ts_code", "trade_date", "prev_close", "up_limit_price", "down_limit_price"])
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
@@ -800,20 +830,25 @@ def _load_limits(code: str, start: date, end: date) -> pd.DataFrame:
     return df
 
 
-def _load_st_periods(code: str, start: date, end: date) -> pd.DataFrame:
-    with get_conn() as conn:
-        frame = pd.read_sql(
-            """
-            SELECT ts_code, start_date, end_date
-            FROM market.stock_st
-            WHERE ts_code = %(code)s
-              AND start_date <= %(end)s
-              AND (end_date IS NULL OR end_date >= %(start)s)
-            ORDER BY start_date, end_date NULLS LAST
-            """,
-            conn,
-            params={"code": code, "start": start, "end": end},
-        )
+def _load_st_periods(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    connection: Any | None = None,
+) -> pd.DataFrame:
+    frame = _read_sql(
+        """
+        SELECT ts_code, start_date, end_date
+        FROM market.stock_st
+        WHERE ts_code = %(code)s
+          AND start_date <= %(end)s
+          AND (end_date IS NULL OR end_date >= %(start)s)
+        ORDER BY start_date, end_date NULLS LAST
+        """,
+        params={"code": code, "start": start, "end": end},
+        connection=connection,
+    )
     if frame.empty:
         return pd.DataFrame(columns=["ts_code", "start_date", "end_date"])
     frame["start_date"] = pd.to_datetime(frame["start_date"]).dt.date
@@ -920,6 +955,21 @@ def _complete_missing_limits_with_rules(
     return output.reset_index().sort_values(["ts_code", "trade_date"]), len(derived_rows)
 
 
+def _limit_rows_cover_required_dates(limits: pd.DataFrame, required_keys: pd.DataFrame) -> bool:
+    if limits.empty or required_keys.empty:
+        return False
+    required = required_keys.loc[:, ["ts_code", "trade_date"]].drop_duplicates().copy()
+    required["ts_code"] = required["ts_code"].astype(str).str.upper()
+    required["trade_date"] = pd.to_datetime(required["trade_date"]).dt.date
+    available = limits.loc[
+        :, ["ts_code", "trade_date", "prev_close", "up_limit_price", "down_limit_price"]
+    ].copy()
+    available["ts_code"] = available["ts_code"].astype(str).str.upper()
+    available["trade_date"] = pd.to_datetime(available["trade_date"]).dt.date
+    matched = required.merge(available, on=["ts_code", "trade_date"], how="left")
+    return not matched[["prev_close", "up_limit_price", "down_limit_price"]].isna().any().any()
+
+
 def _augment_daily_history_from_price_rows(
     daily_history: pd.DataFrame,
     price_rows: pd.DataFrame,
@@ -955,7 +1005,13 @@ def _augment_daily_history_from_price_rows(
     )
 
 
-def _load_suspend_dates(code: str, start: date, end: date) -> set[date]:
+def _load_suspend_dates(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    connection: Any | None = None,
+) -> set[date]:
     sql = """
         SELECT trade_date
         FROM market.suspend_d
@@ -964,14 +1020,23 @@ def _load_suspend_dates(code: str, start: date, end: date) -> set[date]:
           AND trade_date <= %(end)s
           AND suspend_type = 'S'
     """
-    with get_conn() as conn:
-        df = pd.read_sql(sql, conn, params={"code": code, "start": start, "end": end})
+    df = _read_sql(
+        sql,
+        params={"code": code, "start": start, "end": end},
+        connection=connection,
+    )
     if df.empty:
         return set()
     return set(pd.to_datetime(df["trade_date"]).dt.date.tolist())
 
 
-def _load_minute_raw(code: str, start: date, end: date) -> pd.DataFrame:
+def _load_minute_raw(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    connection: Any | None = None,
+) -> pd.DataFrame:
     start_ts = f"{start.isoformat()} 00:00:00+08"
     end_exclusive = f"{(end + timedelta(days=1)).isoformat()} 00:00:00+08"
     sql = """
@@ -992,12 +1057,11 @@ def _load_minute_raw(code: str, start: date, end: date) -> pd.DataFrame:
           AND (m.trade_time AT TIME ZONE 'Asia/Shanghai')::date >= s.list_date
         ORDER BY m.trade_time
     """
-    with get_conn() as conn:
-        return pd.read_sql(
-            sql,
-            conn,
-            params={"code": code, "freq": MINUTE_FREQ_DB, "start_ts": start_ts, "end_exclusive": end_exclusive},
-        )
+    return _read_sql(
+        sql,
+        params={"code": code, "freq": MINUTE_FREQ_DB, "start_ts": start_ts, "end_exclusive": end_exclusive},
+        connection=connection,
+    )
 
 
 def _load_daily_raw(code: str, start: date, end: date) -> pd.DataFrame:
@@ -1022,7 +1086,14 @@ def _load_daily_raw(code: str, start: date, end: date) -> pd.DataFrame:
         return pd.read_sql(sql, conn, params={"code": code, "start": start, "end": end})
 
 
-def _load_daily_close_history(code: str, start: date, end: date, lookback_days: int = 180) -> pd.DataFrame:
+def _load_daily_close_history(
+    code: str,
+    start: date,
+    end: date,
+    lookback_days: int = 180,
+    *,
+    connection: Any | None = None,
+) -> pd.DataFrame:
     sql = """
         SELECT d.trade_date, d.close_li
         FROM market.kline_daily_raw d
@@ -1034,8 +1105,11 @@ def _load_daily_close_history(code: str, start: date, end: date, lookback_days: 
         ORDER BY d.trade_date
     """
     lookback_start = start - timedelta(days=lookback_days)
-    with get_conn() as conn:
-        df = pd.read_sql(sql, conn, params={"code": code, "lookback_start": lookback_start, "end": end})
+    df = _read_sql(
+        sql,
+        params={"code": code, "lookback_start": lookback_start, "end": end},
+        connection=connection,
+    )
     if df.empty:
         return pd.DataFrame(columns=["ts_code", "trade_date", "daily_close"])
     df["ts_code"] = code
@@ -1092,29 +1166,33 @@ def _build_minute_expected_frame(
     basis_start: date,
     basis_end: date,
     strict_limit: bool,
+    connection: Any | None = None,
 ) -> pd.DataFrame:
     df = raw_df.copy()
     df["trade_time"] = pd.to_datetime(df["trade_time"])
     df["trade_date"] = df["trade_time"].dt.date
 
-    adj = _load_adj_factors(code, basis_start, basis_end)
-    limits = _load_limits(code, start, end)
-    daily_history = _load_daily_close_history(code, start, end)
-    daily_history = _augment_daily_history_from_price_rows(daily_history, df)
-    limits, derived_limit_rows = _complete_missing_limits_with_rules(
-        limits=limits,
-        daily_history=daily_history,
-        adj_factors=adj,
-        st_periods=_load_st_periods(code, start, end),
-        required_keys=df[["ts_code", "trade_date"]],
-    )
+    adj = _load_adj_factors(code, basis_start, basis_end, connection=connection)
+    limits = _load_limits(code, start, end, connection=connection)
+    daily_history = pd.DataFrame(columns=["ts_code", "trade_date", "daily_close"])
+    derived_limit_rows = 0
+    if not _limit_rows_cover_required_dates(limits, df[["ts_code", "trade_date"]]):
+        daily_history = _load_daily_close_history(code, start, end, connection=connection)
+        daily_history = _augment_daily_history_from_price_rows(daily_history, df)
+        limits, derived_limit_rows = _complete_missing_limits_with_rules(
+            limits=limits,
+            daily_history=daily_history,
+            adj_factors=adj,
+            st_periods=_load_st_periods(code, start, end, connection=connection),
+            required_keys=df[["ts_code", "trade_date"]],
+        )
     df = df.merge(adj[["trade_date", "qfq_factor"]], on="trade_date", how="left")
     df = df.merge(limits[["trade_date", "prev_close", "up_limit_price", "down_limit_price"]], on="trade_date", how="left")
     raw_close_for_fill = pd.to_numeric(df["close_li"], errors="coerce") / PRICE_UNIT_DIVISOR
     filled_prev_close = 0
     filled_prev_close_from_daily = 0
     if df["prev_close"].isna().any():
-        suspend_dates = _load_suspend_dates(code, start, end)
+        suspend_dates = _load_suspend_dates(code, start, end, connection=connection)
         if suspend_dates:
             minute_volume = pd.to_numeric(df["volume_hand"], errors="coerce").fillna(0)
             date_volume = minute_volume.groupby(df["trade_date"]).transform("sum")
@@ -1124,6 +1202,9 @@ def _build_minute_expected_frame(
                 df.loc[fill_mask, "prev_close"] = raw_close_for_fill[fill_mask]
                 filled_prev_close = int(fill_mask.sum())
     if df["prev_close"].isna().any():
+        if daily_history.empty:
+            daily_history = _load_daily_close_history(code, start, end, connection=connection)
+            daily_history = _augment_daily_history_from_price_rows(daily_history, df)
         filled_prev_close_from_daily = _fill_prev_close_from_daily_history(df, daily_history, code=code)
 
     if df["qfq_factor"].isna().any():
@@ -1275,6 +1356,42 @@ def _read_csv_last_date(path: Path) -> str | None:
     return None
 
 
+def _read_minute_csv_resume_row(path: Path, code: str) -> dict[str, str] | None:
+    """Return one structurally valid last row without scanning the CSV body."""
+
+    if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+        return None
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            header = next(csv.reader(handle))
+        if header != MINUTE_REQUIRED_COLUMNS:
+            return None
+        with path.open("rb") as handle:
+            size = path.stat().st_size
+            handle.seek(-1, 2)
+            if handle.read(1) not in {b"\n", b"\r"}:
+                return None
+            handle.seek(-min(size, 8192), 2)
+            tail = handle.read().decode("utf-8", errors="strict").splitlines()
+        for line in reversed(tail):
+            if not line.strip() or line.startswith("date,"):
+                continue
+            values = next(csv.reader([line]))
+            if len(values) != len(MINUTE_REQUIRED_COLUMNS):
+                return None
+            row = dict(zip(MINUTE_REQUIRED_COLUMNS, values))
+            if row["symbol"].upper() != code.upper():
+                return None
+            datetime.strptime(row["date"], "%Y-%m-%d %H:%M:%S")
+            numeric = np.asarray([float(row[column]) for column in MINUTE_REQUIRED_COLUMNS[2:]], dtype="float64")
+            if not np.isfinite(numeric).all():
+                return None
+            return row
+    except (OSError, UnicodeDecodeError, csv.Error, StopIteration, ValueError):
+        return None
+    return None
+
+
 def _daily_csv_matches_raw_rows(path: Path, code: str, raw_rows: pd.DataFrame) -> bool:
     """Return true only for a complete atomic daily CSV from this physical range."""
 
@@ -1333,6 +1450,7 @@ def export_stock_minute_csv(
     basis_end: date | None = None,
     strict_limit: bool = True,
     overwrite_csv: bool = False,
+    resume_csv: bool = False,
 ) -> CsvExportSummary:
     """Export authoritative per-stock 1min CSV files for Qlib dump_bin.
 
@@ -1361,6 +1479,8 @@ def export_stock_minute_csv(
         )
     )
     csv_dir = csv_root / snapshot_id / "stock_minute_1min"
+    if overwrite_csv and resume_csv:
+        raise ValueError("overwrite_csv and resume_csv cannot both be true")
     if overwrite_csv and csv_dir.exists():
         shutil.rmtree(csv_dir)
     csv_dir.mkdir(parents=True, exist_ok=True)
@@ -1371,29 +1491,76 @@ def export_stock_minute_csv(
     suspended_prev_close_filled_rows = 0
     previous_daily_prev_close_filled_rows = 0
     rule_derived_limit_rows = 0
+    resumed_csv_files = 0
 
-    for code in codes:
-        df = _load_minute_raw(code, start, end)
-        if df.empty:
-            skipped += 1
-            continue
-        out = _build_minute_expected_frame(
-            code,
-            df,
-            start=start,
-            end=end,
-            basis_start=basis_start,
-            basis_end=basis_end,
-            strict_limit=strict_limit,
-        )
+    with get_conn() as connection:
+        for code in codes:
+            csv_path = csv_dir / f"{code}.csv"
+            resume_row = _read_minute_csv_resume_row(csv_path, code) if resume_csv else None
+            resume_timestamp = resume_row["date"] if resume_row else None
+            if resume_timestamp and resume_timestamp[:10] > end.isoformat():
+                raise RuntimeError(f"{code}: existing minute CSV extends beyond requested cutoff {end.isoformat()}")
+            if resume_timestamp and resume_timestamp[:10] == end.isoformat():
+                resumed_csv_files += 1
+                continue
+            query_start = max(start, date.fromisoformat(resume_timestamp[:10])) if resume_timestamp else start
+            df = _load_minute_raw(code, query_start, end, connection=connection)
+            if df.empty:
+                if resume_row is None:
+                    skipped += 1
+                continue
+            out = _build_minute_expected_frame(
+                code,
+                df,
+                start=query_start,
+                end=end,
+                basis_start=basis_start,
+                basis_end=basis_end,
+                strict_limit=strict_limit,
+                connection=connection,
+            )
 
-        _check_required_non_null(out, code, MINUTE_REQUIRED_COLUMNS if strict_limit else ["date", "symbol", "open", "high", "low", "close", "volume", "amount", "factor"])
-        _write_csv_atomic(out, csv_dir / f"{code}.csv", MINUTE_REQUIRED_COLUMNS)
-        csv_files += 1
-        csv_rows += len(out)
-        suspended_prev_close_filled_rows += int(out.attrs.get("suspended_prev_close_filled_rows", 0))
-        previous_daily_prev_close_filled_rows += int(out.attrs.get("previous_daily_prev_close_filled_rows", 0))
-        rule_derived_limit_rows += int(out.attrs.get("rule_derived_limit_rows", 0))
+            rebuild_full = False
+            if resume_row is not None:
+                expected_at_resume = out.loc[out["date"] == resume_timestamp, "factor"]
+                if expected_at_resume.empty or not np.isclose(
+                    float(resume_row["factor"]),
+                    float(expected_at_resume.iloc[-1]),
+                    rtol=1e-6,
+                    atol=1e-7,
+                ):
+                    rebuild_full = True
+                    df = _load_minute_raw(code, start, end, connection=connection)
+                    if df.empty:
+                        raise RuntimeError(f"{code}: existing minute CSV cannot be rebuilt from an empty source")
+                    out = _build_minute_expected_frame(
+                        code,
+                        df,
+                        start=start,
+                        end=end,
+                        basis_start=basis_start,
+                        basis_end=basis_end,
+                        strict_limit=strict_limit,
+                        connection=connection,
+                    )
+                else:
+                    out = out.loc[out["date"] > resume_timestamp]
+
+            if out.empty:
+                resumed_csv_files += 1
+                continue
+
+            _check_required_non_null(out, code, MINUTE_REQUIRED_COLUMNS if strict_limit else ["date", "symbol", "open", "high", "low", "close", "volume", "amount", "factor"])
+            if resume_row is not None and not rebuild_full:
+                out.loc[:, MINUTE_REQUIRED_COLUMNS].to_csv(csv_path, index=False, mode="a", header=False)
+                resumed_csv_files += 1
+            else:
+                _write_csv_atomic(out, csv_path, MINUTE_REQUIRED_COLUMNS)
+            csv_files += 1
+            csv_rows += len(out)
+            suspended_prev_close_filled_rows += int(out.attrs.get("suspended_prev_close_filled_rows", 0))
+            previous_daily_prev_close_filled_rows += int(out.attrs.get("previous_daily_prev_close_filled_rows", 0))
+            rule_derived_limit_rows += int(out.attrs.get("rule_derived_limit_rows", 0))
 
     summary = CsvExportSummary(
         dataset="stock_minute_1min",
@@ -1402,7 +1569,7 @@ def export_stock_minute_csv(
         basis_start=basis_start.isoformat(),
         basis_end=basis_end.isoformat(),
         csv_dir=str(csv_dir),
-        csv_files=csv_files,
+        csv_files=len(list(csv_dir.glob("*.csv"))),
         csv_rows=csv_rows,
         stocks_requested=len(codes),
         stocks_written=csv_files,
@@ -1412,6 +1579,7 @@ def export_stock_minute_csv(
         strict_limit=strict_limit,
         generated_at=datetime.now().isoformat(timespec="seconds"),
         rule_derived_limit_rows=rule_derived_limit_rows,
+        resumed_csv_files=resumed_csv_files,
     )
     _finalize_summary(summary, csv_dir / "export_summary.json")
     return summary

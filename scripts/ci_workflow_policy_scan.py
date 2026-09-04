@@ -180,6 +180,10 @@ def build_contract_evidence(
     issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
     nightly_scheduler_path: Path = Path("scripts/nightly_adaptive_scheduler.py"),
     nightly_session_runner_path: Path = Path("scripts/nightly_session_runner.py"),
+    runner_configure_path: Path = Path("scripts/configure_aistock_github_runner.ps1"),
+    runner_start_path: Path = Path("scripts/start_aistock_github_runner.ps1"),
+    runner_supervisor_path: Path = Path("scripts/supervise_aistock_github_runner.ps1"),
+    runner_health_path: Path = Path("scripts/aistock_runner_health.py"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -213,6 +217,12 @@ def build_contract_evidence(
     nightly_session_runner_text = (
         nightly_session_runner_path.read_text(encoding="utf-8") if nightly_session_runner_path.exists() else ""
     )
+    runner_configure_text = runner_configure_path.read_text(encoding="utf-8") if runner_configure_path.exists() else ""
+    runner_start_text = runner_start_path.read_text(encoding="utf-8") if runner_start_path.exists() else ""
+    runner_supervisor_text = (
+        runner_supervisor_path.read_text(encoding="utf-8") if runner_supervisor_path.exists() else ""
+    )
+    runner_health_text = runner_health_path.read_text(encoding="utf-8") if runner_health_path.exists() else ""
     ci_preparation_match = re.search(
         r"(?ms)^  ci-verdict:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
         test_text,
@@ -521,6 +531,22 @@ def build_contract_evidence(
             and bool(nightly_runner_labels)
             and {label.casefold() for label in nightly_runner_labels}
             == {"aistock-ci", "aistock-ci-security"}
+        ),
+        "runner_lifecycle_is_pinned_and_supervised": (
+            "--disableupdate" in runner_configure_text
+            and "automatic_update_disabled" in runner_configure_text
+            and "AISTOCK_GITHUB_RUNNER_VERSION" in runner_configure_text
+            and "actions-runner-win-x64-2.334.0.zip" not in runner_configure_text
+            and "no active Listener, Worker, Updater, or supervisor process" in runner_configure_text
+            and "supervise-aistock-runner.ps1" in runner_configure_text
+            and "supervise-aistock-runner.ps1" in runner_start_text
+            and "aistock_github_runner_supervisor_state_v1" in runner_start_text
+            and "ClearStopRequest" in runner_start_text
+            and "stop_requested" in runner_start_text
+            and "Local\\AIstockGitHubRunner-" in runner_supervisor_text
+            and "restart_budget_exhausted" in runner_supervisor_text
+            and "online_but_not_accepting_work" in runner_health_text
+            and 'stale_queued_minutes: int = 10' in runner_health_text
         ),
         "policy_evidence_remains_one_scanner_step": (
             combined_workflow_text.count("python scripts/ci_workflow_policy_scan.py") == 1

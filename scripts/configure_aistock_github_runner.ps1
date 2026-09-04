@@ -1,9 +1,11 @@
 param(
   [string]$InstallRoot = 'F:\Dev\github-actions-runner\aistock-security',
   [string]$AllowedRoot = 'F:\Dev\github-actions-runner',
-  [string]$ArchivePath = 'F:\Dev\github-actions-runner\aistock\actions-runner-win-x64-2.334.0.zip',
-  [string]$ArchiveSha256 = 'a0c896f3acf37841cc17f392a38111d39501e56f2990434567f027ee89cf8981',
+  [string]$RunnerVersion = $env:AISTOCK_GITHUB_RUNNER_VERSION,
+  [string]$ArchivePath = $env:AISTOCK_GITHUB_RUNNER_ARCHIVE_PATH,
+  [string]$ArchiveSha256 = $env:AISTOCK_GITHUB_RUNNER_ARCHIVE_SHA256,
   [string]$TemplateWrapper = 'F:\Dev\github-actions-runner\aistock\run-aistock-runner-hidden.cmd',
+  [string]$SupervisorSource = $(Join-Path $PSScriptRoot 'supervise_aistock_github_runner.ps1'),
   [string]$RepositoryUrl = 'https://github.com/licong01-cloud/AIstock',
   [string]$RunnerName = "$env:COMPUTERNAME-aistock-security",
   [string]$Role = 'security',
@@ -39,28 +41,62 @@ function Resolve-BoundedPath {
   return $resolved
 }
 
-if ($Role -notmatch '^[a-z][a-z0-9-]*$') {
-  throw "Invalid runner role: $Role"
+if ($Role -notin @('general', 'security')) {
+  throw "Runner role must be general or security: $Role"
+}
+
+function Get-RunnerProcess {
+  param([string]$Root)
+  $prefix = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $matches = @()
+  foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
+    $path = $null
+    try {
+      $path = $process.Path
+    } catch {
+      $path = $null
+    }
+    if ($path -and $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $matches += $process
+    }
+  }
+  return $matches
 }
 if (-not $Labels -or $Labels.Count -eq 0) {
   throw 'At least one explicit runner label is required'
 }
-if ($Labels -notcontains "aistock-ci-$Role") {
-  throw "Runner labels must include aistock-ci-$Role"
+$requiredRoleLabel = $(if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' })
+if ($Labels -notcontains $requiredRoleLabel) {
+  throw "Runner labels for role $Role must include $requiredRoleLabel"
+}
+if (-not $RunnerVersion -or $RunnerVersion -notmatch '^\d+\.\d+\.\d+$') {
+  throw 'RunnerVersion must be an explicit semantic version such as 2.337.0'
+}
+if (-not $ArchivePath) {
+  throw 'ArchivePath or AISTOCK_GITHUB_RUNNER_ARCHIVE_PATH is required'
+}
+if (-not $ArchiveSha256 -or $ArchiveSha256 -notmatch '^[a-fA-F0-9]{64}$') {
+  throw 'ArchiveSha256 must be an explicit 64-character SHA-256'
 }
 
 $resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
 $resolvedArchive = [System.IO.Path]::GetFullPath($ArchivePath)
 $resolvedTemplate = [System.IO.Path]::GetFullPath($TemplateWrapper)
+$resolvedSupervisorSource = [System.IO.Path]::GetFullPath($SupervisorSource)
 $resolvedStartHelper = if ($StartHelperPath) {
   [System.IO.Path]::GetFullPath($StartHelperPath)
 } else {
   Join-Path $PSScriptRoot 'start_aistock_github_runner.ps1'
 }
 $wrapper = Join-Path $resolvedRoot 'run-aistock-runner-hidden.cmd'
+$supervisor = Join-Path $resolvedRoot 'supervise-aistock-runner.ps1'
+$supervisorState = Join-Path $resolvedRoot '.aistock-runner-supervisor.json'
 $runnerIdentity = Join-Path $resolvedRoot '.runner'
 $config = Join-Path $resolvedRoot 'config.cmd'
 $alreadyConfigured = Test-Path -LiteralPath $runnerIdentity -PathType Leaf
+$automaticUpdateDisabled = $false
+$runnerProcesses = @()
+$supervisorProcess = $null
 
 if (-not (Test-Path -LiteralPath $resolvedArchive -PathType Leaf)) {
   throw "GitHub runner archive not found: $resolvedArchive"
@@ -71,6 +107,9 @@ if (-not $ArchiveSha256 -or $observedArchiveSha256 -ne $ArchiveSha256.ToLowerInv
 }
 if (-not (Test-Path -LiteralPath $resolvedTemplate -PathType Leaf)) {
   throw "GitHub runner wrapper template not found: $resolvedTemplate"
+}
+if (-not (Test-Path -LiteralPath $resolvedSupervisorSource -PathType Leaf)) {
+  throw "GitHub runner supervisor source not found: $resolvedSupervisorSource"
 }
 if ((Test-Path -LiteralPath $resolvedRoot) -and -not $alreadyConfigured) {
   $unexpected = @(Get-ChildItem -Force -LiteralPath $resolvedRoot -ErrorAction SilentlyContinue)
@@ -93,22 +132,47 @@ if ($alreadyConfigured) {
   if ($identity.workFolder -ne '_work') {
     throw "Configured runner work folder mismatch: $($identity.workFolder)"
   }
+  $automaticUpdateDisabled = [bool]$identity.disableUpdate
+}
+if (Test-Path -LiteralPath $resolvedRoot -PathType Container) {
+  $runnerProcesses = @(Get-RunnerProcess -Root $resolvedRoot)
+}
+if (Test-Path -LiteralPath $supervisorState -PathType Leaf) {
+  try {
+    $state = Get-Content -Raw -LiteralPath $supervisorState | ConvertFrom-Json
+    if ($state.schema_version -eq 'aistock_github_runner_supervisor_state_v1' -and [int]$state.supervisor_pid -gt 0) {
+      $supervisorProcess = Get-Process -Id ([int]$state.supervisor_pid) -ErrorAction SilentlyContinue
+    }
+  } catch {
+    $supervisorProcess = $null
+  }
 }
 
 if (-not $Apply) {
   Write-Result @{
     schema_version = 'aistock_github_runner_configure_v1'
-    status = $(if ($alreadyConfigured) { 'already_configured' } else { 'would_configure' })
+    status = $(if ($alreadyConfigured -and -not $automaticUpdateDisabled) { 'reconfiguration_required' } elseif ($alreadyConfigured) { 'already_configured' } else { 'would_configure' })
     configured = $alreadyConfigured
+    automatic_update_disabled = $(if ($alreadyConfigured) { $automaticUpdateDisabled } else { $true })
+    maintenance_process_count = $runnerProcesses.Count + $(if ($null -ne $supervisorProcess) { 1 } else { 0 })
     started = $false
     role = $Role
     labels = $Labels
     runner_name = $RunnerName
+    runner_version = $RunnerVersion
     install_root = $resolvedRoot
     archive_path = $resolvedArchive
     archive_sha256 = $observedArchiveSha256
+    supervisor_source = $resolvedSupervisorSource
   }
   exit 0
+}
+
+if ($alreadyConfigured -and -not $automaticUpdateDisabled) {
+  throw 'Configured runner allows automatic updates; re-register it with --disableupdate before applying the supervised launcher'
+}
+if ($runnerProcesses.Count -gt 0 -or $null -ne $supervisorProcess) {
+  throw 'Runner maintenance requires the selected role to have no active Listener, Worker, Updater, or supervisor process'
 }
 
 if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
@@ -126,7 +190,7 @@ if (-not $alreadyConfigured) {
   if (-not $token) {
     throw 'AISTOCK_GITHUB_RUNNER_REGISTRATION_TOKEN is required for first-time configuration'
   }
-  & $config --unattended --url $RepositoryUrl --token $token --name $RunnerName --labels ($Labels -join ',') --work '_work'
+  & $config --unattended --url $RepositoryUrl --token $token --name $RunnerName --labels ($Labels -join ',') --work '_work' --disableupdate
   if ($LASTEXITCODE -ne 0) {
     throw "GitHub runner configuration failed with exit code $LASTEXITCODE"
   }
@@ -134,7 +198,14 @@ if (-not $alreadyConfigured) {
   if (-not $alreadyConfigured) {
     throw 'GitHub runner configuration completed without creating .runner identity'
   }
+  $identity = Get-Content -Raw -LiteralPath $runnerIdentity | ConvertFrom-Json
+  $automaticUpdateDisabled = [bool]$identity.disableUpdate
+  if (-not $automaticUpdateDisabled) {
+    throw 'GitHub accepted the runner registration without disableUpdate=true'
+  }
 }
+
+Copy-Item -LiteralPath $resolvedSupervisorSource -Destination $supervisor -Force
 
 $wrapperText = Get-Content -Raw -LiteralPath $resolvedTemplate
 $runnerCallPattern = '(?im)^call run\.cmd(?:\s.*)?$'
@@ -186,6 +257,9 @@ Write-Result @{
   role = $Role
   labels = $Labels
   runner_name = $RunnerName
+  runner_version = $RunnerVersion
   install_root = $resolvedRoot
   wrapper = $wrapper
+  supervisor = $supervisor
+  automatic_update_disabled = $automaticUpdateDisabled
 }

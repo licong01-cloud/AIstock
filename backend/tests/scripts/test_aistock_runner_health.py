@@ -147,6 +147,78 @@ def test_runner_health_reports_stale_queued_runs() -> None:
     assert "queued nightly.yml run" in payload["warnings"][0]
 
 
+def test_runner_health_blocks_api_online_idle_runner_that_does_not_accept_work() -> None:
+    payload = health.build_runner_health_report(
+        workflow="codeql.yml",
+        required_labels=["self-hosted", "windows", "aistock-ci-security"],
+        stale_queued_minutes=10,
+        now=datetime(2026, 9, 3, 4, 20, tzinfo=timezone.utc),
+        runners_payload={
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 27,
+                    "name": "aistock-security",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                }
+            ],
+        },
+        runs_payload={
+            "workflow_runs": [
+                {
+                    "id": 33713291574,
+                    "status": "queued",
+                    "created_at": "2026-09-03T04:07:00Z",
+                }
+            ]
+        },
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["online_but_not_accepting_work"] is True
+    assert any("stuck self-update or listener" in item for item in payload["blocking"])
+
+
+def test_runner_health_does_not_call_busy_runner_false_online() -> None:
+    payload = health.build_runner_health_report(
+        required_labels=["self-hosted", "windows", "aistock-ci"],
+        stale_queued_minutes=10,
+        now=datetime(2026, 9, 3, 4, 20, tzinfo=timezone.utc),
+        runners_payload={
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 26,
+                    "name": "aistock-ci",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": True,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                    ],
+                }
+            ],
+        },
+        runs_payload={
+            "workflow_runs": [
+                {"id": 1, "status": "queued", "created_at": "2026-09-03T04:00:00Z"}
+            ]
+        },
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["online_but_not_accepting_work"] is False
+
+
 def test_render_markdown_includes_actionable_sections() -> None:
     payload = health.build_runner_health_report(
         runners_payload={"total_count": 0, "runners": []},

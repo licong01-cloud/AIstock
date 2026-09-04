@@ -10,7 +10,12 @@ from backend.execution_algos.twap_algo import TWAPAlgo
 from backend.execution_algos.v24_plan_algo import V24PlanAlgo
 from backend.execution_algos.v25_1_small_cap_algo import V25_1SmallCapAlgo
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo
-from backend.services.trading_core.errors import DataUnavailableError, ExecutionAlgoError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    ExecutionAlgoError,
+    RiskRuleError,
+    UnsupportedFeatureError,
+)
 from backend.services.trading_core.execution_algo_adapter import ExecutionAlgoAdapter
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderStatus
@@ -425,6 +430,167 @@ def test_incremental_minute_execution_advances_cursor_without_duplicate_fills() 
     assert replayed_state == updated_state
     assert replayed_fills == []
     assert replayed_events == []
+
+
+@pytest.mark.parametrize(
+    ("side", "blocked_price", "expected_reason"),
+    [
+        (OrderSide.BUY, 11.0, "LIMIT_UP_BUY_BLOCKED"),
+        (OrderSide.SELL, 9.0, "LIMIT_DOWN_SELL_BLOCKED"),
+    ],
+)
+def test_incremental_twap_consumes_typed_limit_state_without_fill(
+    side: OrderSide,
+    blocked_price: float,
+    expected_reason: str,
+) -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=200, side=side)
+    state = OrderExecutionState(
+        session_id="psess_twap_limit",
+        run_id="prun_twap_limit",
+        order_id=order.order_id,
+        symbol=order.symbol,
+        trade_date=date(2024, 1, 2),
+        algo_code="TWAP",
+        filled_quantity=0,
+        remaining_quantity=order.quantity,
+        status=order.status.value,
+    )
+    bar = make_bars(1)[0].model_copy(
+        update={
+            "open": blocked_price,
+            "high": blocked_price,
+            "low": blocked_price,
+            "close": blocked_price,
+        }
+    )
+
+    updated_order, updated_state, fills, events = engine.execute_order_incremental(
+        order=order,
+        execution_state=state,
+        new_bars=[bar],
+        algo_code="TWAP",
+        algo_config={"split_count": 2},
+    )
+
+    assert updated_order.status == OrderStatus.SUBMITTED
+    assert updated_state.last_processed_bar_time == bar.bar_time
+    assert updated_state.algo_state["step"] == 1
+    assert updated_state.filled_quantity == 0
+    assert fills == []
+    assert len(events) == 1
+    assert events[0].event_type.value == "NO_FILL"
+    assert events[0].reason == expected_reason
+
+
+def test_incremental_twap_limit_state_does_not_block_later_causal_fill() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=200)
+    state = OrderExecutionState(
+        session_id="psess_twap_limit_recovery",
+        run_id="prun_twap_limit_recovery",
+        order_id=order.order_id,
+        symbol=order.symbol,
+        trade_date=date(2024, 1, 2),
+        algo_code="TWAP",
+        filled_quantity=0,
+        remaining_quantity=order.quantity,
+        status=order.status.value,
+    )
+    first_bar, second_bar = make_bars(2)
+    first_bar = first_bar.model_copy(
+        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}
+    )
+
+    final_order, final_state, fills, events = engine.execute_order_incremental(
+        order=order,
+        execution_state=state,
+        new_bars=[first_bar, second_bar],
+        algo_code="TWAP",
+        algo_config={"split_count": 2},
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert final_state.last_processed_bar_time == second_bar.bar_time
+    assert final_state.filled_quantity == 200
+    assert [fill.bar_time for fill in fills] == [second_bar.bar_time]
+    assert [event.event_type.value for event in events] == ["NO_FILL", "FILLED"]
+    assert events[0].reason == "LIMIT_UP_BUY_BLOCKED"
+
+
+def test_closed_day_twap_all_limit_up_returns_auditable_no_fill_residual() -> None:
+    engine = MinuteExecutionEngine()
+    blocked_bars = [
+        bar.model_copy(update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0})
+        for bar in make_bars(3)
+    ]
+
+    final_order, fills, events = engine.execute_order(
+        order=make_order(quantity=300),
+        minute_bars=blocked_bars,
+        algo_code="TWAP",
+        algo_config={"split_count": 3},
+        allow_partial_fill=True,
+    )
+
+    assert final_order.status == OrderStatus.SUBMITTED
+    assert final_order.remaining_quantity == 300
+    assert fills == []
+    assert [event.event_type.value for event in events] == ["NO_FILL"] * 3
+    assert {event.reason for event in events} == {"LIMIT_UP_BUY_BLOCKED"}
+
+
+def test_twap_limit_state_handling_keeps_missing_limit_data_fail_loud() -> None:
+    engine = MinuteExecutionEngine()
+    bar = make_bars(1)[0].model_copy(update={"limit_up": None})
+    order = make_order(quantity=200)
+
+    with pytest.raises(DataUnavailableError, match="limit price is required"):
+        engine.execute_order_incremental(
+            order=order,
+            execution_state=OrderExecutionState(
+                session_id="psess_twap_missing_limit",
+                run_id="prun_twap_missing_limit",
+                order_id=order.order_id,
+                symbol="000001.SZ",
+                trade_date=date(2024, 1, 2),
+                algo_code="TWAP",
+                filled_quantity=0,
+                remaining_quantity=200,
+                status=OrderStatus.SUBMITTED.value,
+            ),
+            new_bars=[bar],
+            algo_code="TWAP",
+            algo_config={"split_count": 2},
+        )
+
+
+def test_incremental_non_twap_algo_keeps_limit_state_fail_fast() -> None:
+    order = make_order(quantity=200)
+    bar = make_bars(1)[0].model_copy(
+        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}
+    )
+
+    with pytest.raises(RiskRuleError) as exc_info:
+        MinuteExecutionEngine().execute_order_incremental(
+            order=order,
+            execution_state=OrderExecutionState(
+                session_id="psess_non_twap_limit",
+                run_id="prun_non_twap_limit",
+                order_id=order.order_id,
+                symbol=order.symbol,
+                trade_date=date(2024, 1, 2),
+                algo_code="CLOSE_PRICE",
+                filled_quantity=0,
+                remaining_quantity=order.quantity,
+                status=order.status.value,
+            ),
+            new_bars=[bar],
+            algo_code="CLOSE_PRICE",
+        )
+
+    assert exc_info.value.context["reason_code"] == "LIMIT_UP_BUY_BLOCKED"
 
 
 def test_incremental_twap_caps_each_step_to_authoritative_minute_volume_and_carries_residual() -> None:

@@ -21,10 +21,14 @@ P0 只交付一个结果：在独立 X 盘目录生成并签收 cutoff=`2026-08-
 
 1. 使用现有 canonical PIT monthly operator，把 `aistock_equity_pit_canonical_v2` 更新并 readback 到
    `2026-08-31`；DEV 验证和 production DML 仍是独立授权，但不再增加额外 rollback、NO_OP 或重复验证阶段。
-2. 直接构建并 readback `2026-08-31` 的 industry/P3A **full** authority；不再构建或要求五股、六股 sample。
+2. 直接构建并 readback `2026-08-31` 的股票行业分类 PIT **full** candidate；不再构建或要求五股、六股
+   sample。申万行业指数成员进出 authority 与股票分类 authority 保持独立，但前者仅服务成分研究，不能作为
+   股票 sector published 特征逐日覆盖的发布前置。
 3. 只提交一次 `monthly --candidate-only`。planner 必须复用 2026-07-31 已有有效组件，并仅追加 8 月尾部、
    新增 v2 历史退市证券及 PIT/复权/行业变化实际失效的分区；禁止为了流程证明重新导出八年全市场。
-4. 对最终 candidate 执行一次全量结构/identity/分母闭合和分层数值抽样，再运行 QE/HMM producer smoke。
+4. 对最终 candidate 执行一次结构/范围检查和分层数值抽样，再运行 QE/HMM producer contract smoke。
+   数据发布只验证所需数据可读取且代表字段非空；85% 覆盖率、IC、信号天数和组合收益属于模型/策略验收，
+   不得阻断数据集发布。
 
 ### 0.1 禁止过度工程化
 
@@ -46,10 +50,23 @@ P0 只交付一个结果：在独立 X 盘目录生成并签收 cutoff=`2026-08-
 - 分批 SQL、流式 row processing、按股票/月切片、Parquet row group 和单次有界日志继续保留；它们是算法实现方式，
   不是资源准入或阻断门禁，且不得减少股票、日期、字段、指数或验证范围。
 
+### 0.2A BUG-1336 月更关键路径裁剪
+
+- `qe_hmm_full_v2 monthly/status` 直接解析交易日 cutoff 和 X 盘 candidate，不打开旧 control store，也不加载继承
+  profile 中已停用的 source-freeze/resource 合同。
+- 更早 validated baseline 是可选上下文，不是创建首个 canonical v2 candidate 的前置。
+- 失败候选按小型 component metadata 恢复。已 PASS 的 daily/minute/index 原样复用；仅当组件输出 schema 确实
+  改变时才重新打开该组件。本次 factor 输出写入新的 `factor_h5_static_candidate_v2`，不覆盖旧文件。
+- sector published 日线由股票分类 PIT 的 L2 code 映射 `market.sw_index_classify` 后读取 `market.sw_daily`；
+  sector moneyflow 由同一分类 PIT 独立聚合。两条来源互不作为对方的 `published` 条件。
+- P3A 双 authority resolver、membership unavailable denominator 和全量 row/hash ledger 保留给 HMM/指数成分研究，
+  但不再位于每月 QE/HMM 数据候选的执行或签收关键路径。
+
 ### 0.3 P0 完成与停止
 
-仅当 cutoff、PIT、industry/P3A、daily/minute、QFQ、ST/stk_limit、H5/static、12-index、sector、QE/HMM smoke
-全部签收，且 candidate marker/catalog/receipt identity 一致，才报告完成。production activation、pointer、node1、DB repair、
+仅当 cutoff、PIT、股票行业分类 PIT、daily/minute、QFQ、ST/stk_limit、H5/static、12-index、sector、QE/HMM contract smoke
+全部签收，且 candidate 自身 `direct_monthly_state.json` 为 `CANDIDATE_READY`，才报告完成。旧 control
+marker/catalog/receipt 不参与直接月更验收。production activation、pointer、node1、DB repair、
 backend restart 和 cleanup 继续分别报告为 `not_requested`。完成后自动停止，不进入消费者迁移或下一轮产品化。
 
 ## Appendix A. 已废弃的 2026-09-01 P0 重排历史

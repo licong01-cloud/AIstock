@@ -15,7 +15,8 @@
 1. 只读确认 production canonical PIT v2 是否覆盖到 `2026-08-31`。当前若仍为 `2026-07-31`，使用 Appendix A
    “8月31日收盘后：准备目标cutoff authority”中的 canonical PIT operator 命令执行 DEV apply/readback；取得
    production target DML 明确授权后再执行 production apply/readback。Appendix A 的 sample/7月v2 full 步骤仍禁止执行。
-2. 直接构建 `2026-08-31` industry full 和 P3A full。不得先构建五股/六股 sample。
+2. 直接复用或构建 `2026-08-31` 股票行业分类 PIT full candidate。P3A 的行业指数成员进出
+   authority 仅服务成分研究，不再是股票 sector published 字段或月更发布前置。
 3. 只提交一次：
 
 ```powershell
@@ -40,10 +41,10 @@ planner 必须优先复用现有 2026-07-31 v1 candidate 中 identity 一致的 
 
 ### 0.2 完成条件
 
-- canonical PIT v2、industry/P3A 均覆盖 `2026-08-31`；
+- canonical PIT v2 与股票行业分类 PIT candidate 均覆盖 `2026-08-31`；
 - daily/minute/PIT/ST/stk_limit/QFQ/static/H5/12-index/sector required validation 全部 PASS；
 - QE/HMM producer smoke PASS；
-- candidate marker、catalog、receipt 与 artifact identity 一致；
+- candidate 自身 `direct_monthly_state.json` 为 `CANDIDATE_READY`；旧 control catalog/receipt 不参与直接月更验收；
 - production writes、pointer changes、node1、backend restart 和 cleanup 均为 0/not_requested。
 
 满足后立即停止，不继续消费者迁移、模型训练、生产激活或平台产品化。
@@ -621,16 +622,21 @@ production_activation=not_requested
 
 `qe_hmm_full_v2 monthly --candidate-only` 不再向旧 control catalog 提交 resolution。命令直接：
 
-1. 只读解析目标 cutoff 和最近一个更早的 `final_validation_validated` 基线；
+1. 只读解析目标 cutoff；更早 validated candidate 仅是可选上下文，不存在时也允许创建新 candidate；
 2. 创建 `YYYYMMDD-qe_hmm_full_v2-direct-YYYYMMDD-candidate` 独立目录；
 3. 顺序执行 `daily_bin`、`minute_bin`、`factor_h5_static`、`index_context`；
-4. factor/static 按三个月日期块查询并写出，P3A sector 只消费 `resolved + aligned` 行，unavailable 保持缺失和 `l2_code_id=-1`，不回退旧行业；
+4. factor/static 按有界日期块查询并写出；股票分类 PIT 映射到申万 L2 published 日线，不要求逐股票逐日
+   具备指数成员进出证据。published 日线与行业资金流独立生成，任一来源缺失不得清空另一来源；
 5. minute 使用完整 `2024-01-02..cutoff` 流式重建，因此覆盖 7 月补录和 8 月新增；
-6. 仅检查各组件结构文件、metadata 和 calendar cutoff，之后写 `CANDIDATE_READY`；数值抽样和 QE/HMM smoke 仍按本手册验收段执行后才可签收。
+6. 检查各组件结构文件、metadata 和 calendar cutoff，再执行一次小规模消费者合同 smoke：验证 Qlib、H5、
+   12-index 可读取且 sector 代表字段非空。85% 覆盖率、IC、信号天数和组合回测收益不是数据发布门禁；
+   完成后写 `CANDIDATE_READY`。
 
 状态文件只保存路径、动作、状态、行数和 cutoff，不计算数据内容哈希。重复命令仅续跑未 `PASS` 组件；partial 组件不会被自动删除或覆盖。
 
-2026-08-31 是首个完整 canonical v2 candidate，而可复用的 2026-07-31 validated 基线仍使用 v1 股票池，所以四个组件各执行一次全组件重建。分钟重建没有触发无关组件；其他三项重建来自 v1→v2 股票池/行业 authority 迁移。首个 v2 基线完成后再单独实现简单尾部追加，本轮不为增量优化增加冻结、内容哈希、lineage 或资源门禁。
+2026-08-31 是首个完整 canonical v2 candidate。当前已有失败候选中的 daily/minute/index 已通过并保持只读
+复用；BUG-1336 只在新的 `factor_h5_static_candidate_v2` 目录重建 factor/static/sector，旧 factor 输出不覆盖、
+不删除。首个 v2 基线完成后再单独实现简单尾部追加，本轮不为增量优化增加冻结、内容哈希、lineage 或资源门禁。
 
 ## 0A. 当前直接月更步骤
 
@@ -645,7 +651,7 @@ production_activation=not_requested
 
 ### 0A.2 执行顺序
 
-1. 只读确认 canonical PIT v2、industry/P3A 和数据库数据覆盖到目标 cutoff；已有合格结果直接复用。
+1. 只读确认 canonical PIT v2、股票行业分类 PIT 和数据库数据覆盖到目标 cutoff；已有合格结果直接复用。
 2. 读取 7 月分钟补录影响清单。清单完整时只重建受影响股票/日期；清单不完整时重建整个分钟组件。
 3. 对其他组件只追加 8 月尾部或选择性重建真实失效分区，不重导无关历史数据。
 4. 输出到不存在的新候选目录；旧 7 月数据集始终只读。

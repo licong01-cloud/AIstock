@@ -63,9 +63,11 @@ class RiskEngine:
             raise RiskRuleError(
                 "buy order is blocked because all executable bars are at limit up",
                 context={
+                    "reason_code": "LIMIT_UP_BUY_BLOCKED",
                     "order_id": order.order_id,
                     "symbol": order.symbol,
                     "trade_date": executable_bars[0].bar_time.date().isoformat(),
+                    "bar_time": executable_bars[0].bar_time.isoformat(),
                     "up_limit": limit_price.up_limit,
                 },
             )
@@ -75,9 +77,11 @@ class RiskEngine:
             raise RiskRuleError(
                 "sell order is blocked because all executable bars are at limit down",
                 context={
+                    "reason_code": "LIMIT_DOWN_SELL_BLOCKED",
                     "order_id": order.order_id,
                     "symbol": order.symbol,
                     "trade_date": executable_bars[0].bar_time.date().isoformat(),
+                    "bar_time": executable_bars[0].bar_time.isoformat(),
                     "down_limit": limit_price.down_limit,
                 },
             )
