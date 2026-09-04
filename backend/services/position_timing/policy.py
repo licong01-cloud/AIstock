@@ -263,6 +263,19 @@ def _cost_for_notionals(*, side: TriggerSide, notionals: Iterable[Decimal]) -> d
     }
 
 
+def component_cost_for_parent_notionals(
+    *, side: TriggerSide, notionals: Iterable[Decimal]
+) -> dict[str, Decimal]:
+    """Price one or more parent orders with the frozen componentized policy."""
+
+    values = tuple(Decimal(value) for value in notionals)
+    if side not in {TriggerSide.BUY, TriggerSide.SELL}:
+        raise ValueError("component cost side must be BUY or SELL")
+    if not values or any(value <= 0 for value in values):
+        raise ValueError("component cost requires positive parent-order notionals")
+    return _cost_for_notionals(side=side, notionals=values)
+
+
 def estimate_leg_cost(
     *,
     side: TriggerSide,
@@ -364,6 +377,7 @@ __all__ = [
     "PRICE_GUARD_SNAPSHOT_ARTIFACT_SHA256",
     "assert_shared_guard_defaults_unmodified",
     "board_lot_identity",
+    "component_cost_for_parent_notionals",
     "estimate_leg_cost",
     "frozen_exit_guard_policy",
     "frozen_price_guard_policy",

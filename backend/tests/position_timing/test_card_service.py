@@ -7,6 +7,10 @@ from backend.services.position_timing.policy import frozen_price_guard_policy
 from backend.services.trading_core.price_guard import PriceGuardContext, evaluate as evaluate_price_guard
 
 
+def _include_watchlist(service) -> None:
+    service.put_analysis_scope(raw_symbol="600000.SH", analysis_enabled=True)
+
+
 def test_default_daily_loader_reads_fallback_only_for_missing_symbols(monkeypatch) -> None:
     from backend.data_service import timescaledb_adapter
     from backend.services.position_timing.service import _default_daily_snapshot_loader
@@ -54,6 +58,7 @@ def test_default_daily_loader_reads_fallback_only_for_missing_symbols(monkeypatc
 
 def test_hard_stop_generates_at_open_exit_and_watchlist_without_sizing_waits(service_factory) -> None:
     service = service_factory()
+    _include_watchlist(service)
     card_set = service.materialize()["card_set"]
     by_symbol = {card.canonical_symbol: card for card in card_set.cards}
     holding = by_symbol["000001.SZ"]
@@ -151,6 +156,7 @@ def test_stale_daily_fallback_without_suspension_does_not_freeze_unavailable_car
 
 def test_watchlist_intent_generates_only_frozen_buy_guard_branches(service_factory) -> None:
     service = service_factory()
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("120000"),
@@ -182,6 +188,7 @@ def test_watchlist_intent_generates_only_frozen_buy_guard_branches(service_facto
 
 def test_buy_trigger_bands_match_shared_price_guard_actions(service_factory) -> None:
     service = service_factory()
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("120000"),
@@ -236,6 +243,7 @@ def test_green_boundary_keeps_exact_tick_when_shared_evaluator_accepts_it(servic
         return payload
 
     service = service_factory(daily=high_price_daily)
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("120000"),
@@ -269,6 +277,7 @@ def test_single_symbol_data_gap_degrades_only_that_card(service_factory) -> None
         return payload
 
     service = service_factory(daily=missing_one)
+    _include_watchlist(service)
     cards = service.materialize()["card_set"].cards
     by_symbol = {card.canonical_symbol: card for card in cards}
     assert by_symbol["600000.SH"].action.value == "UNAVAILABLE"
@@ -306,6 +315,7 @@ def test_post_decision_delist_fact_is_fail_closed_for_only_affected_card(service
         return payload
 
     service = service_factory(delist=future_delist_fact)
+    _include_watchlist(service)
     cards = {card.canonical_symbol: card for card in service.materialize()["card_set"].cards}
     assert cards["600000.SH"].action.value == "UNAVAILABLE"
     assert "DELIST_PIT_UNAVAILABLE" in cards["600000.SH"].reason_codes
@@ -323,6 +333,7 @@ def test_confirmed_delist_fact_blocks_watchlist_buy_without_blocking_other_cards
         return payload
 
     service = service_factory(delist=confirmed_delist)
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("120000"),
@@ -379,6 +390,7 @@ def test_empty_universe_returns_typed_no_new_card(service_factory) -> None:
 
 def test_positive_intent_below_board_minimum_has_typed_wait_reason(service_factory) -> None:
     service = service_factory()
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("500"),
@@ -391,6 +403,7 @@ def test_positive_intent_below_board_minimum_has_typed_wait_reason(service_facto
 
 def test_yellow_buy_branch_becomes_skip_when_reduced_size_is_below_board_lot(service_factory) -> None:
     service = service_factory()
+    _include_watchlist(service)
     service.put_intent(
         raw_symbol="600000.SH",
         planned_full_notional_cny=Decimal("1500"),
@@ -404,3 +417,22 @@ def test_yellow_buy_branch_becomes_skip_when_reduced_size_is_below_board_lot(ser
     assert yellow.guard_action == "SKIP"
     assert yellow.reason_code == "REDUCE_BRANCH_BELOW_BOARD_LOT_SKIP"
     assert yellow.conditions["price_guard_action"] == "REDUCE"
+
+
+def test_card_set_binds_effective_analysis_scope_and_is_not_rewritten(service_factory) -> None:
+    service = service_factory()
+    _include_watchlist(service)
+    first = service.materialize()["card_set"]
+    assert {card.canonical_symbol for card in first.cards} == {"000001.SZ", "600000.SH"}
+    assert first.input_identity["universe_identity_sha256"] == first.input_identity[
+        "analysis_universe_identity_sha256"
+    ]
+    assert first.input_identity["analysis_scope_snapshot"]["selected_watchlist_symbols"] == [
+        "600000.SH"
+    ]
+    assert first.input_identity["analysis_scope_snapshot_sha256"] == canonical_sha256(
+        first.input_identity["analysis_scope_snapshot"]
+    )
+
+    service.put_analysis_scope(raw_symbol="600000.SH", analysis_enabled=False)
+    assert service.materialize()["card_set"] == first
