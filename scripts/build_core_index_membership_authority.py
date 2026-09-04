@@ -312,12 +312,13 @@ def build_authority(manifest_path: Path) -> list[dict[str, Any]]:
         baseline_reference = str(value.get("baseline_source_reference") or "").strip()
         if not baseline_reference:
             raise AuthorityBuildError(f"baseline_source_reference is empty for {pool_id}")
+        pool_window_start = max(window_start, POOL_DEFINITIONS[pool_id].history_start)
         rows.extend(
             _build_pool_rows(
                 pool_id=pool_id,
                 current_members=current,
                 events=events,
-                window_start=window_start,
+                window_start=pool_window_start,
                 cutoff=cutoff,
                 baseline_reference=baseline_reference,
             )
