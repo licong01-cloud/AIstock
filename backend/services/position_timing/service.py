@@ -3185,7 +3185,9 @@ def _default_outcome_snapshot_loader(
     }
 
 
-def _source_commit() -> str:
+def _resolve_source_commit() -> str:
+    """Resolve the code identity once while this module is being imported."""
+
     from_env = str(os.getenv("AISTOCK_GIT_COMMIT") or "").strip().lower()
     if len(from_env) == 40 and all(char in "0123456789abcdef" for char in from_env):
         return from_env
@@ -3198,7 +3200,29 @@ def _source_commit() -> str:
         text=True,
         timeout=5,
     )
-    return completed.stdout.strip().lower()
+    resolved = completed.stdout.strip().lower()
+    if len(resolved) != 40 or any(char not in "0123456789abcdef" for char in resolved):
+        raise RuntimeError("resolved source commit is not a 40-character lowercase git sha")
+    return resolved
+
+
+try:
+    _PROCESS_SOURCE_REPOSITORY_COMMIT = _resolve_source_commit()
+    _PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR: str | None = None
+except Exception as exc:  # Keep unrelated backend routes importable; materialization fails typed.
+    _PROCESS_SOURCE_REPOSITORY_COMMIT = None
+    _PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR = type(exc).__name__
+
+
+def _source_commit() -> str:
+    """Return the immutable code identity captured for this running process."""
+
+    if _PROCESS_SOURCE_REPOSITORY_COMMIT is None:
+        raise RuntimeError(
+            "position timing source commit was unavailable when process code loaded: "
+            f"{_PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR or 'UNKNOWN'}"
+        )
+    return _PROCESS_SOURCE_REPOSITORY_COMMIT
 
 
 def build_position_timing_service(*, artifact_root: str | Path | None = None) -> PositionTimingService:

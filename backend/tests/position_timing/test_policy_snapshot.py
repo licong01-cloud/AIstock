@@ -1,5 +1,8 @@
 from dataclasses import asdict
 
+import pytest
+
+from backend.services.position_timing import service as service_module
 from backend.services.position_timing.contracts import canonical_sha256
 from backend.services.position_timing.policy import (
     EXIT_GUARD_RULE_DEFAULT_SNAPSHOT_V1,
@@ -39,3 +42,33 @@ def test_snapshot_provenance_is_hash_bound_to_fixed_source_commit() -> None:
         assert provenance["source_repository_commit"] == POLICY_SOURCE_REPOSITORY_COMMIT
         assert provenance["source_defaults_sha256"] == canonical_sha256(envelope["policy"])
         assert len(provenance["timing_policy_sha256"]) == 64
+
+
+def test_source_commit_resolution_prefers_explicit_process_identity(monkeypatch) -> None:
+    expected = "b" * 40
+    monkeypatch.setenv("AISTOCK_GIT_COMMIT", expected)
+
+    def fail_if_git_is_called(*args, **kwargs):  # pragma: no cover - assertion helper
+        raise AssertionError("git must not be called when explicit process identity is valid")
+
+    monkeypatch.setattr(service_module.subprocess, "run", fail_if_git_is_called)
+    assert service_module._resolve_source_commit() == expected
+
+
+def test_source_commit_provider_does_not_reread_mutable_checkout(monkeypatch) -> None:
+    captured = service_module._source_commit()
+    monkeypatch.delenv("AISTOCK_GIT_COMMIT", raising=False)
+
+    def fail_if_git_is_called(*args, **kwargs):  # pragma: no cover - assertion helper
+        raise AssertionError("running process must not reread mutable checkout HEAD")
+
+    monkeypatch.setattr(service_module.subprocess, "run", fail_if_git_is_called)
+    assert service_module._source_commit() == captured
+
+
+def test_source_commit_provider_fails_closed_when_import_capture_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(service_module, "_PROCESS_SOURCE_REPOSITORY_COMMIT", None)
+    monkeypatch.setattr(service_module, "_PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR", "CalledProcessError")
+
+    with pytest.raises(RuntimeError, match="unavailable when process code loaded: CalledProcessError"):
+        service_module._source_commit()
