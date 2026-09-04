@@ -1,7 +1,7 @@
-# Advisory N3 财务事件 Source Readiness F2 详细设计 v1.1
+# Advisory N3 财务事件 Source Readiness F2 详细设计 v1.2
 
 > 日期：2026-09-04
-> 状态：`IMPLEMENTED_LOCAL_SOURCE_SMOKE_READY_FORMAL_PENDING`
+> 状态：`FORMAL_SOURCE_READY_DELIVERED`
 > tier：`F2`
 > research stage：`N3_FINANCIAL_EVENT_SOURCE_READINESS`
 > objective contract：`ALPHA_RANKING`
@@ -17,7 +17,7 @@
 4. 严格只读、target-free 的设计探针确认主库当前有 forecast 70,561 行、express 14,299 行、fina indicator 314,059 行；开发窗口内统一事件有 27,883 条，全部为 `DATE_ONLY`。扩大到 252 个前置交易日后有 46,484 条，全部满足 `effective_trade_date = source_event_date 后首个交易日`。
 5. 这些历史行最早于 2026-05 才被 AIstock 本地观察，晚于开发窗口大部分日期；因此它们不是逐日保存的 vintage。forecast 与 fina indicator 还存在同 business key 多版本。该事实不构成未来价格/收益字段泄漏，但可能包含公告后的源修订，只能支持探索性导航。
 6. target-free 支持度探针表明：仅使用已有非中性 `event_signal`，最近 120 个交易日有事件的全候选/Top20/Top50 比例为 `64.31%/88.10%/83.68%`，386 日 Top20 支持数 min/median/max 为 `11/18/20`。这证明能够形成干预，不证明 Alpha、完整抓取或确认性 PIT。
-7. v1.1 本地实现 smoke 从同一父包和 margin receipt 读取主库只读 snapshot，投影最早本地版本 84,272 行，其中 qualifying 44,953、neutral 39,319；120 日 Top20/Top50 disclosure 为 `100%/99.9948%`，qualifying 为 `87.8756%/83.4974%`，Top50 mixed qualifying 为 378/386 日。forecast/express/fina event-type 漂移为 `0/0/1.6528%`，全部低于预注册 2%；耗时 9.29 秒、最大采样 RSS 1.164GB、临时文件 7.11MB、8 次 SELECT、0 次数据库写、0 network/Tushare。bundle `46dfc443...` inspect 和同输入 exact retry 均通过；该 smoke 来自未合入源码且未 deliver registry/route，只证明实现与 source 可行，正式状态仍 pending。
+7. PR #4288 已合入 merge commit `5f2fda091...`。clean main 正式运行形成 bundle `211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead`，投影最早本地版本 84,272 行，其中 qualifying 44,953、neutral 39,319；120 日 Top20/Top50 disclosure 为 `100%/99.9948%`，qualifying 为 `87.8756%/83.4974%`，Top50 mixed qualifying 为 378/386 日。forecast/express/fina event-type 漂移为 `0/0/1.6528%`，全部低于预注册 2%；耗时 9.937716 秒、最大采样 RSS 1,089,490,944 bytes、临时文件 7,114,549 bytes、8 次 SELECT、0 次数据库写、0 network/Tushare。inspect 通过，首次 deliver 追加一条 zero-trial registry record 并更新 route，第二次 deliver 为 registry duplicate-noop 与 route exact-noop。正式状态为 `SOURCE_READY_NAVIGATION_ONLY_NON_VINTAGE`，next task 固定为 `N3_FINANCIAL_EVENT_INFORMATION_SET_MVE_DESIGN`。
 
 ## 2. Scope / 目标与终止条件
 
@@ -192,7 +192,7 @@ readiness 不追加模型 trial；registry 记录 `study_type=ORACLE_DIAGNOSTIC`
 
 ## 12. Rollout 与后续
 
-设计审查通过后实现最小 probe；源码必须先合入 clean main，再从 clean main 运行一次正式 source readiness。ready 只放行一个新的事件 MVE 详细设计，不自动训练、不自动启动 Tushare、不激活运行时。not-ready 只把精确数据缺口交给用户决定，不自行回填或换源。
+最小 probe 已通过设计审查、源码审核、PR CI 和 clean-main 正式交付。ready 只放行一个新的事件 MVE 详细设计，不自动训练、不自动启动 Tushare、不激活运行时。当前正式 projection 是后续 MVE 唯一允许的事件 source；后续不得重新查询可变主库或换源。
 
 评分/HMM 辅助线继续使用独立文件 `advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md`，不得改变本 route 或共享本次 trial 身份。
 
@@ -235,16 +235,16 @@ position_or_order_write = false
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-980 | §1、§2、§7 route | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_margin_information_set_formal_v1_20260904/margin_information_set_bundles/b50411d8d68838a3162d5d4e5070259af9a0ba02a515b556c8340ad968537ae4/learnability_receipt.json` | FORMAL_INPUT_VERIFIED | none |
-| F-981 | §5.1 parent contract；`financial_event_source_readiness.py` | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` parent projection and poison tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal bundle is a separate clean-main state |
-| F-982 | §5.2、§10；`read_database_snapshot` | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py` session contract；artifact: local smoke `resource_report.json` in bundle `46dfc443...` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: production access was read-only; all writes remain forbidden |
-| F-983 | §5.3、§6.1；`project_earliest_raw_versions` | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` earliest-version and revision tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: no vintage claim or row filtering by future revision |
-| F-984 | §2、§6.1、§9；raw neutral projection | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` neutral/qualifying separation | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: no neutral fill or stock/date deletion |
-| F-985 | §6.2；calendar `bisect_right` clock | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` calendar and future poison tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: conservative date-only clock is frozen |
-| F-986 | §6.3；`calculate_source_support`/`evaluate_readiness` | artifact: local bundle `46dfc443.../source_readiness_receipt.json`; `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` support boundaries | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: thresholds decide research feasibility only |
-| F-987 | §2、§3、§7；zero-trial registry record | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py` route/trial/column-read tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: no model or economic evidence in readiness |
-| F-988 | §7；build/inspect/deliver | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py` manifest/mutation/retry tests；artifact: local exact retry bundle `46dfc443...` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal bundle waits for clean-main implementation |
-| F-989 | §8、§10；batch query and resource guard | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; artifact: local smoke elapsed/RSS/temp/query receipt | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: no daily workspace or general event platform |
-| F-990 | §3、§10、§12、§13；thin CLI and false gates | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_financial_event_source_readiness_f2_detailed_design_20260904.md --tier F2` | IMPLEMENTED_LOCAL_VERIFIED_FORMAL_PENDING | approved_by_user: restart/DDL/DML/runtime remain separately owned |
+| F-981 | §5.1 parent contract；`financial_event_source_readiness.py` | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` parent projection and poison tests；formal bundle `211b8db1...` | FORMAL_VERIFIED | none |
+| F-982 | §5.2、§10；`read_database_snapshot` | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/resource_report.json` | FORMAL_VERIFIED | approved_by_user: production snapshot read-only；writes remain zero |
+| F-983 | §5.3、§6.1；`project_earliest_raw_versions` | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/event_source_projection.parquet` | FORMAL_VERIFIED | approved_by_user: no vintage claim or row filtering by future revision |
+| F-984 | §2、§6.1、§9；raw neutral projection | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/source_readiness_receipt.json` | FORMAL_VERIFIED | approved_by_user: no neutral fill or stock/date deletion |
+| F-985 | §6.2；calendar `bisect_right` clock | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/source_readiness_receipt.json` | FORMAL_VERIFIED | approved_by_user: conservative date-only clock remains frozen |
+| F-986 | §6.3；`calculate_source_support`/`evaluate_readiness` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/source_readiness_receipt.json`; `backend/tests/advisory_model_first/test_financial_event_source_readiness.py` | FORMAL_VERIFIED | approved_by_user: thresholds decide research feasibility only |
+| F-987 | §2、§3、§7；zero-trial registry record | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830/trial_registry.jsonl` | FORMAL_VERIFIED | approved_by_user: no model or economic evidence in readiness |
+| F-988 | §7；build/inspect/deliver | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py` manifest/mutation/retry tests；artifact: formal bundle `211b8db1...` inspect、registry duplicate-noop、route exact-noop | FORMAL_VERIFIED | none |
+| F-989 | §8、§10；batch query and resource guard | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/resource_report.json` | FORMAL_VERIFIED | approved_by_user: no daily workspace or general event platform |
+| F-990 | §3、§10、§12、§13；thin CLI and false gates | `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_financial_event_source_readiness_f2_detailed_design_20260904.md --tier F2` | FORMAL_SOURCE_READY_DELIVERED | approved_by_user: restart/DDL/DML/runtime remain separately owned |
 
 ## 16. DESIGN-COMPLIANCE-001
 
