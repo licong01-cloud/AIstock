@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-09-04T21:09:45.130765Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e3a1fba2f3f372de1b5cc635a6455daba44f3283",
+  "fixed_at": "2026-09-04T22:22:56Z",
   "github_issue_number": 4300,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4300",
   "last_seen_at": "2026-09-04T21:09:45.130765Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4304",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,6 +129,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -139,7 +141,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1363",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "23408c0743dc6e18",
+    "recorded_at": "2026-09-04T22:24:10.479301Z",
+    "runtime_contract_digest": "fd4d429113077422ae6cbd00534e60436cef6c71e6e8b14efb4cb3cdd8e8c9fe",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e",
+    "source_merge_commit": "e3a1fba2f3f372de1b5cc635a6455daba44f3283",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4304",
+    "validation_evidence": [
+      "validation-receipt: id=991f41cb1ce77f5f commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_financial_event_information_set_contracts.py backend/tests/advisory_model_first/test_financial_event_information_set_pipeline.py backend/tests/advisory_model_first/test_financial_event_information_set_delivery.py -q` result=`passed (33 passed)`",
+      "validation-receipt: id=ece16627c8b035fb commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed)`",
+      "validation-receipt: id=cc04abb32e17cb2c commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`passed (877 passed, 16 skipped)`"
+    ],
+    "validation_evidence_digest": "3b6122b39d16b5fd82da05e2c7bfc2beb6281602bd0da4458a1bc71e3c0e3f9c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -148,6 +173,11 @@
     "fingerprint": "1c393781cf665a46f1b95e63",
     "source_event_id": "FE-20260904-1c393781cf66"
   },
+  "validation_evidence": [
+    "validation-receipt: id=991f41cb1ce77f5f commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_financial_event_information_set_contracts.py backend/tests/advisory_model_first/test_financial_event_information_set_pipeline.py backend/tests/advisory_model_first/test_financial_event_information_set_delivery.py -q` result=`passed (33 passed)`",
+    "validation-receipt: id=ece16627c8b035fb commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed)`",
+    "validation-receipt: id=cc04abb32e17cb2c commit=0fc9c5dcd7f244ab51e0fc51ab29ce2b677f079e kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`passed (877 passed, 16 skipped)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
