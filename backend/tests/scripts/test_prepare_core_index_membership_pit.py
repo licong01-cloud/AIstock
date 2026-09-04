@@ -222,6 +222,21 @@ def test_migration_is_one_table_without_freeze_hash_or_extension() -> None:
     assert "freeze" not in lowered
 
 
+def test_raw_price_source_migration_allows_truthful_tushare_fallback() -> None:
+    root = subject.REPO_ROOT / "backend" / "migrations"
+    preflight = (root / "kline_raw_tushare_source_20260905.preflight.sql").read_text(encoding="utf-8")
+    migration = (root / "kline_raw_tushare_source_20260905.sql").read_text(encoding="utf-8")
+    rollback = (root / "kline_raw_tushare_source_20260905.rollback.sql").read_text(encoding="utf-8")
+
+    assert "ALTER TABLE" not in preflight
+    assert "market.kline_daily_raw" in migration
+    assert "market.kline_minute_raw" in migration
+    assert migration.count("'tushare_api'") >= 2
+    assert migration.count("NOT VALID") == 2
+    assert "VALIDATE CONSTRAINT" not in migration
+    assert "rollback refused while tushare_api rows exist" in rollback
+
+
 def test_upsert_orders_intervals_before_batch_write(monkeypatch) -> None:
     observed = []
 
