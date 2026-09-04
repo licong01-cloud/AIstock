@@ -22,6 +22,7 @@ from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_EXPERIMENT_ID,
     GENERATOR_FAMILY_ID,
     GENERATOR_ALLOWED_FIELDS,
+    GENERATOR_PROMPT_SCHEMA_V2,
     SHA256_PATTERN,
     AdvisoryQEAlphaGenerationReceiptV1,
     FrozenAdvisoryQEAlphaGeneratorRequestV1,
@@ -270,8 +271,10 @@ def generate_alpha_candidates(
             call_index = len(family_attempts) + 1
             retry_prompt = user_prompt
             if family_attempts and family_attempts[-1].get("status") == "SCHEMA_REJECTED":
-                retry_prompt += "\n\nSchema-only retry violations:\n" + "\n".join(
-                    f"- {item}" for item in family_attempts[-1].get("violations", ())
+                retry_prompt = _schema_retry_prompt(
+                    user_prompt,
+                    family_attempts[-1].get("violations", ()),
+                    request=request,
                 )
             started = time.monotonic()
             try:
@@ -457,6 +460,14 @@ def build_family_prompt(
             ]
         },
     }
+    if request.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V2:
+        user_payload["operator_contract"] = _operator_parameter_contract(request.allowed_operators)
+        user_payload["response_contract"] = {
+            "transport": "json_object",
+            "top_level_keys": ["proposals"],
+            "proposals_count": 4,
+            "prose_or_markdown_allowed": False,
+        }
     return system, json.dumps(user_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -1000,12 +1011,23 @@ def _default_llm_call(
     kwargs = get_llm_kwargs(request.model_identity.agent_locator)
     if str(kwargs.get("model", "")) != request.model_identity.model:
         _raise("QE alpha generator model identity drift", "ADVISORY_QE_ALPHA_GENERATOR_MODEL_IDENTITY_MISMATCH")
+    completion_kwargs = dict(kwargs)
+    response_format = None
+    if request.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V2:
+        response_format = {"type": "json_object"}
+        configured_response_format = completion_kwargs.get("response_format")
+        if configured_response_format not in (None, response_format):
+            _raise(
+                "QE alpha generator response format drift",
+                "ADVISORY_QE_ALPHA_GENERATOR_MODEL_IDENTITY_MISMATCH",
+            )
+        completion_kwargs["response_format"] = response_format
     response = litellm.completion(
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         temperature=request.model_identity.temperature,
         top_p=request.model_identity.top_p,
         timeout=request.model_identity.timeout_seconds,
-        **kwargs,
+        **completion_kwargs,
     )
     content = str(response.choices[0].message.content or "")
     usage = getattr(response, "usage", None)
@@ -1014,8 +1036,79 @@ def _default_llm_call(
         "prompt_tokens": getattr(usage, "prompt_tokens", None),
         "completion_tokens": getattr(usage, "completion_tokens", None),
         "total_tokens": getattr(usage, "total_tokens", None),
+        "response_format": "json_object" if response_format else "provider_default",
     }
     return content, telemetry
+
+
+def _operator_parameter_contract(allowed_operators: Sequence[str]) -> list[dict[str, Any]]:
+    contract = [
+        {
+            "operators": ["FIELD"],
+            "required_keys": ["op", "field"],
+            "args_count": 0,
+            "parameter_rules": {"field": "one exact value from allowed_fields"},
+        },
+        {
+            "operators": ["CONST"],
+            "required_keys": ["op", "value"],
+            "args_count": 0,
+            "parameter_rules": {"value": "finite JSON number"},
+        },
+        {
+            "operators": ["ADD", "SUBTRACT", "MULTIPLY", "SAFE_DIVIDE"],
+            "required_keys": ["op", "args"],
+            "args_count": 2,
+            "parameter_rules": {},
+        },
+        {
+            "operators": ["ABS", "SIGN", "LOG1P_ABS", "SQRT_ABS", "SAME_DATE_RANK", "SAME_DATE_ZSCORE"],
+            "required_keys": ["op", "args"],
+            "args_count": 1,
+            "parameter_rules": {},
+        },
+        {
+            "operators": ["LAG", "DELTA"],
+            "required_keys": ["op", "args", "periods"],
+            "args_count": 1,
+            "parameter_rules": {"periods": "integer 1..252 inclusive"},
+        },
+        {
+            "operators": ["TRAILING_SUM", "TRAILING_MEAN", "TRAILING_STD", "TRAILING_MIN", "TRAILING_MAX"],
+            "required_keys": ["op", "args", "window"],
+            "args_count": 1,
+            "parameter_rules": {"window": "integer 2..252 inclusive"},
+        },
+        {
+            "operators": ["CLIP"],
+            "required_keys": ["op", "args", "lower", "upper"],
+            "args_count": 1,
+            "parameter_rules": {"lower": "finite JSON number", "upper": "finite JSON number greater than lower"},
+        },
+    ]
+    declared = [operator for item in contract for operator in item["operators"]]
+    if len(declared) != len(set(declared)) or set(declared) != set(allowed_operators):
+        raise ValueError("QE alpha generator prompt operator contract drift")
+    return contract
+
+
+def _schema_retry_prompt(
+    user_prompt: str,
+    violations: Sequence[str],
+    *,
+    request: FrozenAdvisoryQEAlphaGeneratorRequestV1,
+) -> str:
+    if request.prompt_schema_version != GENERATOR_PROMPT_SCHEMA_V2:
+        return user_prompt + "\n\nSchema-only retry violations:\n" + "\n".join(f"- {item}" for item in violations)
+    payload = json.loads(user_prompt)
+    payload["schema_only_retry"] = {
+        "violations": list(violations),
+        "instruction": (
+            "Return one fresh complete JSON object satisfying the unchanged output, operator, field, and budget contracts."
+        ),
+        "economic_feedback_included": False,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_generation_response(raw: str) -> Sequence[Mapping[str, Any]]:

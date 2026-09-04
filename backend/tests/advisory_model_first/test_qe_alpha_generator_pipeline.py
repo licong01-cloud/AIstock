@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import backend.services.advisory_model_first.qe_alpha_generator_pipeline as generator_pipeline
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_ALLOWED_FIELDS,
+    GENERATOR_PROMPT_SCHEMA_V1,
     build_generator_proposal,
 )
 from backend.services.advisory_model_first.qe_alpha_generator_pipeline import (
@@ -117,6 +121,75 @@ def test_generation_parser_rejects_field_outside_frozen_request_schema(tmp_path)
         catalog,
     )
     assert "sw2_open" not in user_prompt
+
+
+def test_prompt_v2_freezes_operator_parameters_and_json_response_mode(tmp_path, monkeypatch) -> None:
+    request = make_generator_request(tmp_path)
+    _, user_prompt = build_family_prompt(
+        request,
+        "REGIME_CONDITIONED",
+        build_default_proposals(),
+        build_catalog_snapshot([]),
+    )
+    payload = json.loads(user_prompt)
+    declared_operators = [operator for item in payload["operator_contract"] for operator in item["operators"]]
+    assert len(declared_operators) == len(set(declared_operators))
+    assert set(declared_operators) == set(request.allowed_operators)
+    trailing_contract = next(item for item in payload["operator_contract"] if "TRAILING_MEAN" in item["operators"])
+    lag_contract = next(item for item in payload["operator_contract"] if "LAG" in item["operators"])
+    assert trailing_contract["required_keys"] == ["op", "args", "window"]
+    assert trailing_contract["parameter_rules"]["window"] == "integer 2..252 inclusive"
+    assert lag_contract["parameter_rules"]["periods"] == "integer 1..252 inclusive"
+    assert payload["response_contract"] == {
+        "transport": "json_object",
+        "top_level_keys": ["proposals"],
+        "proposals_count": 4,
+        "prose_or_markdown_allowed": False,
+    }
+
+    captured: dict[str, object] = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"proposals":[]}'))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+    monkeypatch.setattr(
+        generator_pipeline,
+        "get_llm_kwargs",
+        lambda _agent: {"model": request.model_identity.model},
+    )
+    _, telemetry = generator_pipeline._default_llm_call("system", user_prompt, request)
+    assert captured["response_format"] == {"type": "json_object"}
+    assert telemetry["response_format"] == "json_object"
+
+    monkeypatch.setattr(
+        generator_pipeline,
+        "get_llm_kwargs",
+        lambda _agent: {
+            "model": request.model_identity.model,
+            "response_format": {"type": "text"},
+        },
+    )
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        generator_pipeline._default_llm_call("system", user_prompt, request)
+    assert exc_info.value.reason_code == "ADVISORY_QE_ALPHA_GENERATOR_MODEL_IDENTITY_MISMATCH"
+
+    legacy_root = tmp_path / "legacy"
+    legacy_root.mkdir()
+    legacy = make_generator_request(legacy_root, prompt_schema_version=GENERATOR_PROMPT_SCHEMA_V1)
+    captured.clear()
+    monkeypatch.setattr(
+        generator_pipeline,
+        "get_llm_kwargs",
+        lambda _agent: {"model": legacy.model_identity.model},
+    )
+    _, legacy_telemetry = generator_pipeline._default_llm_call("system", "legacy", legacy)
+    assert "response_format" not in captured
+    assert legacy_telemetry["response_format"] == "provider_default"
 
 
 def test_weighted_structural_fingerprint_distinguishes_new_fields() -> None:
@@ -285,10 +358,13 @@ def test_schema_failure_requires_response_and_counts_four_expression_attempts(tm
     family_counts = {family: 0 for family in MVE_FAMILIES}
 
     def schema_then_valid(_system, user, _request):
-        family = json.loads(user.split("\n\nSchema-only retry violations:", 1)[0])["family"]
+        prompt_payload = json.loads(user)
+        family = prompt_payload["family"]
         family_counts[family] += 1
         if family_counts[family] == 1:
             return "not-json", {}
+        assert prompt_payload["schema_only_retry"]["economic_feedback_included"] is False
+        assert prompt_payload["schema_only_retry"]["violations"]
         family_index = MVE_FAMILIES.index(family)
         proposals = []
         for index in range(4):

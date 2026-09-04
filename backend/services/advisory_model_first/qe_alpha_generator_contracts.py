@@ -40,6 +40,8 @@ GENERATOR_BOOTSTRAP_REPETITIONS = 2000
 GENERATOR_RANDOM_SEED = 20260903
 GENERATOR_MAX_RSS_BYTES = 16 * 1024**3
 GENERATOR_MAX_TEMP_BYTES = 32 * 1024**3
+GENERATOR_PROMPT_SCHEMA_V1 = "advisory_qe_alpha_generator_prompt_v1"
+GENERATOR_PROMPT_SCHEMA_V2 = "advisory_qe_alpha_generator_prompt_v2"
 
 GENERATOR_KNOWN_EFFECTS = (
     "MOMENTUM",
@@ -149,7 +151,10 @@ class FrozenAdvisoryQEAlphaGeneratorRequestV1(BaseModel):
     allowed_operators: tuple[str, ...]
     known_effects: tuple[str, ...]
     model_identity: QEAlphaGeneratorModelIdentityV1
-    prompt_schema_version: Literal["advisory_qe_alpha_generator_prompt_v1"] = "advisory_qe_alpha_generator_prompt_v1"
+    prompt_schema_version: Literal[
+        "advisory_qe_alpha_generator_prompt_v1",
+        "advisory_qe_alpha_generator_prompt_v2",
+    ] = GENERATOR_PROMPT_SCHEMA_V2
     max_generation_calls: Literal[GENERATOR_MAX_CALLS] = GENERATOR_MAX_CALLS
     max_raw_generation_attempts: Literal[GENERATOR_MAX_RAW_ATTEMPTS] = GENERATOR_MAX_RAW_ATTEMPTS
     max_evaluated_expressions: Literal[GENERATOR_MAX_EVALUATED] = GENERATOR_MAX_EVALUATED
@@ -384,6 +389,8 @@ __all__ = [
     "GENERATOR_MIN_ACCEPTED",
     "GENERATOR_MIN_PER_FAMILY",
     "GENERATOR_OVERLAY_WEIGHT",
+    "GENERATOR_PROMPT_SCHEMA_V1",
+    "GENERATOR_PROMPT_SCHEMA_V2",
     "QEAlphaGeneratorModelIdentityV1",
     "QEAlphaGeneratorProposalV1",
     "build_generation_receipt",
