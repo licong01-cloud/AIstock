@@ -111,8 +111,8 @@
   },
   "first_seen_at": "2026-09-04T21:23:39.148377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+  "fixed_at": "2026-09-04T22:28:01Z",
   "github_issue_number": 4301,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4301",
   "last_seen_at": "2026-09-04T21:23:39.148377Z",
@@ -120,6 +120,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4306",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,6 +146,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -156,7 +158,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1365",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "569a1a3e39fcb626",
+    "recorded_at": "2026-09-04T22:29:02.839960Z",
+    "runtime_contract_digest": "712a1ed3a5784c23b236b5ad6b294ee93156b2126ea241e7ffa8a0d394e92030",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "402fdfa5545760cbd98eb7736a26e6705af52c94",
+    "source_merge_commit": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4306",
+    "validation_evidence": [
+      "validation-receipt: id=32a34f9268cae96e commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`",
+      "validation-receipt: id=f9317d9ae8228854 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_backend status=passed command=`rtk nox -s position_timing_backend` result=`passed: 74 tests`",
+      "validation-receipt: id=fa0d83c555051273 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_first_release status=passed command=`rtk nox -s position_timing_first_release` result=`passed: 74 backend tests, TypeScript, lint, production build, Playwright 1 passed`"
+    ],
+    "validation_evidence_digest": "ac6d0b3040abea6327d0a2158e503acf6078f233943c39cf1a70b2c9db9614a4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "position_timing"
   ],
@@ -165,6 +190,11 @@
     "fingerprint": "78e9e69dce3eaa52875b79c3",
     "source_event_id": "FE-20260904-78e9e69dce3e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=32a34f9268cae96e commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`",
+    "validation-receipt: id=f9317d9ae8228854 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_backend status=passed command=`rtk nox -s position_timing_backend` result=`passed: 74 tests`",
+    "validation-receipt: id=fa0d83c555051273 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_first_release status=passed command=`rtk nox -s position_timing_first_release` result=`passed: 74 backend tests, TypeScript, lint, production build, Playwright 1 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
