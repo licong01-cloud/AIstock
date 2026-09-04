@@ -2,11 +2,11 @@
 
 > 日期：2026-09-04
 >
-> 状态：`FIRST_RELEASE_SOURCE_IMPLEMENTED_RUNTIME_ACTIVATION_SEPARATE`
+> 状态：`FIRST_RELEASE_RUNTIME_ACTIVE_PROVENANCE_FIX_PENDING_USER_RESTART`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
-> 当前实现分支：`feature/position-timing-first-release-block2-20260905`
+> 当前修复分支：`bug/BUG-1365-position-timing-card-source-commit-drifts-after-20260904`
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
@@ -34,7 +34,17 @@
 - 首发仍为 8 个 API、一个页面、一个 artifact root、0 DDL/DML、0 新依赖、0 自动交易。L2 pipeline、L3、分钟新信号和外部通知仍未实现，符合批准范围。
 - 当前集中验证：`position_timing_first_release` 完整通过（后端 72 项、TypeScript、frontend lint、production build、目标 Playwright 1 项）；Ruff 与 validation catalog integrity 通过。仓库既有 frontend hook/autoprefixer warnings 未来自本变更路径且不阻断。
 - 最新主线合并后的真实 DEV 只读冒烟使用一次性 artifact root：发现 468 个持仓/已确认自选候选，默认 scope 仅 2 个真实持仓生效并生成 2 张 2026-09-07 卡片；未来目标日正确返回 `NO_DUE_OUTCOMES`，evidence 为 `AVAILABLE` 且 10 个 horizon 全部是 `PENDING_DERIVED`。过程未写数据库或生产 artifact。
-- `production_ddl_gate=noop`、`production_dependency_gate=noop`。生产 8001/3000 进程未重启，生产 artifact 未写入，运行态激活与 readback 继续单独报告。
+- 截至本源码检查点，`production_ddl_gate=noop`、`production_dependency_gate=noop`，生产 8001/3000 进程尚未重启、生产 artifact 尚未写入；后续实际激活与 readback 见 §0.2，历史检查点不反向改写。
+
+## 0.2 2026-09-05 首发运行态验收与 BUG-1365
+
+- 用户于 05:00 完成 8001 后端重启；同一时段 3000 前端进程也已加载首发页面。8001 OpenAPI 已包含完整 8 API，页面 `/position-timing` 返回 200。
+- 真实运行态发现 468 个候选：2 个真实持仓自动且不可关闭地进入分析范围，466 个自选标的默认不选；没有 scope warning。这验证了“持仓始终分析、自选显式 opt-in”的首发边界。
+- 首次幂等 materialize 为决策日 2026-09-04、目标交易日 2026-09-07 生成 2 张 HOLD 卡；立即重试返回 `ALREADY_MATERIALIZED` 且 artifact identity 不变。生产 artifact root 仅新增 card set、2 条 `CARD_ISSUED`、materialization state、冻结 policy snapshot 与锁文件；没有数据库、订单或其他模块写入。
+- evidence 返回 10 个 `PENDING_DERIVED` horizon、0 matured/unavailable/materialization-missing，费用口径为 `PER_PARENT_ORDER / BROKER_UNVERIFIED`，阈值为 58,824 / 117,648 / 235,295。非交易日 alert poll 返回 `NO_VALID_CARD_TODAY`；这证明提醒链路可用但没有虚构真实触价或送达。
+- 定向 Playwright 与真实 3000/8001 DOM 回读均通过：两张真实持仓卡、2 个锁定勾选项、466 个未选自选项均可见，无 API/page error，且不存在下单或自动交易按钮。
+- 运行态验收同时发现 BUG-1365：进程启动后若 canonical worktree 快进，原 `_source_commit()` 会在下次物化时重新读取可变 `HEAD`，使卡片错误绑定未被当前进程加载的提交。修复后源码身份在模块加载时冻结；显式 `AISTOCK_GIT_COMMIT` 仍优先，解析失败仍由 materialize 返回 typed unavailable，不影响其他后端路由导入。
+- 本次首张卡在 worktree 快进前已正确绑定进程加载提交 `4506ea73ea5db1b19315577f5226980b425b2463`。BUG-1365 合入后仍须由用户再次重启 backend-main 才能激活修复；源码合入、既有首发运行态和修复后运行态继续分开报告。
 
 ## 1. 执行结论
 
@@ -293,8 +303,8 @@ production_dependency_gate = noop
 
 获得激活授权后只做一次收口：
 
-1. 确认运行源码 commit 等于已合入 immutable merge commit；
-2. 只读调用 intents、materialize、current cards、evidence 与 alerts poll；
+1. 确认进程加载时冻结的 source commit 是已合入 `origin/main` 的 immutable commit，并由卡片绑定该值；不得在进程启动后用可变 worktree `HEAD` 冒充运行源码身份；
+2. 只读调用 intents、current cards、evidence 与 alerts poll；另以 exact-idempotent `POST materialize` 仅写 timing-owned artifact；
 3. 浏览器实际打开 `/position-timing`，确认卡片、typed 状态和无交易按钮；交易时段且存在合格 edge 时再验证 claim/toast，否则记录可复现的非交易时段状态；
 4. 回读 timing artifact root，确认没有 QE/Selection/Advisory/Watchlist/Portfolio/Paper/MiniQMT 写入；
 5. 分别报告 source merged、runtime activated、UI available、live edge observed 四种状态，不把未遇到触发价误报成系统失败。
