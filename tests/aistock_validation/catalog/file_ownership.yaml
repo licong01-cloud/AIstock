@@ -568,6 +568,7 @@ rules:
       - backend/routers/quantevolver*.py
       - backend/tests/quantevolver/test_factor_emit_hook.py
       - backend/tests/quantevolver/test_canonical_pit_dataset_binding.py
+      - backend/tests/quantevolver/test_stock_pool_sync.py
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py
@@ -1012,6 +1013,20 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: core_index_pit_stock_pools
+    priority: 110
+    include:
+      - backend/services/core_index_membership.py
+      - backend/services/dataset_release/index_pool_sidecar.py
+      - backend/tests/core_index_membership/**
+      - backend/tests/dataset_release/test_index_pool_sidecar.py
+      - backend/tests/scripts/test_prepare_core_index_membership_pit.py
+      - scripts/prepare_core_index_membership_pit.py
+    primary_module: qlib_data
+    impact_modules: [platform.db, qe.core, hmm, selection_center, paper_v2]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: Core-index PIT authority, shared resolver, sidecar renderer, operator, and direct tests form one Qlib universe-selection data boundary.
   - rule_id: qlib_monthly_dataset_release
     priority: 96
     include:
