@@ -347,7 +347,7 @@ exact retry 必须返回相同 bundle id，registry duplicate no-op、route exac
 4. `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`
 5. `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py`
 6. `backend/tests/advisory_model_first/test_margin_information_set_delivery.py`
-7. CI/ownership 的 exact classifier/catalog mapping（仅在实际路径无法自动覆盖时）
+7. CI/ownership 的 exact classifier/catalog mapping（实际 CI 首轮确认薄 CLI 未自动覆盖，因此实现范围包含 `scripts/ci_change_classifier.py` 与 `backend/tests/scripts/test_ci_change_classifier.py` 的单文件映射及直接测试）
 8. 本详细设计与顶层 Advisory 蓝图的事实/进度更新
 
 顺序：contracts -> target-free source projection -> feature builder -> cross-fit -> paired evaluator -> artifact/inspect -> registry/route -> thin CLI -> tests。任何扩展文件必须先更新设计与 acceptance matrix，不能边实现边扩大平台。
@@ -440,7 +440,7 @@ sealed_holdout_access = false
 | F-969 | receipt and `_write_route_page` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` 0/1 route 与 insufficient-support 分型 | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
 | F-970 | `prepare/run/inspect/_deliver_bundle` | `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` source/MVE immutable bundle、mutation/partial/extra、registry/route no-op tests | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
 | F-971 | chunk loader/resource guard/source 落盘后全量 readback | `backend/tests/advisory_model_first/test_margin_information_set_pipeline.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
-| F-972 | frozen false gates、thin CLI、exact CI mapping | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py`; command: `python -m nox -s advisory_modeling_backend` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
+| F-972 | frozen false gates、thin CLI、exact CI mapping | `backend/tests/advisory_model_first/test_margin_information_set_contracts.py`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py`; `backend/tests/scripts/test_ci_change_classifier.py`; command: `python -m nox -s advisory_modeling_backend` | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: formal experiment is a separate post-merge state |
 
 ## 18. DESIGN-COMPLIANCE-001
 
