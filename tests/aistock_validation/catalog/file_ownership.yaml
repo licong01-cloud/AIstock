@@ -1020,7 +1020,9 @@ rules:
       - backend/services/dataset_release/index_pool_sidecar.py
       - backend/tests/core_index_membership/**
       - backend/tests/dataset_release/test_index_pool_sidecar.py
+      - backend/tests/scripts/test_build_core_index_membership_authority.py
       - backend/tests/scripts/test_prepare_core_index_membership_pit.py
+      - scripts/build_core_index_membership_authority.py
       - scripts/prepare_core_index_membership_pit.py
     primary_module: qlib_data
     impact_modules: [platform.db, qe.core, hmm, selection_center, paper_v2]
