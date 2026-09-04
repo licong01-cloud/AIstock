@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1357",
-  "closed_at": null,
+  "closed_at": "2026-09-04T16:23:35.452789Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -107,10 +107,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1357/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1357",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "482a415b14088acc5e1386ba087e4f2a791cb0a122626973cf9b64fdcad9e31b",
+      "contract_digest": "a97f3df59a5f46a78c343bba6e29c03868047128fa34aeacdaba4c5f877113c5",
+      "expected_identity": "ba359bf635693cac7212220255cfc82e44cdffff",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-04T16:15:56.833988Z",
+      "mode": "read_only",
+      "observed_identity": "996b6452b9c136ff1f426779dbbd837018ecd58e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "75aa40a2de7b38fc0ddab6bbb660e8cacf3c0371b64c6e594c675f9df4b62b2b",
+      "receipt_sha256": "44fe068b6ab3b121fb7bb9e0d645cad47b1d22a9cfbc198d055e9d5c12a3abd1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a197b8ea29462101b98cabd4c4b2bb4a263486be4d51cd90fc8ae8110c03aef0",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -144,7 +166,7 @@
     ],
     "validation_evidence_digest": "25585b5a527634060a452f2e6bdd78b625a674123a708080c4269736e23b6b62"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -157,7 +179,8 @@
     "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
     "python -m nox -s validation_catalog_integrity -> passed (7 passed; findings=0)",
     "python -m nox -s qe_read_backend -> passed (154 passed)",
-    "python -m nox -s qe_sector_risk_overlay_backend -> passed (87 passed)"
+    "python -m nox -s qe_sector_risk_overlay_backend -> passed (87 passed)",
+    "PR #4282 CI verdict and CodeQL verdict passed at final source head 2069710087c2d07de18aaa23087824eeed6b6cac"
   ],
   "verification_budget": {
     "budget": "standard",
