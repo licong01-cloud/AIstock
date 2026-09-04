@@ -50,13 +50,18 @@ def _parse_date(value: Any, field: str) -> date:
 
 
 def _canonical_symbol(value: Any) -> str:
-    text = str(value).strip()
+    text = str(value).strip().upper()
     if text.endswith(".0"):
         text = text[:-2]
+    supplied_suffix: str | None = None
+    if len(text) == 9 and text[6] == ".":
+        text, supplied_suffix = text[:6], text[6:]
     if not text.isdigit() or len(text) > 6:
         raise AuthorityBuildError(f"invalid A-share constituent code: {value!r}")
     code = text.zfill(6)
     suffix = ".SH" if code.startswith(("5", "6", "9")) else ".SZ"
+    if supplied_suffix is not None and supplied_suffix != suffix:
+        raise AuthorityBuildError(f"constituent exchange suffix is inconsistent: {value!r}")
     return f"{code}{suffix}"
 
 

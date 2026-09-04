@@ -232,3 +232,10 @@ def test_late_launched_pool_uses_catalog_history_start_not_global_window(tmp_pat
     rows = subject.build_authority(manifest)
 
     assert rows[0]["effective_from"] == "2023-08-07"
+
+
+def test_inline_event_accepts_canonical_symbol_and_rejects_wrong_exchange() -> None:
+    assert subject._canonical_symbol("000408.SZ") == "000408.SZ"
+    assert subject._canonical_symbol("600000.SH") == "600000.SH"
+    with pytest.raises(subject.AuthorityBuildError, match="suffix is inconsistent"):
+        subject._canonical_symbol("000408.SH")
