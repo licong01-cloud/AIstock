@@ -25,14 +25,23 @@ from .errors import DatasetReleaseError
 
 
 DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
-DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
-DIRECT_COMPONENTS = ("daily_bin", "minute_bin", "factor_h5_static", "index_context")
+LEGACY_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
+DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
+DIRECT_COMPONENTS = (
+    "daily_bin",
+    "minute_bin",
+    "factor_h5_static",
+    "index_context",
+    "suspend_d",
+)
 DIRECT_TERMINAL_STATUS = "CANDIDATE_READY"
 DIRECT_START_DATE = date(2018, 8, 1)
 DIRECT_MINUTE_START_DATE = date(2024, 1, 2)
 DIRECT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DIRECT_FACTOR_COMPONENT_DIR = "factor_h5_static_candidate_v2"
 DIRECT_FACTOR_SCHEMA = "qe_direct_factor_h5_static_v2"
+DIRECT_SUSPEND_COMPONENT_DIR = "suspend_d_daily_candidate_v2"
+DIRECT_SUSPEND_SCHEMA = "qe_direct_suspend_d_v1"
 DIRECT_SECTOR_AUTHORITY = "classification_pit_to_published_l2_v2"
 DIRECT_CANDIDATE_PARENT = Path("X:/AIstock_dataset_candidates/backtest_dataset_candidates")
 DIRECT_INDEX_CODES = (
@@ -115,6 +124,10 @@ class DirectMonthlyLayout:
         return self.components_root / DIRECT_FACTOR_COMPONENT_DIR
 
     @property
+    def suspend_root(self) -> Path:
+        return self.components_root / DIRECT_SUSPEND_COMPONENT_DIR
+
+    @property
     def industry_authority_root(self) -> Path:
         return (
             self.candidate_parent
@@ -159,6 +172,11 @@ def component_plan(*, july_minute_repaired: bool = True) -> tuple[DirectComponen
             "COMPONENT_REBUILD",
             "exact_12_index_contract_and_target_cutoff",
         ),
+        DirectComponentPlan(
+            "suspend_d",
+            "COMPONENT_REBUILD",
+            "same_release_canonical_v2_suspend_history",
+        ),
     )
 
 
@@ -197,8 +215,43 @@ def read_state(layout: DirectMonthlyLayout) -> dict[str, Any] | None:
         value = json.loads(layout.state_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise DirectMonthlyError("direct monthly state is unreadable") from exc
+    value = _upgrade_legacy_state(value)
     _validate_state(layout, value)
     return value
+
+
+def _upgrade_legacy_state(value: Any) -> Any:
+    """Expose a four-component v1 state as a resumable five-component state.
+
+    The conversion is deliberately in-memory.  A read-only status call never
+    mutates an existing candidate; the upgraded state is persisted only when
+    the operator runs the normal candidate-only monthly command.
+    """
+
+    if not isinstance(value, Mapping):
+        return value
+    components = value.get("components")
+    legacy_components = tuple(name for name in DIRECT_COMPONENTS if name != "suspend_d")
+    if (
+        value.get("schema_version") != LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
+        or not isinstance(components, Mapping)
+        or set(components) != set(legacy_components)
+    ):
+        return value
+    upgraded = dict(value)
+    upgraded_components = {name: dict(components[name]) for name in legacy_components}
+    suspend_plan = next(item for item in component_plan() if item.component == "suspend_d")
+    upgraded_components["suspend_d"] = {
+        "action": suspend_plan.action,
+        "reason": suspend_plan.reason,
+        "status": "PENDING",
+    }
+    upgraded["components"] = upgraded_components
+    upgraded["schema_version"] = DIRECT_MONTHLY_STATE_SCHEMA
+    if upgraded.get("status") == DIRECT_TERMINAL_STATUS:
+        upgraded["status"] = "PLANNING_DIRECT"
+        upgraded.pop("validation", None)
+    return upgraded
 
 
 def write_state(layout: DirectMonthlyLayout, value: Mapping[str, Any]) -> None:
@@ -236,7 +289,7 @@ class DirectMonthlyRunner:
         validator: Callable[[DirectMonthlyLayout], Mapping[str, Any]] = lambda layout: validate_direct_candidate(layout),
     ) -> None:
         if set(handlers) != set(DIRECT_COMPONENTS):
-            raise DirectMonthlyError("direct monthly handlers must cover all four components exactly")
+            raise DirectMonthlyError("direct monthly handlers must cover all components exactly")
         self.handlers = dict(handlers)
         self.validator = validator
 
@@ -449,6 +502,7 @@ def production_handlers(*, project_root: Path) -> Mapping[str, ComponentHandler]
         ),
         "factor_h5_static": build_factor_h5_static_component,
         "index_context": build_index_context_component,
+        "suspend_d": build_suspend_d_component,
     }
 
 
@@ -647,6 +701,120 @@ def build_index_context_component(layout: DirectMonthlyLayout) -> Mapping[str, A
         "path": str(output),
         "cutoff": layout.cutoff.isoformat(),
         "codes": len(counts),
+    }
+
+
+def _direct_daily_calendar(layout: DirectMonthlyLayout) -> list[date]:
+    path = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+    if not path.is_file() or path.is_symlink():
+        raise DirectMonthlyError("daily calendar is unavailable for suspend_d alignment")
+    try:
+        values = [
+            date.fromisoformat(line.strip()[:10])
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise DirectMonthlyError("daily calendar is unreadable for suspend_d alignment") from exc
+    values = [value for value in values if DIRECT_START_DATE <= value <= layout.cutoff]
+    if not values or values[-1] != layout.cutoff or values != sorted(set(values)):
+        raise DirectMonthlyError("daily calendar does not cover the suspend_d window")
+    return values
+
+
+def build_suspend_d_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+    """Write the sparse same-release suspension sidecar without freeze/hash work."""
+
+    import pandas as pd
+
+    from backend.db.pg_pool import get_conn
+
+    output = layout.suspend_root
+    meta_path = output / "meta.json"
+    parquet_path = output / "suspend_d.parquet"
+    if _component_output_complete(layout, "suspend_d"):
+        return {
+            "status": "PASS",
+            "component": "suspend_d",
+            "action": "REUSE_COMPLETED_DIRECT_OUTPUT",
+            "path": str(output),
+            "cutoff": layout.cutoff.isoformat(),
+        }
+    if output.exists() and any(output.iterdir()):
+        raise DirectMonthlyError("partial suspend_d output requires explicit inspection")
+
+    calendar_days = _direct_daily_calendar(layout)
+    calendar_index = set(calendar_days)
+    spans = _load_pit_spans(DIRECT_UNIVERSE_KEY, DIRECT_START_DATE, layout.cutoff)
+    with get_conn() as connection:
+        source = pd.read_sql(
+            """
+            SELECT trade_date,ts_code,suspend_type,suspend_timing
+            FROM market.suspend_d
+            WHERE trade_date BETWEEN %(start)s AND %(end)s
+              AND suspend_type='S'
+            ORDER BY trade_date,ts_code
+            """,
+            connection,
+            params={"start": DIRECT_START_DATE, "end": layout.cutoff},
+        )
+    if source.empty:
+        raise DirectMonthlyError("suspend_d source is empty for the full direct-v2 window")
+    source["trade_date"] = pd.to_datetime(source["trade_date"]).dt.normalize()
+    source["ts_code"] = source["ts_code"].astype(str).str.strip().str.upper()
+    source["suspend_type"] = source["suspend_type"].astype(str).str.strip().str.upper()
+    source = source.loc[
+        source["trade_date"].dt.date.isin(calendar_index)
+        & source["ts_code"].str.fullmatch(r"\d{6}\.(?:SH|SZ)")
+        & source["suspend_type"].eq("S")
+    ]
+    source = source.merge(spans, on="ts_code", how="inner", validate="many_to_many")
+    source = source.loc[
+        (source["trade_date"] >= source["eligible_start"])
+        & (source["trade_date"] <= source["eligible_end"])
+    ]
+    source = source.loc[
+        :, ["trade_date", "ts_code", "suspend_type", "suspend_timing"]
+    ].sort_values(["trade_date", "ts_code"])
+    if source.empty:
+        raise DirectMonthlyError("suspend_d has no rows inside the canonical-v2 PIT universe")
+    if source.duplicated(["trade_date", "ts_code"]).any():
+        raise DirectMonthlyError("suspend_d contains duplicate stock-date keys")
+    source = source.reset_index(drop=True)
+
+    counts = source.groupby("trade_date").size().to_dict() if not source.empty else {}
+    daily_row_counts = {value.isoformat(): int(counts.get(pd.Timestamp(value), 0)) for value in calendar_days}
+    output.mkdir(parents=True, exist_ok=True)
+    source.to_parquet(parquet_path, engine="pyarrow", index=False)
+    _write_json_new(
+        meta_path,
+        {
+            "schema_version": DIRECT_SUSPEND_SCHEMA,
+            "component": "suspend_d",
+            "start": DIRECT_START_DATE.isoformat(),
+            "end": layout.cutoff.isoformat(),
+            "universe_key": DIRECT_UNIVERSE_KEY,
+            "source_table": "market.suspend_d",
+            "suspend_type": "S",
+            "row_count": int(len(source)),
+            "stock_count": int(source["ts_code"].nunique()) if not source.empty else 0,
+            "trade_date_count": len(calendar_days),
+            "days_with_suspensions": sum(count > 0 for count in daily_row_counts.values()),
+            "daily_row_counts": daily_row_counts,
+            "source_freeze": False,
+            "full_history_content_hash": False,
+        },
+    )
+    return {
+        "status": "PASS",
+        "component": "suspend_d",
+        "action": "COMPONENT_REBUILD",
+        "path": str(output),
+        "cutoff": layout.cutoff.isoformat(),
+        "rows": int(len(source)),
+        "stocks": int(source["ts_code"].nunique()) if not source.empty else 0,
+        "source_freeze": False,
+        "full_history_content_hash": False,
     }
 
 
@@ -1284,6 +1452,7 @@ def _validate_adoptable_direct_work(layout: DirectMonthlyLayout) -> None:
             "factor_h5_static_candidate",
             DIRECT_FACTOR_COMPONENT_DIR,
             "index_context",
+            DIRECT_SUSPEND_COMPONENT_DIR,
         }
         if not {child.name for child in components.iterdir()}.issubset(allowed_components):
             raise DirectMonthlyError("existing direct work contains an unknown component")
@@ -1308,6 +1477,23 @@ def _component_output_complete(layout: DirectMonthlyLayout, component: str) -> b
     already exported Qlib bins.
     """
 
+    if component == "suspend_d":
+        meta = layout.suspend_root / "meta.json"
+        parquet = layout.suspend_root / "suspend_d.parquet"
+        if not _meta_reaches_cutoff(meta, layout.cutoff) or not parquet.is_file():
+            return False
+        try:
+            value = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return (
+            parquet.stat().st_size > 0
+            and value.get("schema_version") == DIRECT_SUSPEND_SCHEMA
+            and value.get("component") == "suspend_d"
+            and value.get("universe_key") == DIRECT_UNIVERSE_KEY
+            and value.get("source_freeze") is False
+            and value.get("full_history_content_hash") is False
+        )
     if component != "factor_h5_static":
         return True
     meta = layout.factor_root / "meta.json"
@@ -1364,6 +1550,7 @@ def validate_direct_candidate(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
         "index_context": _meta_reaches_cutoff(index / "meta.json", layout.cutoff)
         and (index / "index_daily.h5").is_file()
         and (index / "index_daily.h5").stat().st_size > 0,
+        "suspend_d": _component_output_complete(layout, "suspend_d"),
     }
     if not all(checks.values()):
         raise DirectMonthlyError(f"direct candidate structural validation failed: {checks}")
@@ -1505,12 +1692,15 @@ def _windows_to_wsl(path: Path) -> str:
 
 __all__ = [
     "DIRECT_COMPONENTS",
+    "DIRECT_SUSPEND_COMPONENT_DIR",
+    "DIRECT_SUSPEND_SCHEMA",
     "DIRECT_MONTHLY_SCHEMA",
     "DIRECT_TERMINAL_STATUS",
     "DirectComponentPlan",
     "DirectMonthlyError",
     "DirectMonthlyLayout",
     "DirectMonthlyRunner",
+    "build_suspend_d_component",
     "compact_status",
     "component_plan",
     "initial_state",
