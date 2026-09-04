@@ -7,6 +7,7 @@ policy:
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
   - scripts/aistock_runner_health.py
+  - scripts/build_core_index_membership_authority.py
   - scripts/build_industry_pit_candidates.py
   - scripts/build_sector_data_candidate.py
   - scripts/backfill_tushare_daily_basic_fields.py

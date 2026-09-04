@@ -50,13 +50,18 @@ def _parse_date(value: Any, field: str) -> date:
 
 
 def _canonical_symbol(value: Any) -> str:
-    text = str(value).strip()
+    text = str(value).strip().upper()
     if text.endswith(".0"):
         text = text[:-2]
+    supplied_suffix: str | None = None
+    if len(text) == 9 and text[6] == ".":
+        text, supplied_suffix = text[:6], text[6:]
     if not text.isdigit() or len(text) > 6:
         raise AuthorityBuildError(f"invalid A-share constituent code: {value!r}")
     code = text.zfill(6)
     suffix = ".SH" if code.startswith(("5", "6", "9")) else ".SZ"
+    if supplied_suffix is not None and supplied_suffix != suffix:
+        raise AuthorityBuildError(f"constituent exchange suffix is inconsistent: {value!r}")
     return f"{code}{suffix}"
 
 
@@ -312,12 +317,13 @@ def build_authority(manifest_path: Path) -> list[dict[str, Any]]:
         baseline_reference = str(value.get("baseline_source_reference") or "").strip()
         if not baseline_reference:
             raise AuthorityBuildError(f"baseline_source_reference is empty for {pool_id}")
+        pool_window_start = max(window_start, POOL_DEFINITIONS[pool_id].history_start)
         rows.extend(
             _build_pool_rows(
                 pool_id=pool_id,
                 current_members=current,
                 events=events,
-                window_start=window_start,
+                window_start=pool_window_start,
                 cutoff=cutoff,
                 baseline_reference=baseline_reference,
             )

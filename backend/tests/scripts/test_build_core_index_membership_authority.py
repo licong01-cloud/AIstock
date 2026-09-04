@@ -198,3 +198,44 @@ def test_builder_rejects_mislabeled_current_snapshot(tmp_path: Path) -> None:
 
     with pytest.raises(subject.AuthorityBuildError, match="index differs"):
         subject.build_authority(manifest)
+
+
+def test_late_launched_pool_uses_catalog_history_start_not_global_window(tmp_path: Path) -> None:
+    current_path = tmp_path / "star100-current.xlsx"
+    frame = pd.DataFrame(
+        [["20260904", "000698", "STAR 100", "STAR 100", "688001"]],
+        columns=["date", "index", "name", "english_name", "constituent"],
+    )
+    frame.to_excel(current_path, index=False)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": subject.SCHEMA_VERSION,
+                "window_start": "2018-08-01",
+                "cutoff": "2026-08-31",
+                "pools": [
+                    {
+                        "pool_id": "star100",
+                        "current_workbook": str(current_path),
+                        "current_as_of": "2026-09-04",
+                        "current_expected_count": 1,
+                        "baseline_source_reference": "SSE:launch-baseline",
+                        "events": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = subject.build_authority(manifest)
+
+    assert rows[0]["effective_from"] == "2023-08-07"
+
+
+def test_inline_event_accepts_canonical_symbol_and_rejects_wrong_exchange() -> None:
+    assert subject._canonical_symbol("000408.SZ") == "000408.SZ"
+    assert subject._canonical_symbol("600000.SH") == "600000.SH"
+    with pytest.raises(subject.AuthorityBuildError, match="suffix is inconsistent"):
+        subject._canonical_symbol("000408.SH")
