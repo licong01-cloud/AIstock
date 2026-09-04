@@ -345,6 +345,16 @@ modules:
     ui_routes: [/portfolio, /smart-monitor, /monitor]
     test_plans:
       required_on_change: [l0]
+  - module_id: position_timing
+    display_name: Position Timing Advice
+    module_type: product_feature
+    risk_level: high
+    description: Human-only T+1 daily action cards for the legacy portfolio and confirmed watchlist, with isolated immutable artifacts and no order output.
+    description_zh: 面向人工交易的持仓与已确认自选 T+1 日频行动卡，使用独立不可变制品，不生成订单、不接管调度或交易进程。
+    ui_routes: [/position-timing]
+    api_routes: [/api/v1/position-timing/*]
+    test_plans:
+      required_on_change: [l0, position_timing_backend, frontend_type_lint]
   - module_id: qmt
     display_name: QMT
     module_type: trading_infra

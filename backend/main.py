@@ -42,6 +42,7 @@ from .routers import (
     monitor,
     news,
     portfolio,
+    position_timing,
     qmt,
     qmt_strategy_ledger,
     qe_archive,
@@ -553,6 +554,7 @@ def create_app() -> FastAPI:
     app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
     app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
+    app.include_router(position_timing.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")

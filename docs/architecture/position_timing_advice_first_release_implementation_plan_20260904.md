@@ -2,25 +2,36 @@
 
 > 日期：2026-09-04
 >
-> 状态：`IMPLEMENTATION_READY_NOT_STARTED`
+> 状态：`IMPLEMENTATION_BLOCK_ONE_VALIDATED_BLOCK_TWO_NOT_STARTED`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
 > 适用分支：`feature/position-timing-first-release-20260904`
 >
-> 目标：用一个实现分支、一个 PR 和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环。
+> 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
 本计划不建立第二套设计权威。任何业务语义以 F2 蓝图及其 F-001～F-026 为准；本文件只把已批准设计压缩为可连续执行的实施顺序。
 
+## 0. 2026-09-04 实施检查点
+
+实现块一已经形成内部可联调切片，仍不是完整首发：
+
+- 已实现 timing-owned contracts、冻结 guard/cost policy、保存完整 input/policy identity 与 `cards_sha256` 的 immutable card artifact、`CARD_ISSUED`、持仓与 active watchlist 分页合并、已确认终止上市方向规则、停牌最近可执行 close、T+1 日频卡、5 个块一 API、一个页面以及 composition root 薄接线。
+- alert/outcome 的字段契约和 L2 population/sampling/model/inference contract 已冻结；没有创建 alert poll/claim、outcome materializer、L2 pipeline、worker、scheduler、SSE、数据库表或订单路径。
+- 代码收口后的最终复核已重跑通过：`position_timing_backend` 50 项、`qe_read_backend` 133 项、`platform_api_backend` 15 项、validation catalog/ownership 及目标回归 38 项、`frontend_type_lint`、`l0` 与 F2 validator（26/26，0 warning）。前端 lint 仅报告不属于本变更路径的既有 hook warnings；L0 唯一 MEDIUM 为请求体 `JSON.stringify` 的 `RAW_JSON_UI` 启发式命中，不是向用户展示 raw JSON，均无阻塞项。
+- DEV 只读 readback 识别 468 个去重后的目标（2 个 holdings）；在已成熟的 2026-09-03 数据上临时根生成 468 张卡、0 张数据缺失卡，468 张均绑定可用的 confirmed-delist identity，card adjustment 均明确为 `NOT_APPLICABLE`。2026-09-04 15:23 当日 raw 仍为零覆盖时，服务返回 `SOURCE_NOT_MATURE_NO_NEW_CARD`，未签卡且未写 `CARD_ISSUED`，避免锁死稍后重试；复权数据不再错误阻塞只使用 raw 的卡片。
+- 同次 DEV readback 显示全局 canonical PIT pointer 仍指向 legacy `shsz_st_pit_active_v1`。L1 产品 universe 因而明确不依赖该研究 pointer 迁移；历史 L2 才要求绑定 canonical v2/QE dataset identity。这是去除无关上线门禁，不是把 legacy pointer 冒充 canonical v2。
+- 当前状态只证明本地源码与真实 DEV 只读数据的块一联调结果。本轮用户已授权块一独立完成源码提交与合入；源码合入状态以 Git/PR readback 为准，且不等于生产进程重启、生产页面 readback、真实盘中提醒或完整首发完成。
+
 ## 1. 执行结论
 
-首发只采用“两个连续实现块 + 一次上线收口”：
+首发只采用“两个连续实现块 + 增量源码合入 + 一次上线收口”：
 
 1. **实现块一：日频行动卡纵向闭环**。一次完成 contracts、规则、artifact、只读数据适配、API 与页面，使真实持仓和已确认自选能生成并展示 T+1 卡片。
 2. **实现块二：提醒与结果证据闭环**。补齐一分钟轮询、原子 claim、toast、五个 horizon outcome、证据聚合和全量目标测试。
-3. **上线收口：一次验证、一个 PR、一次激活**。更新 F2 验收矩阵，执行集中验证，等待仓库既有四项稳定 CI 判定后合入；生产端口激活仍按用户授权边界单独记录。
+3. **上线收口：一次完整首发验证、一次激活**。块一与块二可以各自通过普通 PR 增量合入，块二完成后更新 F2 验收矩阵并执行完整首发验证；生产端口激活仍按用户授权边界单独记录。
 
-两个实现块是同一分支、同一 PR 内的开发顺序，不是两次立项、两道批准门禁或两次发布。实现块一完成后只能称为“内部可联调切片”，不得称首发完成。
+两个实现块是同一批准范围内的连续开发顺序，不是两次立项、两道批准门禁或两次发布。块一可以作为已验证的内部切片独立 source merge，以缩短后续块二的变更面；它不得单独激活生产、不得称首发完成，也不得把块二缺口伪装成已实现。
 
 首发不等待 L2 样本、MDE、sealed holdout、券商最低佣金核验或 HMM/Selection 可用性。它们都不能阻塞 L1/L1a。L2、L3 和第二阶段分钟执行研究不是本次实施的细分阶段，而是首发之后另行启动的工作。
 
@@ -78,7 +89,8 @@ Phase 0 是本计划的事实依据，不是额外发布阶段。实施优先调
 | symbol 校验 | `normalize_ts_code()`、`normalize_and_validate_ts_codes()` | timing 内只增加一个 legacy 六位代码到 SH/SZ canonical code 的严格边界适配，之后调用公共 validator；BJ 与未知前缀 typed unavailable |
 | 交易日 | `TradingCalendarStatusService.status/ensure_trading_day/list_trading_days/next_trading_day` | 解析 decision/target/valid/maturity 两只时钟，不用自然日替代交易日 |
 | ST/停牌/涨跌停 | `DailyTradingContextProvider.load_supporting_facts/load_stk_limit_authority_attempt` 与 `LocalSimDailyLimitAuthorityProvider.load` | 组合为一次冻结的 `DailyTradingContextV2`，逐标的保留 typed authority state |
-| raw 日线 | `fetch_history_window_ts(..., freq="1d", adj="none")` | card 参考价、trigger、保守 fill 和费用使用 raw CNY；不得调用分钟历史 |
+| 已确认终止上市 | `market.event_signal` 的 `issuer_bound_stock_delisting_v2` confirmed event；已生效 `market.stock_basic` 终态兜底 | timestamp-causal 事实可覆盖持仓为 EXIT、阻断仅自选买入；研究态 event overlay 不接 runtime |
+| raw 日线 | `fetch_history_window_ts(..., freq="1d", adj="none")` | card 参考价、trigger、保守 fill 和费用使用 raw CNY；T 日已验证停牌且缺 T 日 bar 时，第二次只为缺失标的读取最近可执行 raw close；非停牌旧 bar 不得冒充成熟 T 日输入；不得调用分钟历史 |
 | 复权因子 | `AdjFactorProvider(use_tushare_fallback=False).get_adj_factor_from_db(...)` | outcome 跨公司行动估值；本地缺失即 unavailable，不在线回退 Tushare |
 | 买入价格 guard | `trading_core.price_guard.evaluate(PriceGuardContext, PriceGuardPolicy)` | 用 timing-owned V1 snapshot 显式构造 policy，保留共享纯实现 |
 | 卖出 guard | `trading_core.exit_guard.evaluate(ExitGuardContext, ExitGuardPolicy)` | 风险退出与用户目标映射；不得修改共享默认值 |
@@ -112,10 +124,11 @@ backend/services/position_timing/
     service.py
     alerts.py
 backend/routers/position_timing.py
+frontend/src/app/position-timing/layout.tsx
 frontend/src/app/position-timing/page.tsx
 ```
 
-职责保持在这五个服务文件内。首发不增加 `data_access.py`、worker、scheduler、消息队列、SSE、独立 API client、数据库 repository 或通用插件框架。
+职责保持在这五个服务文件内。`layout.tsx` 只导入既有 `paper-v2.css`，不形成第二个页面、样式副本或业务层。首发不增加 `data_access.py`、worker、scheduler、消息队列、SSE、独立 API client、数据库 repository 或通用插件框架。
 
 ### 4.2 既有文件的最小改动
 
@@ -136,11 +149,11 @@ F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/
 
 `PositionTimingArtifactStore(root: Path)` 必须允许测试注入临时目录；生产默认值仍是上述唯一根。测试不得写真实产品 artifact，真实 DEV readback 另行明确记录。
 
-card 与 policy snapshot 使用 content-addressed no-replace 发布；event JSONL 在跨进程文件锁内执行幂等键检查、append、flush 与 fsync；intent 和 materialization state 使用临时文件加原子替换。current card set 不另建控制面 registry：按 `(position_source, decision_trade_date)` 目录解析恰好一个 immutable card set，出现多个不同 identity 直接返回 conflict。
+card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync 后原子 hard-link 的 content-addressed no-replace 发布；event JSONL 在跨进程文件锁内执行幂等键检查、append、flush 与 fsync；intent 和 materialization state 使用临时文件加原子替换。current card set 不另建控制面 registry：按 `(position_source, decision_trade_date)` 目录解析恰好一个 immutable card set，出现多个不同 identity 直接返回 conflict。
 
 ## 5. 实现块一：日频行动卡纵向闭环
 
-目标是尽早得到可以用真实只读数据联调的完整日频切片，但不单独发布。
+目标是尽早得到可以用真实只读数据联调的完整日频切片。它可以独立完成源码合入，但不单独发布或激活。
 
 设计依据：蓝图 §4、§5.1～§5.10、§5.13 与 F-001～F-011、F-017、F-024～F-025。
 
@@ -149,17 +162,17 @@ card 与 policy snapshot 使用 content-addressed no-replace 发布；event JSON
 - 一次定义 `PositionTimingIntentV1`、`PositionTimingCardV1`、trigger、cost、typed status、三类 event 与 API DTO，枚举和字段直接来自蓝图 §5。
 - 同一 `contracts.py` 以不可变 schema/常量冻结 L2 v1 的 population、sampling、Ridge/GBDT 两个 model spec、唯一 monotone policy、两个 hypothesis、`economic_threshold_bps=0.0` 与 inference 分类字段；不创建 pipeline、模型 bundle、trial 或 registry 写入。这样首发 outcome 从第一天起具备未来 L2 所需字段，而不把 L2 实现塞进首发。
 - 冻结 `PRICE_GUARD_RULE_DEFAULT_SNAPSHOT_V1`、`EXIT_GUARD_RULE_DEFAULT_SNAPSHOT_V1`、`PERSONAL_MANUAL_COMPONENT_COST_V1` 及 snapshot provenance/hash。
-- 每张 card/outcome 绑定实际使用的 dataset、calendar、limit/ST/suspend、adjustment/corporate-action、guard、cost policy 与 source commit identity；缺任一强制 identity 时返回 typed unavailable，不用“当前默认值”补齐。
-- 实现 card/policy immutable publish、intent 原子 current state、event append-only、materialization state 与三类幂等键。
+- 每张 card/outcome 绑定实际使用的 dataset、calendar、limit/ST/suspend/delist、guard、cost policy 与 source commit identity；card set 额外保存完整 input/policy identity 与 `cards_sha256`。块一 card 不消费 adjustment，固定记 `NOT_APPLICABLE` 且不设出卡门禁；块二 outcome 才强制绑定 adjustment/corporate-action。缺任一实际消费的强制 identity 时返回 typed unavailable，不用“当前默认值”补齐。
+- 实现 card/policy immutable publish、intent 原子 current state、event append-only 与三类事件 schema/幂等键；块一即冻结 alert/outcome 的复合键、hash、时区与 maturity 一致性，`materialization_state.json` 的读写和两类未来事件的实际追加留在块二，块二不得另造语义。
 - 费用用 `Decimal` 按组件和父订单计算；58,824 / 117,648 / 235,295 只作为派生断言，不写成业务常量。
 
 ### 5.2 Universe、规则与 materialize
 
 - 分页读完自选；与 legacy holdings 合并并按 canonical symbol 去重。
 - 用一次 position/intent snapshot 构造 card set；单只标的数据缺失只降级该卡，系统级 identity 冲突才使该 card set 失败。
-- 先解析已完成 decision trade date 与 target T+1，再加载 raw 日线、calendar、limit/ST/suspend 和 adjustment identity。
-- 对持仓先调用 exit guard，再按用户目标计算 delta；OPEN/ADD/非风险 REDUCE 只生成冻结条件分支，盘中不新建方向、阈值或数量。
-- `POST /materialize` 每次同时做两件幂等工作：扫描到期 outcome；若具备已完成 T 日输入则生成 T+1 card set。盘中或源尚未成熟时返回 typed no-new-card 状态，不伪造空成功。
+- 先解析已完成 decision trade date 与 target T+1，再加载 raw 日线、calendar、limit/ST/suspend 与 confirmed-delist identity；T 日已验证停牌且缺 bar 时只使用更早的最近可执行 close，非停牌旧 bar 仍视为源未成熟；adjustment 留给块二 outcome。
+- 对持仓先调用 exit guard，再按用户目标计算 delta；confirmed delist 对持仓映射 EXIT、对仅自选买入映射 typed unavailable。OPEN/ADD/非风险 REDUCE 只生成由 snapshot 参数派生的冻结条件分支，green/yellow/skip 各有唯一 guard action/reason 映射，页面把 guard 判定与价格条件一起展示，按各自触发价估算分支成本；盘中不新建方向、阈值或数量。
+- `POST /materialize` 是首发唯一物化入口。块一只在具备已完成 T 日输入时幂等生成 T+1 card set，并显式返回 `outcome_materialization_status=DEFERRED_TO_IMPLEMENTATION_BLOCK_TWO`；块二在同一端点内加入到期 outcome 扫描，不另建 worker 或第二入口。盘中或源尚未成熟时返回 typed no-new-card 状态，不伪造空成功。
 
 ### 5.3 API 与页面
 
@@ -172,7 +185,7 @@ card 与 policy snapshot 使用 content-addressed no-replace 发布；event JSON
 
 内部联调结果必须能回答：“今天为什么建议这只股票买、卖、持有或等待；计划数量和成本是多少；若不能做，缺的是什么。”
 
-实现块一只运行 contracts、universe、PIT、tradability、policy snapshot、cost、artifact 与 card service 的快速测试。它不创建独立评审点，也不合入 main。
+实现块一只运行 contracts、universe、PIT、tradability、policy snapshot、cost、artifact 与 card service 的快速测试。它不创建新的业务审批点；在直接测试、F2 validator 与仓库既有 required checks 通过后可以独立合入 main，但仍只称“块一源码已合入”。
 
 反模式保护：不得为数据读取另建 repository 层，不得让单只股票 unavailable 阻断其他卡，不得用当前共享 default factory 代替已冻结 snapshot，不得把 contract-only 的 L2 schema 接到运行路径。
 
@@ -209,7 +222,7 @@ card 与 policy snapshot 使用 content-addressed no-replace 发布；event JSON
 
 | 能力组 | 覆盖重点 | 权威测试 |
 |---|---|---|
-| 卡片正确性 | universe、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、L2 contract-only 冻结值 | `backend/tests/position_timing/test_contracts.py` 至 `test_card_service.py`；`test_l2_population.py`、`test_l2_model_specs.py`、`test_l2_inference.py` |
+| 卡片正确性 | universe、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、L2 contract-only 冻结值 | 块一：`backend/tests/position_timing/test_api.py`、`test_artifact_store.py`、`test_card_service.py`、`test_cost_policy.py`、`test_l2_population.py`、`test_pit_clock.py`、`test_policy_snapshot.py`、`test_tradability.py`、`test_universe.py`；块二/L2 pipeline 测试按对应实现补齐 |
 | 证据完整性 | immutable/append-only、并发幂等、两只时钟、五 horizons、公司行动、coverage state | `test_artifact_store.py`、`test_outcome_materialization.py` |
 | 盘中提醒 | batch quote、5 分钟/30 秒、GET 零写、claim、already-alerted、多标签页、禁用分钟 fetch | `test_alerts.py` |
 | 隔离与用户结果 | N0/既有表/订单零写、零业务反向依赖、页面卡片/状态/toast/无交易按钮 | `test_isolation.py`、`frontend/tests/position-timing/position-timing.spec.ts` |
@@ -233,11 +246,11 @@ git diff --check origin/main...HEAD
 
 设计依据：蓝图 §10、§12、F-026 与开发规范 `FEATURE-WORKFLOW-001`、`DESIGN-COMPLIANCE-001`。
 
-### 8.1 一个 PR
+### 8.1 增量 source PR
 
-- 计划文档与实现代码使用当前同一 feature branch，不先发独立计划 PR。
-- 实现期间可以有若干本地 commit，但只建立一个 source PR。
-- PR 描述直接引用 F2 蓝图和回填后的 Design Acceptance Matrix，按能力组汇总证据，不重复粘贴长日志。
+- 计划文档与块一实现代码使用当前同一 feature branch；块一通过直接验证后可建立第一个 source PR。
+- 块二从块一合入后的最新 `origin/main` 开始，以第二个 source PR 补齐同一首发范围；不重新立项，也不增加一轮业务批准。
+- 两个 PR 都直接引用 F2 蓝图和 Design Acceptance Matrix，按各自实际能力组汇总证据，不重复粘贴长日志，也不把块一 source merge 表述为首发完成。
 - CI 若暴露真实缺陷，修复后重跑受影响组和最终集中入口；不因诊断性 check 增设永久门禁。
 
 ### 8.2 Production gates
