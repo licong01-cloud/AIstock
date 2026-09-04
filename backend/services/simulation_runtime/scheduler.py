@@ -134,7 +134,11 @@ from .models import (
     canonical_json_sha256,
     miniqmt_kernel_runtime_id,
 )
-from backend.services.simulation_data.daily_context import SimulationBrokerBackend
+from backend.services.simulation_data.daily_context import (
+    DailyTradingSymbolFactV1,
+    DailyTradingSymbolFactV2,
+    SimulationBrokerBackend,
+)
 from backend.services.simulation_signal.contracts import DailySelectionEvidence
 from .miniqmt_quote_activation import (
     MiniQMTKernelProductSyncError,
@@ -9834,7 +9838,11 @@ class SimulationLifecycleScheduler:
                 exc=exc,
             )
         if durable_runtime_recovery is not None:
-            return durable_runtime_recovery
+            # Recovery proves that the persisted execution and projection
+            # planes can be restored; it is not itself causal progress.  Keep
+            # driving the recovered run in this tick so status cannot become
+            # temporarily healthy while every execution state remains stale.
+            run = durable_runtime_recovery.run
         local_failure_error = self._local_sim_broker_called_failure_error(binding=binding, run=run)
         if local_failure_error is not None:
             return SimulationSchedulerBindingResult(
@@ -12266,14 +12274,41 @@ class SimulationLifecycleScheduler:
                         "snapshot_time": snapshot_time.isoformat(),
                     },
                 )
-            suspended = pre_trade_tradability_is_suspended(
-                context.pre_trade_tradability.get(symbol),
-                symbol=symbol,
-            )
+            tradability = context.pre_trade_tradability.get(symbol)
+            suspended = pre_trade_tradability_is_suspended(tradability, symbol=symbol)
             if suspended:
+                daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
+                raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
+                schema_version = daily_reference.get("schema_version") if isinstance(daily_reference, Mapping) else None
+                try:
+                    if schema_version == "daily_trading_context_reference_v1":
+                        fact = DailyTradingSymbolFactV1.model_validate(dict(raw_fact))
+                    elif schema_version == "daily_trading_context_reference_v2":
+                        fact = DailyTradingSymbolFactV2.model_validate(dict(raw_fact))
+                    else:
+                        raise ValueError("unsupported frozen daily trading reference schema")
+                except Exception as exc:
+                    raise DataUnavailableError(
+                        "LocalSim suspended market mark requires a valid frozen daily trading fact",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID",
+                            "symbol": symbol,
+                            "trade_date": execution.run.trade_date.isoformat(),
+                        },
+                    ) from exc
+                expected_source = (
+                    f"{fact.pre_close_source}:frozen_daily_trading_context_v1"
+                    if isinstance(fact, DailyTradingSymbolFactV1)
+                    else f"{fact.limit_authority.value}:frozen_daily_trading_context_v2"
+                )
                 if (
-                    record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
-                    or record.as_of_time.date() >= execution.run.trade_date
+                    fact.symbol != symbol
+                    or fact.trade_date != execution.run.trade_date
+                    or fact.pre_close is None
+                    or record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+                    or float(record.price) != float(fact.pre_close)
+                    or record.source != expected_source
+                    or record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None)
                 ):
                     raise DataUnavailableError(
                         "LocalSim suspended mark is not proven by the previous trading-day close",
@@ -12281,7 +12316,11 @@ class SimulationLifecycleScheduler:
                             "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN",
                             "symbol": symbol,
                             "mark_as_of_time": record.as_of_time.isoformat(),
+                            "snapshot_time": snapshot_time.isoformat(),
                             "source": record.source,
+                            "expected_source": expected_source,
+                            "mark_price": float(record.price),
+                            "expected_pre_close": float(fact.pre_close) if fact.pre_close is not None else None,
                         },
                     )
             else:

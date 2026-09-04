@@ -14197,6 +14197,114 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
     assert exc_info.value.context["reason_code"] == "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID"
 
 
+def test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer() -> None:
+    release, _, _, _ = _release_and_bindings(qmt_only=False)
+    suspended_symbol = "000001.SZ"
+    healthy_symbol = "000002.SZ"
+    positions = {
+        symbol: PositionLot(
+            portfolio_id="p_suspended_marks",
+            symbol=symbol,
+            quantity=100,
+            available_quantity=100,
+            avg_cost=9.5,
+            trade_date=TRADE_DATE - timedelta(days=1),
+        )
+        for symbol in (suspended_symbol, healthy_symbol)
+    }
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="p_suspended_marks",
+        release=release,
+        paper_repository=InMemoryPaperTradingV2Repository(),
+        cash=100_000,
+        positions=positions,
+    )
+    suspended_fact = {
+        "symbol": suspended_symbol,
+        "trade_date": TRADE_DATE.isoformat(),
+        "pre_close": 10.0,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+        "price_basis": "raw",
+        "stk_limit_row_hash": canonical_json_sha256(
+            {
+                "source": "market.stk_limit",
+                "symbol": suspended_symbol,
+                "trade_date": TRADE_DATE.isoformat(),
+                "pre_close": 10.0,
+                "up_limit": 11.0,
+                "down_limit": 9.0,
+                "price_basis": "raw",
+            }
+        ),
+        "is_st": False,
+        "st_source": "market.stock_st",
+        "st_evidence_hash": "1" * 64,
+        "is_suspended": True,
+        "suspend_type": "S",
+        "suspend_timing": None,
+        "suspend_source": "market.suspend_d",
+        "board": "MAIN",
+        "lot_rule": {"min_quantity": 100, "increment": 100},
+    }
+    pre_trade_tradability = {
+        suspended_symbol: {
+            "suspend_status": {"is_suspended": True},
+            "daily_trading_context": {
+                "schema_version": "daily_trading_context_reference_v1",
+                "symbol_fact": suspended_fact,
+            },
+        },
+        healthy_symbol: {"suspend_status": {"is_suspended": False}},
+    }
+    context = replace(context, pre_trade_tradability=pre_trade_tradability)
+    snapshot_time = datetime(2026, 5, 21, 9, 33)
+    execution = SimpleNamespace(
+        run=SimpleNamespace(trade_date=TRADE_DATE, run_payload_json={}),
+        execution_plan=SimpleNamespace(plan_id="plan_suspended_marks"),
+    )
+
+    accepted, records = SimulationLifecycleScheduler._local_sim_position_marks(
+        positions=positions,
+        context=context,
+        execution=execution,
+        snapshot_time=snapshot_time,
+    )
+
+    assert accepted == {healthy_symbol: 10.1, suspended_symbol: 10.0}
+    assert records[suspended_symbol].as_of_time == snapshot_time
+    assert records[suspended_symbol].provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+    assert records[healthy_symbol].provenance == LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
+
+    synthetic_tdx_mark = LocalSimMarketMarkV1(
+        symbol=suspended_symbol,
+        price=10.0,
+        as_of_time=snapshot_time,
+        source=MinuteDataSource.TDX_REALTIME.value,
+        provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
+    )
+    rejected_context = replace(
+        context,
+        local_broker=SimpleNamespace(
+            load_authoritative_position_marks=lambda **_: {
+                suspended_symbol: synthetic_tdx_mark,
+                healthy_symbol: records[healthy_symbol],
+            }
+        ),
+    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_position_marks(
+            positions=positions,
+            context=rejected_context,
+            execution=execution,
+            snapshot_time=snapshot_time,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN"
+    assert exc_info.value.context["expected_source"] == (
+        "market.stk_limit.pre_close:frozen_daily_trading_context_v1"
+    )
+
+
 def test_scheduler_localsim_economic_transaction_rolls_back_both_repositories() -> None:
     class FailingPaperRepository(InMemoryPaperTradingV2Repository):
         def save_fill(self, run_id, fill, **kwargs):
@@ -14363,9 +14471,12 @@ def test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state
     )
 
     recovered = repo.get_simulation_daily_run(run_id)
-    assert recovered_tick.results[0].status == "LOCALSIM_DURABLE_RUNTIME_RECOVERED"
+    assert recovered_tick.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
     assert recovered.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert recovered.run_payload_json["local_sim_failed_run_recovery_v1"]["parent_resubmitted"] is False
+    recovered_states = repo.list_local_sim_execution_states(run_id, authoritative=True)
+    assert recovered_states
+    assert {state.last_processed_bar_time for state in recovered_states} == {datetime(2026, 5, 21, 9, 33)}
     assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == order_ids
 
     # A PROJECTED flag alone is not enough: recovery must independently prove

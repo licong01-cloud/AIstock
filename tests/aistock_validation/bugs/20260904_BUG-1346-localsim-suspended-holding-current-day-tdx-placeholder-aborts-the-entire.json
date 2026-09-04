@@ -1,6 +1,8 @@
 {
-  "actual": "On 2026-09-04 run simrun_555075b03708358f, frozen daily context correctly marks 002998.SZ suspended, but portfolio mark collection receives a current-day TDX synthetic zero-volume minute mark instead of an authoritative previous-close SUSPENDED_PREV_CLOSE mark. LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN aborts the whole portfolio batch, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills while TDX has current bars. Suspended symbols must remain explicit no-fill business states and must not prevent healthy peers from advancing; recovery health must not clear the blocker without causal progress.",
+  "actual": "On 2026-09-04 run simrun_555075b03708358f, the LocalSIM mark loader correctly builds a frozen pre_close mark for suspended 002998.SZ with SUSPENDED_PREV_CLOSE provenance, but the scheduler misinterprets the mark valuation as_of_time as the source-effective date and rejects the current snapshot timestamp. The resulting LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN aborts the whole portfolio batch, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills while TDX has current bars. The durable recovery path then reports recovery without advancing in the same tick, temporarily clearing runtime health without causal progress.",
   "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260904_BUG-1346-localsim-suspended-holding-current-day-tdx-placeholder-aborts-the-entire.json"
   ],
   "assigned_agent": null,
@@ -12,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-04T03:27:26.972359Z",
-  "description": "On 2026-09-04 run simrun_555075b03708358f, frozen daily context correctly marks 002998.SZ suspended, but portfolio mark collection receives a current-day TDX synthetic zero-volume minute mark instead of an authoritative previous-close SUSPENDED_PREV_CLOSE mark. LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN aborts the whole portfolio batch, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills while TDX has current bars. Suspended symbols must remain explicit no-fill business states and must not prevent healthy peers from advancing; recovery health must not clear the blocker without causal progress.",
+  "description": "On 2026-09-04 run simrun_555075b03708358f, frozen daily context correctly marks 002998.SZ suspended and the LocalSIM loader builds the previous-close price with SUSPENDED_PREV_CLOSE provenance. The scheduler nevertheless rejects that valid mark because it conflates the current valuation as_of_time with the previous-close source-effective date. The whole portfolio batch aborts, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills. Durable recovery also returns before attempting causal progress, creating alternating false-green recovery and FAILED_RETRYABLE ticks.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -22,7 +24,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A suspended position is valued at the frozen authoritative pre_close with SUSPENDED_PREV_CLOSE provenance at the current snapshot time, remains an explicit no-fill market state, and cannot block healthy symbols from advancing. A safe durable recovery must continue the same scheduler tick into the causal minute loop; it may clear the current-day blocker only after that continuation succeeds or reaches a legitimate waiting state.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +37,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ]
   },
   "first_seen_at": "2026-09-04T03:27:26.972359Z",
   "fix_branch": null,
