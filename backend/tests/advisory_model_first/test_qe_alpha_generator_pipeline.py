@@ -18,6 +18,7 @@ from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
 )
 from backend.services.advisory_model_first.qe_alpha_generator_pipeline import (
     _allowed_fields_from_parent_source,
+    _bind_pit_eligibility,
     _parse_family_proposals,
     build_catalog_snapshot,
     build_family_prompt,
@@ -391,6 +392,43 @@ def test_schema_failure_requires_response_and_counts_four_expression_attempts(tm
     assert result["accepted_expression_count"] == 24
     assert result["rejected_expression_count"] == 24
     assert result["failed_call_count"] == 0
+
+
+def test_pit_eligibility_is_rebound_by_exact_identity_and_mismatch_fails_closed() -> None:
+    source_panel = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-01-05", "2026-01-05"]),
+            "instrument": ["000001.SZ", "000002.SZ"],
+            "pit_eligible": [True, False],
+            "close": [10.0, 20.0],
+        }
+    )
+    compiled = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-01-05", "2026-01-05"]),
+            "instrument": ["000002.SZ", "000001.SZ"],
+            "N3G_TEST": [2.0, 1.0],
+        }
+    )
+
+    rebound = _bind_pit_eligibility(compiled, source_panel)
+
+    assert rebound[["instrument", "pit_eligible"]].to_dict("records") == [
+        {"instrument": "000002.SZ", "pit_eligible": False},
+        {"instrument": "000001.SZ", "pit_eligible": True},
+    ]
+    with pytest.raises(AdvisoryModelFirstError) as missing_exc:
+        _bind_pit_eligibility(compiled, source_panel.iloc[:1])
+    assert missing_exc.value.reason_code == "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH"
+
+    with pytest.raises(AdvisoryModelFirstError) as control_column_exc:
+        _bind_pit_eligibility(compiled.assign(pit_eligible=True), source_panel)
+    assert control_column_exc.value.reason_code == "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH"
+
+    duplicated = pd.concat([source_panel, source_panel.iloc[:1]], ignore_index=True)
+    with pytest.raises(AdvisoryModelFirstError) as duplicate_exc:
+        _bind_pit_eligibility(compiled, duplicated)
+    assert duplicate_exc.value.reason_code == "ADVISORY_QE_ALPHA_GENERATOR_PIT_LEAKAGE"
 
 
 def test_fixed_overlay_selects_only_consistently_incremental_candidate(tmp_path) -> None:

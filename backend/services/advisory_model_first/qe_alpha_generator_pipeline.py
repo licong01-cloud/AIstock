@@ -575,7 +575,10 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
         proposals=tuple([*proposals, *old_proposals]),
     )
     source_panel = build_source_panel(request=adapter, outcomes=target_keys, benchmark=request.benchmark_instrument)
-    compiled = compile_proposal_scores(panel=source_panel, proposals=tuple([*proposals, *old_proposals]))
+    compiled = _bind_pit_eligibility(
+        compile_proposal_scores(panel=source_panel, proposals=tuple([*proposals, *old_proposals])),
+        source_panel,
+    )
     signal_scores = compiled.loc[
         compiled["datetime"].between(pd.Timestamp(request.signal_start), pd.Timestamp(request.signal_end))
         & compiled["pit_eligible"]
@@ -621,6 +624,49 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
     )
     delivered = _deliver_result_bundle(request, bundle)
     return {**inspect_generator_mve_bundle(bundle), **delivered, "exact_retry": False, "bundle_path": bundle.as_posix()}
+
+
+def _bind_pit_eligibility(compiled: pd.DataFrame, source_panel: pd.DataFrame) -> pd.DataFrame:
+    """Rebind PIT membership after the shared score compiler drops control columns."""
+
+    identity_columns = ["datetime", "instrument"]
+    required_source_columns = {*identity_columns, "pit_eligible"}
+    missing_source = sorted(required_source_columns - set(source_panel.columns))
+    missing_compiled = sorted(set(identity_columns) - set(compiled.columns))
+    unexpected_compiled = ["pit_eligible"] if "pit_eligible" in compiled.columns else []
+    if missing_source or missing_compiled or unexpected_compiled:
+        _raise(
+            "QE alpha generator PIT membership source identity is incomplete",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            missing_source_columns=missing_source,
+            missing_compiled_columns=missing_compiled,
+            unexpected_compiled_control_columns=unexpected_compiled,
+        )
+    membership = source_panel[[*identity_columns, "pit_eligible"]].copy()
+    if membership.duplicated(identity_columns).any() or compiled.duplicated(identity_columns).any():
+        _raise(
+            "QE alpha generator PIT membership source identity is duplicated",
+            "ADVISORY_QE_ALPHA_GENERATOR_PIT_LEAKAGE",
+        )
+    rebound = compiled.merge(
+        membership,
+        on=identity_columns,
+        how="left",
+        validate="one_to_one",
+        indicator="_pit_membership_merge",
+    )
+    complete = rebound["_pit_membership_merge"].eq("both")
+    if len(membership) != len(compiled) or not complete.all() or rebound["pit_eligible"].isna().any():
+        _raise(
+            "QE alpha generator score/PIT membership identity does not close",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            compiled_row_count=len(compiled),
+            membership_row_count=len(membership),
+            unmatched_compiled_row_count=int((~complete).sum()),
+        )
+    rebound = rebound.drop(columns="_pit_membership_merge")
+    rebound["pit_eligible"] = rebound["pit_eligible"].astype(bool)
+    return rebound
 
 
 def target_free_score_overlap(
