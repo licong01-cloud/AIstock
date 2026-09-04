@@ -29,13 +29,20 @@
   ],
   "expected": "Generator economic evaluation must rebind the source-panel PIT membership by exact datetime/instrument identity before target-free overlap and must preserve all frozen research gates.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1349-qe-alpha-generator-economic-run-drops-pit-eligibility-after-score-compil.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
       "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
-      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1349-qe-alpha-generator-economic-run-drops-pit-eligibility-after-score-compil.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
@@ -119,10 +126,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
