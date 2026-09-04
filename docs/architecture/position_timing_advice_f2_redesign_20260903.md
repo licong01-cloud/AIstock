@@ -437,7 +437,7 @@ terminal_exit_max_defer_trading_days = 5
 两只时钟不得混用：
 
 - 行动卡只在 T+1 有效，绝不顺延。
-- outcome 的终值在 nominal horizon 不可取得时，最多向后找 5 个交易日；这只延长标签终值观察，不延长建议。
+- outcome 的终值在 nominal horizon 缺失、停牌、一字跌停不可卖或对应限价 authority 不可核验时，最多向后找 5 个交易日；这只延长标签终值观察，不延长建议。终值卖出必须绑定该历史区间独立的 `market.stk_limit` identity，不得沿用 T+1 card 的单日 limit identity。
 
 由于 `ON_PRICE_TRIGGER` 可能发生在 T+1 开盘后，outcome 将 `target_trade_date` 计为 holding session 1，并以第 h 个 session 的官方 raw close 作为 terminal valuation 时点，再按 §5.6 纳入公司行动路径；这与现有 N 线 T+20 open 标签价格端点不同，分叉理由是避免 h=1 终值先于盘中触发。若 OPEN/ADD 新增数量在 h=1 仍受 T+1 卖出锁定，terminal liquidation proxy 顺延到首个可卖交易日并记 `DEFERRED_THEN_MATURED/TERMINAL_T1_LOCKED`。日期、价格端点、数量/现金流路径和分叉理由必须写入 receipt。
 
@@ -696,7 +696,7 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 
 块一还完成了四项收口：已确认终止上市的 PIT 只读输入及买卖方向映射；已验证 T 日停牌时用更早的最近可执行 close 保留风险方向，而非停牌旧 bar 不会锁死卡片；green/yellow/skip 分支由冻结 guard 参数派生、以 guard action/reason 消歧并按各自触发价估算成本；card set 保存完整 input/policy identity 和 `cards_sha256`。复权因子不参与日频卡，明确为 `NOT_APPLICABLE`，不构成出卡门禁。PR `#4277` 的 required checks 已通过并合入；该状态仍只是完整首发内的块一源码，source merge 不改变范围判断。
 
-### 9.3 第一批 B：L1a 与 prospective outcome
+### 9.3 已实现：第一批 B 的 L1a 与 prospective outcome
 
 1. 先在同一个 `position_timing` 包、router 和页面内实现 §5.2.1 的轻量 scope 当前态与过滤；它只是本任务的一个小条目，不拆新阶段或服务。
 2. 实现批量 quote GET、edge 状态机与 atomic claim POST。
@@ -705,6 +705,8 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 5. 完成隔离、并发、PIT、费用、scope 与 UI 结果验证。
 
 第一批结束的用户可见结果是：日频明确卡、盘中到点提示、失败原因、成本和持续累积的结果证据。L2 未实现不降低这一定义。
+
+2026-09-05 的首发源码实现保持一个 namespace、一个页面和一个 artifact root：F-027 scope、8 个 API、`ALERT_EMISSION_AUTHORIZED`、五 horizon `OUTCOME_EVALUATED`、四态 evidence 与集中 `position_timing_first_release` 验证均已落地。块二唯一新增服务文件为 `alerts.py`；outcome 仍在既有 `service.py`，没有新增数据库、worker、scheduler、SSE、通知平台或订单接口。该状态表示首发源码已实现并完成本地验证，不表示生产进程已经加载。
 
 ### 9.4 后续 C：L2/L3
 
@@ -792,9 +794,9 @@ git diff --check
 
 文档回滚通过后续 PR revert；不删除任何 artifact 或历史证据。
 
-### 12.2 当前块一与未来首发激活
+### 12.2 当前首发源码与未来运行激活
 
-块一已完成无进程控制的本地测试及真实 DEV 只读数据联调，并由 PR `#4277` 合入 `main`；源码合入不自动加载到既有生产进程。没有启动开发端口，也没有激活生产运行态。分析范围管理继续使用同一个文件 artifact root，完整首发仍为零 DDL；若后续偏离为数据库表，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。生产端口 8001/3000 的激活与 backend restart 始终由用户明确授权和执行。
+块一已由 PR `#4277` 合入；块二在同一设计边界内完成 scope、提醒和 outcome 源码，并通过集中本地验证。源码合入不自动加载到既有生产进程；本任务没有控制生产 8001/3000 进程，也没有写生产 artifact。完整首发保持零 DDL、零新依赖；若后续偏离为数据库表，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。运行激活与页面/API readback 继续作为独立状态报告。
 
 ## 13. Design Acceptance Index / 设计验收索引
 
@@ -832,7 +834,7 @@ git diff --check
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
-`DESIGN_VERIFIED` 只证明设计条款已经闭合；`BLOCK_ONE_*_VERIFIED` 表示对应的实现块一范围已有直接测试。块一 source merge 已由 PR `#4277` 单独证明，但任何块一状态都不表示完整首发或生产激活已经完成。带 `APPROVED_BY_USER` 的 gap 可以记录用户明确排入队列的实现块二或后续研究范围，但不是新增门禁。
+`DESIGN_VERIFIED` 只证明设计条款已经闭合；`FIRST_RELEASE_*_VERIFIED` 表示首发适用范围已有直接代码和测试。源码验证仍不表示生产进程已加载。带 `APPROVED_BY_USER` 的 gap 只记录明确后移的 L2/第二阶段研究，不是新增门禁。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -842,33 +844,33 @@ git diff --check
 | F-004 | `PositionTimingCardV1` decision clock 与 PIT checks | `backend/tests/position_timing/test_pit_clock.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
 | F-005 | service read adapters；§4.3 reuse table | `backend/tests/position_timing/test_api.py`；2026-09-04 DEV 468-target readback | BLOCK_ONE_RUNTIME_REUSE_VERIFIED_APPROVED_BY_USER | canonical v2 QE/L2 dataset binding remains in approved later L2 scope |
 | F-006 | `backend/services/position_timing/policy.py` 与 `service.py` L1 mapping | `backend/tests/position_timing/test_card_service.py`（含 confirmed delist 买卖方向） | BLOCK_ONE_VERIFIED | none |
-| F-007 | shared limit/suspend/board-lot adapters 与冻结方向分支 | `backend/tests/position_timing/test_tradability.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED_APPROVED_BY_USER | target-day quote direction recheck remains in approved block two |
+| F-007 | shared limit/suspend/board-lot adapters、冻结方向分支与 target-day quote recheck | `backend/tests/position_timing/test_tradability.py`；`test_card_service.py`；`test_alerts.py`；`test_outcome_materialization.py` | FIRST_RELEASE_VERIFIED | none |
 | F-008 | timing-owned guard snapshot artifact/hash/provenance | `backend/tests/position_timing/test_policy_snapshot.py` | BLOCK_ONE_VERIFIED | none |
 | F-009 | componentized `PERSONAL_MANUAL_COMPONENT_COST_V1` | `backend/tests/position_timing/test_cost_policy.py` | BLOCK_ONE_VERIFIED | none |
 | F-010 | Decimal threshold、合法数量与 cost-heavy label | `backend/tests/position_timing/test_cost_policy.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
 | F-011 | `backend/services/position_timing/artifact_store.py` | `backend/tests/position_timing/test_artifact_store.py`（input/policy/cards/intent tamper 与跨月幂等）；`backend/tests/position_timing/test_isolation.py` | BLOCK_ONE_VERIFIED | none |
-| F-012 | router `POST /materialize` 的 card publication | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_API_VERIFIED_APPROVED_BY_USER | outcome materialization remains in approved block two |
-| F-013 | `OutcomeEvaluatedEventV1` schema 已冻结；runtime materializer 尚不存在 | `backend/tests/position_timing/test_artifact_store.py`（复合键/hash/时钟 schema） | BLOCK_ONE_CONTRACT_VERIFIED_APPROVED_BY_USER | OUTCOME_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
-| F-014 | §5.11 coverage-state 设计已闭合；`materialization_state.json` 尚不存在 | artifact: `docs/architecture/position_timing_advice_f2_redesign_20260903.md#511-outcome-评价`；runtime test 尚不存在 | DESIGN_VERIFIED_APPROVED_BY_USER | OUTCOME_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
-| F-015 | §5.12 quote-poll 设计已闭合；`position_timing/alerts.py` 尚不存在 | artifact: `docs/architecture/position_timing_advice_f2_redesign_20260903.md#512-l1a-报价提醒`；runtime test 尚不存在 | DESIGN_VERIFIED_APPROVED_BY_USER | ALERT_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
-| F-016 | `AlertEmissionAuthorizedEventV1` schema 已冻结；atomic claim 尚不存在 | `backend/tests/position_timing/test_artifact_store.py`（复合键/hash/时区 schema） | BLOCK_ONE_CONTRACT_VERIFIED_APPROVED_BY_USER | ALERT_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
+| F-012 | router `POST /materialize` 的 card + due outcome exact-idempotent publication | `backend/tests/position_timing/test_api.py`；`test_artifact_store.py`；`test_outcome_materialization.py` | FIRST_RELEASE_VERIFIED | none |
+| F-013 | `OutcomeEvaluatedEventV1` 与 `service.py` 五 horizon paired materializer | `backend/tests/position_timing/test_outcome_materialization.py`（两只时钟、保守 fill、逐腿路径、公司行动、终值一字跌停顺延与历史 limit identity） | FIRST_RELEASE_VERIFIED | none |
+| F-014 | `materialization_state.json`、四态 reader 与水位推进 | `backend/tests/position_timing/test_outcome_materialization.py`（partial 不推进、missing 不冒充 pending） | FIRST_RELEASE_VERIFIED | none |
+| F-015 | `position_timing/alerts.py`、GET poll 与 TDX batch constants | `backend/tests/position_timing/test_alerts.py`（50 只、5 分钟/30 秒、漂移与 typed failure） | FIRST_RELEASE_VERIFIED | none |
+| F-016 | atomic claim 与 `ALERT_EMISSION_AUTHORIZED` append | `backend/tests/position_timing/test_alerts.py`；`test_api.py`；`test_artifact_store.py` | FIRST_RELEASE_VERIFIED | none |
 | F-017 | card context fields and typed field-level unavailability | `backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
 | F-018 | L2 population/sampling/outcome schema in `contracts.py` | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED | none |
 | F-019 | frozen Ridge/GBDT/monotone policy spec；runtime pipeline absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
 | F-020 | frozen threshold/effect/power/inference spec；runtime receipt absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
 | F-021 | frozen non-gating semantics | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_cost_policy.py` | CONTRACT_VERIFIED | none |
 | F-022 | §7 objective separation and minute snapshot binding | `backend/tests/position_timing/test_l2_population.py` | DESIGN_VERIFIED_APPROVED_BY_USER | SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE |
-| F-023 | 5 block-one API、one page、no SSE/worker/model imports | `backend/tests/position_timing/test_api.py`；`python -m nox -s frontend_type_lint` | BLOCK_ONE_SCOPE_VERIFIED_APPROVED_BY_USER | alerts and outcome remain in approved block two |
-| F-024 | typed block-one reason/error DTOs and no-new-card maturity state | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_TYPED_FAILURES_VERIFIED_APPROVED_BY_USER | alert and outcome failure states remain in approved block two |
-| F-025 | immutable card source identities、confirmed delist identity、guard snapshot hashes；card adjustment=`NOT_APPLICABLE` | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；2026-09-04 DEV readback | BLOCK_ONE_CARD_IDENTITY_VERIFIED_APPROVED_BY_USER | outcome adjustment/corporate-action receipt identities remain in approved block two |
-| F-026 | module-owned nox/L0/catalog routing and block-one isolation | `python -m nox -s position_timing_backend`；`python -m nox -s l0`；PR `#4277` required checks 与 merge readback | BLOCK_ONE_SOURCE_MERGE_VERIFIED_APPROVED_BY_USER | FULL_FIRST_RELEASE_VALIDATION_AND_RUNTIME_ACTIVATION_DEFERRED_APPROVED_BY_USER |
-| F-027 | §5.2.1 `PositionTimingAnalysisScopeV1`、单一增量 API/既有页面复选框、card-set scope identities | artifact: `docs/architecture/position_timing_advice_f2_redesign_20260903.md#521-轻量分析范围管理已设计排入下一实施任务`；未来复用 `backend/tests/position_timing/test_universe.py`、`test_artifact_store.py`、`test_api.py`、`test_card_service.py` 及既有前端 spec | DESIGN_VERIFIED_APPROVED_BY_USER | IMPLEMENTATION_QUEUED_IN_NEXT_POSITION_TIMING_TASK_APPROVED_BY_USER |
+| F-023 | 8 API、one page、only one new `alerts.py`、no SSE/worker/model imports | `test_api.py`；`test_isolation.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_SCOPE_VERIFIED | none |
+| F-024 | card/scope/quote/claim/outcome typed reason and coverage states | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_alerts.py`；`backend/tests/position_timing/test_outcome_materialization.py` | FIRST_RELEASE_TYPED_FAILURES_VERIFIED | none |
+| F-025 | immutable card identities；outcome raw/adjustment/terminal-limit/cost/card hashes | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；`backend/tests/position_timing/test_outcome_materialization.py`；2026-09-04 DEV card readback | FIRST_RELEASE_IDENTITY_VERIFIED | none |
+| F-026 | module-owned concentrated nox/catalog/L0/F2 routing and isolation | `python -m nox -s position_timing_first_release`；validation catalog integrity；F2 validator；`backend/tests/position_timing/test_isolation.py` | FIRST_RELEASE_LOCAL_GATE_VERIFIED | PRODUCTION_RUNTIME_ACTIVATION_SEPARATE_APPROVED_BY_USER |
+| F-027 | `PositionTimingAnalysisScopeV1`、单一 PUT、既有页面复选框与 card-set scope identities | `backend/tests/position_timing/test_universe.py`；`backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-1. **禁止简化交付**：当前只报告“实现块一源码已合入”，明确列出尚未实现的 L1a、outcome、分析范围管理、完整首发验证与生产激活；没有把块一或 F-027 设计伪装成完整首发实现。
-2. **禁止静默错误**：块一对 PIT、source identity、可交易性、sizing、已确认终止上市、HMM/Selection 和不支持标的使用 typed 状态；系统级零覆盖不签空卡，单标的缺失不拖垮其他卡；块二的报价/outcome 失败语义仍由设计契约约束。
-3. **禁止改变业务逻辑**：实现保持唯一持仓 authority、用户 intent、共享 guard 纯实现、逐腿成本、T+1 card 与 N3 objective 边界。F-027 只在 confirmed watchlist 之内增加显式分析选择，真实持仓仍全部覆盖，且不改变既有 card、Watchlist、Portfolio 或研究语义。
-4. **禁止私增门禁审批**：删除了与 L1 无关的 adjustment 出卡门禁；MDE 仅报告、sealed holdout 可选、最低成交额只标注，且没有审批、双人确认或人工放行。仅 L4b-2 保留既有直接证据条件，因为它属于未来范围并会新增交易次数与真实亏损敞口。
+1. **禁止简化交付**：首发适用的 L1、scope、L1a、prospective outcome、8 API、一个页面与集中验证均已实现；明确保留 L2/L3、分钟新信号和外部通知为批准的后续范围，不以 mock-only 结果冒充 DEV/生产运行成功。
+2. **禁止静默错误**：PIT、source/hash、scope、报价 freshness/future-skew、position/intent drift、方向性不可交易、outcome pending/missing/unavailable 均为 typed 状态；GET 不追加事件，失败扫描不推进成功水位。
+3. **禁止改变业务逻辑**：唯一 `LEGACY_PORTFOLIO` authority、持仓强制覆盖、自选显式 opt-in、共享 guard 纯实现、逐腿成本、T+1 卡片单日有效和 outcome 最多五日终值顺延保持分离；HMM/Selection 不决定方向或 universe。
+4. **禁止私增门禁审批**：没有引入样本/MDE、最低金额、HMM/Selection、券商核验或人工审批阻断；scope opt-in 是用户分析选择，不是质量准入。L2 与第二阶段后移不阻塞 L1/L1a。
 
-结论：蓝图仍是唯一 position-timing 设计基线；实现块一已通过本地/CI 验证并由 PR `#4277` 合入。F-027 已完成轻量设计并排入下一 position-timing 实施任务；实现块二、F-027 源码、完整首发验证、生产进程加载与页面运行态 readback 均未完成，不得据此报告完整功能已交付。
+结论：蓝图仍是唯一 position-timing 设计基线；首发源码已实现并通过集中本地验证。块一合入证据仍为 PR `#4277`；当前块二源码合入与生产运行激活分别报告。`production_ddl_gate=noop`、`production_dependency_gate=noop`，尚未执行生产进程加载与运行态 readback，因此当前只能声明“首发源码候选完成”，不能声明“生产已上线”。

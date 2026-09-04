@@ -20,10 +20,14 @@ from .contracts import (
     AlertEmissionAuthorizedEventV1,
     CardIssuedEventV1,
     OutcomeEvaluatedEventV1,
+    PositionTimingAnalysisScopeV1,
     PositionTimingCardSetV1,
     PositionTimingIntentV1,
+    PositionTimingMaterializationStateV1,
+    analysis_scope_sha256,
     canonical_json_bytes,
     canonical_sha256,
+    empty_analysis_scope,
 )
 
 
@@ -65,6 +69,79 @@ class PositionTimingArtifactStore:
         path = self._intent_path(intent.canonical_symbol)
         self._atomic_replace(path, canonical_json_bytes(intent) + b"\n")
         return intent
+
+    def get_analysis_scope(self) -> PositionTimingAnalysisScopeV1:
+        path = self.root / "analysis_scope" / "current.json"
+        if not path.exists():
+            return empty_analysis_scope()
+        return self._read_analysis_scope(path)
+
+    def put_analysis_scope_symbol(
+        self,
+        *,
+        canonical_symbol: str,
+        analysis_enabled: bool,
+        updated_at: datetime,
+    ) -> tuple[PositionTimingAnalysisScopeV1, bool]:
+        safe_symbol = self._safe_name(canonical_symbol)
+        path = self.root / "analysis_scope" / "current.json"
+        lock_path = self.root / "locks" / "analysis-scope.lock"
+        with _exclusive_file_lock(lock_path):
+            current = self._read_analysis_scope(path) if path.exists() else empty_analysis_scope()
+            selected = set(current.selected_watchlist_symbols)
+            already_selected = safe_symbol in selected
+            if already_selected == analysis_enabled:
+                return current, False
+            if analysis_enabled:
+                selected.add(safe_symbol)
+            else:
+                selected.discard(safe_symbol)
+            canonical_symbols = tuple(sorted(selected))
+            updated = PositionTimingAnalysisScopeV1(
+                selected_watchlist_symbols=canonical_symbols,
+                updated_at=updated_at,
+                scope_sha256=analysis_scope_sha256(
+                    selected_watchlist_symbols=canonical_symbols,
+                    updated_at=updated_at,
+                ),
+            )
+            self._atomic_replace(path, canonical_json_bytes(updated) + b"\n")
+            return updated, True
+
+    def get_materialization_state(self) -> PositionTimingMaterializationStateV1:
+        path = self.root / "materialization_state.json"
+        if not path.exists():
+            return PositionTimingMaterializationStateV1()
+        try:
+            return PositionTimingMaterializationStateV1.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PositionTimingArtifactError(f"invalid materialization state: {path}") from exc
+
+    def put_materialization_state(
+        self, state: PositionTimingMaterializationStateV1
+    ) -> PositionTimingMaterializationStateV1:
+        path = self.root / "materialization_state.json"
+        lock_path = self.root / "locks" / "materialization-state.lock"
+        with _exclusive_file_lock(lock_path):
+            if path.exists():
+                current = self.get_materialization_state()
+                if (
+                    current.last_successful_materialization_scan_through_trade_date is not None
+                    and (
+                        state.last_successful_materialization_scan_through_trade_date is None
+                        or state.last_successful_materialization_scan_through_trade_date
+                        < current.last_successful_materialization_scan_through_trade_date
+                    )
+                ):
+                    state = state.model_copy(
+                        update={
+                            "last_successful_materialization_scan_through_trade_date": (
+                                current.last_successful_materialization_scan_through_trade_date
+                            )
+                        }
+                    )
+            self._atomic_replace(path, canonical_json_bytes(state) + b"\n")
+        return state
 
     def publish_policy_snapshot(self, *, name: str, payload: dict[str, Any]) -> tuple[Path, str]:
         safe_name = self._safe_name(name)
@@ -180,8 +257,42 @@ class PositionTimingArtifactStore:
             return None
         return self.get_card_set(decision_trade_date=max(dates))
 
+    def list_card_sets(self) -> tuple[PositionTimingCardSetV1, ...]:
+        root = self.root / "cards"
+        if not root.exists():
+            return ()
+        dates: list[date] = []
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                dates.append(date.fromisoformat(child.name))
+            except ValueError:
+                raise PositionTimingArtifactError(f"invalid decision-date directory: {child}") from None
+        return tuple(
+            card_set
+            for card_set in (self.get_card_set(decision_trade_date=item) for item in sorted(dates))
+            if card_set is not None
+        )
+
     def append_event(self, payload: dict[str, Any], *, idempotency_key: str) -> bool:
         return self.append_events([(payload, idempotency_key)]) == 1
+
+    def claim_alert_authorization(
+        self, event: AlertEmissionAuthorizedEventV1
+    ) -> tuple[AlertEmissionAuthorizedEventV1, bool]:
+        """Atomically grant one alert authorization per ``(card, trigger)``."""
+
+        payload = event.model_dump(mode="python")
+        logical_key = (event.event_type, event.idempotency_key)
+        lock_path = self.root / "locks" / "events-global.lock"
+        with _exclusive_file_lock(lock_path):
+            existing_by_key = self._events_by_key_unlocked()
+            existing = existing_by_key.get(logical_key)
+            if existing is not None:
+                return AlertEmissionAuthorizedEventV1.model_validate(existing), False
+            self._append_event_payloads_unlocked([payload])
+        return event, True
 
     def append_events(self, events: list[tuple[dict[str, Any], str]]) -> int:
         if not events:
@@ -201,31 +312,8 @@ class PositionTimingArtifactStore:
         lock_path = self.root / "locks" / "events-global.lock"
         appended = 0
         with _exclusive_file_lock(lock_path):
-            existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-            events_root = self.root / "events"
-            if events_root.exists():
-                for path in sorted(events_root.glob("*.jsonl")):
-                    with path.open("r", encoding="utf-8") as handle:
-                        for line_number, line in enumerate(handle, start=1):
-                            if not line.strip():
-                                continue
-                            try:
-                                existing = _validated_event_payload(json.loads(line))
-                            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                                raise PositionTimingArtifactError(
-                                    f"invalid event log {path}:{line_number}"
-                                ) from exc
-                            logical_key = (
-                                str(existing["event_type"]),
-                                str(existing["idempotency_key"]),
-                            )
-                            if logical_key in existing_by_key:
-                                raise PositionTimingArtifactError(
-                                    f"duplicate event idempotency key: {logical_key}"
-                                )
-                            existing_by_key[logical_key] = existing
-
-            append_by_month: dict[str, list[dict[str, Any]]] = {}
+            existing_by_key = self._events_by_key_unlocked()
+            to_append: list[dict[str, Any]] = []
             for logical_key, payload in pending.items():
                 existing = existing_by_key.get(logical_key)
                 if existing is not None:
@@ -234,21 +322,33 @@ class PositionTimingArtifactStore:
                             f"event idempotency key has conflicting payload: {logical_key}"
                         )
                     continue
-                occurred_at = payload.get("occurred_at")
-                if not isinstance(occurred_at, datetime):
-                    raise ValueError("validated event occurred_at must be a datetime")
-                append_by_month.setdefault(occurred_at.strftime("%Y-%m"), []).append(payload)
-
-            for month, payloads in append_by_month.items():
-                path = events_root / f"{month}.jsonl"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("ab") as handle:
-                    for payload in payloads:
-                        handle.write(canonical_json_bytes(payload) + b"\n")
-                        appended += 1
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                to_append.append(payload)
+            self._append_event_payloads_unlocked(to_append)
+            appended = len(to_append)
         return appended
+
+    def list_events(self, *, event_type: str | None = None) -> tuple[dict[str, Any], ...]:
+        root = self.root / "events"
+        if not root.exists():
+            return ()
+        lock_path = self.root / "locks" / "events-global.lock"
+        if not lock_path.exists():
+            raise PositionTimingArtifactError("event log exists without its global lock identity")
+        with _exclusive_file_lock(lock_path):
+            values = list(self._events_by_key_unlocked().values())
+        if event_type is not None:
+            values = [item for item in values if item.get("event_type") == event_type]
+        return tuple(sorted(values, key=lambda item: (item["occurred_at"], item["idempotency_key"])))
+
+    def get_event(self, *, event_type: str, idempotency_key: str) -> dict[str, Any] | None:
+        root = self.root / "events"
+        if not root.exists():
+            return None
+        lock_path = self.root / "locks" / "events-global.lock"
+        if not lock_path.exists():
+            raise PositionTimingArtifactError("event log exists without its global lock identity")
+        with _exclusive_file_lock(lock_path):
+            return self._events_by_key_unlocked().get((event_type, idempotency_key))
 
     def event_counts(self) -> dict[str, int]:
         if not (self.root / "events").exists():
@@ -261,33 +361,61 @@ class PositionTimingArtifactStore:
 
     def _event_counts_unlocked(self) -> dict[str, int]:
         counts: dict[str, int] = {}
+        for payload in self._events_by_key_unlocked().values():
+            event_type = str(payload.get("event_type") or "UNKNOWN")
+            counts[event_type] = counts.get(event_type, 0) + 1
+        return counts
+
+    def _events_by_key_unlocked(self) -> dict[tuple[str, str], dict[str, Any]]:
+        existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
         root = self.root / "events"
         if not root.exists():
-            return counts
-        seen_keys: set[tuple[str, str]] = set()
+            return existing_by_key
         for path in sorted(root.glob("*.jsonl")):
             with path.open("r", encoding="utf-8") as handle:
                 for line_number, line in enumerate(handle, start=1):
                     if not line.strip():
                         continue
                     try:
-                        payload = json.loads(line)
+                        raw_payload = json.loads(line)
                     except json.JSONDecodeError as exc:
                         raise PositionTimingArtifactError(f"malformed event log {path}:{line_number}") from exc
                     try:
-                        payload = _validated_event_payload(payload)
+                        payload = _validated_event_payload(raw_payload)
                     except (TypeError, ValueError) as exc:
                         raise PositionTimingArtifactError(f"invalid event contract {path}:{line_number}") from exc
-                    event_type = str(payload.get("event_type") or "UNKNOWN")
-                    key = (event_type, str(payload.get("idempotency_key") or ""))
-                    if key in seen_keys:
-                        raise PositionTimingArtifactError(f"duplicate event idempotency key: {key}")
-                    seen_keys.add(key)
-                    counts[event_type] = counts.get(event_type, 0) + 1
-        return counts
+                    logical_key = (str(payload["event_type"]), str(payload["idempotency_key"]))
+                    if logical_key in existing_by_key:
+                        raise PositionTimingArtifactError(f"duplicate event idempotency key: {logical_key}")
+                    existing_by_key[logical_key] = payload
+        return existing_by_key
+
+    def _append_event_payloads_unlocked(self, payloads: list[dict[str, Any]]) -> None:
+        append_by_month: dict[str, list[dict[str, Any]]] = {}
+        for payload in payloads:
+            occurred_at = payload.get("occurred_at")
+            if not isinstance(occurred_at, datetime):
+                raise ValueError("validated event occurred_at must be a datetime")
+            append_by_month.setdefault(occurred_at.strftime("%Y-%m"), []).append(payload)
+        events_root = self.root / "events"
+        for month, month_payloads in append_by_month.items():
+            path = events_root / f"{month}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("ab") as handle:
+                for payload in month_payloads:
+                    handle.write(canonical_json_bytes(payload) + b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
 
     def _intent_path(self, canonical_symbol: str) -> Path:
         return self.root / "intents" / f"{self._safe_name(canonical_symbol)}.json"
+
+    @staticmethod
+    def _read_analysis_scope(path: Path) -> PositionTimingAnalysisScopeV1:
+        try:
+            return PositionTimingAnalysisScopeV1.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PositionTimingArtifactError(f"invalid analysis scope artifact: {path}") from exc
 
     @staticmethod
     def _read_intent(path: Path) -> PositionTimingIntentV1:
