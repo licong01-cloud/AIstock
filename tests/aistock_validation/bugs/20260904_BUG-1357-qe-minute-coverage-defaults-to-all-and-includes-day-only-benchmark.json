@@ -4,6 +4,7 @@
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "noxfile.py",
     "scripts/qrun_limit_minute.py",
     "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
   ],
@@ -57,6 +58,7 @@
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "noxfile.py",
       "scripts/qrun_limit_minute.py",
       "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
     ],
@@ -65,6 +67,7 @@
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "noxfile.py",
       "scripts/qrun_limit_minute.py",
       "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
     ]
