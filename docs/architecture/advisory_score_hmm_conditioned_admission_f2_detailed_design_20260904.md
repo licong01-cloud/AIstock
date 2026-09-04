@@ -115,6 +115,7 @@ all production false gates
 - 主键为 `decision_as_of_trade_date + instrument`；386 日每天严格 rank 1..50，score、两腿 norm/rank、weights 和 identity 全部 finite/一致。
 - Top50 只用于同日分布 transform 和 source 诊断；模型训练动作候选仅 rank 1..20；实际 admission 仅作用于父 rank 1..5。
 - 父 rank 1..5 的顺序不可被模型改变。rank 6..20 不能在前五被 SKIP 后补位；rank 21..50 永远不能进入动作输出。
+- Top50 面板的 rank 1..20 键必须与 policy dataset 7,720 个 `decision date + instrument` 键一一相等；rank 1..5 必须严格形成 1,930 个动作槽位。duplicate、missing、extra 或 target-date 不一致均在模型读取前 fail closed，不以内连接静默丢行。
 - 任一 package/manifest/style/weights/runtime semantics 不匹配立即 fail closed；不同包必须建立独立 request 和 bundle。
 
 ### 5.3 Primary 与 secondary targets
@@ -177,7 +178,7 @@ GaussianHMM(n_components=2, covariance_type="full", n_iter=200,
             tol=1e-4, random_state=42, min_covar=1e-5)
 ```
 
-observation 固定为 §6.2 八项在 outer-train 上拟合的 median + standard scaler。每个 outer fold 只拟合一次 HMM；state 语义只用 train state 的 `csi300_ret_20 + market_up_ratio` 有序组合确定，较高者为 `risk_on`，tie/nonfinite/空 state 使该 fold HMM unavailable。validation 只 causal forward-filter，不读取旧 snapshot；posterior 行和为 1、finite、非负。
+observation 固定为 §6.2 八项在 outer-train 上拟合的 median + standard scaler。每个 outer fold 只拟合一次 HMM；state 语义只用 train-standardized state mean 的 `csi300_ret_20 + market_up_ratio` 有序组合确定，较高者为 `risk_on`，tie/nonfinite/空 state 使该 fold HMM unavailable。每个不连续 validation block 均从其起点前 60 个真实交易日的 T-visible observation 重新 warm-up，并使用冻结 train 参数逐日 forward-filter；warm-up 输出丢弃、标签不读，两个 validation block 不传递 posterior，任何 warm-up 缺口使该 block typed unavailable。posterior 行和为 1、finite、非负，不读取旧 snapshot。
 
 HMM hard rule `risk_off => SKIP_ALL` 只允许作为不计入 candidate selection 的透明 diagnostic control；模型 arm 不直接按 state 否决，也不将 posterior 乘父 score。
 
@@ -332,7 +333,7 @@ registry 每个 arm 一条记录，固定 `objective_contract=RISK_MANAGED_ADVIS
 
 1. Identity：package/manifest/style/weights/runtime/policy/source/trial reservation 任一漂移 fail closed；不同 package 不共享 calibrator。
 2. Score：同日 rank/tie/percentile/robust formula；对每天 score 做任意正仿射变换不改变 transform/admission；raw fixed threshold 测试必须失败。
-3. PIT：T+1/future price/market/sector/label poison；train-only transform/model/conformal；validation causal forward-filter；拒绝 smoothed/Viterbi/latest snapshot。
+3. PIT：T+1/future price/market/sector/label poison；train-only transform/model/conformal；validation 60 日 past-only warm-up 与 causal forward-filter；跨 block posterior 隔离；拒绝 smoothed/Viterbi/latest snapshot。
 4. Raw market：canonical PIT universe、停牌/synthetic denominator、minimum 100、benchmark trailing 与 missing typed status。
 5. HMM：K=2 参数、state semantic、posterior normalization、state duration、fold identity；旧 snapshot 与 neutral fallback 拒绝。
 6. Sector：无 canonical bundle 时两臂精确 `NOT_RUN_SOURCE_UNAVAILABLE`；PIT mapping/missing candidate 保留；future source 到来后仍需新 identity。
