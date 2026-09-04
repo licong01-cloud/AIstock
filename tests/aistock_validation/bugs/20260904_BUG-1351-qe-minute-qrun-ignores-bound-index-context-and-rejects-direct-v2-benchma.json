@@ -38,6 +38,12 @@
       "actor": "codex",
       "note": "WSL rdagent-gpu fresh process validated the real 2026-08-31 candidate with direct-v2 binding v2. stock_universe SHA256=8979d78a7c3b322a3d9696f21e880dcd79c9a0bff0aa59d160f6a1f957640392 differs from provider-catalog all.txt SHA256=f5e79d087a709f674ff7f66cb6f5c2f242fb439b737e6dd42a542de26f805ca6; benchmark remains excluded from selection.",
       "timestamp": "2026-09-04T10:20:21.172851Z"
+    },
+    {
+      "action": "post_restart_probe_ref_corrected",
+      "actor": "codex",
+      "note": "The configured legacy /api/v1/qe/custom-evolution/tasks probe returned 404 after successful health and runtime-identity readback. Source inspection confirmed the current read-only task-list route is /api/v1/quantevolver/evolution/tasks; no backend process control or business mutation was performed.",
+      "timestamp": "2026-09-04T12:55:00Z"
     }
   ],
   "evidence_uris": [
@@ -250,7 +256,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
     "fresh_process_evidence": [
       "BUG1351_REAL_CANDIDATE_WSL_PASS: WSL rdagent-gpu fresh process imported the final task-worktree direct-v2 v2 contract and validator, verified the immutable 2026-08-31 candidate, proved stock_universe.txt is hash-distinct from all.txt with 000300.SH excluded from selection, and wrote 0 candidate files"
     ],
