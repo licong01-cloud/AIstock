@@ -1,7 +1,7 @@
-# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.4
+# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.5
 
 > 日期：2026-09-03
-> 状态：`BUG_1347_PROMPT_SCHEMA_V2_FIX_IN_REVIEW_FORMAL_RERUN_REQUIRED`
+> 状态：`BUG_1349_PIT_MEMBERSHIP_REBIND_FIX_IN_REVIEW_FORMAL_RERUN_REQUIRED`
 > tier：F2
 > objective contract：`ALPHA_RANKING`
 > study type：`EXPLORATORY_SCREEN`
@@ -20,6 +20,7 @@
 8. 2026-09-03 首次 clean-main 正式生成调用未收到任何模型响应：12 次调用均因 TLS `DECRYPTION_FAILED_OR_BAD_RECORD_MAC` 失败，但旧实现错误记为 48 个 `SCHEMA_OR_AST_INVALID`，形成 bundle `b760e08f...`。BUG-1330 将该 bundle 定性为基础设施/实现失败证据，不是 48 个 Alpha trial、不是生成支持不足结论，也未进入经济评价、registry 或 route。
 9. 2026-09-04 从 `main@ebe1a8ae...` 冻结的 request `advqegenreq_9ccc0e...` 成功生成 bundle `6565eeb9...`：7 次调用、28 个 raw expression、24 个 accepted、4 个 schema reject、0 个 provider failure。但 request 错误地按目标 121 列 schema 暴露字段，而绑定的 `static_factors.parquet` 实际没有 8 个 margin 字段；候选使用 `md_rqmcl/md_rzye` 后，经济阶段在读取 source panel 前以 parquet projection 失败。BUG-1345 将其定性为 concrete-source schema 实现失败证据；没有经济 trial、registry、route 或 Alpha 结论，该 generation bundle 不得复用为修复后正式评价输入。
 10. BUG-1345 经 PR #4249 修复并由 PR #4250 close-sync 后，`main@2957724895...` 的 request `advqegenreq_1c8383...` 正确冻结 119 个 concrete-source 字段。generation bundle `14214fd8...` 无 provider failure，但 `REGIME_CONDITIONED` 主响应生成了缺少 `window` 的 `TRAILING_MEAN`，schema-only retry 又返回 malformed JSON；该族 `0 accepted`，全批为 `9 calls / 36 raw / 20 accepted / 16 rejected`，终态 `INCOMPLETE_SUPPORT`。按预注册合同，Phase C 以 `GENERATION_SUPPORT_INSUFFICIENT` 拒绝，经济 trial、registry、route 仍为 0/未变化。BUG-1347 只修复 operator 参数 schema 和 JSON transport，不允许扩大调用预算、改变 prompt 经济假设或放宽每族支持门槛。
+11. BUG-1347 经 PR #4255 修复并由 PR #4256 close-sync 后，`main@33f4f21f...` 冻结 prompt v2 request `advqegenreq_dbcc8a...`；generation bundle `f85df0a6...` 为 `6 calls / 24 raw / 22 accepted / 2 rejected / 0 provider failure`，终态 `COMPLETE`。首次经济运行在共享 score compiler 返回后读取已被编译结果丢弃的 `pit_eligible` 控制列，typed fail-closed 为 `KeyError('pit_eligible')`；没有 MVE bundle、经济 trial、registry 或 route 变更。BUG-1349 只按 `(datetime,instrument)` 一对一重新绑定 source panel 的 PIT membership，并对缺失、重复或不闭合身份显式失败；不得修改 generation bundle、Alpha 表达式、预算、收益标签或门槛。
 
 ## 2. Goal / 成功定义
 
@@ -216,7 +217,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 - concurrency=1，RSS<=16 GiB，temp<=32 GiB；wall time 只记录、不设自动停止门禁。
 - 生成阶段网络串行；评价阶段复用旧 pipeline 的单份 source panel、AST 子表达式 cache 和 float32 score panel，不 materialize 24 份源表。
 - 已完成：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests。
-- 待执行：BUG-1347 经审核、CI和合入后，从新的 clean merged source identity 冻结 prompt v2 request 并重新执行固定 LLM 生成。`9ccc0e.../6565eeb9...` 与 `1c8383.../14214fd8...` 均保持不可变且不得沿用 response/proposal；仅新 request 的 `COMPLETE` generation 才运行经济评价。
+- 待执行：BUG-1349 经审核、CI和合入后，从新的 clean merged source identity 冻结全新 prompt v2 request；只有该 request 的 `COMPLETE` generation 才运行经济评价。`dbcc8a.../f85df0a6...` 保持不可变并只作为 generation 成功、经济实现失败的证据，不跨 source identity 迁移 proposal。PIT membership 必须从同一 source panel 按精确键重新绑定，缺失、重复或行集不闭合均 typed fail-closed。
 
 ## 14. Verification plan
 
@@ -242,6 +243,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | 不确定 LLM 破坏 exact retry | 第一次完整响应 content-addressed 冻结；通常 retry 只读复用；仅失败族可在原 call 预算内恢复，成功族永不重采样 |
 | provider/TLS 失败被误当 Alpha rejection | caller 与 parser 异常边界分离；`CALL_FAILED=0 raw expression`；`INFRASTRUCTURE_FAILURE` 禁止经济评价并绑定恢复父 bundle |
 | prompt 只列 operator 名称导致合法参数缺失，或 retry 返回 malformed JSON | prompt v2 冻结 exact operator keys/arity/range；transport 固定 JSON object；原两次族级预算和 raw-response 不可变边界不变 |
+| score compiler 丢弃 `pit_eligible` 后 generator 读取控制列失败，或按行位置误绑 membership | 编译后按 `(datetime,instrument)` 一对一重新绑定同一 source panel 的 PIT membership；缺失、重复、额外或未匹配身份 typed fail-closed，禁止按 DataFrame 行位置赋值 |
 | 目标 schema 字段在 concrete frozen parquet 中尚不存在 | prepare 读取父 request 的 static ref/schema，只冻结实际列交集；旧字段缺失在调用前失败；prompt 目录过滤不可读字段；run 再次对账并禁止 projection fallback |
 | 目录读取泄露性能或秘密 | 字段 allowlist、code hash only、READ ONLY 回滚、artifact secret scan |
 | 24 次新搜索造成假阳性 | 当前批次和跨旧 standalone/overlay 的 cumulative family-wise + DSR |
@@ -274,7 +276,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | F-199 | fixed budget fields；prompt v2 operator/JSON transport；generation receipt/bundle call-vs-expression accounting；immutable recovery lineage | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py::test_generator_request_defaults_to_prompt_v2_and_keeps_v1_readable`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_prompt_v2_freezes_operator_parameters_and_json_response_mode`; schema-retry/provider-recovery tests；`backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
 | F-200 | existing `validate_expression/compile_proposal_scores`；strict generator proposal parser | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | PASS | none |
 | F-201 | `preliminary_originality_reasons`; vectorized `target_free_score_overlap` | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
-| F-202 | `evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` incremental/unknown-Top5 cases | PASS | none |
+| F-202 | `run_generator_mve` exact PIT membership rebind；`evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_pit_eligibility_is_rebound_by_exact_identity_and_mismatch_fails_closed`; incremental/unknown-Top5 cases | PASS | none |
 | F-203 | `_summarize_overlay` current+cumulative block inference/DSR | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
 | F-204 | frontier/receipt exact 0/1 route relation | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
 | F-205 | generation/result publisher/reader、exact retry、registry/route、CLI | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |

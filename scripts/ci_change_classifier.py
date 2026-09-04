@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import sys
@@ -81,6 +82,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_changed_files.py",
+    "backend/tests/scripts/test_ci_test_plan_coverage.py",
     "backend/tests/scripts/test_ci_environment_verify.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_configure_aistock_github_runner.py",
@@ -130,6 +132,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/bug_registry_metadata_check.py",
     "scripts/ci_change_classifier.py",
     "scripts/ci_changed_files.py",
+    "scripts/ci_plan_coverage.py",
     "scripts/ci_environment_verify.py",
     "scripts/ci_failure_issue_summary.py",
     "scripts/ci/prepare_self_hosted_workspace.py",
@@ -153,7 +156,10 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
-    ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
+    ".github/workflows/test.yml": (
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_test_plan_coverage.py",
+    ),
     ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
     ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
     "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
@@ -178,6 +184,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
     "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),
+    "scripts/ci_plan_coverage.py": ("backend/tests/scripts/test_ci_test_plan_coverage.py",),
     "scripts/ci_environment_verify.py": ("backend/tests/scripts/test_ci_environment_verify.py",),
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
     "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
@@ -390,6 +397,181 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
     return sessions
 
 
+def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
+    normalized = _normalize_path(path)
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        normalized.startswith(("backend/tests/", "tests/"))
+        and name.startswith("test_")
+        and name.endswith(".py")
+        and (repo_root / normalized).is_file()
+    )
+
+
+def _resolve_nox_literal(node: ast.AST, values: dict[str, list[str]]) -> list[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        resolved: list[str] = []
+        for item in node.elts:
+            resolved.extend(_resolve_nox_literal(item, values))
+        return resolved
+    if isinstance(node, ast.Name):
+        if node.id == "ROOT":
+            return [""]
+        return list(values.get(node.id, []))
+    if isinstance(node, ast.Starred):
+        return _resolve_nox_literal(node.value, values)
+    if isinstance(node, ast.JoinedStr):
+        parts: list[list[str]] = []
+        for value in node.values:
+            if isinstance(value, ast.FormattedValue):
+                parts.append(_resolve_nox_literal(value.value, values))
+            else:
+                parts.append(_resolve_nox_literal(value, values))
+        combined = [""]
+        for options in parts:
+            if not options:
+                return []
+            combined = [prefix + option for prefix in combined for option in options]
+        return combined
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _resolve_nox_literal(node.left, values)
+        right = _resolve_nox_literal(node.right, values)
+        return [f"{lhs.rstrip('/')}/{rhs.lstrip('/')}".lstrip("/") for lhs in left for rhs in right]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"str", "list", "tuple"}:
+        if len(node.args) == 1:
+            return _resolve_nox_literal(node.args[0], values)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "as_posix":
+        return _resolve_nox_literal(node.func.value, values)
+    return []
+
+
+def _nox_call_name(node: ast.Call) -> str:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return ""
+
+
+def _normalize_nox_test_target(value: str) -> str | None:
+    normalized = _normalize_path(value.split("::", 1)[0]).strip("/")
+    if not normalized or normalized.startswith("-"):
+        return None
+    if normalized.startswith(("backend/tests/", "tests/")) or normalized in {"backend/tests", "tests"}:
+        return normalized
+    return None
+
+
+def _session_test_targets(function: ast.FunctionDef) -> set[str]:
+    values: dict[str, list[str]] = {}
+    nodes = sorted(ast.walk(function), key=lambda item: (getattr(item, "lineno", -1), getattr(item, "col_offset", -1)))
+    for node in nodes:
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            resolved = _resolve_nox_literal(node.iter, values)
+            if resolved:
+                values[node.target.id] = resolved
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            resolved = _resolve_nox_literal(node.value, values) if node.value is not None else []
+            for target in targets:
+                if isinstance(target, ast.Name) and resolved:
+                    values[target.id] = resolved
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"append", "extend"}
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+        ):
+            resolved = _resolve_nox_literal(node.args[0], values)
+            if resolved:
+                values.setdefault(node.func.value.id, []).extend(resolved)
+
+    targets: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _nox_call_name(node)
+        resolved_args: list[str] = []
+        for argument in node.args:
+            resolved_args.extend(_resolve_nox_literal(argument, values))
+        is_pytest_call = call_name == "_run_pytest" or (
+            call_name in {"run", "run_always"} and "pytest" in {item.casefold() for item in resolved_args}
+        )
+        if not is_pytest_call:
+            continue
+        for value in resolved_args:
+            target = _normalize_nox_test_target(value)
+            if target:
+                targets.add(target)
+    return targets
+
+
+def _selected_nox_test_targets(*, repo_root: Path, sessions: list[str]) -> tuple[dict[str, set[str]], str | None]:
+    if not sessions:
+        return {}, None
+    nox_path = repo_root / "noxfile.py"
+    if not nox_path.is_file():
+        return {}, f"nox contract file is missing: {nox_path.as_posix()}"
+    try:
+        tree = ast.parse(nox_path.read_text(encoding="utf-8"), filename=nox_path.as_posix())
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        return {}, f"nox contract could not be parsed: {exc}"
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    missing_sessions = [session for session in sessions if session not in functions]
+    if missing_sessions:
+        return {}, f"selected nox sessions are missing: {missing_sessions!r}"
+    return {session: _session_test_targets(functions[session]) for session in sessions}, None
+
+
+def _test_target_covers_path(target: str, path: str) -> bool:
+    normalized_target = _normalize_path(target).rstrip("/")
+    normalized_path = _normalize_path(path)
+    if any(token in normalized_target for token in "*?["):
+        return False
+    if normalized_target.endswith(".py"):
+        return normalized_path == normalized_target
+    return normalized_path == normalized_target or normalized_path.startswith(normalized_target + "/")
+
+
+def _changed_test_plan_coverage(
+    paths: list[str],
+    *,
+    repo_root: Path,
+    file_backend_sessions: dict[str, list[str]],
+) -> dict[str, Any]:
+    test_files = [path for path in paths if _is_python_test_file(path, repo_root=repo_root)]
+    selected_sessions = list(
+        dict.fromkeys(session for path in test_files for session in file_backend_sessions.get(path, []))
+    )
+    targets_by_session, resolution_error = _selected_nox_test_targets(
+        repo_root=repo_root,
+        sessions=selected_sessions,
+    )
+    coverage: dict[str, list[str]] = {}
+    deferred_test_files: list[str] = []
+    for path in test_files:
+        sessions = file_backend_sessions.get(path, [])
+        if not sessions:
+            deferred_test_files.append(path)
+            continue
+        coverage[path] = [
+            session
+            for session in sessions
+            if any(_test_target_covers_path(target, path) for target in targets_by_session.get(session, set()))
+        ]
+    unexecuted = [path for path, covering_sessions in coverage.items() if not covering_sessions]
+    return {
+        "changed_test_files": test_files,
+        "coverage": coverage,
+        "deferred_test_files": deferred_test_files,
+        "resolution_error": resolution_error,
+        "unexecuted_test_files": unexecuted,
+    }
+
+
 def _dev_db_plan_keys(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
     plan_keys: list[str] = []
     for plan_key in selection.get("required_plans") or []:
@@ -425,6 +607,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     frontend_test_targets: list[str] = []
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
+    file_backend_sessions: dict[str, list[str]] = {}
     for path in paths:
         path_selection = flow.select_validation([path])
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
@@ -455,7 +638,9 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             )
             for plan_key in required_plans
         )
-        if _backend_sessions_from_selection({"required_plans": required_plans}, plans) or has_related_deferred_plan:
+        path_sessions = _backend_sessions_from_selection({"required_plans": required_plans}, plans)
+        file_backend_sessions[path] = path_sessions
+        if path_sessions or has_related_deferred_plan:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
@@ -468,6 +653,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
         "unmapped_code_files": unmapped_files,
+        "file_backend_sessions": file_backend_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
         "required_plans": selected_plan_keys,
     }
@@ -672,6 +858,16 @@ def classify_changed_files(
         blocking.append(
             "unmapped executable code must declare a direct CI test mapping: " + ", ".join(unmapped_code_files)
         )
+    changed_test_plan_coverage = _changed_test_plan_coverage(
+        business_files,
+        repo_root=repo_root,
+        file_backend_sessions=catalog_selection["file_backend_sessions"],
+    )
+    unexecuted_test_files = changed_test_plan_coverage["unexecuted_test_files"]
+    if changed_test_plan_coverage["resolution_error"]:
+        blocking.append(str(changed_test_plan_coverage["resolution_error"]))
+    if unexecuted_test_files:
+        blocking.append(f"changed test files are not executed by any selected CI plan: {unexecuted_test_files!r}")
 
     workflow_validation_required = bool(workflow_test_targets)
     workflow_validation_only = (
@@ -716,7 +912,11 @@ def classify_changed_files(
     go_required = bool(go_files) and not docs_lite_only
     classification = "full_ci_required"
     if blocking:
-        classification = "unmapped_code_blocked"
+        classification = (
+            "unexecuted_test_blocked"
+            if unexecuted_test_files and not unmapped_code_files
+            else "unmapped_code_blocked"
+        )
     elif docs_lite_only:
         classification = docs_fast_tier or _docs_lite_kind(normalized)
     elif close_sync_metadata_only:
@@ -790,6 +990,9 @@ def classify_changed_files(
         "codeql_pr_languages": codeql_pr_languages,
         "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
+        "changed_test_plan_coverage": changed_test_plan_coverage,
+        "backend_changed_test_files": changed_test_plan_coverage["changed_test_files"],
+        "unexecuted_test_files": unexecuted_test_files,
         "obsolete_surface_removal": False,
         "nightly_deferred_verification": {
             "required": False,
@@ -824,6 +1027,8 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",
         f"unmapped_code_files={json.dumps(payload['unmapped_code_files'])}",
+        f"backend_changed_test_files={json.dumps(payload['backend_changed_test_files'])}",
+        f"unexecuted_test_files={json.dumps(payload['unexecuted_test_files'])}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
         f"workflow_test_targets={json.dumps(payload['workflow_test_targets'])}",
@@ -874,6 +1079,8 @@ def main(argv: list[str] | None = None) -> int:
                 "frontend_test_targets": payload["frontend_test_targets"],
                 "go_required": payload["go_required"],
                 "unmapped_code_files": payload["unmapped_code_files"],
+                "backend_changed_test_files": payload["backend_changed_test_files"],
+                "unexecuted_test_files": payload["unexecuted_test_files"],
                 "workflow_validation_required": payload["workflow_validation_required"],
                 "workflow_test_targets": payload["workflow_test_targets"],
                 "docs_lite_required": payload["docs_lite_required"],

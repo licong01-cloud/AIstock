@@ -176,6 +176,7 @@ def build_contract_evidence(
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
     changed_files_path: Path = Path("scripts/ci_changed_files.py"),
+    test_plan_coverage_path: Path = Path("scripts/ci_plan_coverage.py"),
     workspace_prepare_path: Path = Path("scripts/ci/prepare_self_hosted_workspace.py"),
     issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
     nightly_scheduler_path: Path = Path("scripts/nightly_adaptive_scheduler.py"),
@@ -212,6 +213,9 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
+    test_plan_coverage_text = (
+        test_plan_coverage_path.read_text(encoding="utf-8") if test_plan_coverage_path.exists() else ""
+    )
     workspace_prepare_text = workspace_prepare_path.read_text(encoding="utf-8") if workspace_prepare_path.exists() else ""
     nightly_scheduler_text = nightly_scheduler_path.read_text(encoding="utf-8") if nightly_scheduler_path.exists() else ""
     nightly_session_runner_text = (
@@ -424,6 +428,22 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "changed_tests_reachable_from_selected_ci_plan": (
+            "def _changed_test_plan_coverage(" in classifier_text
+            and "def _selected_nox_test_targets(" in classifier_text
+            and "file_backend_sessions" in classifier_text
+            and "unexecuted_test_files" in classifier_text
+            and "unexecuted_test_blocked" in classifier_text
+            and "changed test files are not executed by any selected CI plan" in classifier_text
+            and "AISTOCK_CI_TEST_COLLECTION_RECEIPT:" in test_text
+            and "AISTOCK_CI_CLASSIFIER_SUMMARY:" in test_text
+            and "backend_changed_test_files" in classifier_text
+            and "PYTEST_ADDOPTS: -p scripts.ci_plan_coverage" in test_text
+            and "python scripts/ci_plan_coverage.py" in test_text
+            and 'backend_failures+=("changed_test_plan_coverage")' in test_text
+            and "def pytest_collection_finish(" in test_plan_coverage_text
+            and "missing_changed_test_files" in test_plan_coverage_text
+        ),
         "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout": bool(frontend_quality_text)
         and "AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock" in test_text
         and "actions/checkout@v7" in frontend_quality_text
