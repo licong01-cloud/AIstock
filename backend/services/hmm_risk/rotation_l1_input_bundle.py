@@ -1384,10 +1384,15 @@ def _load_suspend_keys(
             or (not frame.empty and max(frame["trade_date"]) != expected_release_cutoff)
         ):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 suspend_d readback differs from metadata")
-    intraday = frame["suspend_timing"].notna()
-    if frame.loc[intraday, "suspend_timing"].map(lambda value: not isinstance(value, str) or not value.strip()).any():
-        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d intraday timing is invalid")
-    full_day = frame.loc[~intraday]
+
+    def is_full_day_timing(value: Any) -> bool:
+        if value is None or value is pd.NA or (isinstance(value, (float, np.floating)) and math.isnan(float(value))):
+            return True
+        if not isinstance(value, str):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d timing is not textual")
+        return value.strip() in {"", "09:30-09:30"}
+
+    full_day = frame.loc[frame["suspend_timing"].map(is_full_day_timing)]
     calendar_set = set(calendar)
     keys = [(row.trade_date, row.ts_code) for row in full_day.itertuples(index=False) if row.trade_date in calendar_set]
     return frozenset(keys)

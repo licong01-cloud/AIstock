@@ -1461,11 +1461,23 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
     suspend_frame = pd.DataFrame(
         [
             {
+                "trade_date": pd.Timestamp("2025-11-26"),
+                "ts_code": "688766.SH",
+                "suspend_type": "S",
+                "suspend_timing": "09:30-09:30",
+            },
+            {
+                "trade_date": pd.Timestamp("2026-01-16"),
+                "ts_code": "688005.SH",
+                "suspend_type": "S",
+                "suspend_timing": "09:30-09:30",
+            },
+            {
                 "trade_date": pd.Timestamp(subject.DIRECT_V2_RELEASE_CUTOFF),
                 "ts_code": "000001.SZ",
                 "suspend_type": "S",
                 "suspend_timing": None,
-            }
+            },
         ]
     )
     suspend_frame.to_parquet(suspend / "suspend_d.parquet", index=False)
@@ -1479,9 +1491,13 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
                 "source_table": "market.suspend_d",
                 "suspend_type": "S",
-                "row_count": 1,
-                "stock_count": 1,
-                "daily_row_counts": {subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(): 1},
+                "row_count": 3,
+                "stock_count": 3,
+                "daily_row_counts": {
+                    "2025-11-26": 1,
+                    "2026-01-16": 1,
+                    subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(): 1,
+                },
             }
         ),
         encoding="utf-8",
@@ -1655,19 +1671,25 @@ def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_fut
     assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
 
 
-def test_direct_v2_suspend_readback_closes_metadata_without_changing_model_calendar(tmp_path: Path) -> None:
+def test_direct_v2_suspend_readback_closes_metadata_and_full_day_sentinels(tmp_path: Path) -> None:
     root, _security, _provider = _direct_v2_candidate(tmp_path)
     suspend = root / "components" / "suspend_d_daily_candidate_v2"
 
     keys = subject._load_suspend_keys(
         suspend / "suspend_d.parquet",
         suspend / "meta.json",
-        calendar=(subject.SOURCE_START, subject.SOURCE_END),
+        calendar=(date(2025, 11, 26), date(2026, 1, 16), subject.DIRECT_V2_RELEASE_CUTOFF),
         expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
         expected_universe_key=subject.DIRECT_V2_UNIVERSE_KEY,
     )
 
-    assert keys == frozenset()
+    assert keys == frozenset(
+        {
+            (date(2025, 11, 26), "688766.SH"),
+            (date(2026, 1, 16), "688005.SH"),
+            (subject.DIRECT_V2_RELEASE_CUTOFF, "000001.SZ"),
+        }
+    )
 
 
 def test_direct_v2_bundle_identity_round_trip_preserves_candidate_universe(tmp_path: Path) -> None:
@@ -1804,6 +1826,18 @@ def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observat
                 "suspend_type": "S",
                 "suspend_timing": "09:30-10:00",
             },
+            {
+                "ts_code": "000003.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": " 09:30-09:30 ",
+            },
+            {
+                "ts_code": "000004.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": "   ",
+            },
         ]
     )
     rows.to_parquet(data_path, index=False)
@@ -1822,17 +1856,109 @@ def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observat
 
     keys = subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
 
-    assert keys == frozenset({(subject.SOURCE_START, "000001.SZ")})
+    assert keys == frozenset(
+        {
+            (subject.SOURCE_START, "000001.SZ"),
+            (subject.SOURCE_START, "000003.SZ"),
+            (subject.SOURCE_START, "000004.SZ"),
+        }
+    )
+
+
+def test_full_day_suspension_precedes_missing_evidence_and_price_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = (date(2026, 1, 16), date(2026, 1, 19))
+    symbol = "688005.SH"
+    source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+    for index, day in enumerate(dates):
+        source_rows[index]["trade_date"] = int(day.strftime("%Y%m%d"))
+        source_rows[index]["symbol"] = symbol.encode("ascii")
+        for field in subject.QLIB_STOCK_FIELDS:
+            source_rows[index][field] = np.nan if index == 0 else 1.0
+        if index == 1:
+            source_rows[index]["limit_up"] = 0.0
+            source_rows[index]["limit_down"] = 0.0
+    month_path = tmp_path / "202601.bin"
+    source_rows.tofile(month_path)
+
+    index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime([dates[1]]), [symbol]],
+        names=["datetime", "instrument"],
+    )
+    basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        source_ts_code = symbol
+
+        @staticmethod
+        def evidence():
+            return {"source_ts_code": symbol}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, _day, _dataset):
+            return Resolution()
+
+    class ProviderAbsence:
+        @staticmethod
+        def resolve(**_kwargs):
+            raise AssertionError("suspension and available moneyflow must not consult provider absence")
+
+    captured: list[dict[str, object]] = []
+
+    def capture(day_rows, **_kwargs):
+        captured.extend(dict(row) for row in day_rows)
+
+    monkeypatch.setattr(subject, "_append_day_level_aggregates", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((dates[0], dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=ProviderAbsence(),
+        suspension_keys=frozenset({(dates[0], symbol)}),
+        contributor_eligibility={symbol: True},
+    )
+
+    suspended, resumed = captured
+    assert suspended["is_suspended"] is True
+    assert suspended["moneyflow_fact_status"] == "not_applicable_suspended"
+    assert resumed["is_suspended"] is False
+    assert resumed["prev_close_yuan"] is None
+    assert resumed["prev_close_5_yuan"] is None
+    assert resumed["prev_close_10_yuan"] is None
 
 
 @pytest.mark.parametrize(
     ("suspend_type", "suspend_timing"),
-    (("R", None), ("S", "")),
+    (("R", None), ("S", 930)),
 )
-def test_suspend_sidecar_rejects_unknown_type_or_empty_intraday_timing(
+def test_suspend_sidecar_rejects_unknown_type_or_non_text_timing(
     tmp_path: Path,
     suspend_type: str,
-    suspend_timing: str | None,
+    suspend_timing: object,
 ) -> None:
     data_path = tmp_path / "suspend_d.parquet"
     manifest_path = tmp_path / "manifest.json"
