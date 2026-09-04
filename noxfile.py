@@ -589,6 +589,9 @@ def qlib_data_backend(session: nox.Session) -> None:
         session,
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "backend/tests/core_index_membership",
+        "backend/tests/dataset_release/test_index_pool_sidecar.py",
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1247,6 +1250,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
         "backend/tests/quantevolver/test_p0_d2_sector_oracle.py",
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
+        "backend/tests/quantevolver/test_stock_pool_sync.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
     ]
