@@ -136,7 +136,9 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/position-timing/intents",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "BUG1365_FRESH_PROCESS_PASS: fresh Python process loaded committed dfc9dcf997c7a33e11f7b03f5a6b47740797b1ce, captured the exact HEAD, and kept provider_stable=true after process environment mutation; no backend process control"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -144,6 +146,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
