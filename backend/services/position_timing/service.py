@@ -559,6 +559,8 @@ class PositionTimingService:
         due: list[dict[str, Any]] = []
         calendar_error: str | None = None
         for card_set in card_sets:
+            if card_set.target_trade_date > completed_trade_date:
+                continue
             try:
                 timeline = self.dependencies.calendar_service.list_trading_days(
                     card_set.target_trade_date,
@@ -1489,15 +1491,18 @@ class PositionTimingService:
         grouped: dict[tuple[str, str, str], list[Decimal]] = {}
         calendar_failures: list[str] = []
         for card_set in card_sets:
-            try:
-                timeline = self.dependencies.calendar_service.list_trading_days(
-                    card_set.target_trade_date,
-                    completed_trade_date,
-                    allow_empty=True,
-                )
-            except Exception as exc:
-                calendar_failures.append(f"{card_set.card_set_id}:{type(exc).__name__}")
-                continue
+            if card_set.target_trade_date > completed_trade_date:
+                timeline: list[date] = []
+            else:
+                try:
+                    timeline = self.dependencies.calendar_service.list_trading_days(
+                        card_set.target_trade_date,
+                        completed_trade_date,
+                        allow_empty=True,
+                    )
+                except Exception as exc:
+                    calendar_failures.append(f"{card_set.card_set_id}:{type(exc).__name__}")
+                    continue
             for card in card_set.cards:
                 intervention_intent = any(trigger.planned_delta_qty != 0 for trigger in card.triggers)
                 action_side = (

@@ -136,6 +136,30 @@ def test_five_horizons_are_materialized_once_with_paired_incremental_paths(servi
     assert evidence["paired_matured"]["count"] >= 5
 
 
+def test_future_target_is_pending_without_reverse_calendar_query(service_factory) -> None:
+    service = service_factory(
+        now=datetime(2026, 9, 5, 10, 0, tzinfo=CHINA_TZ),
+        outcome=_outcome_loader(),
+    )
+    calendar = service.dependencies.calendar_service
+    original_list = calendar.list_trading_days
+    calls: list[tuple[date, date]] = []
+
+    def strict_list(start_date: date, end_date: date, *, allow_empty: bool = False):
+        assert start_date <= end_date
+        calls.append((start_date, end_date))
+        return original_list(start_date, end_date, allow_empty=allow_empty)
+
+    calendar.list_trading_days = strict_list
+    result = service.materialize()
+
+    assert result["outcome_materialization_status"] == "NO_DUE_OUTCOMES"
+    outcome_evidence = service.evidence()["outcome_evidence"]
+    assert outcome_evidence["status"] == "AVAILABLE"
+    assert outcome_evidence["coverage_counts"]["pending_derived"] == 5
+    assert calls == []
+
+
 def test_h1_buy_terminal_is_deferred_for_t1_lock(service_factory) -> None:
     clock = [datetime(2026, 9, 3, 16, 0, tzinfo=CHINA_TZ)]
     service = service_factory(
