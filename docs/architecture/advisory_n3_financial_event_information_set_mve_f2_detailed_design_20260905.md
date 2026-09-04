@@ -1,4 +1,4 @@
-# Advisory N3 财务事件信息集 Learnability MVE F2 详细设计 v1.2
+# Advisory N3 财务事件信息集 Learnability MVE F2 详细设计 v1.3
 
 > 日期：2026-09-05
 > 状态：`IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RUN_PENDING`
@@ -83,7 +83,7 @@ request 必须冻结并 readback：
 
 - source bundle id/schema/manifest SHA、九成员 closure、source request/receipt/projection identities；
 - source state `SOURCE_READY_NAVIGATION_ONLY_NON_VINTAGE`、time quality、rule version、source roster；
-- N2-B parent file size/hash/arm/date/row/key/score/outcome identity；
+- N2-B `manifest.json`、`request.json`、权威 `audit_receipt.json` 以及 parent file size/hash/arm/date/row/key/score/outcome identity；证据引用不得臆造通用 `receipt.json`；
 - N1 bundle `74827d03...` 的 28 READY paths、regime daily、split/embargo identity；
 - package/program/binding/manifest/style/terminal weights、selection semantics、baseline/shadow/cost policy hashes；
 - current route 必须仍指向 `N3_FINANCIAL_EVENT_INFORMATION_SET_MVE_DESIGN` 与 source bundle `211b8db1...`；
@@ -388,4 +388,4 @@ sealed_holdout_access = false
 
 ## 19. Source feasibility and current conclusion / 当前结论
 
-当前结论为 `SOURCE_READY_IMPLEMENTATION_LOCAL_VERIFIED_FORMAL_RUN_PENDING`。formal source bundle 已证明 projection、类型、时钟与支持度可用于本次 non-vintage learnability MVE；源码现已实现冻结合同、全键PIT特征、三臂CPCV、配对评价、immutable delivery、三条trial registry和0/1 route。BUG-1360已把projection identity纠正为manifest中的完整64位SHA-256并增加exact identity回归，32个direct tests通过；同步最新主线后的完整`advisory_modeling_backend`矩阵为`876 passed/16 skipped`。真实target-free smoke在约9.93秒内完成1,710,301键/386日/22列，保留408个120日无披露行，1,095,669行具有非零120日signed sum，全部source/support门槛通过。该smoke未读取收益，不能证明事件内容可学习或形成荐股收益。只有源码合入并从clean main运行一次固定MVE，才允许按§9分流；任何结果都不得读取sealed holdout或直接形成factor、策略包、荐股runtime或激活结论。
+当前结论为 `SOURCE_READY_IMPLEMENTATION_LOCAL_VERIFIED_FORMAL_RUN_PENDING`。formal source bundle 已证明 projection、类型、时钟与支持度可用于本次 non-vintage learnability MVE；源码现已实现冻结合同、全键PIT特征、三臂CPCV、配对评价、immutable delivery、三条trial registry和0/1 route。BUG-1360已把projection identity纠正为manifest中的完整64位SHA-256并增加exact identity回归；BUG-1363进一步把N2-B evidence ref纠正为该bundle合同实际发布的`audit_receipt.json`并增加prepare级文件名回归。BUG-1363修复后33个direct tests、8个L0测试及完整`advisory_modeling_backend`矩阵`877 passed/16 skipped`均通过。真实target-free smoke在约9.93秒内完成1,710,301键/386日/22列，保留408个120日无披露行，1,095,669行具有非零120日signed sum，全部source/support门槛通过。该smoke未读取收益，不能证明事件内容可学习或形成荐股收益。只有上述修复经重复审核、合入，并从clean main运行一次固定MVE，才允许按§9分流；任何结果都不得读取sealed holdout或直接形成factor、策略包、荐股runtime或激活结论。
