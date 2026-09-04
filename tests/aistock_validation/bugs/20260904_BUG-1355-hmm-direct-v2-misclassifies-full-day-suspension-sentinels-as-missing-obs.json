@@ -28,12 +28,18 @@
   ],
   "expected": "HMM direct-v2 classifies authoritative null, blank, and 09:30-09:30 S records as full-day suspensions before price lag and provider-absence evaluation, while preserving intraday semantics.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1355-hmm-direct-v2-misclassifies-full-day-suspension-sentinels-as-missing-obs.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1355-hmm-direct-v2-misclassifies-full-day-suspension-sentinels-as-missing-obs.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -101,10 +107,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
