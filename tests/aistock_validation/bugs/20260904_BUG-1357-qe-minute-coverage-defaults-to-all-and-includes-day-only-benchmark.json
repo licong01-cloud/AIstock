@@ -1,6 +1,10 @@
 {
   "actual": "MA-E19R3 direct-v2 config pins market=stock_universe, but minute coverage and Qlib Exchange default to all when exchange_kwargs.codes is omitted. Since daily all.txt correctly catalogs 000300.SH while minute data remains stock-only, the pre-training minute coverage gate incorrectly requires 000300.SH minute bars and blocks the run. Fix the consumer contract without modifying Qlib or candidate data: the default exchange quote universe must bind to the configured market/stock pool, while explicit wider quote_universe_codes remains supported and fail-closed coverage validation remains intact.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "scripts/qrun_limit_minute.py",
     "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
   ],
   "assigned_agent": null,
@@ -19,10 +23,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260904-f0b2f0670652",
       "timestamp": "2026-09-04T13:52:11.869275Z"
+    },
+    {
+      "action": "root_cause_confirmed",
+      "actor": "codex",
+      "note": "ConfigComposer omitted exchange_kwargs.codes, so Qlib and the minute coverage guard defaulted to the daily all catalog containing benchmark-only 000300.SH. The direct-v2 minute catalog remains stock-only under all.txt and is separately hash-pinned.",
+      "timestamp": "2026-09-04T14:39:52Z"
+    },
+    {
+      "action": "real_candidate_contract_verified",
+      "actor": "codex",
+      "note": "WSL rdagent-gpu fresh-process smoke loaded the immutable 2026-08-31 candidate and verified codes=stock_universe while accepting minute all.txt only through exact direct-v2 selection and minute SHA pins; candidate writes remained zero.",
+      "timestamp": "2026-09-04T14:39:52Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "rdagent_assets/qe_workspace/qe_mae19r3_20260904_142359_20260831/Loop01/run.log"
+  ],
+  "expected": "QE minute backtests bind the default Exchange quote universe to the configured market stock pool, while explicit wider quote_universe_codes remains authoritative and coverage mismatches still fail closed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +53,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
+    ]
   },
   "first_seen_at": "2026-09-04T13:52:11.869292Z",
   "fix_branch": null,
@@ -54,22 +84,33 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0",
+    "qe_sector_risk_overlay_backend",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
+    "fresh_process_evidence": [
+      "BUG1357_REAL_CANDIDATE_COVERAGE_PASS: WSL rdagent-gpu fresh process loaded the final task-worktree runner against the immutable 2026-08-31 direct-v2 binding, resolved the stock-only minute catalog by exact SHA pins, and bound Qlib Exchange codes to stock_universe"
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

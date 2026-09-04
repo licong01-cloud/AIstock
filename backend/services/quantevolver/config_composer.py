@@ -4354,6 +4354,12 @@ class ConfigComposer:
             lines.append("            codes:")
             for code in quote_universe_codes:
                 lines.append(f"                - {self._yaml_scalar(str(code).upper())}")
+        elif backtest_freq != "day":
+            # The Qlib Exchange defaults to the provider's ``all`` catalog when
+            # ``codes`` is omitted.  Direct-v2 keeps benchmark-only instruments
+            # in that catalog, so bind the default quote/sell universe to the
+            # same explicit stock pool used by the model and strategy.
+            lines.append("            codes: *market")
         risk_policy = (custom_params or {}).get("risk_policy")
         if risk_policy:
             lines.append("        # risk_policy:")
