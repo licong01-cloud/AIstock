@@ -90,7 +90,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
     "fresh_process_evidence": [
-      "BUG1341_REAL_CANDIDATE_VALIDATOR_PASS: WSL rdagent-gpu fresh process imported the task-worktree direct-v2 validator and verified the immutable 2026-08-31 candidate without legacy-path fallback or candidate writes"
+      "BUG1341_REAL_CANDIDATE_VALIDATOR_PASS: WSL rdagent-gpu fresh process imported the task-worktree direct-v2 validator and verified the immutable 2026-08-31 candidate without legacy-path fallback, candidate writes, or backend process control"
     ],
     "health_ref": "http://127.0.0.1:8001/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -118,6 +118,13 @@
     "fingerprint": "652d0e8bef9b63eb05c87b7b",
     "source_event_id": "FE-20260903-652d0e8bef9b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
+    "WSL rdagent-gpu real candidate direct-v2 binding, factor contract and suspend artifact preflight -> passed; suspend trade dates=115, rows=781, old path hits=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 133 passed",
+    "python -m nox -s l0 -> 0 blocking findings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -159,13 +166,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
-    "WSL rdagent-gpu real candidate direct-v2 binding, factor contract and suspend artifact preflight -> passed; suspend trade dates=115, rows=781, old path hits=0",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "python -m nox -s qe_read_backend -> 133 passed",
-    "python -m nox -s l0 -> 0 blocking findings"
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
