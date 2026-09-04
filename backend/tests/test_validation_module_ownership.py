@@ -109,6 +109,20 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert platform_test.ownership_status == "mapped"
     assert platform_test.primary_module == "platform.api"
 
+    core_index_service = catalog.match_path("backend/services/core_index_membership.py")
+    assert core_index_service.ownership_status == "mapped"
+    assert core_index_service.primary_module == "qlib_data"
+
+    core_index_operator_test = catalog.match_path(
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py"
+    )
+    assert core_index_operator_test.ownership_status == "mapped"
+    assert core_index_operator_test.primary_module == "qlib_data"
+
+    qe_stock_pool_transport = catalog.match_path("backend/tests/quantevolver/test_stock_pool_sync.py")
+    assert qe_stock_pool_transport.ownership_status == "mapped"
+    assert qe_stock_pool_transport.primary_module == "qe.core"
+
     client_instruction = catalog.match_path("CLAUDE.md")
     assert client_instruction.ownership_status == "mapped"
     assert client_instruction.primary_module == "docs.standards"
