@@ -124,6 +124,11 @@ def test_trial_roster_direction_schema_and_multiplicity_are_frozen() -> None:
     assert EVENT_MVE_CUMULATIVE_CANDIDATE_INDEX == 83
 
 
+def test_projection_sha256_is_exact_formal_manifest_identity() -> None:
+    assert len(EVENT_MVE_SOURCE_PROJECTION_SHA256) == 64
+    assert EVENT_MVE_SOURCE_PROJECTION_SHA256 == ("d9bda2d23335354bb99f04c5a11643ee56347ae2e8ac871f7bae77e39030bded")
+
+
 def test_request_freezes_calendar_evidence_roles_and_all_side_effects_false() -> None:
     request = build_test_request()
     assert len(request.evidence_refs) == 15
