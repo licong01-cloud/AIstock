@@ -57,6 +57,21 @@ GENERATOR_STATIC_FIELDS = frozenset(str(item) for item in STATIC_ORDERED_COLUMNS
 GENERATOR_ALLOWED_FIELDS = DAILY_FIELDS | GENERATOR_STATIC_FIELDS | frozenset({"market_regime"})
 
 
+def generator_allowed_fields_for_source(
+    *,
+    available_static_fields: set[str] | frozenset[str],
+    old_source_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Freeze only fields that the concrete source can physically provide."""
+    allowed = (
+        DAILY_FIELDS | (GENERATOR_STATIC_FIELDS & frozenset(available_static_fields)) | frozenset({"market_regime"})
+    )
+    missing_old = sorted(set(old_source_fields) - allowed)
+    if missing_old:
+        raise ValueError(f"QE alpha generator concrete source omits old proposal fields: {missing_old}")
+    return tuple(sorted(allowed))
+
+
 class QEAlphaGeneratorModelIdentityV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -174,8 +189,14 @@ class FrozenAdvisoryQEAlphaGeneratorRequestV1(BaseModel):
     def validate_request(self) -> "FrozenAdvisoryQEAlphaGeneratorRequestV1":
         if len(set(self.old_expression_hashes)) != 24:
             raise ValueError("QE alpha generator requires 24 unique old expression hashes")
-        if self.allowed_fields != tuple(sorted(GENERATOR_ALLOWED_FIELDS)):
+        allowed_fields = set(self.allowed_fields)
+        if self.allowed_fields != tuple(sorted(allowed_fields)):
             raise ValueError("QE alpha generator allowed field roster drift")
+        if not allowed_fields.issubset(GENERATOR_ALLOWED_FIELDS):
+            raise ValueError("QE alpha generator allowed field roster exceeds the implemented schema")
+        required_fields = DAILY_FIELDS | frozenset({"market_regime"}) | frozenset(self.old_source_fields)
+        if not required_fields.issubset(allowed_fields):
+            raise ValueError("QE alpha generator allowed field roster omits required source fields")
         if self.allowed_operators != tuple(sorted(EXPRESSION_OPERATORS)):
             raise ValueError("QE alpha generator operator roster drift")
         if self.known_effects != GENERATOR_KNOWN_EFFECTS:
@@ -369,4 +390,5 @@ __all__ = [
     "build_generator_mve_receipt",
     "build_generator_proposal",
     "build_generator_request",
+    "generator_allowed_fields_for_source",
 ]

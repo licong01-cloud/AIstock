@@ -21,6 +21,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_EXPERIMENT_ID,
     GENERATOR_FAMILY_ID,
+    GENERATOR_ALLOWED_FIELDS,
     SHA256_PATTERN,
     AdvisoryQEAlphaGenerationReceiptV1,
     FrozenAdvisoryQEAlphaGeneratorRequestV1,
@@ -30,6 +31,7 @@ from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     build_generator_mve_receipt,
     build_generator_proposal,
     build_generator_request,
+    generator_allowed_fields_for_source,
 )
 from backend.services.advisory_model_first.qe_alpha_mve_contracts import (
     MVE_FAMILIES,
@@ -42,6 +44,7 @@ from backend.services.advisory_model_first.qe_alpha_mve_pipeline import (
     _moving_block_interval,
     _peak_rss_bytes,
     _safe_correlation,
+    _static_schema_sha256,
     build_source_panel,
     compile_proposal_scores,
 )
@@ -52,6 +55,7 @@ from backend.services.advisory_model_first.research_control import (
 from backend.services.advisory_model_first.research_control_contracts import (
     ConsumedWindowV1,
     DecisionUse,
+    EvidenceReferenceV1,
     ObjectiveContract,
     ResearchResultClass,
     ResearchStudyType,
@@ -174,6 +178,8 @@ def prepare_generator_request(
     old_proposals = tuple(QEAlphaProposalV1.model_validate(item) for item in roster.get("proposals", ()))
     if len(old_proposals) != 24:
         _raise("QE alpha generator old proposal roster is not exact", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
+    old_source_fields = tuple(sorted({field for item in old_proposals for field in item.source_fields}))
+    allowed_fields = _allowed_fields_from_parent_source(parent_request, old_source_fields=old_source_fields)
     model_kwargs = get_llm_kwargs("evolution_researcher")
     model_identity = QEAlphaGeneratorModelIdentityV1(model=str(model_kwargs.get("model", "")))
     repo = Path(repository_root).resolve()
@@ -202,7 +208,8 @@ def prepare_generator_request(
         policy_identity=str(n2b_manifest["policy_identity"]),
         benchmark_instrument=benchmark,
         old_expression_hashes=tuple(item.expression_sha256 for item in old_proposals),
-        old_source_fields=tuple(sorted({field for item in old_proposals for field in item.source_fields})),
+        old_source_fields=old_source_fields,
+        allowed_fields=allowed_fields,
         model_identity=model_identity,
         registry_path=str(parent_request["registry_path"]),
         route_path=str(parent_request["route_path"]),
@@ -289,7 +296,7 @@ def generate_alpha_candidates(
                 break
             try:
                 raw_items = _parse_generation_response(raw_response)
-                parsed = _parse_family_proposals(family, raw_items)
+                parsed = _parse_family_proposals(family, raw_items, allowed_fields=request.allowed_fields)
             except Exception as exc:
                 violations = (_safe_error(exc),)
                 schema_failure = _attempt_row(
@@ -399,7 +406,12 @@ def build_family_prompt(
     catalog: Mapping[str, Any],
 ) -> tuple[str, str]:
     unused = sorted(set(request.allowed_fields) - set(request.old_source_fields))
-    catalog_rows = _catalog_prompt_rows(catalog, family, limit=96)
+    catalog_rows = _catalog_prompt_rows(
+        catalog,
+        family,
+        allowed_fields=request.allowed_fields,
+        limit=96,
+    )
     exclusions = [
         {
             "hypothesis": item.economic_hypothesis,
@@ -540,6 +552,9 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
     proposals = list(generation["proposals"])
     old_roster_payload = generation["old_roster"]
     old_proposals = tuple(QEAlphaProposalV1.model_validate(item) for item in old_roster_payload["proposals"])
+    _verify_request_source_fields(
+        request, old_source_fields=tuple(sorted({field for item in old_proposals for field in item.source_fields}))
+    )
     target_keys = _load_target_free_parent_keys(request)
     adapter = SimpleNamespace(
         signal_start=request.signal_start,
@@ -1013,21 +1028,28 @@ def _parse_generation_response(raw: str) -> Sequence[Mapping[str, Any]]:
     return payload["proposals"]
 
 
-def _parse_family_proposals(family: str, rows: Sequence[Mapping[str, Any]]) -> list[QEAlphaGeneratorProposalV1]:
+def _parse_family_proposals(
+    family: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    allowed_fields: Sequence[str],
+) -> list[QEAlphaGeneratorProposalV1]:
     output: list[QEAlphaGeneratorProposalV1] = []
+    frozen_allowed_fields = set(allowed_fields)
     for index, row in enumerate(rows, start=1):
         if set(row) != {"economic_hypothesis", "mechanism", "known_effect_exposures", "expression"}:
             raise ValueError("proposal response fields drift")
-        output.append(
-            build_generator_proposal(
-                proposal_id=f"N3G_{family}_{index:02d}",
-                family=family,
-                economic_hypothesis=row["economic_hypothesis"],
-                mechanism=row["mechanism"],
-                known_effect_exposures=tuple(row["known_effect_exposures"]),
-                expression=row["expression"],
-            )
+        proposal = build_generator_proposal(
+            proposal_id=f"N3G_{family}_{index:02d}",
+            family=family,
+            economic_hypothesis=row["economic_hypothesis"],
+            mechanism=row["mechanism"],
+            known_effect_exposures=tuple(row["known_effect_exposures"]),
+            expression=row["expression"],
         )
+        if not set(proposal.source_fields).issubset(frozen_allowed_fields):
+            raise ValueError("proposal uses a field outside the frozen request source schema")
+        output.append(proposal)
     return output
 
 
@@ -1433,6 +1455,7 @@ def _read_generation_bundle(path: Path) -> dict[str, Any]:
         != sum(int(item.get("raw_generation_attempt_count") or 0) for item in attempts)
         or receipt.rejected_expression_count != len(rejections)
         or response_attempt_keys != transcript_keys
+        or any(not set(item.source_fields).issubset(request.allowed_fields) for item in proposals)
         or (receipt.status == "INFRASTRUCTURE_FAILURE") != bool(unresolved_families)
         or manifest.get("target_or_economic_metric_exposed") is not False
         or manifest.get("secret_persisted") is not False
@@ -1595,7 +1618,13 @@ def _benchmark_from_parent_request(parent_request: Mapping[str, Any]) -> str:
     raise AssertionError
 
 
-def _catalog_prompt_rows(catalog: Mapping[str, Any], family: str, *, limit: int) -> list[dict[str, Any]]:
+def _catalog_prompt_rows(
+    catalog: Mapping[str, Any],
+    family: str,
+    *,
+    allowed_fields: Sequence[str],
+    limit: int,
+) -> list[dict[str, Any]]:
     prefixes = {
         "PRICE_VOLUME_BEHAVIOR": ("db_", "liquidity", "PriceStrength"),
         "MONEYFLOW_BEHAVIOR": ("mf_",),
@@ -1604,12 +1633,22 @@ def _catalog_prompt_rows(catalog: Mapping[str, Any], family: str, *, limit: int)
         "CROWDING_DISPERSION": ("db_", "cp_", "size_", "liquidity"),
         "REGIME_CONDITIONED": ("sw2_", "db_", "mf_", "value_"),
     }[family]
+    forbidden_fields = set(GENERATOR_ALLOWED_FIELDS) - set(allowed_fields)
     selected: list[dict[str, Any]] = []
     for record in catalog.get("records", ()):
         blob = json.dumps(
             {"variables": record.get("variables"), "data_source": record.get("data_source")}, ensure_ascii=False
         )
         if not any(prefix in blob for prefix in prefixes):
+            continue
+        metadata_blob = json.dumps(
+            {key: record.get(key) for key in ("factor_name", "variables", "formula_hint", "data_source")},
+            ensure_ascii=False,
+        )
+        if any(
+            re.search(rf"(?<![A-Za-z0-9_]){re.escape(field)}(?![A-Za-z0-9_])", metadata_blob)
+            for field in forbidden_fields
+        ):
             continue
         selected.append(
             {
@@ -1717,6 +1756,85 @@ def _read_catalog_snapshot(path: Path) -> dict[str, Any]:
     if payload.get("row_count") != len(payload.get("records", ())):
         _raise("QE alpha generator catalog snapshot row count drift", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
     return payload
+
+
+def _allowed_fields_from_parent_source(
+    parent_request: Mapping[str, Any],
+    *,
+    old_source_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    try:
+        static_ref = EvidenceReferenceV1.model_validate(parent_request["static_factor_ref"])
+        expected_schema_sha256 = str(parent_request["static_schema_sha256"])
+    except (KeyError, ValidationError, ValueError) as exc:
+        _raise(
+            "QE alpha generator parent static source contract is invalid",
+            "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID",
+            error_type=type(exc).__name__,
+        )
+    if static_ref.role != "n3_static_factors_parquet":
+        _raise(
+            "QE alpha generator parent static source role is invalid",
+            "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID",
+            role=static_ref.role,
+        )
+    static_path = _local_path(static_ref.artifact_uri)
+    try:
+        actual_ref = evidence_reference_for_file(static_path, role=static_ref.role)
+        import pyarrow.parquet as pq
+
+        schema = pq.ParquetFile(static_path).schema_arrow
+        actual_schema_sha256 = _static_schema_sha256(static_path)
+    except Exception as exc:
+        _raise(
+            "QE alpha generator concrete static source cannot be read",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            error_type=type(exc).__name__,
+            path=static_path.as_posix(),
+        )
+    if (actual_ref.sha256, actual_ref.size_bytes) != (
+        static_ref.sha256,
+        static_ref.size_bytes,
+    ) or actual_schema_sha256 != expected_schema_sha256:
+        _raise(
+            "QE alpha generator concrete static source identity drift",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            path=static_path.as_posix(),
+        )
+    try:
+        return generator_allowed_fields_for_source(
+            available_static_fields=frozenset(schema.names),
+            old_source_fields=old_source_fields,
+        )
+    except ValueError as exc:
+        _raise(
+            "QE alpha generator concrete static source omits required fields",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            error_type=type(exc).__name__,
+        )
+    raise AssertionError
+
+
+def _verify_request_source_fields(
+    request: FrozenAdvisoryQEAlphaGeneratorRequestV1,
+    *,
+    old_source_fields: tuple[str, ...],
+) -> None:
+    parent_request = _read_json(
+        _local_path(request.parent_qe_bundle_path) / "request.json",
+        "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+    )
+    actual_allowed_fields = _allowed_fields_from_parent_source(
+        parent_request,
+        old_source_fields=old_source_fields,
+    )
+    if request.allowed_fields != actual_allowed_fields:
+        _raise(
+            "QE alpha generator frozen allowed fields do not match the concrete source schema",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            missing_fields=sorted(set(request.allowed_fields) - set(actual_allowed_fields)),
+            unexpected_fields=sorted(set(actual_allowed_fields) - set(request.allowed_fields)),
+        )
 
 
 def _load_request(path: str | Path) -> FrozenAdvisoryQEAlphaGeneratorRequestV1:
