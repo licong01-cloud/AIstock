@@ -13,6 +13,8 @@ from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     build_generator_proposal,
 )
 from backend.services.advisory_model_first.qe_alpha_generator_pipeline import (
+    _allowed_fields_from_parent_source,
+    _parse_family_proposals,
     build_catalog_snapshot,
     build_family_prompt,
     evaluate_generated_overlays,
@@ -23,6 +25,8 @@ from backend.services.advisory_model_first.qe_alpha_generator_pipeline import (
     weighted_jaccard,
 )
 from backend.services.advisory_model_first.qe_alpha_mve_contracts import MVE_FAMILIES, build_default_proposals
+from backend.services.advisory_model_first.qe_alpha_mve_pipeline import _static_schema_sha256
+from backend.services.advisory_model_first.research_control import evidence_reference_for_file
 from backend.tests.advisory_model_first.test_qe_alpha_generator_contracts import make_generator_request
 
 
@@ -49,6 +53,72 @@ def test_catalog_snapshot_excludes_code_performance_and_secret_values() -> None:
     assert snapshot["records"][0]["code_text_sha256"]
 
 
+def test_parent_source_schema_excludes_fields_absent_from_concrete_parquet(tmp_path) -> None:
+    static_path = tmp_path / "static_factors.parquet"
+    pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2026-01-05")],
+            "instrument": ["000001.SZ"],
+            "db_turnover_rate": [1.0],
+        }
+    ).to_parquet(static_path, index=False)
+    static_ref = evidence_reference_for_file(static_path, role="n3_static_factors_parquet")
+    parent_request = {
+        "static_factor_ref": static_ref.model_dump(mode="json"),
+        "static_schema_sha256": _static_schema_sha256(static_path),
+    }
+
+    allowed = _allowed_fields_from_parent_source(
+        parent_request,
+        old_source_fields=("close", "db_turnover_rate"),
+    )
+
+    assert "db_turnover_rate" in allowed
+    assert "md_rqmcl" not in allowed
+    assert "md_rzye" not in allowed
+
+
+def test_generation_parser_rejects_field_outside_frozen_request_schema(tmp_path) -> None:
+    request = make_generator_request(
+        tmp_path,
+        allowed_fields=tuple(sorted(set(GENERATOR_ALLOWED_FIELDS) - {"md_rqmcl", "sw2_open"})),
+    )
+    rows = [
+        {
+            "economic_hypothesis": "Margin short-sale pressure provides a distinct behavioral signal",
+            "mechanism": "Use a T-visible margin field only when the frozen source physically provides it",
+            "known_effect_exposures": ["LIQUIDITY"],
+            "expression": {"op": "FIELD", "field": "md_rqmcl"},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="outside the frozen request source schema"):
+        _parse_family_proposals(
+            MVE_FAMILIES[0],
+            rows,
+            allowed_fields=request.allowed_fields,
+        )
+
+    catalog = build_catalog_snapshot(
+        [
+            {
+                "factor_name": "unsupported_sector_open",
+                "source": "qe",
+                "variables": {"sw2_open": "T-visible"},
+                "formula_hint": "rank(sw2_open)",
+                "data_source": "sw2_open",
+            }
+        ]
+    )
+    _, user_prompt = build_family_prompt(
+        request,
+        "SECTOR_RELATIVE",
+        build_default_proposals(),
+        catalog,
+    )
+    assert "sw2_open" not in user_prompt
+
+
 def test_weighted_structural_fingerprint_distinguishes_new_fields() -> None:
     left = expression_fingerprint(
         {"op": "ADD", "args": [{"op": "FIELD", "field": "db_pe_ttm"}, {"op": "FIELD", "field": "mf_lg_buy_amt"}]}
@@ -71,7 +141,7 @@ def test_generation_is_six_calls_target_free_and_exact_retry(tmp_path) -> None:
     request_path = tmp_path / "request.json"
     request_path.write_text(request.model_dump_json(), encoding="utf-8")
     old = set(request.old_source_fields)
-    new_fields = sorted(set(GENERATOR_ALLOWED_FIELDS) - old - {"market_regime"})
+    new_fields = sorted(set(request.allowed_fields) - old - {"market_regime"})
     calls: list[str] = []
 
     def fake_call(system_prompt, user_prompt, _request):
@@ -126,7 +196,7 @@ def test_provider_failure_is_not_expression_rejection_and_recovers_only_failed_f
     request_path = tmp_path / "request.json"
     request_path.write_text(request.model_dump_json(), encoding="utf-8")
     old = set(request.old_source_fields)
-    new_fields = sorted(set(GENERATOR_ALLOWED_FIELDS) - old - {"market_regime"})
+    new_fields = sorted(set(request.allowed_fields) - old - {"market_regime"})
     first_calls: list[str] = []
     credential_marker = "_".join(("api", "key")) + "=must-not-survive"
 
@@ -211,7 +281,7 @@ def test_schema_failure_requires_response_and_counts_four_expression_attempts(tm
     request_path = tmp_path / "request.json"
     request_path.write_text(request.model_dump_json(), encoding="utf-8")
     old = set(request.old_source_fields)
-    new_fields = sorted(set(GENERATOR_ALLOWED_FIELDS) - old - {"market_regime"})
+    new_fields = sorted(set(request.allowed_fields) - old - {"market_regime"})
     family_counts = {family: 0 for family in MVE_FAMILIES}
 
     def schema_then_valid(_system, user, _request):
