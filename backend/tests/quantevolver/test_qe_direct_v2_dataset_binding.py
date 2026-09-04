@@ -17,7 +17,7 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QEDirectV2DatasetBinding,
 )
 from scripts.qe_build_frozen_suspend_filter import build_suspend_filter_payload
-from scripts.qe_validate_direct_v2_dataset import validate_binding
+from backend.services.quantevolver.qe_validate_direct_v2_dataset import validate_binding
 
 
 def _sha(path: Path) -> str:

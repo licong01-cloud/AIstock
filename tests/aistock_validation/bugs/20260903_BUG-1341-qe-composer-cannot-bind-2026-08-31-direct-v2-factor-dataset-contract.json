@@ -5,7 +5,7 @@
     "backend/services/quantevolver/qe_dataset_contract.py",
     "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
     "scripts/qe_build_frozen_suspend_filter.py",
-    "scripts/qe_validate_direct_v2_dataset.py",
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
     "tests/aistock_validation/bugs/20260903_BUG-1341-qe-composer-cannot-bind-2026-08-31-direct-v2-factor-dataset-contract.json"
   ],
   "assigned_agent": null,
@@ -54,7 +54,7 @@
       "backend/services/quantevolver/qe_dataset_contract.py",
       "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
       "scripts/qe_build_frozen_suspend_filter.py",
-      "scripts/qe_validate_direct_v2_dataset.py"
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -62,7 +62,7 @@
       "backend/services/quantevolver/qe_dataset_contract.py",
       "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
       "scripts/qe_build_frozen_suspend_filter.py",
-      "scripts/qe_validate_direct_v2_dataset.py"
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
     ]
   },
   "first_seen_at": "2026-09-03T19:40:13.754807Z",

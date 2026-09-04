@@ -549,7 +549,15 @@ QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
     AISTOCK_PROJECT_ROOT / "scripts",
 ]
-AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {}
+AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {
+    "qe_validate_direct_v2_dataset.py": (
+        AISTOCK_PROJECT_ROOT
+        / "backend"
+        / "services"
+        / "quantevolver"
+        / "qe_validate_direct_v2_dataset.py"
+    ),
+}
 
 
 class ConfigComposer:
