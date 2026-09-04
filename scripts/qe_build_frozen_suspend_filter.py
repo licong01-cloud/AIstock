@@ -41,6 +41,8 @@ SPEC_SCHEMA_VERSION = "qe_frozen_build_spec_v1"
 SUSPEND_PARQUET_NAME = "suspend_d.parquet"
 SUSPEND_MANIFEST_NAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = "suspend_d_dataset_manifest_v1"
+DIRECT_METADATA_NAME = "meta.json"
+DIRECT_METADATA_SCHEMA_VERSION = "qe_direct_suspend_d_v1"
 CANONICAL_TS_CODE_RE = re.compile(r"^[0-9]{6}\.(SH|SZ)$")
 REQUIRED_PARQUET_COLUMNS = ("trade_date", "ts_code", "suspend_type")
 
@@ -120,8 +122,14 @@ def _verify_suspend_dataset(
     suspend_spec: dict[str, Any],
 ) -> tuple[Path, dict[str, Any]]:
     parquet_path = suspend_dir / SUSPEND_PARQUET_NAME
-    manifest_path = suspend_dir / SUSPEND_MANIFEST_NAME
-    for path in (parquet_path, manifest_path):
+    metadata_name = str(suspend_spec.get("metadata_name") or SUSPEND_MANIFEST_NAME)
+    if metadata_name not in {SUSPEND_MANIFEST_NAME, DIRECT_METADATA_NAME}:
+        raise FrozenSuspendFilterBuildError(
+            "reason_code=qe_frozen_build_spec_invalid: "
+            f"unsupported suspend metadata_name={metadata_name!r}"
+        )
+    metadata_path = suspend_dir / metadata_name
+    for path in (parquet_path, metadata_path):
         if not path.is_file():
             raise FrozenSuspendFilterBuildError(
                 "reason_code=qe_frozen_suspend_file_missing: "
@@ -129,7 +137,11 @@ def _verify_suspend_dataset(
             )
     expected_hashes = {
         parquet_path: suspend_spec.get("parquet_sha256"),
-        manifest_path: suspend_spec.get("manifest_sha256"),
+        metadata_path: (
+            suspend_spec.get("metadata_sha256")
+            if metadata_name == DIRECT_METADATA_NAME
+            else suspend_spec.get("manifest_sha256")
+        ),
     }
     for path, expected in expected_hashes.items():
         if not expected:
@@ -145,21 +157,45 @@ def _verify_suspend_dataset(
                 "the frozen suspend dataset does not match the deployed contract pins"
             )
 
-    with manifest_path.open("r", encoding="utf-8") as handle:
+    with metadata_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
-    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+    expected_schema = str(
+        suspend_spec.get("metadata_schema_version") or MANIFEST_SCHEMA_VERSION
+    )
+    if manifest.get("schema_version") != expected_schema:
         raise FrozenSuspendFilterBuildError(
             "reason_code=qe_frozen_suspend_identity_mismatch: "
             f"manifest schema_version={manifest.get('schema_version')!r} "
-            f"expected={MANIFEST_SCHEMA_VERSION!r}"
+            f"expected={expected_schema!r}"
         )
-    for key in ("dataset_id", "universe_key", "source_contract"):
-        expected_value = str(suspend_spec.get(key) or "")
-        actual_value = str(
-            manifest.get(key)
-            if key != "source_contract"
-            else (manifest.get("source") or {}).get("contract") or ""
-        )
+    if expected_schema == DIRECT_METADATA_SCHEMA_VERSION:
+        expected_identity = {
+            "dataset_id": str(suspend_spec.get("dataset_id") or ""),
+            "component": "suspend_d",
+            "universe_key": str(suspend_spec.get("universe_key") or ""),
+            "source_contract": str(suspend_spec.get("source_contract") or ""),
+            "suspend_type": "S",
+        }
+        actual_identity = {
+            "dataset_id": suspend_dir.name,
+            "component": str(manifest.get("component") or ""),
+            "universe_key": str(manifest.get("universe_key") or ""),
+            "source_contract": str(manifest.get("source_table") or ""),
+            "suspend_type": str(manifest.get("suspend_type") or ""),
+        }
+    else:
+        expected_identity = {
+            "dataset_id": str(suspend_spec.get("dataset_id") or ""),
+            "universe_key": str(suspend_spec.get("universe_key") or ""),
+            "source_contract": str(suspend_spec.get("source_contract") or ""),
+        }
+        actual_identity = {
+            "dataset_id": str(manifest.get("dataset_id") or ""),
+            "universe_key": str(manifest.get("universe_key") or ""),
+            "source_contract": str((manifest.get("source") or {}).get("contract") or ""),
+        }
+    for key, expected_value in expected_identity.items():
+        actual_value = actual_identity.get(key, "")
         if not expected_value or actual_value != expected_value:
             raise FrozenSuspendFilterBuildError(
                 "reason_code=qe_frozen_suspend_identity_mismatch: "
@@ -329,7 +365,11 @@ def build_suspend_filter_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "trade_date_count": len(calendar_days),
         "suspended_row_count": total_rows,
         "suspend_d_parquet_sha256": str(suspend_spec.get("parquet_sha256") or ""),
-        "suspend_d_manifest_sha256": str(suspend_spec.get("manifest_sha256") or ""),
+        "suspend_d_manifest_sha256": str(
+            suspend_spec.get("metadata_sha256")
+            or suspend_spec.get("manifest_sha256")
+            or ""
+        ),
         "suspended_by_date": suspended_by_date,
     }
 

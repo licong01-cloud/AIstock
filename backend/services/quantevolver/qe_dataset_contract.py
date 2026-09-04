@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import posixpath
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -36,6 +37,291 @@ QE_FORMAL_DATASET_BINDING_SCHEMA = "qe_formal_canonical_pit_dataset_binding_v1"
 QE_FORMAL_DATASET_REQUEST_SCHEMA = "qe_formal_canonical_pit_dataset_request_v1"
 QE_FORMAL_DATASET_REQUEST_PARAM = "_qe_formal_dataset_request"
 QE_FORMAL_RUNTIME_PINS_SCHEMA = "qe_formal_frozen_runtime_pins_v1"
+QE_DIRECT_V2_DATASET_BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v1"
+QE_DIRECT_V2_DATASET_BINDING_PARAM = "_qe_direct_v2_dataset_binding"
+
+QE_DIRECT_V2_INDEX_CODES = (
+    "000001.SH",
+    "000016.SH",
+    "000300.SH",
+    "000688.SH",
+    "000852.SH",
+    "000905.SH",
+    "000985.CSI",
+    "399001.SZ",
+    "399006.SZ",
+    "399102.SZ",
+    "399107.SZ",
+    "932000.CSI",
+)
+
+
+def _canonical_posix_path(value: Any, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"QE direct-v2 {field} must be a string")
+    raw = value.strip()
+    if (
+        raw != value
+        or not raw.startswith("/")
+        or raw == "/"
+        or "\\" in raw
+        or "\x00" in raw
+        or posixpath.normpath(raw) != raw
+    ):
+        raise ValueError(f"QE direct-v2 {field} must be a canonical absolute POSIX path")
+    return raw
+
+
+def _string_mapping(value: Any, *, field: str, required: set[str]) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError(f"QE direct-v2 {field} schema/fields are invalid")
+    if any(not isinstance(value[key], str) for key in required):
+        raise ValueError(f"QE direct-v2 {field} values must be strings")
+    return {key: str(value[key]) for key in sorted(required)}
+
+
+def _canonical_sha256(value: Any, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"QE direct-v2 {field} must be a string")
+    canonical = ensure_sha256(value, field=field)
+    if canonical != value:
+        raise ValueError(f"QE direct-v2 {field} is not canonical")
+    return canonical
+
+
+@dataclass(frozen=True, slots=True)
+class QEDirectV2DatasetBinding:
+    """Run-scoped, hash-pinned binding for a direct monthly candidate.
+
+    Direct monthly candidates intentionally are not formal production releases.
+    This binding therefore does not promote them to the canonical formal-release
+    contract.  It only seals the exact five read-only components selected for a
+    QE run and makes any path, identity or content drift fail closed in the
+    fresh computation process.
+    """
+
+    release_id: str
+    cutoff: dt.date
+    candidate_root: str
+    provider_uri_day: str
+    provider_uri_1min: str
+    factor_data_dir: str
+    index_context_path: str
+    suspend_data_dir: str
+    factor_meta: Mapping[str, str]
+    factor_meta_sha256: str
+    day_pins: Mapping[str, str]
+    minute_pins: Mapping[str, str]
+    index_pins: Mapping[str, Any]
+    suspend_pins: Mapping[str, str]
+    schema_version: str = QE_DIRECT_V2_DATASET_BINDING_SCHEMA
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "QEDirectV2DatasetBinding":
+        required = {
+            "schema_version",
+            "release_id",
+            "cutoff",
+            "candidate_root",
+            "provider_uri_day",
+            "provider_uri_1min",
+            "factor_data_dir",
+            "index_context_path",
+            "suspend_data_dir",
+            "factor_meta",
+            "factor_meta_sha256",
+            "day_pins",
+            "minute_pins",
+            "index_pins",
+            "suspend_pins",
+        }
+        if not isinstance(value, Mapping) or set(value) != required:
+            raise ValueError("QE direct-v2 dataset binding schema/fields are invalid")
+        if value.get("schema_version") != QE_DIRECT_V2_DATASET_BINDING_SCHEMA:
+            raise ValueError("QE direct-v2 dataset binding schema_version is invalid")
+        string_fields = required - {
+            "schema_version",
+            "factor_meta",
+            "day_pins",
+            "minute_pins",
+            "index_pins",
+            "suspend_pins",
+        }
+        if any(not isinstance(value[field], str) for field in string_fields):
+            raise ValueError("QE direct-v2 dataset binding identity values must be strings")
+        try:
+            cutoff = dt.date.fromisoformat(str(value["cutoff"]))
+        except ValueError as exc:
+            raise ValueError("QE direct-v2 dataset binding cutoff is invalid") from exc
+        binding = cls(
+            release_id=str(value["release_id"]),
+            cutoff=cutoff,
+            candidate_root=str(value["candidate_root"]),
+            provider_uri_day=str(value["provider_uri_day"]),
+            provider_uri_1min=str(value["provider_uri_1min"]),
+            factor_data_dir=str(value["factor_data_dir"]),
+            index_context_path=str(value["index_context_path"]),
+            suspend_data_dir=str(value["suspend_data_dir"]),
+            factor_meta=dict(value["factor_meta"]) if isinstance(value["factor_meta"], Mapping) else {},
+            factor_meta_sha256=str(value["factor_meta_sha256"]),
+            day_pins=dict(value["day_pins"]) if isinstance(value["day_pins"], Mapping) else {},
+            minute_pins=dict(value["minute_pins"]) if isinstance(value["minute_pins"], Mapping) else {},
+            index_pins=dict(value["index_pins"]) if isinstance(value["index_pins"], Mapping) else {},
+            suspend_pins=dict(value["suspend_pins"]) if isinstance(value["suspend_pins"], Mapping) else {},
+        )
+        return binding.validated()
+
+    def validated(self) -> "QEDirectV2DatasetBinding":
+        if self.schema_version != QE_DIRECT_V2_DATASET_BINDING_SCHEMA:
+            raise ValueError("QE direct-v2 dataset binding schema_version is invalid")
+        if (
+            self.release_id != self.release_id.strip().lower()
+            or not _DATASET_ID_RE.fullmatch(self.release_id)
+        ):
+            raise ValueError("QE direct-v2 dataset binding release_id is not canonical")
+        if self.cutoff < QE_DATASET_START_DATE:
+            raise ValueError("QE direct-v2 dataset binding cutoff is earlier than start")
+        root = _canonical_posix_path(self.candidate_root, field="candidate_root")
+        expected_paths = {
+            "provider_uri_day": posixpath.join(root, "components/daily_bin_candidate"),
+            "provider_uri_1min": posixpath.join(root, "components/minute_bin_candidate"),
+            "factor_data_dir": posixpath.join(root, "components/factor_h5_static_candidate_v2"),
+            "index_context_path": posixpath.join(root, "components/index_context/index_daily.h5"),
+            "suspend_data_dir": posixpath.join(root, "components/suspend_d_daily_candidate_v2"),
+        }
+        for field, expected in expected_paths.items():
+            actual = _canonical_posix_path(getattr(self, field), field=field)
+            if actual != expected:
+                raise ValueError(
+                    f"QE direct-v2 {field} is outside the selected candidate release"
+                )
+
+        factor_meta = _string_mapping(
+            self.factor_meta,
+            field="factor_meta",
+            required={"schema_version", "start", "end", "universe_key"},
+        )
+        if factor_meta != {
+            "end": self.cutoff.isoformat(),
+            "schema_version": "qe_direct_factor_h5_static_v2",
+            "start": QE_DATASET_START_DATE.isoformat(),
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }:
+            raise ValueError("QE direct-v2 factor metadata identity is invalid")
+        _canonical_sha256(self.factor_meta_sha256, field="factor_meta_sha256")
+
+        pin_fields = {
+            "snapshot_id",
+            "universe_key",
+            "rule_version",
+            "instruments_sha256",
+            "calendar_sha256",
+            "meta_export_sha256",
+        }
+        day = _string_mapping(self.day_pins, field="day_pins", required=pin_fields)
+        minute = _string_mapping(self.minute_pins, field="minute_pins", required=pin_fields)
+        for label, pins, snapshot_id in (
+            ("day", day, "daily_bin_candidate"),
+            ("minute", minute, "minute_bin_candidate"),
+        ):
+            if pins["snapshot_id"] != snapshot_id:
+                raise ValueError(f"QE direct-v2 {label} snapshot_id is invalid")
+            if pins["universe_key"] != factor_meta["universe_key"]:
+                raise ValueError(f"QE direct-v2 {label} universe_key differs")
+            if not pins["rule_version"].strip():
+                raise ValueError(f"QE direct-v2 {label} rule_version is empty")
+            for key in ("instruments_sha256", "calendar_sha256", "meta_export_sha256"):
+                _canonical_sha256(pins[key], field=f"{label}_pins.{key}")
+
+        if not isinstance(self.index_pins, Mapping) or set(self.index_pins) != {
+            "sha256",
+            "max_date",
+            "codes",
+        }:
+            raise ValueError("QE direct-v2 index_pins schema/fields are invalid")
+        _canonical_sha256(self.index_pins["sha256"], field="index_pins.sha256")
+        if self.index_pins["max_date"] != self.cutoff.isoformat():
+            raise ValueError("QE direct-v2 index max_date differs from cutoff")
+        codes = self.index_pins["codes"]
+        if not isinstance(codes, list) or tuple(codes) != QE_DIRECT_V2_INDEX_CODES:
+            raise ValueError("QE direct-v2 index code contract differs")
+
+        suspend = _string_mapping(
+            self.suspend_pins,
+            field="suspend_pins",
+            required={
+                "dataset_id",
+                "schema_version",
+                "source_contract",
+                "metadata_sha256",
+                "parquet_sha256",
+            },
+        )
+        if suspend["dataset_id"] != "suspend_d_daily_candidate_v2":
+            raise ValueError("QE direct-v2 suspend dataset_id is invalid")
+        if suspend["schema_version"] != "qe_direct_suspend_d_v1":
+            raise ValueError("QE direct-v2 suspend schema_version is invalid")
+        if not suspend["source_contract"].strip():
+            raise ValueError("QE direct-v2 suspend source_contract is empty")
+        if not _SOURCE_CONTRACT_RE.fullmatch(suspend["source_contract"]):
+            raise ValueError("QE direct-v2 suspend source_contract is not canonical")
+        _canonical_sha256(
+            suspend["metadata_sha256"], field="suspend_pins.metadata_sha256"
+        )
+        _canonical_sha256(
+            suspend["parquet_sha256"], field="suspend_pins.parquet_sha256"
+        )
+        return self
+
+    def as_dict(self) -> dict[str, Any]:
+        self.validated()
+        return {
+            "schema_version": self.schema_version,
+            "release_id": self.release_id,
+            "cutoff": self.cutoff.isoformat(),
+            "candidate_root": self.candidate_root,
+            "provider_uri_day": self.provider_uri_day,
+            "provider_uri_1min": self.provider_uri_1min,
+            "factor_data_dir": self.factor_data_dir,
+            "index_context_path": self.index_context_path,
+            "suspend_data_dir": self.suspend_data_dir,
+            "factor_meta": dict(self.factor_meta),
+            "factor_meta_sha256": self.factor_meta_sha256,
+            "day_pins": dict(self.day_pins),
+            "minute_pins": dict(self.minute_pins),
+            "index_pins": {
+                "sha256": self.index_pins["sha256"],
+                "max_date": self.index_pins["max_date"],
+                "codes": list(self.index_pins["codes"]),
+            },
+            "suspend_pins": dict(self.suspend_pins),
+        }
+
+
+def require_qe_direct_v2_dataset_binding(
+    value: QEDirectV2DatasetBinding | Mapping[str, Any],
+) -> QEDirectV2DatasetBinding:
+    if isinstance(value, QEDirectV2DatasetBinding):
+        return value.validated()
+    return QEDirectV2DatasetBinding.from_mapping(value)
+
+
+def require_qe_direct_v2_dataset_window(
+    binding: QEDirectV2DatasetBinding | Mapping[str, Any],
+    *,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> QEDirectV2DatasetBinding:
+    direct = require_qe_direct_v2_dataset_binding(binding)
+    if end_date < start_date:
+        raise ValueError(f"QE request end date {end_date} is earlier than start date {start_date}")
+    if start_date < QE_DATASET_START_DATE or end_date > direct.cutoff:
+        raise ValueError(
+            "QE request window exceeds the direct-v2 candidate contract: "
+            f"requested={start_date}..{end_date}, cutoff={direct.cutoff}, "
+            f"release_id={direct.release_id}"
+        )
+    return direct
 
 
 def _dataset_id() -> str:

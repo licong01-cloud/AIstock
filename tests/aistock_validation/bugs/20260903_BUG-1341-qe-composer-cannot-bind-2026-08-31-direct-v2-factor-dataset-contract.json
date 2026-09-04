@@ -1,6 +1,11 @@
 {
-  "actual": "2026-08-31 QE/HMM v2 candidate consumer smoke passes for day/minute/H5/static/index, but ConfigComposer-generated prepare_factors.py still pins QE_DATASET_EXPECTED_META and factor-cache universe metadata to the retired 2026-06-30 dataset constants. The candidate factor meta contract is schema_version=qe_direct_factor_h5_static_v2, start=2018-08-01, end=2026-08-31, universe_key=aistock_equity_pit_canonical_v2 and has no legacy snapshot_id. A formal MA-E19R3 run would therefore fail closed or mix release identities. Add an explicit immutable direct-v2 consumer binding supplied by the selected release, validate exact factor meta and frozen day/minute/index identities without database fallback, preserve legacy/formal canonical paths, and ensure generated configuration contains no /home/lc999/data fallback. Do not modify candidate data or weaken fail-closed checks.",
+  "actual": "The 2026-08-31 direct-v2 candidate passes day/minute/H5/static/index/suspend reads, but ConfigComposer emits the retired 2026-06-30 factor, qlib-bin and suspend identities. prepare_factors.py rejects the real factor meta, while qe_build_frozen_suspend_filter.py targets a nonexistent legacy-named sidecar instead of the same-release suspend_d_daily_candidate_v2 directory.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "scripts/qe_validate_direct_v2_dataset.py",
     "tests/aistock_validation/bugs/20260903_BUG-1341-qe-composer-cannot-bind-2026-08-31-direct-v2-factor-dataset-contract.json"
   ],
   "assigned_agent": null,
@@ -19,10 +24,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260903-652d0e8bef9b",
       "timestamp": "2026-09-03T19:40:13.754792Z"
+    },
+    {
+      "action": "direct_v2_consumer_fix_validated",
+      "actor": "codex",
+      "note": "Added explicit five-component binding, fresh-process hash validation and direct suspend metadata support; real X-drive candidate preflight passed with zero legacy path hits.",
+      "timestamp": "2026-09-04T04:43:27Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "tmp/handoff/qe_hmm_full_v2_20260831_consumer_binding.json",
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260902-candidate/direct_monthly_state.json"
+  ],
+  "expected": "An explicit direct-v2 binding pins the same-release day, minute, factor, index, and suspend components; ConfigComposer emits only those paths and identities, and fresh-process validation fails closed on any mismatch without database or legacy-path fallback.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +49,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+      "scripts/qe_build_frozen_suspend_filter.py",
+      "scripts/qe_validate_direct_v2_dataset.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py",
+      "scripts/qe_build_frozen_suspend_filter.py",
+      "scripts/qe_validate_direct_v2_dataset.py"
+    ]
   },
   "first_seen_at": "2026-09-03T19:40:13.754807Z",
   "fix_branch": null,
@@ -54,9 +80,10 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -123,6 +150,13 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
+    "WSL rdagent-gpu real candidate direct-v2 binding, factor contract and suspend artifact preflight -> passed; suspend trade dates=115, rows=781, old path hits=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 133 passed",
+    "python -m nox -s l0 -> 0 blocking findings"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
