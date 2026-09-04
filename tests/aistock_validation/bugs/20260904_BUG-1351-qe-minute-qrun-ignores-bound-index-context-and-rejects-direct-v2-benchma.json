@@ -193,11 +193,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
+    "fresh_process_evidence": [
+      "BUG1351_REAL_CANDIDATE_WSL_PASS: WSL rdagent-gpu fresh process imported the final task-worktree direct-v2 v2 contract and validator, verified the immutable 2026-08-31 candidate, and proved stock_universe.txt is hash-distinct from all.txt with 000300.SH excluded from selection"
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
