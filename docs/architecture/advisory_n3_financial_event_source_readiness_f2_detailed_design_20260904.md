@@ -1,12 +1,12 @@
 # Advisory N3 财务事件 Source Readiness F2 详细设计 v1.1
 
-> 日期：2026-09-04  
-> 状态：`IMPLEMENTED_LOCAL_SOURCE_SMOKE_READY_FORMAL_PENDING`  
-> tier：`F2`  
-> research stage：`N3_FINANCIAL_EVENT_SOURCE_READINESS`  
-> objective contract：`ALPHA_RANKING`  
-> study type：`ORACLE_DIAGNOSTIC`  
-> decision use：`NAVIGATION_ONLY`  
+> 日期：2026-09-04
+> 状态：`IMPLEMENTED_LOCAL_SOURCE_SMOKE_READY_FORMAL_PENDING`
+> tier：`F2`
+> research stage：`N3_FINANCIAL_EVENT_SOURCE_READINESS`
+> objective contract：`ALPHA_RANKING`
+> study type：`ORACLE_DIAGNOSTIC`
+> decision use：`NAVIGATION_ONLY`
 > production gates：backend restart / DDL / DML / Tushare / network / backfill / factor catalog / StrategyPackage / runtime activation 均为 `noop`
 
 ## 1. 背景与当前事实
