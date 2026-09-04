@@ -92,6 +92,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 def _write_runtime_catalog(root: Path) -> Path:
     for script_name in (
         "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/build_core_index_membership_authority.py",
         "scripts/ingest_tushare_daily_basic.py",
         "scripts/qlib_authoritative_bin_export.py",
         "scripts/seed_dataset_refresh_audit.py",
@@ -107,6 +108,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "schema_version": "aistock_runtime_target_catalog_v1",
                 "non_runtime_source_paths": [
                     "scripts/backfill_tushare_daily_basic_fields.py",
+                    "scripts/build_core_index_membership_authority.py",
                     "scripts/ingest_tushare_daily_basic.py",
                     "scripts/qlib_authoritative_bin_export.py",
                     "scripts/seed_dataset_refresh_audit.py",
@@ -5002,6 +5004,22 @@ def test_export_qe_qlib_candidate_classified_as_non_runtime_offline_tool(
     _write_runtime_catalog(isolated_workflow_root)
     inference = workflow._classify_runtime_impact(
         ["scripts/export_qe_qlib_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+
+
+def test_core_index_authority_builder_is_exact_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/build_core_index_membership_authority.py"],
         root=isolated_workflow_root,
     )
     assert inference == {
