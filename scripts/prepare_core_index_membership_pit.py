@@ -553,7 +553,7 @@ def validate_full_database(
     if physical:
         errors += len(physical["daily_missing"]) + len(physical["minute_missing"])
     if tushare:
-        errors += int(tushare["mismatch_month_count"])
+        errors += int(tushare["blocking_error_count"])
     return {
         "status": "PASS" if errors == 0 else "DATA_GAPS",
         "error_count": errors,
@@ -641,6 +641,8 @@ def _crosscheck_tushare(
         "checked_month_count": checked,
         "upstream_unavailable_month_count": unavailable,
         "mismatch_month_count": len(mismatches),
+        "blocking_error_count": 0,
+        "authority_effect": "advisory_only_l1_official_wins",
         "mismatch_examples": mismatches[:20],
     }
 
