@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1346",
-  "closed_at": null,
+  "closed_at": "2026-09-04T05:52:00.187126Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -84,10 +84,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1346-close-sync-20260904\\tmp\\BUG-1346-post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1346",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "482a415b14088acc5e1386ba087e4f2a791cb0a122626973cf9b64fdcad9e31b",
+      "contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+      "expected_identity": "11a032c622eac6bdb7befd50d194b1868f242732",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-04T05:50:59.008127Z",
+      "mode": "read_only",
+      "observed_identity": "11a032c622eac6bdb7befd50d194b1868f242732",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e0038463de902724f652035070353bd7f09f781b4ece00f384f45b7027f8eeb6",
+      "receipt_sha256": "96aaf030979fd82d85f7b6f5285b74dd823fcb24066f94282d0711b89925200e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "68cd423ebcc7f0ddcab960e70ba1e6c5be96f92a3f268348e00e7ff3e351fd99",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -120,7 +142,7 @@
     ],
     "validation_evidence_digest": "df36b69b3447942fe9e7f5c34446fcdb6467d40a6cb1c3e5698e5d1886894779"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -132,7 +154,10 @@
   "validation_evidence": [
     "validation-receipt: id=bec17b22b0beff21 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state backend/tests/simulation_execution/test_localsim_runtime.py::test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual -q -p no:cacheprovider` result=`5 passed`",
     "validation-receipt: id=df33acfa99259a11 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
-    "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`"
+    "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k suspended_current_day_tdx_placeholder -> 5 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s simulation_core_l2 -> 767 passed, 3 skipped"
   ],
   "verification_budget": {
     "budget": "standard",
