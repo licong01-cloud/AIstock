@@ -1,0 +1,386 @@
+{
+  "actual": "After BUG-1353 adds 000300.SH to the direct-v2 daily Qlib provider catalog, QE ConfigComposer still emits market=all and fingerprints instruments/all.txt. A new MA-E19R3 run would therefore include the benchmark-only index in the model/selection universe and frozen risk policy instead of using instruments/stock_universe.txt.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+    "scripts/qe_build_frozen_risk_policy.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+    "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1351",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T07:52:29.871017Z",
+  "description": "BUG-1353 correctly makes 000300.SH available to Qlib's normal benchmark reader by adding it to the daily provider catalog, while publishing stock_universe.txt as the benchmark-free PIT selection universe. QE direct-v2 binding v1 only pins all.txt and ConfigComposer keeps stock_pool=all, so the repaired candidate would contaminate training, inference, factor-cache identity and the frozen risk policy with the benchmark. The consumer must bind and validate stock_universe.txt explicitly without changing Qlib or benchmark read semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-81f4b5062e36",
+      "timestamp": "2026-09-04T07:52:29.871001Z"
+    },
+    {
+      "action": "scope_corrected_after_producer_fix",
+      "actor": "codex",
+      "note": "BUG-1353 established Qlib daily-bin benchmark delivery as the correct path. BUG-1351 is narrowed to the QE direct-v2 consumer selecting and fingerprinting provider-catalog all.txt instead of benchmark-free stock_universe.txt; qrun and Qlib source are excluded.",
+      "timestamp": "2026-09-04T10:20:21.172851Z"
+    },
+    {
+      "action": "real_candidate_selection_contract_verified",
+      "actor": "codex",
+      "note": "WSL rdagent-gpu fresh process validated the real 2026-08-31 candidate with direct-v2 binding v2. stock_universe SHA256=8979d78a7c3b322a3d9696f21e880dcd79c9a0bff0aa59d160f6a1f957640392 differs from provider-catalog all.txt SHA256=f5e79d087a709f674ff7f66cb6f5c2f242fb439b737e6dd42a542de26f805ca6; benchmark remains excluded from selection.",
+      "timestamp": "2026-09-04T10:20:21.172851Z"
+    }
+  ],
+  "evidence_uris": [
+    "rdagent_assets/qe_workspace/qe_mae19r3_20260904_083639_20260831/Loop01/run.log"
+  ],
+  "expected": "A direct-v2 TWAP run continues to load 000300.SH through Qlib's normal daily-bin benchmark path, while training, inference, factor-cache identity and frozen risk policy use the hash-pinned instruments/stock_universe.txt. The validator must fail closed if the benchmark enters the stock pool or the three instruments files drift; legacy runs remain unchanged and no Qlib source fallback is introduced.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+    ],
+    "changed_files_source": "implementation_readback",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+        "scripts/qe_build_frozen_risk_policy.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "noxfile.py",
+        "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_dataset_contract.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "scripts/qe_build_frozen_risk_policy.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_frozen_data_plane"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+        "scripts/qe_build_frozen_risk_policy.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "noxfile.py",
+        "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1351-qe-minute-qrun-ignores-bound-index-context-and-rejects-direct-v2-benchma.json"
+    ]
+  },
+  "first_seen_at": "2026-09-04T07:52:29.871017Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4265,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4265",
+  "last_seen_at": "2026-09-04T07:52:29.871017Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Generate a direct-v2 MA-E19R3 config after BUG-1353 and inspect conf.yaml plus qe_frozen_build_spec.json: before this fix both select instruments/all.txt, which now contains benchmark-only 000300.SH.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_sector_risk_overlay_backend",
+    "qe_read_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
+    "fresh_process_evidence": [
+      "BUG1351_REAL_CANDIDATE_WSL_PASS: WSL rdagent-gpu fresh process imported the final task-worktree direct-v2 v2 contract and validator, verified the immutable 2026-08-31 candidate, proved stock_universe.txt is hash-distinct from all.txt with 000300.SH excluded from selection, and wrote 0 candidate files"
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE direct-v2 consumer includes benchmark-only 000300 in stock selection universe",
+  "trigger_condition": {
+    "fingerprint": "81f4b5062e36da13890189d7",
+    "source_event_id": "FE-20260904-81f4b5062e36"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

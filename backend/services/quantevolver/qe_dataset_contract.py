@@ -37,7 +37,7 @@ QE_FORMAL_DATASET_BINDING_SCHEMA = "qe_formal_canonical_pit_dataset_binding_v1"
 QE_FORMAL_DATASET_REQUEST_SCHEMA = "qe_formal_canonical_pit_dataset_request_v1"
 QE_FORMAL_DATASET_REQUEST_PARAM = "_qe_formal_dataset_request"
 QE_FORMAL_RUNTIME_PINS_SCHEMA = "qe_formal_frozen_runtime_pins_v1"
-QE_DIRECT_V2_DATASET_BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v1"
+QE_DIRECT_V2_DATASET_BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v2"
 QE_DIRECT_V2_DATASET_BINDING_PARAM = "_qe_direct_v2_dataset_binding"
 
 QE_DIRECT_V2_INDEX_CODES = (
@@ -112,6 +112,7 @@ class QEDirectV2DatasetBinding:
     factor_meta_sha256: str
     day_pins: Mapping[str, str]
     minute_pins: Mapping[str, str]
+    selection_pins: Mapping[str, str]
     index_pins: Mapping[str, Any]
     suspend_pins: Mapping[str, str]
     schema_version: str = QE_DIRECT_V2_DATASET_BINDING_SCHEMA
@@ -132,6 +133,7 @@ class QEDirectV2DatasetBinding:
             "factor_meta_sha256",
             "day_pins",
             "minute_pins",
+            "selection_pins",
             "index_pins",
             "suspend_pins",
         }
@@ -144,6 +146,7 @@ class QEDirectV2DatasetBinding:
             "factor_meta",
             "day_pins",
             "minute_pins",
+            "selection_pins",
             "index_pins",
             "suspend_pins",
         }
@@ -166,6 +169,11 @@ class QEDirectV2DatasetBinding:
             factor_meta_sha256=str(value["factor_meta_sha256"]),
             day_pins=dict(value["day_pins"]) if isinstance(value["day_pins"], Mapping) else {},
             minute_pins=dict(value["minute_pins"]) if isinstance(value["minute_pins"], Mapping) else {},
+            selection_pins=(
+                dict(value["selection_pins"])
+                if isinstance(value["selection_pins"], Mapping)
+                else {}
+            ),
             index_pins=dict(value["index_pins"]) if isinstance(value["index_pins"], Mapping) else {},
             suspend_pins=dict(value["suspend_pins"]) if isinstance(value["suspend_pins"], Mapping) else {},
         )
@@ -233,6 +241,29 @@ class QEDirectV2DatasetBinding:
             for key in ("instruments_sha256", "calendar_sha256", "meta_export_sha256"):
                 _canonical_sha256(pins[key], field=f"{label}_pins.{key}")
 
+        selection = _string_mapping(
+            self.selection_pins,
+            field="selection_pins",
+            required={
+                "stock_pool",
+                "instruments_sha256",
+                "benchmark_code",
+                "benchmark_instruments_sha256",
+            },
+        )
+        if selection["stock_pool"] != "stock_universe":
+            raise ValueError("QE direct-v2 selection stock_pool is invalid")
+        if selection["benchmark_code"] != "000300.SH":
+            raise ValueError("QE direct-v2 benchmark code is invalid")
+        _canonical_sha256(
+            selection["instruments_sha256"],
+            field="selection_pins.instruments_sha256",
+        )
+        _canonical_sha256(
+            selection["benchmark_instruments_sha256"],
+            field="selection_pins.benchmark_instruments_sha256",
+        )
+
         if not isinstance(self.index_pins, Mapping) or set(self.index_pins) != {
             "sha256",
             "max_date",
@@ -289,6 +320,7 @@ class QEDirectV2DatasetBinding:
             "factor_meta_sha256": self.factor_meta_sha256,
             "day_pins": dict(self.day_pins),
             "minute_pins": dict(self.minute_pins),
+            "selection_pins": dict(self.selection_pins),
             "index_pins": {
                 "sha256": self.index_pins["sha256"],
                 "max_date": self.index_pins["max_date"],

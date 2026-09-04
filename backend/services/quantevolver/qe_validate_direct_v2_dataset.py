@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 
 BINDING_FILE = "qe_direct_v2_dataset_binding.json"
-BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v1"
+BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v2"
 BINDING_FIELDS = {
     "schema_version",
     "release_id",
@@ -29,6 +29,7 @@ BINDING_FIELDS = {
     "factor_meta_sha256",
     "day_pins",
     "minute_pins",
+    "selection_pins",
     "index_pins",
     "suspend_pins",
 }
@@ -121,6 +122,63 @@ def _validate_qlib_component(root: Path, pins: Mapping[str, str], *, freq: str) 
     )
 
 
+def _validate_selection_universe(
+    root: Path,
+    pins: Mapping[str, str],
+    *,
+    cutoff: str,
+) -> None:
+    required_fields = {
+        "stock_pool",
+        "instruments_sha256",
+        "benchmark_code",
+        "benchmark_instruments_sha256",
+    }
+    if not isinstance(pins, Mapping) or set(pins) != required_fields:
+        raise _fail("qe_direct_v2_selection_contract_invalid", "selection fields differ")
+    if pins.get("stock_pool") != "stock_universe" or pins.get("benchmark_code") != "000300.SH":
+        raise _fail("qe_direct_v2_selection_contract_invalid", "selection identity differs")
+    instruments = root / "instruments"
+    all_path = instruments / "all.txt"
+    stock_path = instruments / "stock_universe.txt"
+    benchmark_path = instruments / "benchmark.txt"
+    _require_file(stock_path, str(pins["instruments_sha256"]))
+    _require_file(benchmark_path, str(pins["benchmark_instruments_sha256"]))
+    try:
+        all_lines = all_path.read_text(encoding="utf-8").splitlines()
+        stock_lines = stock_path.read_text(encoding="utf-8").splitlines()
+        benchmark_lines = benchmark_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise _fail("qe_direct_v2_file_unreadable", f"cannot read instruments: {exc}") from exc
+    benchmark_line = f"000300.SH\t2018-08-01\t{cutoff}"
+    if benchmark_lines != [benchmark_line]:
+        raise _fail("qe_direct_v2_benchmark_universe_invalid", "benchmark.txt differs")
+    if benchmark_line in stock_lines:
+        raise _fail("qe_direct_v2_selection_contains_benchmark", "000300.SH is selection eligible")
+    if all_lines.count(benchmark_line) != 1 or [line for line in all_lines if line != benchmark_line] != stock_lines:
+        raise _fail(
+            "qe_direct_v2_provider_selection_mismatch",
+            "all.txt is not exactly stock_universe.txt plus benchmark.txt",
+        )
+    meta = _load_json(root / "meta_export.json", code="qe_direct_v2_metadata_unreadable")
+    benchmark_meta = meta.get("benchmark_only")
+    expected = {
+        "schema_version": "qe_direct_daily_benchmark_v1",
+        "code": "000300.SH",
+        "start": "2018-08-01",
+        "end": cutoff,
+        "source": "components/index_context/index_daily.h5",
+        "provider_catalog": "instruments/all.txt",
+        "selection_universe": "instruments/stock_universe.txt",
+        "benchmark_universe": "instruments/benchmark.txt",
+        "selection_eligible": False,
+    }
+    if not isinstance(benchmark_meta, Mapping) or any(
+        benchmark_meta.get(key) != value for key, value in expected.items()
+    ):
+        raise _fail("qe_direct_v2_benchmark_metadata_invalid", "benchmark_only metadata differs")
+
+
 def _validate_index(path: Path, pins: Mapping[str, Any]) -> None:
     _require_file(path, str(pins["sha256"]))
     try:
@@ -198,6 +256,7 @@ def validate_binding(path: Path = Path(BINDING_FILE)) -> dict[str, Any]:
 
     _validate_qlib_component(day, binding["day_pins"], freq="day")
     _validate_qlib_component(minute, binding["minute_pins"], freq="1min")
+    _validate_selection_universe(day, binding["selection_pins"], cutoff=binding["cutoff"])
     factor_meta_path = factor / "meta.json"
     _require_file(factor_meta_path, binding["factor_meta_sha256"])
     _require_meta(factor_meta_path, binding["factor_meta"])
