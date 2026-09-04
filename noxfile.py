@@ -2545,6 +2545,27 @@ def market_regime_label(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def position_timing_backend(session: nox.Session) -> None:
+    """Run the isolated daily-card backend contract without services or DB writes."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def rl_execution_smoke(session: nox.Session) -> None:
     """Module-visibility smoke for backend.services.rl_execution.
 
