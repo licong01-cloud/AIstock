@@ -9819,14 +9819,18 @@ class SimulationLifecycleScheduler:
         if projection_recovery is not None:
             return projection_recovery
         try:
-            durable_runtime_recovery = self._recover_failed_local_sim_durable_runtime_if_safe(
-                binding=binding,
-                run=run,
-                plan=plan,
-                runtime_release=runtime_release,
-                trade_date=trade_date,
-                data_source=data_source,
-                as_of_time=as_of_time,
+            durable_runtime_recovery = (
+                self._recover_failed_local_sim_durable_runtime_if_safe(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    as_of_time=as_of_time,
+                )
+                if submit
+                else None
             )
         except Exception as exc:
             return self._record_local_sim_durable_runtime_recovery_failure(

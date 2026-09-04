@@ -14276,6 +14276,54 @@ def test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_heal
     assert records[suspended_symbol].provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
     assert records[healthy_symbol].provenance == LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
 
+    v2_suspended_fact = {
+        "symbol": suspended_symbol,
+        "trade_date": TRADE_DATE.isoformat(),
+        "authority_state": "READY",
+        "limit_authority": "TUSHARE_STK_LIMIT",
+        "has_daily_limit": True,
+        "pre_close": 10.0,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+        "price_tick": 0.01,
+        "price_basis": "raw",
+        "source_evidence_hash": "2" * 64,
+        "rule_version": None,
+        "derivation_hash": None,
+        "authority_reason_code": None,
+        "is_st": False,
+        "st_source": "market.stock_st",
+        "st_evidence_hash": "3" * 64,
+        "is_suspended": True,
+        "suspend_type": "S",
+        "suspend_timing": None,
+        "suspend_source": "market.suspend_d",
+        "board": "MAIN",
+        "lot_rule": {"min_quantity": 100, "increment": 100},
+    }
+    v2_context = replace(
+        context,
+        pre_trade_tradability={
+            suspended_symbol: {
+                "suspend_status": {"is_suspended": True},
+                "daily_trading_context": {
+                    "schema_version": "daily_trading_context_reference_v2",
+                    "symbol_fact": v2_suspended_fact,
+                },
+            },
+            healthy_symbol: {"suspend_status": {"is_suspended": False}},
+        },
+    )
+    accepted_v2, records_v2 = SimulationLifecycleScheduler._local_sim_position_marks(
+        positions=positions,
+        context=v2_context,
+        execution=execution,
+        snapshot_time=snapshot_time,
+    )
+    assert accepted_v2 == accepted
+    assert records_v2[suspended_symbol].source == "TUSHARE_STK_LIMIT:frozen_daily_trading_context_v2"
+    assert records_v2[suspended_symbol].as_of_time == snapshot_time
+
     synthetic_tdx_mark = LocalSimMarketMarkV1(
         symbol=suspended_symbol,
         price=10.0,
@@ -14461,6 +14509,20 @@ def test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state
     scheduler.context_provider = StaticSimulationRunContextProvider(
         by_binding_id={binding.binding_id: recovery_context}
     )
+
+    readiness_tick = scheduler._existing_plan_result(
+        binding=binding,
+        run=repo.get_simulation_daily_run(run_id),
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        submit=False,
+        mode="SIM",
+        as_of_time=datetime(2026, 5, 21, 9, 33),
+    )
+    still_failed = repo.get_simulation_daily_run(run_id)
+    assert readiness_tick.status == "REUSED_EXISTING_PLAN"
+    assert readiness_tick.run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert still_failed.status == SimulationDailyRunStatus.FAILED_RETRYABLE
 
     recovered_tick = scheduler.run_once(
         trade_date=TRADE_DATE,
