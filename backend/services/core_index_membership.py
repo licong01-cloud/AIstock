@@ -347,16 +347,12 @@ def resolve_universe(
     for pool_id in selection.pool_ids:
         definition = POOL_DEFINITIONS[pool_id]
         observed = coverage[pool_id]
-        if observed.first_effective_from > definition.history_start:
+        required_from = max(start_date, definition.launch_date)
+        if observed.first_effective_from > required_from:
             raise CoreIndexMembershipUnavailable(
                 UniverseUnavailableReason.MEMBERSHIP_HISTORY_UNAVAILABLE,
                 f"{pool_id} membership starts at {observed.first_effective_from}, "
-                f"after required history_start {definition.history_start}",
-            )
-        if start_date < definition.history_start and definition.history_start > definition.launch_date:
-            raise CoreIndexMembershipUnavailable(
-                UniverseUnavailableReason.MEMBERSHIP_HISTORY_UNAVAILABLE,
-                f"{pool_id} is only validated from {definition.history_start}",
+                f"after the requested ready_from {required_from}",
             )
 
     membership = tuple(repo.fetch_membership_intervals(selection.pool_ids, start_date, end_date))
