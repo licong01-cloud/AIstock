@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -21,22 +21,35 @@ class FakeCalendar:
         self.is_trading_day = is_trading_day
 
     def status(self, *, as_of_date: date) -> dict[str, Any]:
-        assert as_of_date == self.today
+        is_trading_day = self.is_trading_day if as_of_date == self.today else as_of_date.weekday() < 5
+        previous = as_of_date - timedelta(days=1)
+        while previous.weekday() >= 5:
+            previous -= timedelta(days=1)
         return {
-            "is_trading_day": self.is_trading_day,
-            "previous_trading_day": "2026-09-02",
-            "latest_completed_trading_day": "2026-09-03" if self.is_trading_day else "2026-09-02",
+            "is_trading_day": is_trading_day,
+            "previous_trading_day": previous.isoformat(),
+            "latest_completed_trading_day": (as_of_date if is_trading_day else previous).isoformat(),
             "source": "fake-calendar",
             "timezone": "Asia/Shanghai",
             "cache": {"checksum": "calendar-fixture"},
         }
 
     def next_trading_day(self, anchor_date: date) -> date:
-        mapping = {
-            date(2026, 9, 2): date(2026, 9, 3),
-            date(2026, 9, 3): date(2026, 9, 4),
-        }
-        return mapping[anchor_date]
+        candidate = anchor_date + timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+        return candidate
+
+    def list_trading_days(self, start_date: date, end_date: date, *, allow_empty: bool = False) -> list[date]:
+        values: list[date] = []
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5:
+                values.append(current)
+            current += timedelta(days=1)
+        if not values and not allow_empty:
+            raise ValueError("no trading days")
+        return values
 
 
 def daily_loader(symbols: list[str], trade_date: date) -> dict[str, Any]:
@@ -151,13 +164,15 @@ def watchlist_rows() -> list[dict[str, Any]]:
 def service_factory(tmp_path: Path, holding_rows: list[dict[str, Any]], watchlist_rows: list[dict[str, Any]]):
     def build(
         *,
-        now: datetime | None = None,
+        now: Any = None,
         holdings: list[dict[str, Any]] | None = None,
         watchlist: list[dict[str, Any]] | None = None,
         calendar: Any | None = None,
         daily: Any = daily_loader,
         supporting: Any = supporting_loader,
         delist: Any = delist_loader,
+        quote: Any = None,
+        outcome: Any = None,
     ) -> PositionTimingService:
         hold = holding_rows if holdings is None else holdings
         watch = watchlist_rows if watchlist is None else watchlist
@@ -173,8 +188,14 @@ def service_factory(tmp_path: Path, holding_rows: list[dict[str, Any]], watchlis
             daily_snapshot_loader=daily,
             supporting_facts_loader=supporting,
             delist_snapshot_loader=delist,
-            now_provider=lambda: now or datetime(2026, 9, 3, 16, 0, tzinfo=CHINA_TZ),
+            now_provider=(
+                now
+                if callable(now)
+                else lambda: now or datetime(2026, 9, 3, 16, 0, tzinfo=CHINA_TZ)
+            ),
             source_commit_provider=lambda: "a" * 40,
+            realtime_quote_loader=quote,
+            outcome_snapshot_loader=outcome,
         )
         return PositionTimingService(
             store=PositionTimingArtifactStore(tmp_path / "position-timing"),

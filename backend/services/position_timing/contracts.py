@@ -154,6 +154,48 @@ class PositionTimingIntentV1(StrictModel):
         return value
 
 
+class PositionTimingAnalysisScopeV1(StrictModel):
+    """Single timing-owned current state for explicit watchlist analysis."""
+
+    schema_version: Literal["position_timing_analysis_scope_v1"] = (
+        "position_timing_analysis_scope_v1"
+    )
+    selected_watchlist_symbols: tuple[str, ...] = ()
+    updated_at: datetime
+    scope_sha256: str
+
+    @field_validator("selected_watchlist_symbols")
+    @classmethod
+    def _canonical_symbols(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(str(item).strip().upper() for item in value)
+        if any(not _SYMBOL_PATTERN.fullmatch(item) for item in normalized):
+            raise ValueError("selected_watchlist_symbols must contain canonical exchange-qualified symbols")
+        if normalized != tuple(sorted(set(normalized))):
+            raise ValueError("selected_watchlist_symbols must be sorted and unique")
+        return normalized
+
+    @field_validator("updated_at")
+    @classmethod
+    def _scope_updated_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("analysis scope updated_at must be timezone-aware")
+        return value
+
+    @field_validator("scope_sha256")
+    @classmethod
+    def _scope_hash(cls, value: str) -> str:
+        return validate_sha256(value, field="scope_sha256")
+
+    @model_validator(mode="after")
+    def _scope_identity_consistency(self) -> "PositionTimingAnalysisScopeV1":
+        if self.scope_sha256 != analysis_scope_sha256(
+            selected_watchlist_symbols=self.selected_watchlist_symbols,
+            updated_at=self.updated_at,
+        ):
+            raise ValueError("analysis scope semantic identity mismatch")
+        return self
+
+
 class TriggerV1(StrictModel):
     trigger_id: str
     branch: str
@@ -534,6 +576,72 @@ class IntentWriteRequest(StrictModel):
         return value
 
 
+class AnalysisScopeWriteRequest(StrictModel):
+    analysis_enabled: bool
+
+
+class AlertClaimRequest(StrictModel):
+    """Bounded poll snapshot required to revalidate an alert claim."""
+
+    card_id: str
+    eligibility_identity: str
+    quote_price_raw: Decimal = Field(gt=0)
+    quote_open_raw: Decimal = Field(gt=0)
+    quote_observed_at: datetime
+    alert_evaluated_at: datetime
+    quote_source: str
+    position_snapshot_sha256: str
+    intent_snapshot_sha256: str
+
+    @field_validator("eligibility_identity", "position_snapshot_sha256", "intent_snapshot_sha256")
+    @classmethod
+    def _claim_hashes(cls, value: str) -> str:
+        return validate_sha256(value, field="alert claim identity")
+
+    @field_validator("quote_observed_at", "alert_evaluated_at")
+    @classmethod
+    def _claim_times_are_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("alert claim timestamps must be timezone-aware")
+        return value
+
+    @field_validator("quote_source")
+    @classmethod
+    def _claim_source_present(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("quote_source is required")
+        return normalized
+
+
+class PositionTimingMaterializationStateV1(StrictModel):
+    schema_version: Literal["position_timing_materialization_state_v1"] = (
+        "position_timing_materialization_state_v1"
+    )
+    last_successful_materialization_scan_through_trade_date: date | None = None
+    last_run_at: datetime | None = None
+    expected_due_count: int = Field(default=0, ge=0)
+    accounted_outcome_count: int = Field(default=0, ge=0)
+    run_status: Literal["NEVER_RUN", "COMPLETE", "PARTIAL"] = "NEVER_RUN"
+
+    @field_validator("last_run_at")
+    @classmethod
+    def _last_run_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("materialization last_run_at must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _coverage_counts_are_consistent(self) -> "PositionTimingMaterializationStateV1":
+        if self.accounted_outcome_count > self.expected_due_count:
+            raise ValueError("accounted_outcome_count cannot exceed expected_due_count")
+        if self.run_status == "COMPLETE" and self.accounted_outcome_count != self.expected_due_count:
+            raise ValueError("COMPLETE materialization state requires all due outcomes")
+        if self.run_status == "NEVER_RUN" and self.last_run_at is not None:
+            raise ValueError("NEVER_RUN materialization state cannot have last_run_at")
+        return self
+
+
 class L2ModelSpecV1(StrictModel):
     model_id: str
     package: str
@@ -606,6 +714,35 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def analysis_scope_sha256(
+    *, selected_watchlist_symbols: tuple[str, ...], updated_at: datetime
+) -> str:
+    return canonical_sha256(
+        {
+            "schema_version": "position_timing_analysis_scope_v1",
+            "selected_watchlist_symbols": selected_watchlist_symbols,
+            "updated_at": updated_at,
+        }
+    )
+
+
+EMPTY_ANALYSIS_SCOPE_UPDATED_AT = datetime.fromisoformat("1970-01-01T00:00:00+08:00")
+
+
+def empty_analysis_scope() -> PositionTimingAnalysisScopeV1:
+    """Return the deterministic zero-write ``EMPTY_EXPLICIT_SCOPE_V1`` identity."""
+
+    symbols: tuple[str, ...] = ()
+    return PositionTimingAnalysisScopeV1(
+        selected_watchlist_symbols=symbols,
+        updated_at=EMPTY_ANALYSIS_SCOPE_UPDATED_AT,
+        scope_sha256=analysis_scope_sha256(
+            selected_watchlist_symbols=symbols,
+            updated_at=EMPTY_ANALYSIS_SCOPE_UPDATED_AT,
+        ),
+    )
 
 
 def validate_sha256(value: str, *, field: str) -> str:

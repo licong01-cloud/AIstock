@@ -12,7 +12,11 @@ from backend.services.position_timing.artifact_store import (
     ImmutableArtifactConflict,
     PositionTimingArtifactError,
 )
-from backend.services.position_timing.contracts import IntentWriteRequest
+from backend.services.position_timing.contracts import (
+    AlertClaimRequest,
+    AnalysisScopeWriteRequest,
+    IntentWriteRequest,
+)
 from backend.services.position_timing.service import (
     PositionTimingService,
     PositionTimingServiceError,
@@ -81,12 +85,25 @@ def put_intent(
         _raise_http(exc)
 
 
+@router.put("/analysis-scope/{symbol}")
+def put_analysis_scope(
+    symbol: str,
+    request: AnalysisScopeWriteRequest,
+    service: PositionTimingService = Depends(get_position_timing_service),
+) -> dict[str, Any]:
+    try:
+        return service.put_analysis_scope(
+            raw_symbol=symbol,
+            analysis_enabled=request.analysis_enabled,
+        )
+    except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
+        _raise_http(exc)
+
+
 @router.post("/materialize")
 def materialize(service: PositionTimingService = Depends(get_position_timing_service)) -> dict[str, Any]:
     try:
-        result = service.materialize()
-        result["outcome_materialization_status"] = "DEFERRED_TO_IMPLEMENTATION_BLOCK_TWO"
-        return result
+        return service.materialize()
     except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
         _raise_http(exc)
 
@@ -103,6 +120,26 @@ def current_cards(service: PositionTimingService = Depends(get_position_timing_s
 def evidence(service: PositionTimingService = Depends(get_position_timing_service)) -> dict[str, Any]:
     try:
         return service.evidence()
+    except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
+        _raise_http(exc)
+
+
+@router.get("/alerts/poll")
+def poll_alerts(service: PositionTimingService = Depends(get_position_timing_service)) -> dict[str, Any]:
+    try:
+        return service.poll_alerts()
+    except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
+        _raise_http(exc)
+
+
+@router.post("/alerts/{trigger_id}/claim")
+def claim_alert(
+    trigger_id: str,
+    request: AlertClaimRequest,
+    service: PositionTimingService = Depends(get_position_timing_service),
+) -> dict[str, Any]:
+    try:
+        return service.claim_alert(trigger_id=trigger_id, request=request)
     except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
         _raise_http(exc)
 

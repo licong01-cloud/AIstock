@@ -7,6 +7,7 @@ rules:
       - backend/routers/position_timing.py
       - backend/tests/position_timing/**
       - frontend/src/app/position-timing/**
+      - frontend/tests/position-timing/**
       - docs/architecture/position_timing_advice_f2_redesign_*.md
       - docs/architecture/position_timing_advice_first_release_implementation_plan_*.md
     primary_module: position_timing
