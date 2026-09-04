@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import sys
 import types
 from pathlib import Path
@@ -92,31 +94,94 @@ def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, 
     minute_instruments = minute_root / "instruments"
     day_instruments.mkdir(parents=True)
     minute_instruments.mkdir(parents=True)
-    (day_instruments / "all.txt").write_text(
+    pool_name = config_market = "filtered_pool_20260630"
+    (day_instruments / f"{pool_name}.txt").write_text(
         "000001.SZ\t2018-08-01\t2026-06-30\n",
         encoding="utf-8",
     )
     config = _minute_config(minute_root, day_root)
+    assert config["market"] == config_market
 
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_MISSING"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
-    minute_all = minute_instruments / "all.txt"
-    minute_all.write_text("000001.SZ\tnot-a-date\t2026-06-30\n", encoding="utf-8")
+    minute_pool = minute_instruments / f"{pool_name}.txt"
+    minute_pool.write_text("000001.SZ\tnot-a-date\t2026-06-30\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_INVALID"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
-    minute_all.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n", encoding="utf-8")
+    minute_pool.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
     # Instrument membership is a trading-day contract: a minute span beginning
     # at 09:30 on its first listed day must cover the day-level 00:00 boundary.
-    minute_all.write_text("000001.SZ\t2026-06-01 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
+    minute_pool.write_text("000001.SZ\t2026-06-01 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
     runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+    assert config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == pool_name
 
     config["port_analysis_config"]["backtest"]["start_time"] = "not-a-date"
     with pytest.raises(RuntimeError, match="QE_MINUTE_BACKTEST_WINDOW_INVALID"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
+    tmp_path, monkeypatch
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    day_root = tmp_path / "day"
+    minute_root = tmp_path / "minute"
+    day_instruments = day_root / "instruments"
+    minute_instruments = minute_root / "instruments"
+    day_instruments.mkdir(parents=True)
+    minute_instruments.mkdir(parents=True)
+    stock_row = "000001.SZ\t2018-08-01\t2026-06-30\n"
+    benchmark_row = "000300.SH\t2018-08-01\t2026-06-30\n"
+    (day_instruments / "all.txt").write_text(stock_row + benchmark_row, encoding="utf-8")
+    (day_instruments / "stock_universe.txt").write_text(stock_row, encoding="utf-8")
+    minute_all = minute_instruments / "all.txt"
+    minute_all.write_text(
+        "000001.SZ\t2026-06-01 09:30:00\t2026-06-30 15:00:00\n",
+        encoding="utf-8",
+    )
+    config = _minute_config(minute_root, day_root)
+    config["market"] = "stock_universe"
+    (tmp_path / "qe_direct_v2_dataset_binding.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "qe_direct_v2_dataset_binding_v2",
+                "selection_pins": {
+                    "stock_pool": "stock_universe",
+                    "instruments_sha256": hashlib.sha256(
+                        (day_instruments / "stock_universe.txt").read_bytes()
+                    ).hexdigest(),
+                },
+                "minute_pins": {
+                    "instruments_sha256": hashlib.sha256(minute_all.read_bytes()).hexdigest(),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    assert config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "stock_universe"
+
+    minute_all.write_text(
+        "000001.SZ\t2026-06-02 09:30:00\t2026-06-30 15:00:00\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_BINDING_HASH_MISMATCH"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_minute_quote_universe_missing_market_fails_closed(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    config = _minute_config(tmp_path / "minute")
+    config["market"] = ""
+
+    with pytest.raises(RuntimeError, match="QE_MINUTE_QUOTE_UNIVERSE_MISSING"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 

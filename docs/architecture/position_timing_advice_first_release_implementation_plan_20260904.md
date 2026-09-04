@@ -2,7 +2,7 @@
 
 > 日期：2026-09-04
 >
-> 状态：`IMPLEMENTATION_BLOCK_ONE_VALIDATED_BLOCK_TWO_NOT_STARTED`
+> 状态：`IMPLEMENTATION_BLOCK_ONE_SOURCE_MERGED_BLOCK_TWO_AND_SCOPE_QUEUED`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
@@ -10,7 +10,7 @@
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
-本计划不建立第二套设计权威。任何业务语义以 F2 蓝图及其 F-001～F-026 为准；本文件只把已批准设计压缩为可连续执行的实施顺序。
+本计划不建立第二套设计权威。任何业务语义以 F2 蓝图及其 F-001～F-027 为准；本文件只把已批准设计压缩为可连续执行的实施顺序。
 
 ## 0. 2026-09-04 实施检查点
 
@@ -18,17 +18,18 @@
 
 - 已实现 timing-owned contracts、冻结 guard/cost policy、保存完整 input/policy identity 与 `cards_sha256` 的 immutable card artifact、`CARD_ISSUED`、持仓与 active watchlist 分页合并、已确认终止上市方向规则、停牌最近可执行 close、T+1 日频卡、5 个块一 API、一个页面以及 composition root 薄接线。
 - alert/outcome 的字段契约和 L2 population/sampling/model/inference contract 已冻结；没有创建 alert poll/claim、outcome materializer、L2 pipeline、worker、scheduler、SSE、数据库表或订单路径。
-- 代码收口后的最终复核已重跑通过：`position_timing_backend` 50 项、`qe_read_backend` 133 项、`platform_api_backend` 15 项、validation catalog/ownership 及目标回归 38 项、`frontend_type_lint`、`l0` 与 F2 validator（26/26，0 warning）。前端 lint 仅报告不属于本变更路径的既有 hook warnings；L0 唯一 MEDIUM 为请求体 `JSON.stringify` 的 `RAW_JSON_UI` 启发式命中，不是向用户展示 raw JSON，均无阻塞项。
+- 代码收口后的最终复核已重跑通过：`position_timing_backend` 50 项、`qe_read_backend` 153 项、`platform_api_backend` 15 项、validation catalog/ownership/UI target 21 项、`frontend_type_lint`、`l0` 与 F2 validator（26/26，0 warning）。前端 lint 仅报告不属于本变更路径的既有 hook warnings；L0 唯一 MEDIUM 为请求体 `JSON.stringify` 的 `RAW_JSON_UI` 启发式命中，不是向用户展示 raw JSON，均无阻塞项。
 - DEV 只读 readback 识别 468 个去重后的目标（2 个 holdings）；在已成熟的 2026-09-03 数据上临时根生成 468 张卡、0 张数据缺失卡，468 张均绑定可用的 confirmed-delist identity，card adjustment 均明确为 `NOT_APPLICABLE`。2026-09-04 15:23 当日 raw 仍为零覆盖时，服务返回 `SOURCE_NOT_MATURE_NO_NEW_CARD`，未签卡且未写 `CARD_ISSUED`，避免锁死稍后重试；复权数据不再错误阻塞只使用 raw 的卡片。
 - 同次 DEV readback 显示全局 canonical PIT pointer 仍指向 legacy `shsz_st_pit_active_v1`。L1 产品 universe 因而明确不依赖该研究 pointer 迁移；历史 L2 才要求绑定 canonical v2/QE dataset identity。这是去除无关上线门禁，不是把 legacy pointer 冒充 canonical v2。
-- 当前状态只证明本地源码与真实 DEV 只读数据的块一联调结果。本轮用户已授权块一独立完成源码提交与合入；源码合入状态以 Git/PR readback 为准，且不等于生产进程重启、生产页面 readback、真实盘中提醒或完整首发完成。
+- 块一已由 PR `#4277` 合入 `main`，merge commit 为 `7c9fdd9cf86aa472fb2e84bac6211eb2378350ed`。这不等于生产进程重启、生产页面 readback、真实盘中提醒或完整首发完成。
+- 本次新增 F-027 轻量分析范围设计后，F2 validator 为 27/27、0 warning，docs L0 为 0 finding，`git diff --check` 通过；这只证明设计闭合，源码状态仍为 queued。
 
 ## 1. 执行结论
 
 首发只采用“两个连续实现块 + 增量源码合入 + 一次上线收口”：
 
 1. **实现块一：日频行动卡纵向闭环**。一次完成 contracts、规则、artifact、只读数据适配、API 与页面，使真实持仓和已确认自选能生成并展示 T+1 卡片。
-2. **实现块二：提醒与结果证据闭环**。补齐一分钟轮询、原子 claim、toast、五个 horizon outcome、证据聚合和全量目标测试。
+2. **实现块二：范围、提醒与结果证据闭环**。先在同一模块内补一个显式自选分析范围，再完成一分钟轮询、原子 claim、toast、五个 horizon outcome、证据聚合和全量目标测试；不为范围能力另拆阶段或平台。
 3. **上线收口：一次完整首发验证、一次激活**。块一与块二可以各自通过普通 PR 增量合入，块二完成后更新 F2 验收矩阵并执行完整首发验证；生产端口激活仍按用户授权边界单独记录。
 
 两个实现块是同一批准范围内的连续开发顺序，不是两次立项、两道批准门禁或两次发布。块一可以作为已验证的内部切片独立 source merge，以缩短后续块二的变更面；它不得单独激活生产、不得称首发完成，也不得把块二缺口伪装成已实现。
@@ -55,7 +56,7 @@
 用户打开唯一的“持仓择时”页面后，应能完成以下闭环：
 
 ```text
-只读持仓 + 已确认自选 + 用户仓位意图
+只读持仓 + 已确认自选 + 显式分析范围 + 用户仓位意图
   -> 页面首次打开触发幂等 materialize
   -> T 日信息生成 T+1 immutable action cards
   -> 页面显示 OPEN / ADD / HOLD / REDUCE / EXIT / WAIT / UNAVAILABLE
@@ -70,6 +71,7 @@
 
 - `LEGACY_PORTFOLIO` 持仓与 active confirmed watchlist 合并、canonical symbol 去重，持仓身份优先。
 - 用户可以维护 `planned_full_notional_cny` 与 `desired_target_exposure`；缺失 sizing 只影响对应自选股，不影响其他股票。
+- 全部真实持仓始终分析；仅被显式选择且仍 active 的 confirmed watchlist 进入下一张 card set。scope 缺失是 `NOT_SELECTED`，不是失败或审批门禁。
 - T+1 卡片给出明确动作、目标敞口、合法数量、执行窗口、触发价、逐腿成本与不可执行原因。
 - 页面可见 `QUOTE_STALE`、`QUOTE_FUTURE_SKEW`、`QUOTE_UNAVAILABLE`、持仓或 intent 漂移等状态；不以空结果伪装成功。
 - 新触发边以 artifact exact-once claim；多标签页视觉去重只尽力而为，已 claim 且仍有效的边继续以非模态条目可见。
@@ -129,6 +131,8 @@ frontend/src/app/position-timing/page.tsx
 ```
 
 职责保持在这五个服务文件内。`layout.tsx` 只导入既有 `paper-v2.css`，不形成第二个页面、样式副本或业务层。首发不增加 `data_access.py`、worker、scheduler、消息队列、SSE、独立 API client、数据库 repository 或通用插件框架。
+
+轻量分析范围管理也只修改现有 `contracts.py`、`artifact_store.py`、`service.py`、router 和页面：新增一个 `analysis_scope/current.json` 当前态和一个 PUT 接口，不增加第六个服务文件、新页面、事件类型或数据库表。
 
 ### 4.2 既有文件的最小改动
 
@@ -191,7 +195,14 @@ card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync �
 
 ## 6. 实现块二：提醒与 prospective outcome 闭环
 
-设计依据：蓝图 §5.11～§5.13、§6、§9.3 与 F-012～F-021、F-023～F-026；其中 F-019～F-021 在首发只验证冻结 contract 和“非门禁”语义，不实现 L2 pipeline。
+设计依据：蓝图 §5.2.1、§5.11～§5.13、§6、§9.3 与 F-012～F-021、F-023～F-027；其中 F-019～F-021 在首发只验证冻结 contract 和“非门禁”语义，不实现 L2 pipeline。
+
+### 6.0 分析范围管理
+
+- discovery universe 仍为 holdings 与 confirmed watchlist 并集；analysis universe 只保留全部 holdings 与显式选择的 active watchlist。
+- 使用 timing-owned `PositionTimingAnalysisScopeV1` 单文件当前态、文件锁和原子替换；不写原 Watchlist/Portfolio，不新增 event、registry、worker 或 repository。
+- 复用 `GET /intents` 展示 selected/effective/locked/reason，新增请求体仅含 `analysis_enabled` 的 `PUT /analysis-scope/{symbol}`；现有页面只增加复选框，所有 GET 保持零写入。
+- scope 更新仅进入下一 card set，旧 card/alert/outcome 不改写；scope snapshot hash 进入 card-set input identity。
 
 ### 6.1 L1a 一分钟提醒
 
@@ -212,17 +223,17 @@ card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync �
 
 ### 6.3 首发代码完成条件
 
-实现块二结束时，蓝图 §5.13 的 7 个 API、唯一页面、三类 artifact/event、全部 typed failure 和无订单边界必须一起可验证。此时才形成首发候选；L2 未实现不是缺口，因为蓝图已经把它定义为后续独立工作。
+实现块二结束时，蓝图 §5.13 的 8 个 API、唯一页面、scope/current state、三类 artifact/event、全部 typed failure 和无订单边界必须一起可验证。此时才形成首发候选；L2 未实现不是缺口，因为蓝图已经把它定义为后续独立工作。
 
 反模式保护：不得把 alert event 当成交或 user-seen 证据，不得用日线触价反推运行时 system eligibility，不得因 outcome 失败推进成功水位，不得为了定时物化引入 scheduler/worker。
 
 ## 7. 集中验证，不增加额外门禁
 
-验证按四个能力组集中执行，不按 F-001～F-026 逐项建立审批或流水线：
+验证按四个能力组集中执行，不按 F-001～F-027 逐项建立审批或流水线：
 
 | 能力组 | 覆盖重点 | 权威测试 |
 |---|---|---|
-| 卡片正确性 | universe、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、L2 contract-only 冻结值 | 块一：`backend/tests/position_timing/test_api.py`、`test_artifact_store.py`、`test_card_service.py`、`test_cost_policy.py`、`test_l2_population.py`、`test_pit_clock.py`、`test_policy_snapshot.py`、`test_tradability.py`、`test_universe.py`；块二/L2 pipeline 测试按对应实现补齐 |
+| 卡片正确性 | discovery/analysis universe、scope、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、L2 contract-only 冻结值 | 块一：`backend/tests/position_timing/test_api.py`、`test_artifact_store.py`、`test_card_service.py`、`test_cost_policy.py`、`test_l2_population.py`、`test_pit_clock.py`、`test_policy_snapshot.py`、`test_tradability.py`、`test_universe.py`；块二直接在这些文件补 scope 与 outcome/alert 测试，不新增 scope 专用测试套件 |
 | 证据完整性 | immutable/append-only、并发幂等、两只时钟、五 horizons、公司行动、coverage state | `test_artifact_store.py`、`test_outcome_materialization.py` |
 | 盘中提醒 | batch quote、5 分钟/30 秒、GET 零写、claim、already-alerted、多标签页、禁用分钟 fetch | `test_alerts.py` |
 | 隔离与用户结果 | N0/既有表/订单零写、零业务反向依赖、页面卡片/状态/toast/无交易按钮 | `test_isolation.py`、`frontend/tests/position-timing/position-timing.spec.ts` |
@@ -288,6 +299,7 @@ production_dependency_gate = noop
 - SSE、WebSocket、共享 poller、后台 worker、scheduler、队列或新数据库表。
 - SmartMonitor engine/task/trade、Paper v2 position、MiniQMT position/order、外部通知服务。
 - actual user execution event、券商成交回报接入与自动化下单。
+- 第二套真实或虚拟持仓池、组合编辑器、scope 标签/分组/审批/批量工作流；普通待分析股票继续复用 confirmed watchlist。
 - 以 MDE、sealed holdout、最低金额、成本敏感性、HMM/Selection availability 或样本数作为首发批准门槛。
 
 首发上线并开始积累 prospective outcome 后，再用独立任务决定 L2；L2 的阴性、功效不足或延后不得反向削弱已经可用的 L1/L1a 人工建议产品。
@@ -296,9 +308,19 @@ production_dependency_gate = noop
 
 只有在以下事实同时成立后，才可以报告“首发源码完成”：
 
-- F2 蓝图 F-001～F-026 的首发适用项均回填真实实现和验证证据；F-019/F-020 分别标明首发已验证的 contract 与 `PIPELINE_DEFERRED_BY_APPROVED_SCOPE`，F-021 验证非门禁语义，F-022 标明 `SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE`，不得把后移部分伪造成 implementation evidence。
-- 7 个 API、一个页面、三类 artifact/event、逐腿成本、typed errors、隔离性和无订单边界均已验证。
+- F2 蓝图 F-001～F-027 的首发适用项均回填真实实现和验证证据；F-019/F-020 分别标明首发已验证的 contract 与 `PIPELINE_DEFERRED_BY_APPROVED_SCOPE`，F-021 验证非门禁语义，F-022 标明 `SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE`，不得把后移部分伪造成 implementation evidence。
+- 8 个 API、一个页面、scope 当前态、三类 artifact/event、逐腿成本、typed errors、隔离性和无订单边界均已验证。
 - 集中本地验证和当前 PR HEAD 的四项仓库稳定检查通过。
 - `production_ddl_gate=noop`、`production_dependency_gate=noop` 有明确记录。
 
 “首发源码完成”不自动等于“生产运行已激活”。生产进程和前端激活完成并读回后，再单独报告“已上线”；没有发生市场触价时，只能报告提醒链路可用，不能虚构真实 alert delivery。
+
+## 11. 后续任务列表（执行顺序，不是新增门禁）
+
+| 顺序 | task_id | 状态 | 一次性交付边界 |
+|---:|---|---|---|
+| 1 | `PT-NEXT-001` | `READY_FOR_IMPLEMENTATION` | 在同一个块二任务中先实现 F-027 轻量分析范围，再完成 L1a 与 prospective outcome；只改既有 position_timing 包/router/page 与既有测试，不拆新阶段、PR 审批或发布平台 |
+| 2 | `PT-NEXT-002` | `WAIT_FOR_PROSPECTIVE_DATA` | 按冻结契约执行一次 L2 Ridge+GBDT learnability audit；结果不阻塞 L1/L1a |
+| 3 | `PT-NEXT-003` | `DEFERRED` | 独立评估 L4b-1 分钟执行窗口；L4b-2 仍在范围外 |
+
+下一次实现从 `PT-NEXT-001` 开始。任务表只表示开发顺序，不增加 MDE、样本数、HMM/Selection 可用性、最低金额或人工审批条件。

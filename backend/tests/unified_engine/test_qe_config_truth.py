@@ -562,6 +562,24 @@ def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
     assert "contract: stock_event_risk_policy_v1" in yaml_text
 
 
+def test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog():
+    yaml_text = _base_yaml(
+        execution_algo="TWAP",
+        execution_algo_params={},
+        custom_params={"stock_pool": "stock_universe"},
+    )
+    exchange = _slice_yaml_between(
+        yaml_text,
+        "        exchange_kwargs:",
+        "task:",
+    )
+
+    assert "market: &market stock_universe" in yaml_text
+    assert "codes: *market" in exchange
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+    assert parsed["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "stock_universe"
+
+
 def test_qe_risk_policy_wraps_outer_strategy_and_emits_runtime_kwargs():
     yaml_text = _base_yaml(
         custom_params={
