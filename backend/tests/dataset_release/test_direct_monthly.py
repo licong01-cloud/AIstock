@@ -12,12 +12,16 @@ from backend.services.dataset_release.direct_monthly import (
     DIRECT_COMPONENTS,
     DIRECT_FACTOR_SCHEMA,
     DIRECT_INDEX_CODES,
+    DIRECT_MONTHLY_STATE_SCHEMA,
     DIRECT_SECTOR_AUTHORITY,
+    DIRECT_SUSPEND_SCHEMA,
     DIRECT_TERMINAL_STATUS,
+    LEGACY_DIRECT_MONTHLY_STATE_SCHEMA,
     DirectMonthlyError,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
     cleanup_terminal_candidate,
+    build_suspend_d_component,
     compact_status,
     component_plan,
     default_candidate_path,
@@ -49,7 +53,7 @@ def _layout(tmp_path) -> DirectMonthlyLayout:
     )
 
 
-def test_component_plan_rebuilds_minute_for_july_repair_without_expanding_components() -> None:
+def test_component_plan_includes_same_release_suspend_sidecar() -> None:
     plan = component_plan(july_minute_repaired=True)
 
     assert tuple(item.component for item in plan) == DIRECT_COMPONENTS
@@ -60,6 +64,155 @@ def test_component_plan_rebuilds_minute_for_july_repair_without_expanding_compon
     assert next(item for item in plan if item.component == "daily_bin").reason == (
         "canonical_v2_pool_and_target_cutoff"
     )
+    assert next(item for item in plan if item.component == "suspend_d").reason == (
+        "same_release_canonical_v2_suspend_history"
+    )
+
+
+def test_legacy_four_component_state_resumes_only_missing_suspend_d(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy = initial_state(layout)
+    legacy["schema_version"] = LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
+    legacy["status"] = DIRECT_TERMINAL_STATUS
+    legacy["components"].pop("suspend_d")
+    for component in legacy["components"]:
+        legacy["components"][component]["status"] = "PASS"
+        legacy["components"][component]["receipt"] = {
+            "status": "PASS",
+            "component": component,
+        }
+    layout.factor_root.mkdir(parents=True)
+    (layout.factor_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_FACTOR_SCHEMA,
+                "sector_authority": DIRECT_SECTOR_AUTHORITY,
+                "end": layout.cutoff.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    layout.candidate_root.mkdir(parents=True, exist_ok=True)
+    layout.state_path.write_text(json.dumps(legacy), encoding="utf-8")
+    observed = read_state(layout)
+    assert observed is not None
+    assert observed["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert observed["status"] == "PLANNING_DIRECT"
+    assert observed["components"]["suspend_d"]["status"] == "PENDING"
+    persisted_before_run = json.loads(layout.state_path.read_text(encoding="utf-8"))
+    assert persisted_before_run["schema_version"] == LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
+    assert "suspend_d" not in persisted_before_run["components"]
+
+    calls: list[str] = []
+
+    def handler(component: str):
+        def run(_layout: DirectMonthlyLayout):
+            calls.append(component)
+            return {"status": "PASS", "component": component}
+
+        return run
+
+    result = DirectMonthlyRunner(
+        {component: handler(component) for component in DIRECT_COMPONENTS},
+        validator=lambda _layout: {"status": "PASS"},
+    ).run(layout)
+
+    assert result["status"] == DIRECT_TERMINAL_STATUS
+    assert result["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert calls == ["suspend_d"]
+
+
+def test_suspend_component_uses_daily_calendar_and_canonical_pit_without_hashes(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text("2026-08-28\n2026-08-31\n", encoding="utf-8")
+    spans = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "600000.SH"],
+            "eligible_start": [pd.Timestamp("2018-08-01"), pd.Timestamp("2018-08-01")],
+            "eligible_end": [pd.Timestamp("2026-08-31"), pd.Timestamp("2026-08-28")],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "trade_date": [
+                "2026-08-31",
+                "2026-08-31",
+                "2026-08-31",
+                "2026-08-31",
+            ],
+            "ts_code": ["000001.SZ", "600000.SH", "430001.BJ", "000002.SZ"],
+            "suspend_type": ["S", "S", "S", "R"],
+            "suspend_timing": [None, None, None, None],
+        }
+    )
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_pit_spans",
+        lambda *_args: spans,
+    )
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: Connection())
+    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: source.copy())
+
+    receipt = build_suspend_d_component(layout)
+
+    written = pd.read_parquet(layout.suspend_root / "suspend_d.parquet")
+    meta = json.loads((layout.suspend_root / "meta.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "PASS"
+    assert written[["trade_date", "ts_code"]].to_dict("records") == [
+        {"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "000001.SZ"}
+    ]
+    assert meta["schema_version"] == DIRECT_SUSPEND_SCHEMA
+    assert meta["end"] == "2026-08-31"
+    assert meta["daily_row_counts"] == {"2026-08-28": 0, "2026-08-31": 1}
+    assert meta["source_freeze"] is False
+    assert meta["full_history_content_hash"] is False
+    assert not any("sha256" in key for key in meta)
+
+
+def test_suspend_component_rejects_empty_full_history_source(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text("2026-08-31\n", encoding="utf-8")
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_pit_spans",
+        lambda *_args: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "eligible_start": [pd.Timestamp("2018-08-01")],
+                "eligible_end": [pd.Timestamp("2026-08-31")],
+            }
+        ),
+    )
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: Connection())
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"]
+        ),
+    )
+
+    with pytest.raises(DirectMonthlyError, match="source is empty"):
+        build_suspend_d_component(layout)
+    assert not layout.suspend_root.exists()
 
 
 def test_layout_rejects_escape_existing_file_and_baseline_alias(tmp_path) -> None:
@@ -141,6 +294,7 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
             "minute_bin": minute,
             "factor_h5_static": pass_handler("factor_h5_static"),
             "index_context": pass_handler("index_context"),
+            "suspend_d": pass_handler("suspend_d"),
         },
         validator=lambda _layout: {"status": "PASS"},
     )
@@ -160,11 +314,12 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
     assert calls.count("minute_bin") == 2
     assert calls.count("factor_h5_static") == 1
     assert calls.count("index_context") == 1
+    assert calls.count("suspend_d") == 1
 
 
 def test_runner_rejects_partial_registry_and_invalid_receipt(tmp_path) -> None:
     layout = _layout(tmp_path)
-    with pytest.raises(DirectMonthlyError, match="all four components"):
+    with pytest.raises(DirectMonthlyError, match="all components"):
         DirectMonthlyRunner({})
 
     def invalid(component: str):
@@ -669,6 +824,21 @@ def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> N
     for component in DIRECT_COMPONENTS:
         state["components"][component]["status"] = "PASS"
         state["components"][component]["receipt"] = {"status": "PASS", "component": component}
+    layout.suspend_root.mkdir(parents=True)
+    (layout.suspend_root / "suspend_d.parquet").write_bytes(b"present")
+    (layout.suspend_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_SUSPEND_SCHEMA,
+                "component": "suspend_d",
+                "end": layout.cutoff.isoformat(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "source_freeze": False,
+                "full_history_content_hash": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     write_state(layout, state)
     calls: list[str] = []
 
