@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1347",
-  "closed_at": null,
+  "closed_at": "2026-09-04T05:55:44Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -144,8 +144,8 @@
   },
   "first_seen_at": "2026-09-04T04:54:10.483769Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fbf4c192cd6406fcb5f959c58452b3b7c6142b00",
+  "fixed_at": "2026-09-04T05:55:44Z",
   "github_issue_number": 4252,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4252",
   "last_seen_at": "2026-09-04T04:54:10.483769Z",
@@ -153,6 +153,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4255",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -170,6 +171,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -179,7 +181,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1347",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "37e1cde2c0423122",
+    "recorded_at": "2026-09-04T05:57:10.503882Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9945035dec2872654eac45b5178432334633f183",
+    "source_merge_commit": "fbf4c192cd6406fcb5f959c58452b3b7c6142b00",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4255",
+    "validation_evidence": [
+      "python -m pytest backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py -q -> 19 passed",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and ownership 14/14",
+      "python -m nox -s advisory_modeling_backend -> passed: 793 tests and 16 skipped on source-identical commit 7a1b37b7b; final commit changes BUG JSON metadata only",
+      "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2 -> passed: 10 design items and 10 matrix rows"
+    ],
+    "validation_evidence_digest": "2accc85008555f3a66d03ea3c31131f68a8667ab4ceb279dec71e5a3dbc92caa"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -188,6 +214,12 @@
     "fingerprint": "010472d77dd32c5c32314f26",
     "source_event_id": "FE-20260904-010472d77dd3"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py -q -> 19 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and ownership 14/14",
+    "python -m nox -s advisory_modeling_backend -> passed: 793 tests and 16 skipped on source-identical commit 7a1b37b7b; final commit changes BUG JSON metadata only",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2 -> passed: 10 design items and 10 matrix rows"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
