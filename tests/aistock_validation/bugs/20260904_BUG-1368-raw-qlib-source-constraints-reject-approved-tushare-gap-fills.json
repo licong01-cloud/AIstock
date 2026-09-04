@@ -30,15 +30,26 @@
   ],
   "expected": "The two raw price tables accept the existing TDX source values and the explicit tushare_api fallback value, with DEV-first migration and readback.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1368-raw-qlib-source-constraints-reject-approved-tushare-gap-fills.json"
+    ],
     "added_files": [
       "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
       "backend/migrations/kline_raw_tushare_source_20260905.sql",
       "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
     ],
     "changed_files": [
-      "backend/tests/scripts/test_prepare_core_index_membership_pit.py"
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1368-raw-qlib-source-constraints-reject-approved-tushare-gap-fills.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
@@ -162,10 +173,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "database",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
