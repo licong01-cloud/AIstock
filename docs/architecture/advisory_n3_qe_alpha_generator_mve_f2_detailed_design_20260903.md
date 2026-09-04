@@ -1,7 +1,7 @@
-# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.5
+# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.7
 
-> 日期：2026-09-03
-> 状态：`BUG_1349_PIT_MEMBERSHIP_REBIND_FIX_IN_REVIEW_FORMAL_RERUN_REQUIRED`
+> 日期：2026-09-04
+> 状态：`FORMAL_COMPLETE_SELECTED_ZERO_LINEAGE_CLOSED`
 > tier：F2
 > objective contract：`ALPHA_RANKING`
 > study type：`EXPLORATORY_SCREEN`
@@ -21,6 +21,7 @@
 9. 2026-09-04 从 `main@ebe1a8ae...` 冻结的 request `advqegenreq_9ccc0e...` 成功生成 bundle `6565eeb9...`：7 次调用、28 个 raw expression、24 个 accepted、4 个 schema reject、0 个 provider failure。但 request 错误地按目标 121 列 schema 暴露字段，而绑定的 `static_factors.parquet` 实际没有 8 个 margin 字段；候选使用 `md_rqmcl/md_rzye` 后，经济阶段在读取 source panel 前以 parquet projection 失败。BUG-1345 将其定性为 concrete-source schema 实现失败证据；没有经济 trial、registry、route 或 Alpha 结论，该 generation bundle 不得复用为修复后正式评价输入。
 10. BUG-1345 经 PR #4249 修复并由 PR #4250 close-sync 后，`main@2957724895...` 的 request `advqegenreq_1c8383...` 正确冻结 119 个 concrete-source 字段。generation bundle `14214fd8...` 无 provider failure，但 `REGIME_CONDITIONED` 主响应生成了缺少 `window` 的 `TRAILING_MEAN`，schema-only retry 又返回 malformed JSON；该族 `0 accepted`，全批为 `9 calls / 36 raw / 20 accepted / 16 rejected`，终态 `INCOMPLETE_SUPPORT`。按预注册合同，Phase C 以 `GENERATION_SUPPORT_INSUFFICIENT` 拒绝，经济 trial、registry、route 仍为 0/未变化。BUG-1347 只修复 operator 参数 schema 和 JSON transport，不允许扩大调用预算、改变 prompt 经济假设或放宽每族支持门槛。
 11. BUG-1347 经 PR #4255 修复并由 PR #4256 close-sync 后，`main@33f4f21f...` 冻结 prompt v2 request `advqegenreq_dbcc8a...`；generation bundle `f85df0a6...` 为 `6 calls / 24 raw / 22 accepted / 2 rejected / 0 provider failure`，终态 `COMPLETE`。首次经济运行在共享 score compiler 返回后读取已被编译结果丢弃的 `pit_eligible` 控制列，typed fail-closed 为 `KeyError('pit_eligible')`；没有 MVE bundle、经济 trial、registry 或 route 变更。BUG-1349 只按 `(datetime,instrument)` 一对一重新绑定 source panel 的 PIT membership，并对缺失、重复或不闭合身份显式失败；不得修改 generation bundle、Alpha 表达式、预算、收益标签或门槛。
+12. BUG-1349 经 PR #4263 修复并由 PR #4264 close-sync 后，clean `main@ea9b1509...` 的 request `advqegenreq_7b0e785b3c0f05a2ef2ceb39`、generation bundle `5f6ff834...` 和经济 bundle `9327330c...` 完成。6 次调用生成/接受 24 项，23 项完成经济评价，selected=0；最佳 Top5 lift point 仍为 `-5.21 bps`，全部 23 项累计 family-wise Top5 lift lower 均不大于 0，四段稳定性全部失败。registry append 1、total 26，route 固定转 `N3_UPSTREAM_ALPHA_NEW_DATA_SOURCE_MVE_DESIGN`；sealed/factor/package/runtime writes 均 false。
 
 ## 2. Goal / 成功定义
 
@@ -217,7 +218,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 - concurrency=1，RSS<=16 GiB，temp<=32 GiB；wall time 只记录、不设自动停止门禁。
 - 生成阶段网络串行；评价阶段复用旧 pipeline 的单份 source panel、AST 子表达式 cache 和 float32 score panel，不 materialize 24 份源表。
 - 已完成：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests。
-- 待执行：BUG-1349 经审核、CI和合入后，从新的 clean merged source identity 冻结全新 prompt v2 request；只有该 request 的 `COMPLETE` generation 才运行经济评价。`dbcc8a.../f85df0a6...` 保持不可变并只作为 generation 成功、经济实现失败的证据，不跨 source identity 迁移 proposal。PIT membership 必须从同一 source panel 按精确键重新绑定，缺失、重复或行集不闭合均 typed fail-closed。
+- 已执行：BUG-1349 经审核、CI、PR #4263 合入及 PR #4264 close-sync 后，从 clean `main@ea9b1509...` 冻结 prompt-v2 request `advqegenreq_7b0e785b3c0f05a2ef2ceb39`；generation `5f6ff834...` 为 `COMPLETE` 后才运行经济评价，最终 economic bundle `9327330c...` 为 `24/23/0`。`dbcc8a.../f85df0a6...` 继续保持不可变并只作为 generation 成功、经济实现失败的历史证据，未跨 source identity 迁移 proposal。正式运行按同一 source panel 精确键重新绑定 PIT membership，缺失、重复或行集不闭合仍 typed fail-closed。
 
 ## 14. Verification plan
 
@@ -296,3 +297,13 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 - `runtime_activation=noop`
 - `factor_catalog_write=noop`
 - rollback：源码通过普通 PR revert；content-addressed generation/MVE artifact 与 append-only registry 保留为研究事实，不覆盖、不删除、不进入运行时。
+
+## 20. Formal Result / 正式结果
+
+- request：`advqegenreq_7b0e785b3c0f05a2ef2ceb39`，repository commit `ea9b1509baaeecdbb9ae4b609b0d30652b54f577`。
+- generation：bundle `5f6ff834baefa63cd837f3de0ca7df6fc284cd93ef8bbfe051a5f6728827a1b6`，`6 calls / 24 raw / 24 accepted / 0 rejected / 0 provider failure`，状态 `COMPLETE`。
+- economic：bundle `9327330c11082d656463a85007f03744c47ad52224c764e006235025b5c8fc64`，generated/evaluated/selected `24/23/0`，状态 `COMPLETE/VALID`。
+- 经济结论：最佳 RankIC delta point `+0.00410`，但最佳 Top5 lift point仍为 `-5.21 bps`；23/23 的累计 family-wise Top5 lift lower 不大于0，23/23 的四段稳定性不达标，无 eligible proposal。
+- 资源：elapsed `347.40s`，peak RSS `15,368,347,648` bytes，temp `457,216,676` bytes。
+- 交付：receipt `advqegenmvercpt_97e95467801e917174af072a`，registry首次append 1、总数26；sealed holdout未读，未写factor catalog、StrategyPackage或runtime，deployable/runtime_eligible均false。
+- 固定结论：daily/static grammar generator lineage关闭，不扩大prompt、模型、字段、调用或表达式预算。唯一next task为`N3_UPSTREAM_ALPHA_NEW_DATA_SOURCE_MVE_DESIGN`。
