@@ -21,6 +21,8 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_EXPERIMENT_ID,
     GENERATOR_FAMILY_ID,
+    GENERATOR_ALLOWED_FIELDS,
+    GENERATOR_PROMPT_SCHEMA_V2,
     SHA256_PATTERN,
     AdvisoryQEAlphaGenerationReceiptV1,
     FrozenAdvisoryQEAlphaGeneratorRequestV1,
@@ -30,6 +32,7 @@ from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     build_generator_mve_receipt,
     build_generator_proposal,
     build_generator_request,
+    generator_allowed_fields_for_source,
 )
 from backend.services.advisory_model_first.qe_alpha_mve_contracts import (
     MVE_FAMILIES,
@@ -42,6 +45,7 @@ from backend.services.advisory_model_first.qe_alpha_mve_pipeline import (
     _moving_block_interval,
     _peak_rss_bytes,
     _safe_correlation,
+    _static_schema_sha256,
     build_source_panel,
     compile_proposal_scores,
 )
@@ -52,6 +56,7 @@ from backend.services.advisory_model_first.research_control import (
 from backend.services.advisory_model_first.research_control_contracts import (
     ConsumedWindowV1,
     DecisionUse,
+    EvidenceReferenceV1,
     ObjectiveContract,
     ResearchResultClass,
     ResearchStudyType,
@@ -174,6 +179,8 @@ def prepare_generator_request(
     old_proposals = tuple(QEAlphaProposalV1.model_validate(item) for item in roster.get("proposals", ()))
     if len(old_proposals) != 24:
         _raise("QE alpha generator old proposal roster is not exact", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
+    old_source_fields = tuple(sorted({field for item in old_proposals for field in item.source_fields}))
+    allowed_fields = _allowed_fields_from_parent_source(parent_request, old_source_fields=old_source_fields)
     model_kwargs = get_llm_kwargs("evolution_researcher")
     model_identity = QEAlphaGeneratorModelIdentityV1(model=str(model_kwargs.get("model", "")))
     repo = Path(repository_root).resolve()
@@ -202,7 +209,8 @@ def prepare_generator_request(
         policy_identity=str(n2b_manifest["policy_identity"]),
         benchmark_instrument=benchmark,
         old_expression_hashes=tuple(item.expression_sha256 for item in old_proposals),
-        old_source_fields=tuple(sorted({field for item in old_proposals for field in item.source_fields})),
+        old_source_fields=old_source_fields,
+        allowed_fields=allowed_fields,
         model_identity=model_identity,
         registry_path=str(parent_request["registry_path"]),
         route_path=str(parent_request["route_path"]),
@@ -263,8 +271,10 @@ def generate_alpha_candidates(
             call_index = len(family_attempts) + 1
             retry_prompt = user_prompt
             if family_attempts and family_attempts[-1].get("status") == "SCHEMA_REJECTED":
-                retry_prompt += "\n\nSchema-only retry violations:\n" + "\n".join(
-                    f"- {item}" for item in family_attempts[-1].get("violations", ())
+                retry_prompt = _schema_retry_prompt(
+                    user_prompt,
+                    family_attempts[-1].get("violations", ()),
+                    request=request,
                 )
             started = time.monotonic()
             try:
@@ -289,7 +299,7 @@ def generate_alpha_candidates(
                 break
             try:
                 raw_items = _parse_generation_response(raw_response)
-                parsed = _parse_family_proposals(family, raw_items)
+                parsed = _parse_family_proposals(family, raw_items, allowed_fields=request.allowed_fields)
             except Exception as exc:
                 violations = (_safe_error(exc),)
                 schema_failure = _attempt_row(
@@ -399,7 +409,12 @@ def build_family_prompt(
     catalog: Mapping[str, Any],
 ) -> tuple[str, str]:
     unused = sorted(set(request.allowed_fields) - set(request.old_source_fields))
-    catalog_rows = _catalog_prompt_rows(catalog, family, limit=96)
+    catalog_rows = _catalog_prompt_rows(
+        catalog,
+        family,
+        allowed_fields=request.allowed_fields,
+        limit=96,
+    )
     exclusions = [
         {
             "hypothesis": item.economic_hypothesis,
@@ -445,6 +460,14 @@ def build_family_prompt(
             ]
         },
     }
+    if request.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V2:
+        user_payload["operator_contract"] = _operator_parameter_contract(request.allowed_operators)
+        user_payload["response_contract"] = {
+            "transport": "json_object",
+            "top_level_keys": ["proposals"],
+            "proposals_count": 4,
+            "prose_or_markdown_allowed": False,
+        }
     return system, json.dumps(user_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -540,6 +563,9 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
     proposals = list(generation["proposals"])
     old_roster_payload = generation["old_roster"]
     old_proposals = tuple(QEAlphaProposalV1.model_validate(item) for item in old_roster_payload["proposals"])
+    _verify_request_source_fields(
+        request, old_source_fields=tuple(sorted({field for item in old_proposals for field in item.source_fields}))
+    )
     target_keys = _load_target_free_parent_keys(request)
     adapter = SimpleNamespace(
         signal_start=request.signal_start,
@@ -549,7 +575,10 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
         proposals=tuple([*proposals, *old_proposals]),
     )
     source_panel = build_source_panel(request=adapter, outcomes=target_keys, benchmark=request.benchmark_instrument)
-    compiled = compile_proposal_scores(panel=source_panel, proposals=tuple([*proposals, *old_proposals]))
+    compiled = _bind_pit_eligibility(
+        compile_proposal_scores(panel=source_panel, proposals=tuple([*proposals, *old_proposals])),
+        source_panel,
+    )
     signal_scores = compiled.loc[
         compiled["datetime"].between(pd.Timestamp(request.signal_start), pd.Timestamp(request.signal_end))
         & compiled["pit_eligible"]
@@ -595,6 +624,49 @@ def run_generator_mve(request_path: str | Path, generation_bundle_path: str | Pa
     )
     delivered = _deliver_result_bundle(request, bundle)
     return {**inspect_generator_mve_bundle(bundle), **delivered, "exact_retry": False, "bundle_path": bundle.as_posix()}
+
+
+def _bind_pit_eligibility(compiled: pd.DataFrame, source_panel: pd.DataFrame) -> pd.DataFrame:
+    """Rebind PIT membership after the shared score compiler drops control columns."""
+
+    identity_columns = ["datetime", "instrument"]
+    required_source_columns = {*identity_columns, "pit_eligible"}
+    missing_source = sorted(required_source_columns - set(source_panel.columns))
+    missing_compiled = sorted(set(identity_columns) - set(compiled.columns))
+    unexpected_compiled = ["pit_eligible"] if "pit_eligible" in compiled.columns else []
+    if missing_source or missing_compiled or unexpected_compiled:
+        _raise(
+            "QE alpha generator PIT membership source identity is incomplete",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            missing_source_columns=missing_source,
+            missing_compiled_columns=missing_compiled,
+            unexpected_compiled_control_columns=unexpected_compiled,
+        )
+    membership = source_panel[[*identity_columns, "pit_eligible"]].copy()
+    if membership.duplicated(identity_columns).any() or compiled.duplicated(identity_columns).any():
+        _raise(
+            "QE alpha generator PIT membership source identity is duplicated",
+            "ADVISORY_QE_ALPHA_GENERATOR_PIT_LEAKAGE",
+        )
+    rebound = compiled.merge(
+        membership,
+        on=identity_columns,
+        how="left",
+        validate="one_to_one",
+        indicator="_pit_membership_merge",
+    )
+    complete = rebound["_pit_membership_merge"].eq("both")
+    if len(membership) != len(compiled) or not complete.all() or rebound["pit_eligible"].isna().any():
+        _raise(
+            "QE alpha generator score/PIT membership identity does not close",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            compiled_row_count=len(compiled),
+            membership_row_count=len(membership),
+            unmatched_compiled_row_count=int((~complete).sum()),
+        )
+    rebound = rebound.drop(columns="_pit_membership_merge")
+    rebound["pit_eligible"] = rebound["pit_eligible"].astype(bool)
+    return rebound
 
 
 def target_free_score_overlap(
@@ -985,12 +1057,23 @@ def _default_llm_call(
     kwargs = get_llm_kwargs(request.model_identity.agent_locator)
     if str(kwargs.get("model", "")) != request.model_identity.model:
         _raise("QE alpha generator model identity drift", "ADVISORY_QE_ALPHA_GENERATOR_MODEL_IDENTITY_MISMATCH")
+    completion_kwargs = dict(kwargs)
+    response_format = None
+    if request.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V2:
+        response_format = {"type": "json_object"}
+        configured_response_format = completion_kwargs.get("response_format")
+        if configured_response_format not in (None, response_format):
+            _raise(
+                "QE alpha generator response format drift",
+                "ADVISORY_QE_ALPHA_GENERATOR_MODEL_IDENTITY_MISMATCH",
+            )
+        completion_kwargs["response_format"] = response_format
     response = litellm.completion(
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         temperature=request.model_identity.temperature,
         top_p=request.model_identity.top_p,
         timeout=request.model_identity.timeout_seconds,
-        **kwargs,
+        **completion_kwargs,
     )
     content = str(response.choices[0].message.content or "")
     usage = getattr(response, "usage", None)
@@ -999,8 +1082,79 @@ def _default_llm_call(
         "prompt_tokens": getattr(usage, "prompt_tokens", None),
         "completion_tokens": getattr(usage, "completion_tokens", None),
         "total_tokens": getattr(usage, "total_tokens", None),
+        "response_format": "json_object" if response_format else "provider_default",
     }
     return content, telemetry
+
+
+def _operator_parameter_contract(allowed_operators: Sequence[str]) -> list[dict[str, Any]]:
+    contract = [
+        {
+            "operators": ["FIELD"],
+            "required_keys": ["op", "field"],
+            "args_count": 0,
+            "parameter_rules": {"field": "one exact value from allowed_fields"},
+        },
+        {
+            "operators": ["CONST"],
+            "required_keys": ["op", "value"],
+            "args_count": 0,
+            "parameter_rules": {"value": "finite JSON number"},
+        },
+        {
+            "operators": ["ADD", "SUBTRACT", "MULTIPLY", "SAFE_DIVIDE"],
+            "required_keys": ["op", "args"],
+            "args_count": 2,
+            "parameter_rules": {},
+        },
+        {
+            "operators": ["ABS", "SIGN", "LOG1P_ABS", "SQRT_ABS", "SAME_DATE_RANK", "SAME_DATE_ZSCORE"],
+            "required_keys": ["op", "args"],
+            "args_count": 1,
+            "parameter_rules": {},
+        },
+        {
+            "operators": ["LAG", "DELTA"],
+            "required_keys": ["op", "args", "periods"],
+            "args_count": 1,
+            "parameter_rules": {"periods": "integer 1..252 inclusive"},
+        },
+        {
+            "operators": ["TRAILING_SUM", "TRAILING_MEAN", "TRAILING_STD", "TRAILING_MIN", "TRAILING_MAX"],
+            "required_keys": ["op", "args", "window"],
+            "args_count": 1,
+            "parameter_rules": {"window": "integer 2..252 inclusive"},
+        },
+        {
+            "operators": ["CLIP"],
+            "required_keys": ["op", "args", "lower", "upper"],
+            "args_count": 1,
+            "parameter_rules": {"lower": "finite JSON number", "upper": "finite JSON number greater than lower"},
+        },
+    ]
+    declared = [operator for item in contract for operator in item["operators"]]
+    if len(declared) != len(set(declared)) or set(declared) != set(allowed_operators):
+        raise ValueError("QE alpha generator prompt operator contract drift")
+    return contract
+
+
+def _schema_retry_prompt(
+    user_prompt: str,
+    violations: Sequence[str],
+    *,
+    request: FrozenAdvisoryQEAlphaGeneratorRequestV1,
+) -> str:
+    if request.prompt_schema_version != GENERATOR_PROMPT_SCHEMA_V2:
+        return user_prompt + "\n\nSchema-only retry violations:\n" + "\n".join(f"- {item}" for item in violations)
+    payload = json.loads(user_prompt)
+    payload["schema_only_retry"] = {
+        "violations": list(violations),
+        "instruction": (
+            "Return one fresh complete JSON object satisfying the unchanged output, operator, field, and budget contracts."
+        ),
+        "economic_feedback_included": False,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_generation_response(raw: str) -> Sequence[Mapping[str, Any]]:
@@ -1013,21 +1167,28 @@ def _parse_generation_response(raw: str) -> Sequence[Mapping[str, Any]]:
     return payload["proposals"]
 
 
-def _parse_family_proposals(family: str, rows: Sequence[Mapping[str, Any]]) -> list[QEAlphaGeneratorProposalV1]:
+def _parse_family_proposals(
+    family: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    allowed_fields: Sequence[str],
+) -> list[QEAlphaGeneratorProposalV1]:
     output: list[QEAlphaGeneratorProposalV1] = []
+    frozen_allowed_fields = set(allowed_fields)
     for index, row in enumerate(rows, start=1):
         if set(row) != {"economic_hypothesis", "mechanism", "known_effect_exposures", "expression"}:
             raise ValueError("proposal response fields drift")
-        output.append(
-            build_generator_proposal(
-                proposal_id=f"N3G_{family}_{index:02d}",
-                family=family,
-                economic_hypothesis=row["economic_hypothesis"],
-                mechanism=row["mechanism"],
-                known_effect_exposures=tuple(row["known_effect_exposures"]),
-                expression=row["expression"],
-            )
+        proposal = build_generator_proposal(
+            proposal_id=f"N3G_{family}_{index:02d}",
+            family=family,
+            economic_hypothesis=row["economic_hypothesis"],
+            mechanism=row["mechanism"],
+            known_effect_exposures=tuple(row["known_effect_exposures"]),
+            expression=row["expression"],
         )
+        if not set(proposal.source_fields).issubset(frozen_allowed_fields):
+            raise ValueError("proposal uses a field outside the frozen request source schema")
+        output.append(proposal)
     return output
 
 
@@ -1433,6 +1594,7 @@ def _read_generation_bundle(path: Path) -> dict[str, Any]:
         != sum(int(item.get("raw_generation_attempt_count") or 0) for item in attempts)
         or receipt.rejected_expression_count != len(rejections)
         or response_attempt_keys != transcript_keys
+        or any(not set(item.source_fields).issubset(request.allowed_fields) for item in proposals)
         or (receipt.status == "INFRASTRUCTURE_FAILURE") != bool(unresolved_families)
         or manifest.get("target_or_economic_metric_exposed") is not False
         or manifest.get("secret_persisted") is not False
@@ -1595,7 +1757,13 @@ def _benchmark_from_parent_request(parent_request: Mapping[str, Any]) -> str:
     raise AssertionError
 
 
-def _catalog_prompt_rows(catalog: Mapping[str, Any], family: str, *, limit: int) -> list[dict[str, Any]]:
+def _catalog_prompt_rows(
+    catalog: Mapping[str, Any],
+    family: str,
+    *,
+    allowed_fields: Sequence[str],
+    limit: int,
+) -> list[dict[str, Any]]:
     prefixes = {
         "PRICE_VOLUME_BEHAVIOR": ("db_", "liquidity", "PriceStrength"),
         "MONEYFLOW_BEHAVIOR": ("mf_",),
@@ -1604,12 +1772,22 @@ def _catalog_prompt_rows(catalog: Mapping[str, Any], family: str, *, limit: int)
         "CROWDING_DISPERSION": ("db_", "cp_", "size_", "liquidity"),
         "REGIME_CONDITIONED": ("sw2_", "db_", "mf_", "value_"),
     }[family]
+    forbidden_fields = set(GENERATOR_ALLOWED_FIELDS) - set(allowed_fields)
     selected: list[dict[str, Any]] = []
     for record in catalog.get("records", ()):
         blob = json.dumps(
             {"variables": record.get("variables"), "data_source": record.get("data_source")}, ensure_ascii=False
         )
         if not any(prefix in blob for prefix in prefixes):
+            continue
+        metadata_blob = json.dumps(
+            {key: record.get(key) for key in ("factor_name", "variables", "formula_hint", "data_source")},
+            ensure_ascii=False,
+        )
+        if any(
+            re.search(rf"(?<![A-Za-z0-9_]){re.escape(field)}(?![A-Za-z0-9_])", metadata_blob)
+            for field in forbidden_fields
+        ):
             continue
         selected.append(
             {
@@ -1717,6 +1895,85 @@ def _read_catalog_snapshot(path: Path) -> dict[str, Any]:
     if payload.get("row_count") != len(payload.get("records", ())):
         _raise("QE alpha generator catalog snapshot row count drift", "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID")
     return payload
+
+
+def _allowed_fields_from_parent_source(
+    parent_request: Mapping[str, Any],
+    *,
+    old_source_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    try:
+        static_ref = EvidenceReferenceV1.model_validate(parent_request["static_factor_ref"])
+        expected_schema_sha256 = str(parent_request["static_schema_sha256"])
+    except (KeyError, ValidationError, ValueError) as exc:
+        _raise(
+            "QE alpha generator parent static source contract is invalid",
+            "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID",
+            error_type=type(exc).__name__,
+        )
+    if static_ref.role != "n3_static_factors_parquet":
+        _raise(
+            "QE alpha generator parent static source role is invalid",
+            "ADVISORY_QE_ALPHA_GENERATOR_REQUEST_INVALID",
+            role=static_ref.role,
+        )
+    static_path = _local_path(static_ref.artifact_uri)
+    try:
+        actual_ref = evidence_reference_for_file(static_path, role=static_ref.role)
+        import pyarrow.parquet as pq
+
+        schema = pq.ParquetFile(static_path).schema_arrow
+        actual_schema_sha256 = _static_schema_sha256(static_path)
+    except Exception as exc:
+        _raise(
+            "QE alpha generator concrete static source cannot be read",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            error_type=type(exc).__name__,
+            path=static_path.as_posix(),
+        )
+    if (actual_ref.sha256, actual_ref.size_bytes) != (
+        static_ref.sha256,
+        static_ref.size_bytes,
+    ) or actual_schema_sha256 != expected_schema_sha256:
+        _raise(
+            "QE alpha generator concrete static source identity drift",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            path=static_path.as_posix(),
+        )
+    try:
+        return generator_allowed_fields_for_source(
+            available_static_fields=frozenset(schema.names),
+            old_source_fields=old_source_fields,
+        )
+    except ValueError as exc:
+        _raise(
+            "QE alpha generator concrete static source omits required fields",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            error_type=type(exc).__name__,
+        )
+    raise AssertionError
+
+
+def _verify_request_source_fields(
+    request: FrozenAdvisoryQEAlphaGeneratorRequestV1,
+    *,
+    old_source_fields: tuple[str, ...],
+) -> None:
+    parent_request = _read_json(
+        _local_path(request.parent_qe_bundle_path) / "request.json",
+        "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+    )
+    actual_allowed_fields = _allowed_fields_from_parent_source(
+        parent_request,
+        old_source_fields=old_source_fields,
+    )
+    if request.allowed_fields != actual_allowed_fields:
+        _raise(
+            "QE alpha generator frozen allowed fields do not match the concrete source schema",
+            "ADVISORY_QE_ALPHA_GENERATOR_SOURCE_IDENTITY_MISMATCH",
+            missing_fields=sorted(set(request.allowed_fields) - set(actual_allowed_fields)),
+            unexpected_fields=sorted(set(actual_allowed_fields) - set(request.allowed_fields)),
+        )
 
 
 def _load_request(path: str | Path) -> FrozenAdvisoryQEAlphaGeneratorRequestV1:

@@ -1,5 +1,19 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: position_timing_advice
+    priority: 131
+    include:
+      - backend/services/position_timing/**
+      - backend/routers/position_timing.py
+      - backend/tests/position_timing/**
+      - frontend/src/app/position-timing/**
+      - docs/architecture/position_timing_advice_f2_redesign_*.md
+      - docs/architecture/position_timing_advice_first_release_implementation_plan_*.md
+    primary_module: position_timing
+    impact_modules: [platform.api, portfolio_management, watchlist, frontend_common]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Human-only T+1 position timing cards, timing-owned immutable artifacts, component costs, API, UI, and their F2 design form one isolated product boundary.
   - rule_id: advisory_model_first_training
     priority: 130
     include:

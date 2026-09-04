@@ -40,6 +40,8 @@ GENERATOR_BOOTSTRAP_REPETITIONS = 2000
 GENERATOR_RANDOM_SEED = 20260903
 GENERATOR_MAX_RSS_BYTES = 16 * 1024**3
 GENERATOR_MAX_TEMP_BYTES = 32 * 1024**3
+GENERATOR_PROMPT_SCHEMA_V1 = "advisory_qe_alpha_generator_prompt_v1"
+GENERATOR_PROMPT_SCHEMA_V2 = "advisory_qe_alpha_generator_prompt_v2"
 
 GENERATOR_KNOWN_EFFECTS = (
     "MOMENTUM",
@@ -55,6 +57,21 @@ GENERATOR_KNOWN_EFFECTS = (
 
 GENERATOR_STATIC_FIELDS = frozenset(str(item) for item in STATIC_ORDERED_COLUMNS if item != "l2_code_id")
 GENERATOR_ALLOWED_FIELDS = DAILY_FIELDS | GENERATOR_STATIC_FIELDS | frozenset({"market_regime"})
+
+
+def generator_allowed_fields_for_source(
+    *,
+    available_static_fields: set[str] | frozenset[str],
+    old_source_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Freeze only fields that the concrete source can physically provide."""
+    allowed = (
+        DAILY_FIELDS | (GENERATOR_STATIC_FIELDS & frozenset(available_static_fields)) | frozenset({"market_regime"})
+    )
+    missing_old = sorted(set(old_source_fields) - allowed)
+    if missing_old:
+        raise ValueError(f"QE alpha generator concrete source omits old proposal fields: {missing_old}")
+    return tuple(sorted(allowed))
 
 
 class QEAlphaGeneratorModelIdentityV1(BaseModel):
@@ -134,7 +151,10 @@ class FrozenAdvisoryQEAlphaGeneratorRequestV1(BaseModel):
     allowed_operators: tuple[str, ...]
     known_effects: tuple[str, ...]
     model_identity: QEAlphaGeneratorModelIdentityV1
-    prompt_schema_version: Literal["advisory_qe_alpha_generator_prompt_v1"] = "advisory_qe_alpha_generator_prompt_v1"
+    prompt_schema_version: Literal[
+        "advisory_qe_alpha_generator_prompt_v1",
+        "advisory_qe_alpha_generator_prompt_v2",
+    ] = GENERATOR_PROMPT_SCHEMA_V2
     max_generation_calls: Literal[GENERATOR_MAX_CALLS] = GENERATOR_MAX_CALLS
     max_raw_generation_attempts: Literal[GENERATOR_MAX_RAW_ATTEMPTS] = GENERATOR_MAX_RAW_ATTEMPTS
     max_evaluated_expressions: Literal[GENERATOR_MAX_EVALUATED] = GENERATOR_MAX_EVALUATED
@@ -174,8 +194,14 @@ class FrozenAdvisoryQEAlphaGeneratorRequestV1(BaseModel):
     def validate_request(self) -> "FrozenAdvisoryQEAlphaGeneratorRequestV1":
         if len(set(self.old_expression_hashes)) != 24:
             raise ValueError("QE alpha generator requires 24 unique old expression hashes")
-        if self.allowed_fields != tuple(sorted(GENERATOR_ALLOWED_FIELDS)):
+        allowed_fields = set(self.allowed_fields)
+        if self.allowed_fields != tuple(sorted(allowed_fields)):
             raise ValueError("QE alpha generator allowed field roster drift")
+        if not allowed_fields.issubset(GENERATOR_ALLOWED_FIELDS):
+            raise ValueError("QE alpha generator allowed field roster exceeds the implemented schema")
+        required_fields = DAILY_FIELDS | frozenset({"market_regime"}) | frozenset(self.old_source_fields)
+        if not required_fields.issubset(allowed_fields):
+            raise ValueError("QE alpha generator allowed field roster omits required source fields")
         if self.allowed_operators != tuple(sorted(EXPRESSION_OPERATORS)):
             raise ValueError("QE alpha generator operator roster drift")
         if self.known_effects != GENERATOR_KNOWN_EFFECTS:
@@ -363,10 +389,13 @@ __all__ = [
     "GENERATOR_MIN_ACCEPTED",
     "GENERATOR_MIN_PER_FAMILY",
     "GENERATOR_OVERLAY_WEIGHT",
+    "GENERATOR_PROMPT_SCHEMA_V1",
+    "GENERATOR_PROMPT_SCHEMA_V2",
     "QEAlphaGeneratorModelIdentityV1",
     "QEAlphaGeneratorProposalV1",
     "build_generation_receipt",
     "build_generator_mve_receipt",
     "build_generator_proposal",
     "build_generator_request",
+    "generator_allowed_fields_for_source",
 ]

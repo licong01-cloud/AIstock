@@ -7,11 +7,14 @@ from pydantic import ValidationError
 
 from backend.services.advisory_model_first.qe_alpha_generator_contracts import (
     GENERATOR_ALLOWED_FIELDS,
+    GENERATOR_PROMPT_SCHEMA_V1,
+    GENERATOR_PROMPT_SCHEMA_V2,
     QEAlphaGeneratorModelIdentityV1,
     build_generation_receipt,
     build_generator_mve_receipt,
     build_generator_proposal,
     build_generator_request,
+    generator_allowed_fields_for_source,
 )
 from backend.services.advisory_model_first.qe_alpha_generator_pipeline import build_catalog_snapshot
 from backend.services.advisory_model_first.qe_alpha_mve_contracts import (
@@ -21,7 +24,7 @@ from backend.services.advisory_model_first.qe_alpha_mve_contracts import (
 from backend.services.advisory_model_first.research_control import evidence_reference_for_file
 
 
-def make_generator_request(tmp_path):
+def make_generator_request(tmp_path, *, allowed_fields=None, prompt_schema_version=GENERATOR_PROMPT_SCHEMA_V2):
     parent = tmp_path / "parent"
     overlay = tmp_path / "overlay"
     minute = tmp_path / "minute"
@@ -59,13 +62,62 @@ def make_generator_request(tmp_path):
         benchmark_instrument="000300.SH",
         old_expression_hashes=tuple(item.expression_sha256 for item in old),
         old_source_fields=tuple(sorted({field for item in old for field in item.source_fields})),
+        allowed_fields=(tuple(sorted(GENERATOR_ALLOWED_FIELDS)) if allowed_fields is None else tuple(allowed_fields)),
         model_identity=QEAlphaGeneratorModelIdentityV1(),
+        prompt_schema_version=prompt_schema_version,
         registry_path=(tmp_path / "registry.jsonl").as_posix(),
         route_path=(tmp_path / "route.md").as_posix(),
         repository_root=tmp_path.as_posix(),
         repository_commit="c" * 40,
         output_root=(tmp_path / "output").as_posix(),
     )
+
+
+def test_generator_request_defaults_to_prompt_v2_and_keeps_v1_readable(tmp_path) -> None:
+    current_root = tmp_path / "current"
+    current_root.mkdir()
+    current = make_generator_request(current_root)
+    assert current.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V2
+
+    legacy_root = tmp_path / "legacy"
+    legacy_root.mkdir()
+    legacy = make_generator_request(legacy_root, prompt_schema_version=GENERATOR_PROMPT_SCHEMA_V1)
+    parsed = type(legacy).model_validate_json(legacy.model_dump_json())
+    assert parsed.prompt_schema_version == GENERATOR_PROMPT_SCHEMA_V1
+    assert parsed.request_sha256 == legacy.request_sha256
+
+
+def test_generator_request_freezes_only_concrete_source_fields(tmp_path) -> None:
+    base_root = tmp_path / "base"
+    base_root.mkdir()
+    base = make_generator_request(base_root)
+    available_static = set(GENERATOR_ALLOWED_FIELDS) - {
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "market_regime",
+    }
+    available_static -= {"md_rqmcl", "md_rzye"}
+    allowed = generator_allowed_fields_for_source(
+        available_static_fields=available_static,
+        old_source_fields=base.old_source_fields,
+    )
+
+    request_root = tmp_path / "filtered"
+    request_root.mkdir()
+    request = make_generator_request(request_root, allowed_fields=allowed)
+    assert "md_rqmcl" not in request.allowed_fields
+    assert "md_rzye" not in request.allowed_fields
+    assert "db_turnover_rate" in request.allowed_fields
+
+    with pytest.raises(ValueError, match="omits old proposal fields"):
+        generator_allowed_fields_for_source(
+            available_static_fields=available_static - {"db_turnover_rate"},
+            old_source_fields=base.old_source_fields,
+        )
 
 
 def test_generator_expression_extends_schema_without_widening_old_contract() -> None:

@@ -1,0 +1,223 @@
+{
+  "actual": "The 2026-08-31 direct-v2 candidate passes day/minute/H5/static/index/suspend reads, but ConfigComposer emits the retired 2026-06-30 factor, qlib-bin and suspend identities. prepare_factors.py rejects the real factor meta, while qe_build_frozen_suspend_filter.py targets a nonexistent legacy-named sidecar instead of the same-release suspend_d_daily_candidate_v2 directory.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+    "tests/aistock_validation/bugs/20260903_BUG-1341-qe-composer-cannot-bind-2026-08-31-direct-v2-factor-dataset-contract.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1341",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-03T19:40:13.754807Z",
+  "description": "2026-08-31 QE/HMM v2 candidate consumer smoke passes for day/minute/H5/static/index, but ConfigComposer-generated prepare_factors.py still pins QE_DATASET_EXPECTED_META and factor-cache universe metadata to the retired 2026-06-30 dataset constants. The candidate factor meta contract is schema_version=qe_direct_factor_h5_static_v2, start=2018-08-01, end=2026-08-31, universe_key=aistock_equity_pit_canonical_v2 and has no legacy snapshot_id. A formal MA-E19R3 run would therefore fail closed or mix release identities. Add an explicit immutable direct-v2 consumer binding supplied by the selected release, validate exact factor meta and frozen day/minute/index identities without database fallback, preserve legacy/formal canonical paths, and ensure generated configuration contains no /home/lc999/data fallback. Do not modify candidate data or weaken fail-closed checks.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260903-652d0e8bef9b",
+      "timestamp": "2026-09-03T19:40:13.754792Z"
+    },
+    {
+      "action": "direct_v2_consumer_fix_validated",
+      "actor": "codex",
+      "note": "Added explicit five-component binding, fresh-process hash validation and direct suspend metadata support; real X-drive candidate preflight passed with zero legacy path hits.",
+      "timestamp": "2026-09-04T04:43:27Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe_hmm_full_v2_20260831_consumer_binding.json",
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260902-candidate/direct_monthly_state.json"
+  ],
+  "expected": "An explicit direct-v2 binding pins the same-release day, minute, factor, index, and suspend components; ConfigComposer emits only those paths and identities, and fresh-process validation fails closed on any mismatch without database or legacy-path fallback.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "scripts/qe_build_frozen_suspend_filter.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "scripts/qe_build_frozen_suspend_filter.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py"
+    ]
+  },
+  "first_seen_at": "2026-09-03T19:40:13.754807Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4242,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4242",
+  "last_seen_at": "2026-09-03T19:40:13.754807Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py -q",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe/custom-evolution/tasks",
+    "fresh_process_evidence": [
+      "BUG1341_REAL_CANDIDATE_VALIDATOR_PASS: WSL rdagent-gpu fresh process imported the task-worktree direct-v2 validator and verified the immutable 2026-08-31 candidate without legacy-path fallback, candidate writes, or backend process control"
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE Composer cannot bind 2026-08-31 direct v2 factor dataset contract",
+  "trigger_condition": {
+    "fingerprint": "652d0e8bef9b63eb05c87b7b",
+    "source_event_id": "FE-20260903-652d0e8bef9b"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py -q -> 51 passed",
+    "WSL rdagent-gpu real candidate direct-v2 binding, factor contract and suspend artifact preflight -> passed; suspend trade dates=115, rows=781, old path hits=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 133 passed",
+    "python -m nox -s l0 -> 0 blocking findings"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

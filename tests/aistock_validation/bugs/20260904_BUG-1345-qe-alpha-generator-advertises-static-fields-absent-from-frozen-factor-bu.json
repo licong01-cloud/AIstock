@@ -1,0 +1,304 @@
+{
+  "actual": "Generation completed with 24 accepted expressions, then run failed with ADVISORY_MODEL_QE_SCHEMA_MISMATCH because md_rqmcl and md_rzye are absent from the frozen static parquet.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+    "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+    "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+    "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+    "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+    "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+    "tests/aistock_validation/bugs/20260904_BUG-1345-qe-alpha-generator-advertises-static-fields-absent-from-frozen-factor-bu.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1345",
+  "closed_at": "2026-09-04T03:45:26Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T02:21:12.955497Z",
+  "description": "Generation completed with 24 accepted expressions, then run failed with ADVISORY_MODEL_QE_SCHEMA_MISMATCH because md_rqmcl and md_rzye are absent from the frozen static parquet.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-22e27652c595",
+      "timestamp": "2026-09-04T02:21:12.955480Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_formal_v2_20260904/qe_alpha_generation_bundles/6565eeb9ce9e69492d7aae7ab7b8712fc05e941b303f56c32876716f02a01ff9"
+  ],
+  "expected": "Phase A must bind the concrete frozen source schema and expose only fields that are physically readable, or fail before any LLM call; no missing field may reach economic projection.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1345-qe-alpha-generator-advertises-static-fields-absent-from-frozen-factor-bu.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+      "tests/aistock_validation/bugs/20260904_BUG-1345-qe-alpha-generator-advertises-static-fields-absent-from-frozen-factor-bu.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+        "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+        "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+        "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
+      "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py",
+      "docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md"
+    ]
+  },
+  "first_seen_at": "2026-09-04T02:21:12.955497Z",
+  "fix_branch": null,
+  "fix_commit": "76d0960c5c9008461ff4d11503ccda7e5b99c9a3",
+  "fixed_at": "2026-09-04T03:45:26Z",
+  "github_issue_number": 4244,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4244",
+  "last_seen_at": "2026-09-04T02:21:12.955497Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4249",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/advisory_qe_alpha_generator_mve_run.py run --request <request> --generation-bundle <bundle>",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "QE alpha generator advertises static fields absent from frozen factor bundle",
+  "trigger_condition": {
+    "fingerprint": "22e27652c595a4342d5725cd",
+    "source_event_id": "FE-20260904-22e27652c595"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=12012806dffb1053 commit=715301a079b57871c488f8431e157c514ed41146 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed on final HEAD: 8 passed; ownership 14/14`",
+    "validation-receipt: id=8adfe35b5d7711bc commit=715301a079b57871c488f8431e157c514ed41146 kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`passed on source-identical parent a34866232: 791 passed, 16 skipped; final child changes BUG metadata only`",
+    "validation-receipt: id=a9498721708fb5b5 commit=715301a079b57871c488f8431e157c514ed41146 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py::test_generator_request_freezes_only_concrete_source_fields backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_parent_source_schema_excludes_fields_absent_from_concrete_parquet backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_generation_parser_rejects_field_outside_frozen_request_schema -q` result=`passed on final HEAD: 3 passed`",
+    "validation-receipt: id=013ccb32bbf91023 commit=715301a079b57871c488f8431e157c514ed41146 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/advisory_model_first/qe_alpha_generator_contracts.py backend/services/advisory_model_first/qe_alpha_generator_pipeline.py backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` result=`passed on source-identical parent: all checks passed`",
+    "validation-receipt: id=b7a6b59232e631ca commit=715301a079b57871c488f8431e157c514ed41146 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/advisory_model_first/qe_alpha_generator_contracts.py backend/services/advisory_model_first/qe_alpha_generator_pipeline.py` result=`passed on source-identical parent`",
+    "validation-receipt: id=2c2b5b77191bfbdf commit=715301a079b57871c488f8431e157c514ed41146 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md --tier F2` result=`passed on source-identical parent: design_items=10 matrix_rows=10 warnings=0`",
+    "validation-receipt: id=11aaf5937a9d71b9 commit=715301a079b57871c488f8431e157c514ed41146 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed on final HEAD`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

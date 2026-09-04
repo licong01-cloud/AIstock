@@ -157,6 +157,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wsl-conda-env", default=os.getenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu"))
     parser.add_argument("--rdagent-root-wsl", default=os.getenv("QLIB_RDAGENT_ROOT_WSL", "/mnt/f/Dev/RD-Agent-main"))
     parser.add_argument(
+        "--isolated-dump-only",
+        action="store_true",
+        help=(
+            "Run only the existing Qlib dump implementation against an isolated CSV/bin root. "
+            "No DB read, PIT rewrite, metadata write, or target-candidate mutation is performed."
+        ),
+    )
+    parser.add_argument(
         "--skip-validation",
         action="store_true",
         help="Skip optional full-window DB/bin validation; export invariants and caller smoke still apply.",
@@ -176,6 +184,47 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.isolated_dump_only:
+        if (
+            args.stage != "dump"
+            or args.dataset != "stock_daily"
+            or args.dump_subcmd != "dump_all"
+            or args.stock_universe_mode != "legacy_static"
+        ):
+            raise ValueError(
+                "--isolated-dump-only requires stock_daily, stage=dump, "
+                "dump_all and legacy_static"
+            )
+        csv_dir = Path(args.csv_root) / args.snapshot_id / "stock_daily"
+        bin_dir = Path(args.bin_root) / args.snapshot_id
+        dump = run_wsl_dump(
+            csv_dir=csv_dir,
+            bin_dir=bin_dir,
+            freq="day",
+            distro=args.wsl_distro,
+            conda_sh=args.wsl_conda_sh,
+            conda_env=args.wsl_conda_env,
+            rdagent_root_wsl=args.rdagent_root_wsl,
+            dump_subcmd="dump_all",
+            max_workers=args.dump_workers,
+        )
+        print(
+            json.dumps(
+                {
+                    "isolated_dump_only": True,
+                    "ok": dump["ok"],
+                    "returncode": dump["returncode"],
+                    "csv_dir": str(csv_dir),
+                    "bin_dir": str(bin_dir),
+                },
+                ensure_ascii=False,
+            )
+        )
+        if not dump["ok"]:
+            print(dump["stdout"])
+            print(dump["stderr"], file=sys.stderr)
+            return 2
+        return 0
     if args.skip_validation and args.stage != "all":
         raise ValueError("--skip-validation is only valid with --stage all")
     start = parse_date(args.start)

@@ -3,13 +3,13 @@
 > 版本：v2.0
 > 日期：2026-09-03
 > Feature tier：F2
-> 状态：`DESIGN_VERIFIED_IMPLEMENTATION_NOT_STARTED`
+> 状态：`IMPLEMENTATION_BLOCK_ONE_SOURCE_DELIVERY_BLOCK_TWO_NOT_STARTED`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > decision use：`HUMAN_TRADING_ADVICE`
 > 对照蓝图：`F:/Dev/AIstock_worktrees/stock-timing-strategy-blueprint-20260831/docs/architecture/stock_timing_strategy_system_blueprint_f2_20260831.md`
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
-`DESIGN_VERIFIED` 只表示本蓝图的目标、边界、契约、实施与验证设计已经闭合，不表示任何代码已经实现、运行或激活。本次文档合入不授权自动交易、数据库变更、依赖安装、进程控制或生产激活。
+`DESIGN_VERIFIED` 只表示对应设计条款已经闭合。2026-09-04 已完成并本地验证实现块一的日频行动卡内部联调切片，并允许它作为独立 source PR 合入；实际合入状态以 Git/PR readback 为准。L1a 提醒、prospective outcome、完整首发验证与生产激活仍未完成。实现块一不授权自动交易、数据库变更、进程控制或生产激活，也不得被表述为完整首发已经交付。
 
 ## 1. Background / 背景与结论
 
@@ -117,12 +117,13 @@ backend/services/position_timing/
     service.py            # universe, L1 card, outcome materialization
     alerts.py             # quote eligibility and atomic alert claim
 backend/routers/position_timing.py
+frontend/src/app/position-timing/layout.tsx  # only imports the existing paper-v2 visual tokens
 frontend/src/app/position-timing/page.tsx
 backend/tests/position_timing/
 frontend/tests/position-timing/
 ```
 
-仅允许两处现有 composition root 做薄接线：`backend/main.py` 注册 router（统一 `/api/v1` 前缀），`frontend/src/lib/navigation/nav-groups.ts` 增加页面入口。两处不得包含择时业务逻辑；除 composition root 外，任何既有业务模块不得 import `position_timing`。
+仅允许两处现有 composition root 做薄接线：`backend/main.py` 注册 router（统一 `/api/v1` 前缀），`frontend/src/lib/navigation/nav-groups.ts` 增加页面入口。新路由的 `layout.tsx` 只导入既有 `paper-v2.css`，不复制样式或承载业务逻辑。两处既有接线文件不得包含择时业务逻辑；除 composition root 外，任何既有业务模块不得 import `position_timing`。
 
 L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py`，不放进 `advisory_model_first`，也不复用其全局 registry 路径。
 
@@ -133,7 +134,8 @@ L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py
 | 持仓 | 第一阶段唯一 authority 为 `portfolio_manager.get_all_stocks()` / `app.portfolio_stocks`，只读 |
 | 已确认自选 | 只读 watchlist；`advisory_enabled=true` 且 `lifecycle_status` 属于 `CANDIDATE/ENTERED/HOLDING` |
 | 交易日 | `TradingCalendarStatusService`、`TradeCalendarProvider` |
-| PIT 股票身份与日频行情 | `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`、本地数据库权威服务、Qlib daily、QE 导出 manifest/H5/Parquet；每次生成绑定 source identity |
+| PIT 股票身份与日频行情 | L1 标的身份由 holdings/watchlist 与公共 symbol validator 决定，不把研究 universe 当产品准入门；raw 日线读取本地权威服务。历史 L2 才绑定 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2` 与 QE 导出 manifest/H5/Parquet |
+| 已确认终止上市 | 只读 `market.event_signal` 中符合 `issuer_bound_stock_delisting_v2` 的 timestamp-causal confirmed event；`market.stock_basic` 只在 `list_status=D AND delist_date <= decision_trade_date` 时作为已生效终态兜底；研究态 event overlay 不接入 runtime |
 | 双价格/公司行动 | raw 使用 `market.kline_daily_raw`；跨日经济值复用 `market.adj_factor` / `AdjFactorProvider` 或已绑定同源 factor 的 Qlib 导出，按 `EVID-PRICE-BASIS` fail closed |
 | 涨跌停、停牌、ST | `a_share_live_limit_rule.py` 与现有 daily-limit/suspend authority |
 | 风险与价格规则 | 只调用 `trading_core.exit_guard.evaluate`、`trading_core.price_guard.evaluate` |
@@ -186,6 +188,7 @@ L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py
 - T+1 盘中只评价已冻结 card，不刷新方向、目标仓位或触发价。
 - intent 在 card 首次签发后不创建或改写同一 decision date 的 card；新 intent 正式进入下一交易日。它可以立即使旧提醒失效：盘中若 legacy 持仓 hash 或 intent hash 已不同于 card snapshot，返回 `POSITION_SNAPSHOT_CHANGED/INTENT_SNAPSHOT_CHANGED` 并禁止旧卡弹窗，等待下一张卡重新决策。
 - card 在 T+1 收盘失效。T+1 停牌、T+1 不可卖或方向性一字板记 `POLICY_FILL_UNAVAILABLE_EXPIRED`，不得把旧卡顺延到 T+2；T+1 收盘后由新卡重新决策。
+- 若 suspend authority 证明标的在 T 日停牌且不存在 T 日 bar，card 只能使用 T 日之前最近一根可执行 raw close，并显式记 `DECISION_DAY_SUSPENDED_USING_LAST_EXECUTABLE_CLOSE`；非停牌标的的旧 bar 不得冒充 T 日成熟数据，也不得因此提前冻结 unavailable card set。
 - 第一阶段不调用 `fetch_minute_kline_tdx`、`TdxCausalMinuteProvider` 或任何分钟 feature builder。
 
 ### 5.2 Universe、用户意图与去重
@@ -209,12 +212,12 @@ L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py
 | 时钟 | `decision_trade_date`、`decision_as_of`、`target_trade_date`、`valid_until` |
 | 当前与目标 | `pre_action_qty`、`pre_action_exposure`、`planned_full_notional_cny`、`desired_target_exposure`、`requested_delta_qty`、`requested_leg_notional_cny` |
 | 建议 | `action=OPEN/ADD/HOLD/REDUCE/EXIT/WAIT/UNAVAILABLE`、`execution_window=AT_OPEN/ON_PRICE_TRIGGER/WAIT_UNAVAILABLE` |
-| 触发 | `triggers[]`；每项含 `trigger_id`、side/operator/raw price、条件分支对应的 `planned_delta_qty`、`planned_leg_notional_cny` 与合法 target exposure；另含 `reference_price_raw` |
+| 触发 | `triggers[]`；每项含 `trigger_id`、side/operator/raw price、共享 guard action/reason 条件、分支对应的 `planned_delta_qty`、`planned_leg_notional_cny` 与合法 target exposure；另含 `reference_price_raw` |
 | 可执行性 | `tradability_status`、`st_flag`、`t1_sellable_qty`、`limit_up_raw`、`limit_down_raw`、typed reason codes |
 | 成本 | 买卖逐腿估算、parent-order 情景、`SMALL_TRADE_COST_HEAVY`、cost policy identity |
-| 上下文 | `holding_trading_days`、`holding_age_bucket`、`market_regime=DOWN/UP_OR_FLAT/UNKNOWN`，以及 Selection/HMM status 与 evidence ref；缺失必须 typed |
+| 上下文 | `holding_trading_days`、`holding_age_bucket`、`market_regime=DOWN/UP_OR_FLAT/UNKNOWN`，已确认退市 flag/status，以及 Selection/HMM status 与 evidence ref；缺失必须 typed |
 | 证据 | `evidence_tier`、`historical_base_rate_status`；L1 固定 `RULE_BASED_RISK_MANAGEMENT` |
-| 可复现性 | dataset、calendar、limit、intent、guard snapshot、cost policy、code commit 的 hash/provenance |
+| 可复现性 | dataset、calendar、limit、delist、intent、guard snapshot、cost policy、code commit 的 hash/provenance；card set 同时保存完整 input/policy identity 与 `cards_sha256` |
 
 卡片本身不显示 MDE/oracle 比值、L2 总体置信区间或“个股胜率”。这些研究级结论只在页面证据区展示。
 
@@ -225,8 +228,8 @@ L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py
 L1 只做确定性风险与执行映射，不从历史 PnL 回选规则：
 
 1. 用户 intent 决定希望向哪个 exposure 移动；Selection 不决定 universe，也不替用户发起新股票方向。
-2. 持仓先调用冻结的 `ExitGuardPolicy`。硬止损、alpha decay 或退市风险可把用户目标覆盖为 `EXIT`；T+1 不可卖时为 `WAIT_UNAVAILABLE`。
-3. T 日只使用已知的 signal close、limit 与 snapshot 生成有限个条件分支；T+1 报价到来后才调用同一个冻结 `PriceGuardPolicy.evaluate`，且只能命中卡片内已有分支。buy-side guard 的 `REDUCE` 分支表示缩小本次 `OPEN/ADD` 数量，不表示卖出现有持仓。
+2. 持仓先调用冻结的 `ExitGuardPolicy`。硬止损、可用的 alpha decay 或 timestamp-causal 已确认终止上市事实可把用户目标覆盖为 `EXIT`；仅自选标的命中已确认终止上市时为 `CONFIRMED_DELISTING_BUY_UNAVAILABLE`。Selection 缺失时 alpha-decay 不运行，不能用默认排名代替；T+1 不可卖时为 `WAIT_UNAVAILABLE`。
+3. T 日只使用已知的 signal close、limit 与 snapshot 生成有限个条件分支；已验证的 T 日停牌按 §5.1 使用更早的最近可执行 close。T+1 报价到来后才调用同一个冻结 `PriceGuardPolicy.evaluate`，并以 evaluator 的 action/reason 在卡片内选择唯一分支；不能把相互重叠的价格上界单独解释为多个同时成立的建议。buy-side guard 的 `REDUCE` 分支表示缩小本次 `OPEN/ADD` 数量，不表示卖出现有持仓。
 4. 冲突顺序固定为：方向性可执行性 > exit 风险 > 用户目标移动 > price guard 规模调整。
 5. `OPEN/ADD` 卡预先冻结 green/yellow/skip 对应的 trigger 与合法数量，使用 `ON_PRICE_TRIGGER`；风险型 `EXIT` 使用 `AT_OPEN`，非风险型 `REDUCE/EXIT` 可使用 `ON_PRICE_TRIGGER`；`HOLD/WAIT/UNAVAILABLE` 使用 `WAIT_UNAVAILABLE` 并给出 no-trade/原因码。
 6. T+1 runtime 只选择已冻结 trigger branch 或返回不可执行，不能创建新方向、新价格阈值或新规模；因此 L1a 是提醒器而不是第二个决策器。
@@ -275,11 +278,13 @@ snapshot 中共享 `t1_handling=defer_to_next_tradable_day` 只描述 guard 在�
 
 `OUTCOME_EVALUATED` 绑定用于该 horizon 的 corporate-action/adjustment source、版本、覆盖区间与 hash。该信息属于事后标签，可在 outcome materialization 时使用当时已成熟的权威数据，但不得反向进入旧 card。缺失、版本冲突或无法把 raw fill 与 terminal valuation 对齐时记 `UNAVAILABLE_AT_HORIZON`。
 
+块一日频卡不计算跨日收益，因而 card 的 `adjustment_identity` 固定为 `NOT_APPLICABLE / BLOCK_ONE_CARD_USES_RAW_PRICE_ONLY`；复权因子缺失不得阻塞 L1 出卡。只有实现块二的 outcome 评价才读取并强制绑定 adjustment/corporate-action identity。
+
 ### 5.7 可交易性、ST 与交易单位
 
 - ST 是涨跌幅比例与风险属性，不等于不可交易。
 - 一字涨停只阻断买入；一字跌停只阻断卖出。相反方向不得被笼统判 `UNAVAILABLE`。
-- 停牌、缺失涨跌停权威、T+1 可卖数量不足均返回独立 typed reason。
+- T 日已验证停牌且有更早可执行 close 时保留风险方向并要求 T+1 重验；连最近可执行 close 也缺失、涨跌停权威缺失或 T+1 可卖数量不足时返回独立 typed reason。
 - 买入用 `round_to_board_lot(..., side="BUY")` 向下取合法数量。
 - 任一板块卖出全部剩余持仓时可按实际剩余数量一次退出；否则沪深主板/创业板买入与部分卖出按 100 股倍数。
 - 科创板买入与部分卖出至少 200 股，超过 200 后可按 1 股递增；不足 200 的余额只通过上述全量退出处理。
@@ -369,13 +374,13 @@ timing 唯一写入根为：
 F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/
     intents/
     policy_snapshots/
-    cards/<decision_trade_date>/<card_set_id>/
+    cards/<decision_trade_date>/<card_set_id>/card_set-<artifact_sha256>.json
     events/<yyyy-mm>.jsonl
     research_registry/timing_trial_registry_v1.jsonl
     materialization_state.json
 ```
 
-- cards 与 policy snapshots content-addressed、不可变、hash-bound。
+- cards 与 policy snapshots content-addressed、不可变、hash-bound；card set 保存完整 input/policy identity，并用 `cards_sha256` 检出卡片内容篡改。
 - event log append-only，使用文件锁和 fsync；不改写旧事件。
 - intents 与 `materialization_state.json` 是 timing-owned 当前态，使用临时文件 + 原子替换；它们不冒充 append-only 证据。
 - `CARD_ISSUED` 幂等键为 `card_id`。
@@ -477,7 +482,7 @@ paired path 只评价卡片动作造成的边际数量，不重算未受动作�
 | `GET /api/v1/position-timing/alerts/poll` | 只读报价与 edge |
 | `POST /api/v1/position-timing/alerts/{trigger_id}/claim` | 原子追加唯一 alert authorization |
 
-页面只设一个产品入口，使用现有 shadcn-compatible token。主要区域为：今日行动卡、非模态已提醒边、typed 数据状态、成本明细、研究证据。不得出现“一键下单”、自动交易开关或把 `46.9%` 显示成个股置信度。
+页面只设一个产品入口，使用现有 shadcn-compatible token。主要区域为：当前/最近行动卡（明确显示 `UPCOMING/VALID_TODAY/EXPIRED`）、非模态已提醒边、typed 数据状态、成本明细、研究证据。不得出现“一键下单”、自动交易开关或把 `46.9%` 显示成个股置信度。
 
 ## 6. L2/L3 研究契约
 
@@ -643,15 +648,17 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 
 - 建立证据语义目录，修正臂名、fee、board-lot、minute fetch、到期时钟与统计分类。
 - 冻结 F2 contracts、Design Acceptance Index、验证路径与隔离矩阵。
-- 文档通过 F2 validator 后合入；这不代表实现开始。
+- 蓝图文档已通过 F2 validator 并作为本分支实现权威；文档合入本身不曾代表功能实现。
 
-### 9.2 第一批 A：L1 contracts、artifact 与规则卡
+### 9.2 已完成并本地验证：实现块一 L1 contracts、artifact 与规则卡
 
 1. 实现 `contracts.py`、`policy.py`、`artifact_store.py`。
 2. 实现唯一持仓 authority、自选去重、intent 与方向性可交易性。
 3. 生成 immutable card set 与 `CARD_ISSUED`。
 4. 实现 componentized cost、board-lot、guard snapshots 与 typed errors。
 5. 实现 materialize/current/evidence/intents API 与页面行动卡。
+
+块一还完成了四项收口：已确认终止上市的 PIT 只读输入及买卖方向映射；已验证 T 日停牌时用更早的最近可执行 close 保留风险方向，而非停牌旧 bar 不会锁死卡片；green/yellow/skip 分支由冻结 guard 参数派生、以 guard action/reason 消歧并按各自触发价估算成本；card set 保存完整 input/policy identity 和 `cards_sha256`。复权因子不参与日频卡，明确为 `NOT_APPLICABLE`，不构成出卡门禁。该状态仍只是完整首发内的内部可联调切片；独立 source merge 不改变这一范围判断。
 
 ### 9.3 第一批 B：L1a 与 prospective outcome
 
@@ -685,14 +692,14 @@ git diff --check
 
 ### 10.2 第一批实现 gate
 
-1. `backend/tests/position_timing/test_contracts.py`：card/intent/event schema、枚举、hash identity。
+1. `backend/tests/position_timing/test_artifact_store.py` 与 `test_api.py`：card/intent/event schema、枚举、完整 input/policy/card hash identity，以及三个 GET 在空 artifact 根上的零写入。
 2. `backend/tests/position_timing/test_universe.py`：唯一 authority、watchlist active 过滤、holding 优先去重、Paper/MiniQMT 隔离。
 3. `backend/tests/position_timing/test_pit_clock.py`：`feature_available_at <= decision_as_of`，同日 15:00 后信息也 fail closed。
 4. `backend/tests/position_timing/test_tradability.py`：停牌、ST、买入一字涨停、卖出一字跌停、相反方向、T+1 可卖量。
 5. `backend/tests/position_timing/test_policy_snapshot.py`：v1 与 `EVID-GUARD-DEFAULTS` 逐项一致；共享默认值未修改；旧 card 不受未来默认变化影响。
 6. `backend/tests/position_timing/test_cost_policy.py`：逐腿分项、父订单累计、三种拆单、阈值 58,824/117,648/235,295、买卖 lot 不对称。
-7. `backend/tests/position_timing/test_card_service.py`：L1 mapping、buy guard `REDUCE` 不误作卖出、缺 Selection/HMM 的字段级降级。
-8. `backend/tests/position_timing/test_artifact_store.py`：immutable conflict、append-only、三类幂等键、并发 lock。
+7. `backend/tests/position_timing/test_card_service.py`：L1 mapping、已确认终止上市的买卖方向、真实停牌缺 T 日 bar 的最近可执行 close、非停牌旧 bar 不锁卡、green/yellow/skip 唯一映射、逐分支触发价成本、缺 Selection/HMM 的字段级降级，以及 adjustment 非门禁。
+8. `backend/tests/position_timing/test_artifact_store.py`：immutable conflict、input/policy/cards/intent 篡改 fail closed、append-only、三类事件的复合幂等键/hash/时区契约与并发 lock。
 9. `backend/tests/position_timing/test_outcome_materialization.py`：两只时钟、五 horizons、5 日 terminal defer、h=1 新买数量 T+1 锁定、保守日线 fill、边际 paired path、公司行动/双价格、intention-to-treat、四种读取态、水位不越过部分失败。
 10. `backend/tests/position_timing/test_alerts.py`：GET 零写、50-symbol chunk、5 分钟/30 秒、有界 open/current quote identity、position/intent 漂移、atomic claim、多标签页、already-alerted 可见条目、无 minute fetch。
 11. `backend/tests/position_timing/test_isolation.py`：N0/现有表/调度/SmartMonitor/Paper/MiniQMT 零写；除 `backend/main.py` 与前端导航外零反向依赖；无 order/runtime-weight 输出。
@@ -717,10 +724,12 @@ git diff --check
 | 多标签页重复视觉提示 | 服务端 event exact-once；UI 弹窗 at-most-once 只尽力而为，数据完整性优先 |
 | 荐股/Selection 进展慢 | universe 与 intent 不依赖荐股；Selection 缺失只禁用 alpha-decay context |
 | HMM 缺失或漂移 | 字段级 `hmm_context_status=UNAVAILABLE`；方向不受影响 |
+| 退市研究 overlay 尚非运行 authority | L1 只消费 issuer-bound、timestamp-causal confirmed terminal event，并仅用已生效 `stock_basic` 终态兜底；研究 profile 不接入；仅自选买入与持仓卖出按方向处理 |
 | 用户未提供 planned full notional | 该股票 `SIZING_INPUT_UNAVAILABLE`，不虚构仓位；其他股票正常 |
 | 最低佣金实际聚合口径与假设不同 | `BROKER_UNVERIFIED` 披露 + 1/2/3 parent-order sensitivity；不阻塞 |
 | 费率变化使手写阈值漂移 | Decimal 从 versioned components 派生并写 receipt，禁止业务常量 |
 | 除权除息使 raw 收益失真 | raw 只用于触发/成交/费用；经济结果绑定公司行动或等价 total-return identity，缺失即 unavailable |
+| 复权数据暂未成熟 | 不阻塞只使用 raw 的块一 card；实现块二 outcome 到期评价时才 fail closed 为 `UNAVAILABLE_AT_HORIZON` |
 | 文件 artifact 并发冲突 | content address、file lock、fsync、atomic replace；冲突 fail closed |
 | 规则卡被误读成 alpha | 卡片固定 `RULE_BASED_RISK_MANAGEMENT`；研究统计只在证据区 |
 | L2 双模型仍无正下界或功效不足 | 如实 `NEGATIVE/INCONCLUSIVE` 与 `UNDERPOWERED`；L1/L1a 不受影响，不追加搜索 |
@@ -730,9 +739,9 @@ git diff --check
 
 ## 12. Rollout / Rollback / Production gates
 
-### 12.1 本蓝图合入
+### 12.1 蓝图文档历史合入边界
 
-- 只合入本 Markdown 文件。
+- 蓝图初次合入只包含 Markdown；当前 feature 分支已经在其约束下实现块一源码，不能再用本段宣称“当前只改文档”。
 - `production_ddl_gate=noop`。
 - `production_dependency_gate=noop`。
 - `runtime_activation=noop`。
@@ -742,9 +751,9 @@ git diff --check
 
 文档回滚通过后续 PR revert；不删除任何 artifact 或历史证据。
 
-### 12.2 未来第一批实现
+### 12.2 当前块一与未来首发激活
 
-先在开发端口 8011/8012 与 3011/3012 验证。第一批仍为零 DDL；若实现偏离为数据库表，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。生产端口 8001/3000 的激活与 backend restart 始终由用户明确授权和执行。
+块一已完成无进程控制的本地测试及真实 DEV 只读数据联调，并可按用户授权独立完成源码提交与合入；源码合入不自动加载到既有生产进程。没有启动开发端口，也没有激活生产运行态。完整首发仍为零 DDL；若后续偏离为数据库表，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。生产端口 8001/3000 的激活与 backend restart 始终由用户明确授权和执行。
 
 ## 13. Design Acceptance Index / 设计验收索引
 
@@ -776,47 +785,47 @@ git diff --check
 | F-022 | PT-018, PT-020 | SCOPE | L4b-1 独立分钟执行反事实；N3 objective 不混用；L4b-2 保持范围外 |
 | F-023 | PT-016, PT-018 | SCOPE | 第一批仅 L1/L1a/outcome；无 SSE、SmartMonitor engine 或复杂模型 |
 | F-024 | PT-003, PT-019 | HARD | 所有缺失/陈旧/不支持/物化失败均 typed，不静默、不空结果冒充成功 |
-| F-025 | PT-001, PT-004 | HARD | card/receipt 绑定 dataset、calendar、limit、adjustment/corporate-action、policy、fee 与 code provenance |
+| F-025 | PT-001, PT-004 | HARD | card/receipt 绑定实际消费的 dataset、calendar、limit、delist、policy、fee 与 code provenance；card 未消费的 adjustment 明确 NOT_APPLICABLE，outcome 必须绑定 adjustment/corporate-action |
 | F-026 | PT-014 | HARD | 文档与未来实现具备逐条测试、隔离、回滚和 production gate 证据 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
-以下 `DESIGN_VERIFIED` 只证明设计条款已经闭合，`implementation_refs` 与测试路径是未来实现的强制映射；不表示文件或测试已经存在。
+`DESIGN_VERIFIED` 只证明设计条款已经闭合；`BLOCK_ONE_*_VERIFIED` 表示当前分支上对应的实现块一范围已有直接测试。带 `APPROVED_BY_USER` 的 gap 是既定实现块二或后续研究范围，不是新增门禁。任何块一状态都不表示完整首发、PR、merge 或生产激活已经完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | `position_timing/contracts.py`；router output boundary | `backend/tests/position_timing/test_isolation.py` | DESIGN_VERIFIED | none |
-| F-002 | `position_timing/` namespace、own artifact root、隔离矩阵 | `backend/tests/position_timing/test_isolation.py` | DESIGN_VERIFIED | none |
-| F-003 | `position_timing/service.py` universe adapter | `backend/tests/position_timing/test_universe.py` | DESIGN_VERIFIED | none |
-| F-004 | `PositionTimingCardV1` decision clock | `backend/tests/position_timing/test_pit_clock.py` | DESIGN_VERIFIED | none |
-| F-005 | service read adapters；§4.3 reuse table | `backend/tests/position_timing/test_isolation.py` | DESIGN_VERIFIED | none |
-| F-006 | `position_timing/policy.py` L1 mapping | `backend/tests/position_timing/test_card_service.py` | DESIGN_VERIFIED | none |
-| F-007 | shared limit/suspend/board-lot adapters | `backend/tests/position_timing/test_tradability.py` | DESIGN_VERIFIED | none |
-| F-008 | `position_timing/policy.py` snapshot V1 | `backend/tests/position_timing/test_policy_snapshot.py` | DESIGN_VERIFIED | none |
-| F-009 | componentized `PERSONAL_MANUAL_COMPONENT_COST_V1` | `backend/tests/position_timing/test_cost_policy.py` | DESIGN_VERIFIED | none |
-| F-010 | Decimal threshold and cost-heavy label | `backend/tests/position_timing/test_cost_policy.py` | DESIGN_VERIFIED | none |
-| F-011 | `position_timing/artifact_store.py` | `backend/tests/position_timing/test_artifact_store.py` | DESIGN_VERIFIED | none |
-| F-012 | router `POST /materialize` | `backend/tests/position_timing/test_outcome_materialization.py` | DESIGN_VERIFIED | none |
-| F-013 | outcome contracts/service | `backend/tests/position_timing/test_outcome_materialization.py` | DESIGN_VERIFIED | none |
-| F-014 | `materialization_state.json` operational coverage | `backend/tests/position_timing/test_outcome_materialization.py` | DESIGN_VERIFIED | none |
-| F-015 | `position_timing/alerts.py` quote poll | `backend/tests/position_timing/test_alerts.py` | DESIGN_VERIFIED | none |
-| F-016 | atomic claim + `ALERT_EMISSION_AUTHORIZED` | `backend/tests/position_timing/test_alerts.py` | DESIGN_VERIFIED | none |
-| F-017 | card context fields and typed partial state | `backend/tests/position_timing/test_card_service.py` | DESIGN_VERIFIED | none |
-| F-018 | L2 population/schema in `contracts.py` | `backend/tests/position_timing/test_l2_population.py` | DESIGN_VERIFIED | none |
-| F-019 | future `position_timing/learnability_pipeline.py` spec | `backend/tests/position_timing/test_l2_model_specs.py` | DESIGN_VERIFIED | none |
-| F-020 | future inference receipt schema | `backend/tests/position_timing/test_l2_inference.py` | DESIGN_VERIFIED | none |
-| F-021 | §6.4/§6.5 non-gating semantics | `backend/tests/position_timing/test_l2_inference.py` | DESIGN_VERIFIED | none |
-| F-022 | §7 objective separation and minute snapshot binding | `backend/tests/position_timing/test_l2_population.py` | DESIGN_VERIFIED | none |
-| F-023 | §4.2 and §9 staged file plan | `frontend/tests/position-timing/position-timing.spec.ts` | DESIGN_VERIFIED | none |
-| F-024 | typed reason/error DTOs | `backend/tests/position_timing/test_contracts.py` | DESIGN_VERIFIED | none |
-| F-025 | immutable identity fields in card/receipt | `backend/tests/position_timing/test_artifact_store.py` | DESIGN_VERIFIED | none |
-| F-026 | §10 verification、§12 rollout/gates | `backend/tests/position_timing/test_isolation.py`；`frontend/tests/position-timing/position-timing.spec.ts` | DESIGN_VERIFIED | none |
+| F-001 | `backend/services/position_timing/contracts.py`；router output boundary | `backend/tests/position_timing/test_isolation.py` | BLOCK_ONE_VERIFIED | none |
+| F-002 | `backend/services/position_timing/`、own artifact root、composition wiring | `backend/tests/position_timing/test_isolation.py` | BLOCK_ONE_VERIFIED | none |
+| F-003 | `backend/services/position_timing/service.py` universe adapter | `backend/tests/position_timing/test_universe.py` | BLOCK_ONE_VERIFIED | none |
+| F-004 | `PositionTimingCardV1` decision clock 与 PIT checks | `backend/tests/position_timing/test_pit_clock.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
+| F-005 | service read adapters；§4.3 reuse table | `backend/tests/position_timing/test_api.py`；2026-09-04 DEV 468-target readback | BLOCK_ONE_RUNTIME_REUSE_VERIFIED_APPROVED_BY_USER | canonical v2 QE/L2 dataset binding remains in approved later L2 scope |
+| F-006 | `backend/services/position_timing/policy.py` 与 `service.py` L1 mapping | `backend/tests/position_timing/test_card_service.py`（含 confirmed delist 买卖方向） | BLOCK_ONE_VERIFIED | none |
+| F-007 | shared limit/suspend/board-lot adapters 与冻结方向分支 | `backend/tests/position_timing/test_tradability.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED_APPROVED_BY_USER | target-day quote direction recheck remains in approved block two |
+| F-008 | timing-owned guard snapshot artifact/hash/provenance | `backend/tests/position_timing/test_policy_snapshot.py` | BLOCK_ONE_VERIFIED | none |
+| F-009 | componentized `PERSONAL_MANUAL_COMPONENT_COST_V1` | `backend/tests/position_timing/test_cost_policy.py` | BLOCK_ONE_VERIFIED | none |
+| F-010 | Decimal threshold、合法数量与 cost-heavy label | `backend/tests/position_timing/test_cost_policy.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
+| F-011 | `backend/services/position_timing/artifact_store.py` | `backend/tests/position_timing/test_artifact_store.py`（input/policy/cards/intent tamper 与跨月幂等）；`backend/tests/position_timing/test_isolation.py` | BLOCK_ONE_VERIFIED | none |
+| F-012 | router `POST /materialize` 的 card publication | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_API_VERIFIED_APPROVED_BY_USER | outcome materialization remains in approved block two |
+| F-013 | `OutcomeEvaluatedEventV1` schema 已冻结；runtime materializer 尚不存在 | `backend/tests/position_timing/test_artifact_store.py`（复合键/hash/时钟 schema） | BLOCK_ONE_CONTRACT_VERIFIED_APPROVED_BY_USER | OUTCOME_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
+| F-014 | §5.11 coverage-state 设计已闭合；`materialization_state.json` 尚不存在 | artifact: `docs/architecture/position_timing_advice_f2_redesign_20260903.md#511-outcome-评价`；runtime test 尚不存在 | DESIGN_VERIFIED_APPROVED_BY_USER | OUTCOME_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
+| F-015 | §5.12 quote-poll 设计已闭合；`position_timing/alerts.py` 尚不存在 | artifact: `docs/architecture/position_timing_advice_f2_redesign_20260903.md#512-l1a-报价提醒`；runtime test 尚不存在 | DESIGN_VERIFIED_APPROVED_BY_USER | ALERT_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
+| F-016 | `AlertEmissionAuthorizedEventV1` schema 已冻结；atomic claim 尚不存在 | `backend/tests/position_timing/test_artifact_store.py`（复合键/hash/时区 schema） | BLOCK_ONE_CONTRACT_VERIFIED_APPROVED_BY_USER | ALERT_RUNTIME_DEFERRED_BY_APPROVED_SCOPE |
+| F-017 | card context fields and typed field-level unavailability | `backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
+| F-018 | L2 population/sampling/outcome schema in `contracts.py` | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED | none |
+| F-019 | frozen Ridge/GBDT/monotone policy spec；runtime pipeline absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
+| F-020 | frozen threshold/effect/power/inference spec；runtime receipt absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
+| F-021 | frozen non-gating semantics | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_cost_policy.py` | CONTRACT_VERIFIED | none |
+| F-022 | §7 objective separation and minute snapshot binding | `backend/tests/position_timing/test_l2_population.py` | DESIGN_VERIFIED_APPROVED_BY_USER | SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE |
+| F-023 | 5 block-one API、one page、no SSE/worker/model imports | `backend/tests/position_timing/test_api.py`；`python -m nox -s frontend_type_lint` | BLOCK_ONE_SCOPE_VERIFIED_APPROVED_BY_USER | alerts and outcome remain in approved block two |
+| F-024 | typed block-one reason/error DTOs and no-new-card maturity state | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_TYPED_FAILURES_VERIFIED_APPROVED_BY_USER | alert and outcome failure states remain in approved block two |
+| F-025 | immutable card source identities、confirmed delist identity、guard snapshot hashes；card adjustment=`NOT_APPLICABLE` | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；2026-09-04 DEV readback | BLOCK_ONE_CARD_IDENTITY_VERIFIED_APPROVED_BY_USER | outcome adjustment/corporate-action receipt identities remain in approved block two |
+| F-026 | module-owned nox/L0/catalog routing and block-one isolation | `python -m nox -s position_timing_backend`；`python -m nox -s l0`；`backend/tests/test_validation_catalog_integrity.py` | BLOCK_ONE_LOCAL_VALIDATION_VERIFIED_APPROVED_BY_USER | full first-release CI, PR, merge and runtime activation remain outside block-one claim |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-1. **禁止简化交付**：蓝图把第一批的行动卡、提醒、outcome、成本、隔离和错误可见性定义为一个完整结果；L2/L3/第二阶段被明确列为后续范围，没有把它们伪装成已实现。
-2. **禁止静默错误**：PIT、报价、可交易性、sizing、HMM/Selection、outcome 物化和不支持标的均有 typed 状态；陈旧报价只禁止弹窗，不隐藏失败。
-3. **禁止改变业务逻辑**：唯一持仓 authority、用户 intent、共享 guard 纯实现、双价格/公司行动、逐腿成本、T+1 card、两只 outcome 时钟与 N3 objective 边界均已写成稳定契约；研究臂名称不再被外推为运行语义。
-4. **禁止私增门禁审批**：PT-009 对应 MDE 仅报告，sealed holdout 可选，最低成交额只标注；没有审批、双人确认或人工放行。仅 L4b-2 保留直接证据条件，因为它属于未来范围并会新增交易次数与真实亏损敞口。
+1. **禁止简化交付**：当前只报告“实现块一内部切片已本地验证”，明确列出尚未实现的 L1a、outcome、完整首发 CI/PR/merge 与生产激活；没有把块一伪装成完整首发。
+2. **禁止静默错误**：块一对 PIT、source identity、可交易性、sizing、已确认终止上市、HMM/Selection 和不支持标的使用 typed 状态；系统级零覆盖不签空卡，单标的缺失不拖垮其他卡；块二的报价/outcome 失败语义仍由设计契约约束。
+3. **禁止改变业务逻辑**：实现保持唯一持仓 authority、用户 intent、共享 guard 纯实现、逐腿成本、T+1 card 与 N3 objective 边界。审查中发现的调整只把真实消费口径写准：card 使用 raw，adjustment 留给 outcome；confirmed delist 不使用研究 overlay；green/yellow/skip 由冻结 snapshot 参数派生。上述变化已同步回正文与矩阵。
+4. **禁止私增门禁审批**：删除了与 L1 无关的 adjustment 出卡门禁；MDE 仅报告、sealed holdout 可选、最低成交额只标注，且没有审批、双人确认或人工放行。仅 L4b-2 保留既有直接证据条件，因为它属于未来范围并会新增交易次数与真实亏损敞口。
 
-结论：蓝图设计与用户终极目标及四轮联合评审共识一致，可作为后续 feature 实现的唯一 position-timing 设计基线；当前实现状态仍为未开始。
+结论：蓝图仍是唯一 position-timing 设计基线；实现块一已形成并通过本地测试与真实 DEV 只读数据联调的内部切片。实现块二、完整首发、PR/merge、生产进程加载与页面运行态 readback 均未完成，不得据此报告完整功能已交付。

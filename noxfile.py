@@ -1219,6 +1219,7 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
         "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
@@ -1236,6 +1237,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
@@ -2540,6 +2542,27 @@ def market_regime_label(session: nox.Session) -> None:
     # exercised here; its application is owned by dw-foundation per
     # cross-tool drawer eb441503881c1c0f680ca7ac.
     _ = sql_init  # documented dependency
+
+
+@nox.session(venv_backend="none")
+def position_timing_backend(session: nox.Session) -> None:
+    """Run the isolated daily-card backend contract without services or DB writes."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
 
 
 @nox.session(venv_backend="none")

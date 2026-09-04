@@ -1,7 +1,7 @@
-# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.2
+# AIstock Advisory N3 QE Alpha Generator MVE F2 详细设计 v1.7
 
-> 日期：2026-09-03
-> 状态：`IMPLEMENTED_LOCAL_FULL_VERIFIED_FORMAL_PENDING`
+> 日期：2026-09-04
+> 状态：`FORMAL_COMPLETE_SELECTED_ZERO_LINEAGE_CLOSED`
 > tier：F2
 > objective contract：`ALPHA_RANKING`
 > study type：`EXPLORATORY_SCREEN`
@@ -18,12 +18,16 @@
 6. 2026-09-03 只读可行性预检确认：DEV `aistock_factor_catalog` 当前可提供 789 条目录元数据；QE 的 `evolution_researcher` 可解析到 `deepseek/deepseek-reasoner`；本机 Python 已安装 `litellm`。该预检未生成 proposal、未读取收益、未形成 research trial。
 7. 本设计 v1.1 源码已从 clean main 完成实现与验证：DEV目录READ ONLY快照两次得到同一`advqegencat_6608bb...`/789行；声明式generator、原创性过滤、固定10% overlay、累计多重检验、immutable bundle、registry/route和薄CLI均已有直接测试。Advisory完整回归`785 passed/16 skipped`，L0无阻断；首次正式调用未取得模型响应且未运行经济评价，因此仍没有candidate或研究结论。
 8. 2026-09-03 首次 clean-main 正式生成调用未收到任何模型响应：12 次调用均因 TLS `DECRYPTION_FAILED_OR_BAD_RECORD_MAC` 失败，但旧实现错误记为 48 个 `SCHEMA_OR_AST_INVALID`，形成 bundle `b760e08f...`。BUG-1330 将该 bundle 定性为基础设施/实现失败证据，不是 48 个 Alpha trial、不是生成支持不足结论，也未进入经济评价、registry 或 route。
+9. 2026-09-04 从 `main@ebe1a8ae...` 冻结的 request `advqegenreq_9ccc0e...` 成功生成 bundle `6565eeb9...`：7 次调用、28 个 raw expression、24 个 accepted、4 个 schema reject、0 个 provider failure。但 request 错误地按目标 121 列 schema 暴露字段，而绑定的 `static_factors.parquet` 实际没有 8 个 margin 字段；候选使用 `md_rqmcl/md_rzye` 后，经济阶段在读取 source panel 前以 parquet projection 失败。BUG-1345 将其定性为 concrete-source schema 实现失败证据；没有经济 trial、registry、route 或 Alpha 结论，该 generation bundle 不得复用为修复后正式评价输入。
+10. BUG-1345 经 PR #4249 修复并由 PR #4250 close-sync 后，`main@2957724895...` 的 request `advqegenreq_1c8383...` 正确冻结 119 个 concrete-source 字段。generation bundle `14214fd8...` 无 provider failure，但 `REGIME_CONDITIONED` 主响应生成了缺少 `window` 的 `TRAILING_MEAN`，schema-only retry 又返回 malformed JSON；该族 `0 accepted`，全批为 `9 calls / 36 raw / 20 accepted / 16 rejected`，终态 `INCOMPLETE_SUPPORT`。按预注册合同，Phase C 以 `GENERATION_SUPPORT_INSUFFICIENT` 拒绝，经济 trial、registry、route 仍为 0/未变化。BUG-1347 只修复 operator 参数 schema 和 JSON transport，不允许扩大调用预算、改变 prompt 经济假设或放宽每族支持门槛。
+11. BUG-1347 经 PR #4255 修复并由 PR #4256 close-sync 后，`main@33f4f21f...` 冻结 prompt v2 request `advqegenreq_dbcc8a...`；generation bundle `f85df0a6...` 为 `6 calls / 24 raw / 22 accepted / 2 rejected / 0 provider failure`，终态 `COMPLETE`。首次经济运行在共享 score compiler 返回后读取已被编译结果丢弃的 `pit_eligible` 控制列，typed fail-closed 为 `KeyError('pit_eligible')`；没有 MVE bundle、经济 trial、registry 或 route 变更。BUG-1349 只按 `(datetime,instrument)` 一对一重新绑定 source panel 的 PIT membership，并对缺失、重复或不闭合身份显式失败；不得修改 generation bundle、Alpha 表达式、预算、收益标签或门槛。
+12. BUG-1349 经 PR #4263 修复并由 PR #4264 close-sync 后，clean `main@ea9b1509...` 的 request `advqegenreq_7b0e785b3c0f05a2ef2ceb39`、generation bundle `5f6ff834...` 和经济 bundle `9327330c...` 完成。6 次调用生成/接受 24 项，23 项完成经济评价，selected=0；最佳 Top5 lift point 仍为 `-5.21 bps`，全部 23 项累计 family-wise Top5 lift lower 均不大于 0，四段稳定性全部失败。registry append 1、total 26，route 固定转 `N3_UPSTREAM_ALPHA_NEW_DATA_SOURCE_MVE_DESIGN`；sealed/factor/package/runtime writes 均 false。
 
 ## 2. Goal / 成功定义
 
 交付一个固定预算、可审计、一次性的自动上游 Alpha 生成 MVE：
 
-1. 自动生成而非人工编写一批声明式 Alpha AST；生成器只接收冻结字段、grammar、旧表达式排除清单、目录元数据和经济机制约束，不接收 IC、收益、Top5、父包表现或 sealed holdout。
+1. 自动生成而非人工编写一批声明式 Alpha AST；生成器只接收冻结 concrete-source 可读字段、grammar、旧表达式排除清单、已按可读字段过滤的目录元数据和经济机制约束，不接收 IC、收益、Top5、父包表现或 sealed holdout。
 2. 生成阶段最多 6 个主调用和 6 个 schema-only/recovery 调用，每个信号族最终最多接受 4 个、全批最多评价 24 个表达式；只有实际收到模型响应才形成 4 个 raw expression attempt，供应商/传输失败只计 call、计 0 个 expression attempt，禁止因结果不好扩预算。
 3. 所有表达式经现有 allowlist AST validator/interpreter 执行，禁止动态 Python、`eval/exec/import/subprocess`、文件写入、数据库访问和网络访问。
 4. 在与当前父包相同的 PIT 股票池、H20 成本后 outcome 和已消费开发窗口上，评价固定 10% rank overlay 对父包的增量 RankIC、Top5 净超额、干预支持、换手和时段稳定性。
@@ -84,11 +88,11 @@ Phase C: offline economic evaluation
 - clean `origin/main` commit、当前 route、trial registry hash；
 - 旧 QE bundle `09137f0c.../proposal_roster.json` 及 24 个 canonical AST hash；
 - 父 overlay bundle `fdca2130...`、分钟 bundle `0076a3a6...` 的完成 receipt，只证明旧 lineage 已关闭，不把其经济结果放入 prompt；
-- Qlib daily/static snapshot、canonical PIT universe、N2-B `CURRENT_IC_PARENT` outcome、policy 和成本 identity；
-- grammar/operator/field schema 与 evaluator source hash；
+- Qlib daily/static snapshot、父 QE request 的 `static_factor_ref/static_schema_sha256`、canonical PIT universe、N2-B `CURRENT_IC_PARENT` outcome、policy 和成本 identity；
+- grammar/operator/field schema 与 evaluator source hash；`allowed_fields` 必须是已实现 superset 与 concrete `static_factors.parquet` 实际 schema 的交集，再加固定 daily 字段和 `market_regime`；旧 24 proposal 所需字段必须全部存在，否则在 LLM 调用前 fail closed；
 - DEV 因子目录只读 metadata snapshot 的 hash/size/row count/schema。
 
-目录快照只允许字段：`factor_name/source/catalog_version/expression/formula_hint/variables/factor_formulation/factor_type/data_source/dedup_hash/is_available`，以及 `code_text` 的 SHA256；禁止导出 `code_text` 正文、performance、IC、收益、评级、凭据或任意秘密。读取必须处于 `READ ONLY` 事务并回滚；Phase A 结束后 Phase B/C 只消费文件快照。
+目录快照只允许字段：`factor_name/source/catalog_version/expression/formula_hint/variables/factor_formulation/factor_type/data_source/dedup_hash/is_available`，以及 `code_text` 的 SHA256；禁止导出 `code_text` 正文、performance、IC、收益、评级、凭据或任意秘密。读取必须处于 `READ ONLY` 事务并回滚；进入 prompt 的目录行还必须过滤掉引用 concrete source 不可读字段的记录。Phase A 结束后 Phase B/C 只消费文件快照。
 
 preparation 不调用 LLM、不加载 outcome、不计 research trial。目录行数变化只产生新 request identity，不覆盖旧 request。
 
@@ -98,16 +102,19 @@ preparation 不调用 LLM、不加载 outcome、不计 research trial。目录�
 
 - signal families：`PRICE_VOLUME_BEHAVIOR`、`MONEYFLOW_BEHAVIOR`、`FUNDAMENTAL_CHANGE`、`SECTOR_RELATIVE`、`CROWDING_DISPERSION`、`REGIME_CONDITIONED`；
 - 每族 1 个主调用，要求 4 个 proposal；仅当 JSON/schema/AST/字段合法性失败时允许同族 1 个 schema-only retry；
+- 新 request 固定 `prompt_schema_version=advisory_qe_alpha_generator_prompt_v2`：除 operator 名称外，逐组声明 exact keys、arity、`LAG/DELTA periods=1..252`、`TRAILING_* window=2..252`、`CLIP lower<upper`、`FIELD/CONST` 参数；历史 v1 request 仅保留读取和 exact-inspect 兼容，不迁移、不改写；
 - `max_generation_calls=12`、`max_raw_generation_attempts=48`、`max_evaluated_expressions=24`、`concurrency=1`；
 - retry 只能收到 machine-readable schema violation，不得收到 IC、收益、相关性或其它经济反馈；成功族不得再次调用；
+- v2 schema-only retry 必须仍是一个完整 JSON user payload，只新增 `schema_only_retry.violations/instruction/economic_feedback_included=false`；禁止在 JSON 后拼接自由文本、禁止修补或改写原始 response；
 - 只有 `caller` 已返回响应后发生的 JSON/schema/AST/字段错误才是 `SCHEMA_REJECTED`，保存响应 hash/原文并计 4 个 raw/rejected expression；`caller` 抛出的 provider、TLS、timeout 或配置异常必须记为 `CALL_FAILED`，计 0 个 raw/rejected expression，不得伪造 proposal rejection，也不得触发 schema-only retry；
 - 存在未解决 `CALL_FAILED` 时 generation 状态固定为 `INFRASTRUCTURE_FAILURE`，不得进入经济评价或形成 Alpha 方向证据。同一冻结 request 仅可在每族最多 2 call、全局最多 12 call 的剩余额度内恢复；恢复只调用最后状态为 `CALL_FAILED` 的族，已成功族的 response/proposal 原样复用并以 recovery-parent hash 绑定。额度耗尽后 exact retry 只读返回，不得继续调用；
 - 不足 24 个合法 proposal 时允许以实际数量继续，但每族至少 2 个、全批至少 12 个，否则 typed `GENERATION_SUPPORT_INSUFFICIENT`，不进入经济评价；不得临时补人工作品。
+- LLM 响应中的表达式字段必须同时属于实现 superset 和 request 冻结的 concrete-source `allowed_fields`；只命中 superset、但不在当前 source schema 中的字段按 `SCHEMA_REJECTED` 处理，并且最多使用原有 schema-only retry，不得留到 Phase C 才发现。
 
 ### 6.2 LLM identity and secret boundary
 
 - 默认 agent locator 固定 `evolution_researcher`，模型 readback 固定并写入 request；正式 v1 预期 `deepseek/deepseek-reasoner`，发生漂移则冻结新 request，不能静默接受。
-- prompt template、system/user message、temperature、top_p、provider-supported seed、timeout 和 response schema 均写入 request/hash；`temperature=0`、`top_p=1`。
+- prompt template、system/user message、temperature、top_p、provider-supported seed、timeout 和 response schema 均写入 request/hash；`temperature=0`、`top_p=1`。prompt v2 的 provider request 固定 `response_format={"type":"json_object"}`，若 locator 已声明冲突格式则 typed model-identity drift，不允许静默覆盖；
 - API key 只从现有非秘密 locator 解析并在内存使用；artifact 只记录 locator、model、provider、request/response hash、token/latency telemetry，不保存 key、authorization header 或包含秘密的 exception。
 - LLM 不保证字节确定性。因此第一次完整成功响应冻结为 content-addressed generation bundle；通常 exact retry 复用该 bundle，不重新调用模型。唯一例外是冻结 bundle 为 `INFRASTRUCTURE_FAILURE` 且仍有预注册 call 额度：只对未收到响应的失败族做一次有界恢复，不重采样任何成功族；恢复 bundle 累积原 attempts/transcript 并绑定 recovery-parent。BUG-1330 旧 bundle 已被错误消耗满 12 call，只能由修复后的新 source identity 冻结新 request，不得改写旧 bundle。
 
@@ -135,7 +142,7 @@ preparation 不调用 LLM、不加载 outcome、不计 research trial。目录�
 ## 8. PIT, data and evaluation clock
 
 - signal dates `2024-07-04..2026-02-02`，outcome cutoff `2026-03-10`；只使用已消费开发窗口，`sealed_holdout_accessed=false`。
-- source 与旧 QE MVE 一致：冻结 Qlib daily `open/high/low/close/volume/amount`、冻结 `static_factors.parquet` 和 N2-B `CURRENT_IC_PARENT/outcome_known=true/economic_net_excess_bps`。
+- source 与旧 QE MVE 一致：冻结 Qlib daily `open/high/low/close/volume/amount`、冻结 `static_factors.parquet` 和 N2-B `CURRENT_IC_PARENT/outcome_known=true/economic_net_excess_bps`。prepare 和 run 都必须把 request `allowed_fields` 与父 request 所绑定的实际 parquet schema 对账；文件 hash、size、schema 或字段集合漂移均 typed `SOURCE_IDENTITY_MISMATCH`，禁止 Arrow projection fallback。
 - rolling/lag 按 instrument/date 正序且只读 `<=T`；T+1 future poison 不得改变 T score/hash。
 - 停牌、未上市、合法缺失保留 NaN/reason；不得填 0、未来回填、删除整日或以部分 Top5 平均冒充完整 Top5。
 - Phase C 启动前显式禁止网络和数据库；任何网络/DB access 视为 bundle invalid。
@@ -187,6 +194,7 @@ generation bundle 固定包含 request、catalog snapshot、old-roster exclusion
 - manifest 绑定每个文件 SHA256/size/row_count 和 request/source/result identity；partial、mutation、missing 或 extra member fail closed。
 - registry 追加一个 `ADVISORY-N3-QE-ALPHA-GENERATOR-MVE-V1` record，分别记录 generation calls/raw attempts/accepted/evaluated/selected、cumulative trial count、objective、study、decision use、消费窗口和 route。
 - exact retry 先按 request identity 选择累计 call 数最大的唯一 generation bundle；成功或普通支持不足 bundle 直接 inspect 后返回 same identity，不调用 LLM、不重复评价。仅 `INFRASTRUCTURE_FAILURE` 且仍有族级/全局剩余额度时发布一个新的 immutable recovery bundle；成功族不再调用，旧 bundle 不修改。若同一 request 出现相同最大 call 数的多个分支则 fail closed。
+- `1c8383.../14214fd8...` 是普通支持不足 bundle，永久 exact、不得恢复或追加第 3 次 `REGIME_CONDITIONED` 调用；BUG-1347 合入后必须从新的 clean merged source 生成 prompt v2 request 和全新 generation bundle。
 - raw LLM response 只作为该生成 attempt 的不可变证据；不得将失败响应人工修成 proposal 后写回原 attempt。
 
 ## 12. Error contract
@@ -210,14 +218,14 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 - concurrency=1，RSS<=16 GiB，temp<=32 GiB；wall time 只记录、不设自动停止门禁。
 - 生成阶段网络串行；评价阶段复用旧 pipeline 的单份 source panel、AST 子表达式 cache 和 float32 score panel，不 materialize 24 份源表。
 - 已完成：contracts/fixtures -> target-free catalog snapshot + generator -> originality -> offline evaluator/overlay -> artifacts/registry/route -> CLI/delivery tests。
-- 待执行：BUG-1330 经CI通过并合入后，从新的 clean merged source identity 冻结正式 catalog/request，调用固定LLM生成；仅 `COMPLETE` generation 才运行经济评价。首次 TLS 失败 bundle 保持不可变且不作为研究 trial；不得从当前dirty/未合入源码形成正式证据。
+- 已执行：BUG-1349 经审核、CI、PR #4263 合入及 PR #4264 close-sync 后，从 clean `main@ea9b1509...` 冻结 prompt-v2 request `advqegenreq_7b0e785b3c0f05a2ef2ceb39`；generation `5f6ff834...` 为 `COMPLETE` 后才运行经济评价，最终 economic bundle `9327330c...` 为 `24/23/0`。`dbcc8a.../f85df0a6...` 继续保持不可变并只作为 generation 成功、经济实现失败的历史证据，未跨 source identity 迁移 proposal。正式运行按同一 source panel 精确键重新绑定 PIT membership，缺失、重复或行集不闭合仍 typed fail-closed。
 
 ## 14. Verification plan
 
-- request/hash/unknown-field/model drift/secret redaction；
+- request/hash/prompt-v1读取兼容/prompt-v2 operator参数合同/concrete-source field intersection/unknown-field/model drift/secret redaction；
 - READ ONLY catalog snapshot 精确字段与 transaction rollback；
-- 6 family、12-call/48-expression-attempt/24-evaluation budgets；provider failure 为 0 expression attempt，schema-only retry 不接收经济反馈；
-- AST operator/field/node/depth/window/direction 与 arbitrary-code rejection；
+- 6 family、12-call/48-expression-attempt/24-evaluation budgets；provider failure 为 0 expression attempt，schema-only retry 为结构化 JSON 且不接收经济反馈；provider request 固定 JSON object mode；
+- AST operator/field/node/depth/window/direction、request-level unavailable-field 与 arbitrary-code rejection；
 - exact/structural/catalog/field/known-effect/score-correlation originality；
 - outcome 不可出现在 prompt/generation bundle，Phase C 网络/DB fail-closed；
 - future poison、same-date canonical PIT、missing/suspend preservation；
@@ -235,6 +243,9 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | economic result 进入下一 prompt | Phase B 不加载 outcome；prompt manifest 逐字 hash；retry 只含 schema violation |
 | 不确定 LLM 破坏 exact retry | 第一次完整响应 content-addressed 冻结；通常 retry 只读复用；仅失败族可在原 call 预算内恢复，成功族永不重采样 |
 | provider/TLS 失败被误当 Alpha rejection | caller 与 parser 异常边界分离；`CALL_FAILED=0 raw expression`；`INFRASTRUCTURE_FAILURE` 禁止经济评价并绑定恢复父 bundle |
+| prompt 只列 operator 名称导致合法参数缺失，或 retry 返回 malformed JSON | prompt v2 冻结 exact operator keys/arity/range；transport 固定 JSON object；原两次族级预算和 raw-response 不可变边界不变 |
+| score compiler 丢弃 `pit_eligible` 后 generator 读取控制列失败，或按行位置误绑 membership | 编译后按 `(datetime,instrument)` 一对一重新绑定同一 source panel 的 PIT membership；缺失、重复、额外或未匹配身份 typed fail-closed，禁止按 DataFrame 行位置赋值 |
+| 目标 schema 字段在 concrete frozen parquet 中尚不存在 | prepare 读取父 request 的 static ref/schema，只冻结实际列交集；旧字段缺失在调用前失败；prompt 目录过滤不可读字段；run 再次对账并禁止 projection fallback |
 | 目录读取泄露性能或秘密 | 字段 allowlist、code hash only、READ ONLY 回滚、artifact secret scan |
 | 24 次新搜索造成假阳性 | 当前批次和跨旧 standalone/overlay 的 cumulative family-wise + DSR |
 | 单窗口短期有效冒充抗衰减 | 后半窗口和 4-block 同向门槛；结果仍只 navigation |
@@ -247,7 +258,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | design_item | requirement |
 |---|---|
 | F-197 | 旧24/overlay/腿间/分钟lineage关闭后只进入新的自动QE Alpha generator MVE |
-| F-198 | 三阶段隔离：目录只读准备、LLM无target生成、DB/network-off离线经济评价 |
+| F-198 | 三阶段隔离：目录只读准备并冻结 concrete-source 字段交集、LLM无target生成、DB/network-off离线经济评价 |
 | F-199 | 6族固定调用/attempt/evaluation预算；schema失败计expression，provider失败仅计call；有界失败族恢复不重采样成功族 |
 | F-200 | 只接受allowlist声明式AST，不执行LLM Python或RD-Agent coder/runner |
 | F-201 | exact/structural/catalog/field/known-effect/score-correlation原创性与alpha-illusion边界 |
@@ -262,11 +273,11 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-197 | `qe_alpha_generator_contracts.py`; `qe_alpha_generator_pipeline.py` route contract | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `python -m nox -s advisory_modeling_backend` | PASS | none |
-| F-198 | request phase gates；READ ONLY catalog snapshot；generation/evaluation split | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_preflight_20260903/catalog_snapshot.json` | PASS | none |
-| F-199 | fixed budget fields；generation receipt/bundle call-vs-expression accounting；immutable recovery lineage | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
+| F-198 | request phase gates；READ ONLY catalog snapshot；concrete parquet schema intersection；generation/evaluation split | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_parent_source_schema_excludes_fields_absent_from_concrete_parquet`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_generation_parser_rejects_field_outside_frozen_request_schema`; real BUG-1345 replay returns `SOURCE_IDENTITY_MISMATCH` before Qlib initialization | PASS | none |
+| F-199 | fixed budget fields；prompt v2 operator/JSON transport；generation receipt/bundle call-vs-expression accounting；immutable recovery lineage | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py::test_generator_request_defaults_to_prompt_v2_and_keeps_v1_readable`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_prompt_v2_freezes_operator_parameters_and_json_response_mode`; schema-retry/provider-recovery tests；`backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
 | F-200 | existing `validate_expression/compile_proposal_scores`；strict generator proposal parser | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_mve_contracts.py` | PASS | none |
 | F-201 | `preliminary_originality_reasons`; vectorized `target_free_score_overlap` | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
-| F-202 | `evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` incremental/unknown-Top5 cases | PASS | none |
+| F-202 | `run_generator_mve` exact PIT membership rebind；`evaluate_generated_overlays` fixed rank overlay | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py::test_pit_eligibility_is_rebound_by_exact_identity_and_mismatch_fails_closed`; incremental/unknown-Top5 cases | PASS | none |
 | F-203 | `_summarize_overlay` current+cumulative block inference/DSR | `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
 | F-204 | frontier/receipt exact 0/1 route relation | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `backend/tests/advisory_model_first/test_qe_alpha_generator_pipeline.py` | PASS | none |
 | F-205 | generation/result publisher/reader、exact retry、registry/route、CLI | `backend/tests/advisory_model_first/test_qe_alpha_generator_delivery.py` | PASS | none |
@@ -275,7 +286,7 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 ## 18. DESIGN-COMPLIANCE-001
 
 1. 本设计交付的是可运行的自动生成 MVE，不把人工公式、prompt 文档、固定 fixture 或原生 RD-Agent 完整 loop 冒充生成器。
-2. 不以名称变化、window 微调、符号反转、silent fallback、人工作品补位或 partial Top5 形成伪 candidate。
+2. 不以名称变化、window 微调、符号反转、silent fallback、人工作品补位、不可读取字段或 partial Top5 形成伪 candidate。
 3. 不改变当前策略包、Selection、H20 outcome、成本、PIT universe、review policy、Entry/Exit、仓位或页面业务语义。
 4. 不新增未授权 restart/DDL/DML/激活；正式结果只有在源码合入、clean-main运行、bundle inspect、registry/route readback后才能报告。
 
@@ -286,3 +297,13 @@ CLI 对 expected/unexpected error 均输出单行 typed JSON 和非零退出码�
 - `runtime_activation=noop`
 - `factor_catalog_write=noop`
 - rollback：源码通过普通 PR revert；content-addressed generation/MVE artifact 与 append-only registry 保留为研究事实，不覆盖、不删除、不进入运行时。
+
+## 20. Formal Result / 正式结果
+
+- request：`advqegenreq_7b0e785b3c0f05a2ef2ceb39`，repository commit `ea9b1509baaeecdbb9ae4b609b0d30652b54f577`。
+- generation：bundle `5f6ff834baefa63cd837f3de0ca7df6fc284cd93ef8bbfe051a5f6728827a1b6`，`6 calls / 24 raw / 24 accepted / 0 rejected / 0 provider failure`，状态 `COMPLETE`。
+- economic：bundle `9327330c11082d656463a85007f03744c47ad52224c764e006235025b5c8fc64`，generated/evaluated/selected `24/23/0`，状态 `COMPLETE/VALID`。
+- 经济结论：最佳 RankIC delta point `+0.00410`，但最佳 Top5 lift point仍为 `-5.21 bps`；23/23 的累计 family-wise Top5 lift lower 不大于0，23/23 的四段稳定性不达标，无 eligible proposal。
+- 资源：elapsed `347.40s`，peak RSS `15,368,347,648` bytes，temp `457,216,676` bytes。
+- 交付：receipt `advqegenmvercpt_97e95467801e917174af072a`，registry首次append 1、总数26；sealed holdout未读，未写factor catalog、StrategyPackage或runtime，deployable/runtime_eligible均false。
+- 固定结论：daily/static grammar generator lineage关闭，不扩大prompt、模型、字段、调用或表达式预算。唯一next task为`N3_UPSTREAM_ALPHA_NEW_DATA_SOURCE_MVE_DESIGN`。

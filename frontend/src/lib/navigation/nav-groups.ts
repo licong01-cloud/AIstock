@@ -90,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "\u{1F4BC} \u6295\u8D44\u7BA1\u7406",
     items: [
       { href: "/portfolio", label: "\u{1F4CA} \u6301\u4ED3\u5206\u6790" },
+      { href: "/position-timing", label: "\u{1F9ED} \u6301\u4ED3\u62E9\u65F6\u5EFA\u8BAE" },
       { href: "/smart-monitor", label: "\u{1F916} AI\u76EF\u76D8" },
       { href: "/monitor", label: "\u{1F4E1} \u5B9E\u65F6\u76D1\u6D4B" },
     ],

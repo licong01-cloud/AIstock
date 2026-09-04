@@ -79,7 +79,13 @@ def _load_spec(cwd: Path) -> dict[str, Any]:
 
 def _verify_frozen_snapshot(provider_dir: Path, pins: dict[str, Any]) -> dict[str, Any]:
     meta_path = provider_dir / "meta_export.json"
-    instruments_path = provider_dir / "instruments" / "all.txt"
+    instruments_file = str(pins.get("instruments_file") or "all.txt")
+    if instruments_file not in {"all.txt", "stock_universe.txt"}:
+        raise FrozenRiskPolicyBuildError(
+            "reason_code=qe_frozen_build_spec_invalid: "
+            f"unsupported instruments_file={instruments_file!r}"
+        )
+    instruments_path = provider_dir / "instruments" / instruments_file
     calendar_path = provider_dir / "calendars" / "day.txt"
     for path in (meta_path, instruments_path, calendar_path):
         if not path.is_file():
@@ -250,7 +256,7 @@ def build_risk_policy_payload(spec: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": True,
         "contract": str(profile.get("contract") or "stock_event_risk_policy_v1"),
-        "source": "frozen:qlib_bin/instruments/all.txt",
+        "source": f"frozen:qlib_bin/instruments/{verified['instruments_path'].name}",
         "providers": providers,
         "hard_actions": hard_actions,
         "visible_time_mode": profile.get("visible_time_mode"),

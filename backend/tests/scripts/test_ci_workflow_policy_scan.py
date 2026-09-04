@@ -84,6 +84,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
+    assert evidence["changed_tests_reachable_from_selected_ci_plan"] is True
     assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
@@ -288,6 +289,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
         "pr_ci_selected_lanes_reuse_ci_verdict_runner",
+        "changed_tests_reachable_from_selected_ci_plan",
         "codeql_reuses_single_security_runner_allocation",
     }
 
