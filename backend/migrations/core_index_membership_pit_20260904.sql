@@ -98,4 +98,3 @@ COMMENT ON COLUMN market.core_index_membership_pit.updated_at IS
     'Database write timestamp; never used as a PIT effective date.';
 
 COMMIT;
-

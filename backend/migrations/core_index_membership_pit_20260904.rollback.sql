@@ -15,4 +15,3 @@ DROP TABLE IF EXISTS market.core_index_membership_pit;
 DROP FUNCTION IF EXISTS market.validate_core_index_membership_pit();
 
 COMMIT;
-

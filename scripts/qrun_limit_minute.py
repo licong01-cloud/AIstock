@@ -1673,6 +1673,58 @@ def _minute_backtest_window(config: dict) -> tuple[pd.Timestamp, pd.Timestamp]:
     return window_start, window_end
 
 
+def _resolve_minute_instrument_path(
+    *, day_path: Path, minute_root: Path, market: str, cwd: Path
+) -> Path:
+    """Resolve an explicitly pinned direct-v2 minute catalog without guessing."""
+
+    same_name_path = minute_root / "instruments" / f"{market}.txt"
+    if same_name_path.is_file():
+        return same_name_path
+
+    binding_path = cwd / "qe_direct_v2_dataset_binding.json"
+    if not binding_path.is_file():
+        return same_name_path
+    try:
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"QE_MINUTE_INSTRUMENT_BINDING_INVALID: path={binding_path}"
+        ) from exc
+    selection_pins = binding.get("selection_pins") or {}
+    minute_pins = binding.get("minute_pins") or {}
+    expected_day_sha = str(selection_pins.get("instruments_sha256") or "").lower()
+    expected_minute_sha = str(minute_pins.get("instruments_sha256") or "").lower()
+    if (
+        binding.get("schema_version") != "qe_direct_v2_dataset_binding_v2"
+        or selection_pins.get("stock_pool") != market
+        or len(expected_day_sha) != 64
+        or len(expected_minute_sha) != 64
+    ):
+        raise RuntimeError(
+            "QE_MINUTE_INSTRUMENT_BINDING_INVALID: "
+            f"path={binding_path} market={market}"
+        )
+    if not day_path.is_file():
+        return same_name_path
+    actual_day_sha = hashlib.sha256(day_path.read_bytes()).hexdigest()
+    if actual_day_sha != expected_day_sha:
+        raise RuntimeError(
+            "QE_MINUTE_DAY_INSTRUMENT_BINDING_HASH_MISMATCH: "
+            f"expected={expected_day_sha} actual={actual_day_sha} path={day_path}"
+        )
+    minute_all_path = minute_root / "instruments" / "all.txt"
+    if not minute_all_path.is_file():
+        return same_name_path
+    actual_minute_sha = hashlib.sha256(minute_all_path.read_bytes()).hexdigest()
+    if actual_minute_sha != expected_minute_sha:
+        raise RuntimeError(
+            "QE_MINUTE_INSTRUMENT_BINDING_HASH_MISMATCH: "
+            f"expected={expected_minute_sha} actual={actual_minute_sha} path={minute_all_path}"
+        )
+    return minute_all_path
+
+
 def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | None = None) -> None:
     """Require the minute quote universe to cover the day universe for the replay window."""
 
@@ -1682,7 +1734,21 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
     exchange_kwargs = backtest.get("exchange_kwargs") or {}
     codes = exchange_kwargs.get("codes")
     if codes is None:
-        market = "all"
+        configured_market = config.get("market")
+        if isinstance(configured_market, str):
+            market = configured_market.strip()
+        elif isinstance(configured_market, dict):
+            market = str(configured_market.get("market") or "").strip()
+        else:
+            market = ""
+        if not market:
+            raise RuntimeError(
+                "QE_MINUTE_QUOTE_UNIVERSE_MISSING: exchange codes and configured market are empty"
+            )
+        # Keep the coverage contract and the actual Qlib Exchange construction
+        # aligned for legacy configs composed before ``codes: *market`` became
+        # explicit.  This changes only the loaded workspace config, never Qlib.
+        exchange_kwargs["codes"] = market
     elif isinstance(codes, str):
         market = codes.strip()
     elif isinstance(codes, dict):
@@ -1701,7 +1767,13 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
     day_root = Path(str(provider_uri["day"])).expanduser()
     minute_root = Path(str(provider_uri["1min"])).expanduser()
     day_path = day_root / "instruments" / f"{market}.txt"
-    minute_path = minute_root / "instruments" / f"{market}.txt"
+    workspace_root = cwd or Path.cwd()
+    minute_path = _resolve_minute_instrument_path(
+        day_path=day_path,
+        minute_root=minute_root,
+        market=market,
+        cwd=workspace_root,
+    )
     day_spans = _read_instrument_spans(day_path)
     minute_spans = _read_instrument_spans(minute_path)
     window_start, window_end = _minute_backtest_window(config)
@@ -1736,9 +1808,9 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
             f"market={market} expected={expected} uncovered={len(uncovered)} examples={uncovered[:5]}"
         )
 
-    workspace_pool = (cwd or Path.cwd()) / f"{market}.txt"
+    workspace_pool = workspace_root / f"{market}.txt"
     if workspace_pool.is_file():
-        installed_sha = hashlib.sha256(minute_path.read_bytes()).hexdigest()
+        installed_sha = hashlib.sha256(day_path.read_bytes()).hexdigest()
         workspace_sha = hashlib.sha256(workspace_pool.read_bytes()).hexdigest()
         if installed_sha != workspace_sha:
             raise RuntimeError(
