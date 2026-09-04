@@ -32,7 +32,7 @@
 - `alerts.py` 是块二唯一新增服务文件；页面可见且存在今日有效 trigger 时每 60 秒只读轮询，服务按 50 只分批复用 TDX quote，执行 5 分钟/30 秒、持仓/意图与方向性可交易性复核。claim 原子追加唯一 `ALERT_EMISSION_AUTHORIZED`，不接 notification service、SSE、worker、scheduler 或订单路径。
 - 同一个 materialize POST 已加入五 horizon `OUTCOME_EVALUATED`：卡片仍只在 T+1 有效，标签终值遇停牌、一字跌停或必要 authority 缺失时最多顺延 5 个交易日；candidate/do-nothing 只比较动作边际数量并逐腿计费，公司行动由 hash-bound adj-factor ratio 进入持股路径，终值可卖性绑定独立的历史 `market.stk_limit` identity。成功水位不会越过 pending/失败 key，evidence 区分 pending-derived、pending-materialization、materialization-missing 与 unavailable。
 - 首发仍为 8 个 API、一个页面、一个 artifact root、0 DDL/DML、0 新依赖、0 自动交易。L2 pipeline、L3、分钟新信号和外部通知仍未实现，符合批准范围。
-- 当前集中验证：`position_timing_first_release` 完整通过（后端 71 项、TypeScript、frontend lint、production build、目标 Playwright 1 项）；Ruff 与 validation catalog integrity 通过。仓库既有 frontend hook/autoprefixer warnings 未来自本变更路径且不阻断。
+- 当前集中验证：`position_timing_first_release` 完整通过（后端 72 项、TypeScript、frontend lint、production build、目标 Playwright 1 项）；Ruff 与 validation catalog integrity 通过。仓库既有 frontend hook/autoprefixer warnings 未来自本变更路径且不阻断。
 - 最新主线合并后的真实 DEV 只读冒烟使用一次性 artifact root：发现 468 个持仓/已确认自选候选，默认 scope 仅 2 个真实持仓生效并生成 2 张 2026-09-07 卡片；未来目标日正确返回 `NO_DUE_OUTCOMES`，evidence 为 `AVAILABLE` 且 10 个 horizon 全部是 `PENDING_DERIVED`。过程未写数据库或生产 artifact。
 - `production_ddl_gate=noop`、`production_dependency_gate=noop`。生产 8001/3000 进程未重启，生产 artifact 未写入，运行态激活与 readback 继续单独报告。
 
