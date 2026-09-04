@@ -28,12 +28,18 @@
   ],
   "expected": "Index membership PIT interval normalization uses the canonical trading calendar; physical daily/minute coverage remains a separate validation result.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/core_index_membership.py",
+      "backend/tests/core_index_membership/test_membership_repository.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1366-core-index-pit-resolver-derives-calendar-from-sparse-price-rows.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/core_index_membership.py",
-      "backend/tests/core_index_membership/test_membership_repository.py"
+      "backend/tests/core_index_membership/test_membership_repository.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1366-core-index-pit-resolver-derives-calendar-from-sparse-price-rows.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/core_index_membership.py",
@@ -118,13 +124,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python process using task worktree and canonical environment -> passed DEV and production union both 3517 intervals 3034 symbols 2018-08-01 through 2026-08-31"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
