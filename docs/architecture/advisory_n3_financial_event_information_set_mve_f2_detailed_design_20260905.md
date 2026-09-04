@@ -1,4 +1,4 @@
-# Advisory N3 财务事件信息集 Learnability MVE F2 详细设计 v1.1
+# Advisory N3 财务事件信息集 Learnability MVE F2 详细设计 v1.2
 
 > 日期：2026-09-05
 > 状态：`IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RUN_PENDING`
@@ -14,7 +14,7 @@
 
 1. N3 融资融券正式 MVE `b50411d8...` selected=0，不可变 route 已完成后继 source readiness。
 2. 财务事件 source-readiness F2 v1.2 源码经 PR #4288 合入；clean-main 正式 bundle `211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead` 为 `SOURCE_READY_NAVIGATION_ONLY_NON_VINTAGE`，next task 固定为本设计。
-3. 正式 projection `event_source_projection.parquet` 为 7,061,459 bytes、SHA-256 `d9bda2d23335354bb99f04c5a11643ee56347ae2e8ac871f7bae77e39030bd`，共 84,272 行：forecast 15,564、express 3,340、fina indicator 65,368；qualifying 44,953、neutral 39,319。
+3. 正式 projection `event_source_projection.parquet` 为 7,061,459 bytes、SHA-256 `d9bda2d23335354bb99f04c5a11643ee56347ae2e8ac871f7bae77e39030bded`，共 84,272 行：forecast 15,564、express 3,340、fina indicator 65,368；qualifying 44,953、neutral 39,319。
 4. target-free 类型 roster：positive 为 `*_large_growth` 与 `financial_forecast_turnaround`；negative 为 `*_loss` 与 `*_large_decline`；`*_neutral` 只表示披露存在。severity 范围 `0..0.7`、confidence `0.5..0.78`，全部有限。
 5. 120 日 Top20 disclosure/qualifying coverage 为 `100%/87.8756%`，Top50 qualifying coverage `83.4974%`，378/386 日有 Top50 mixed qualifying state。source 足以产生干预，不证明收益可学。
 6. source 最早在 2026-05 才被本地观察，无法还原各历史决策日真正可见的 numeric revision。虽然最早本地版本与分类 drift 已受控，它仍是 `DATE_ONLY_BACKFILLED_NON_VINTAGE`；任何经济结果只能导航是否建设真实 vintage source，不能成为 confirmation 或 activation evidence。
@@ -388,4 +388,4 @@ sealed_holdout_access = false
 
 ## 19. Source feasibility and current conclusion / 当前结论
 
-当前结论为 `SOURCE_READY_IMPLEMENTATION_LOCAL_VERIFIED_FORMAL_RUN_PENDING`。formal source bundle 已证明 projection、类型、时钟与支持度可用于本次 non-vintage learnability MVE；源码现已实现冻结合同、全键PIT特征、三臂CPCV、配对评价、immutable delivery、三条trial registry和0/1 route。31个direct tests通过；同步最新主线后的完整`advisory_modeling_backend`矩阵为`875 passed/16 skipped`。真实target-free smoke在约9.93秒内完成1,710,301键/386日/22列，保留408个120日无披露行，1,095,669行具有非零120日signed sum，全部source/support门槛通过。该smoke未读取收益，不能证明事件内容可学习或形成荐股收益。只有源码合入并从clean main运行一次固定MVE，才允许按§9分流；任何结果都不得读取sealed holdout或直接形成factor、策略包、荐股runtime或激活结论。
+当前结论为 `SOURCE_READY_IMPLEMENTATION_LOCAL_VERIFIED_FORMAL_RUN_PENDING`。formal source bundle 已证明 projection、类型、时钟与支持度可用于本次 non-vintage learnability MVE；源码现已实现冻结合同、全键PIT特征、三臂CPCV、配对评价、immutable delivery、三条trial registry和0/1 route。BUG-1360已把projection identity纠正为manifest中的完整64位SHA-256并增加exact identity回归，32个direct tests通过；同步最新主线后的完整`advisory_modeling_backend`矩阵为`876 passed/16 skipped`。真实target-free smoke在约9.93秒内完成1,710,301键/386日/22列，保留408个120日无披露行，1,095,669行具有非零120日signed sum，全部source/support门槛通过。该smoke未读取收益，不能证明事件内容可学习或形成荐股收益。只有源码合入并从clean main运行一次固定MVE，才允许按§9分流；任何结果都不得读取sealed holdout或直接形成factor、策略包、荐股runtime或激活结论。
