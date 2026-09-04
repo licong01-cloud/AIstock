@@ -225,8 +225,8 @@
   },
   "first_seen_at": "2026-09-04T07:52:29.871017Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e9596f85f50f24417ed3628cac6afe310c9a6cf7",
+  "fixed_at": "2026-09-04T11:27:47Z",
   "github_issue_number": 4265,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4265",
   "last_seen_at": "2026-09-04T07:52:29.871017Z",
@@ -234,6 +234,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4271",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -259,6 +260,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -270,7 +272,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1351",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "220631006d4d5f25",
+    "recorded_at": "2026-09-04T11:29:02.069436Z",
+    "runtime_contract_digest": "7b7c60b02b2a39282e6f426468763543157d8aa68c69a1d27cfcdb6743f004a6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0150a064b961f66fca081f6949e3c777f0e845be",
+    "source_merge_commit": "e9596f85f50f24417ed3628cac6afe310c9a6cf7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4271",
+    "validation_evidence": [
+      "PR #4271 CI verdict and CodeQL verdict passed at head 0150a064b961f66fca081f6949e3c777f0e845be"
+    ],
+    "validation_evidence_digest": "f6b3c65f733dbb336ba4be2d4195ef4ad18e710bb55dbee53776f2f16161669b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -279,6 +302,9 @@
     "fingerprint": "81f4b5062e36da13890189d7",
     "source_event_id": "FE-20260904-81f4b5062e36"
   },
+  "validation_evidence": [
+    "PR #4271 CI verdict and CodeQL verdict passed at head 0150a064b961f66fca081f6949e3c777f0e845be"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
