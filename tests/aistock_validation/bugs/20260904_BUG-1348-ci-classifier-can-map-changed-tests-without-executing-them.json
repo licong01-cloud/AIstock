@@ -1,6 +1,15 @@
 {
   "actual": "A newly added or modified test can satisfy file ownership and select a module CI plan while remaining absent from every selected nox session target list. Renaming the test to match an ownership wildcard therefore produces a false-green CI path: classification passes but the changed test is never collected. Require fail-closed proof that every changed test file is reachable from at least one selected executable CI plan, with explicit diagnostics and regression coverage.",
   "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_test_plan_coverage.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/ci_change_classifier.py",
+    "scripts/ci_plan_coverage.py",
+    "scripts/ci_workflow_policy_scan.py",
     "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
   ],
   "assigned_agent": null,
@@ -13,16 +22,41 @@
   ],
   "created_at": "2026-09-04T06:00:01.841565Z",
   "description": "A newly added or modified test can satisfy file ownership and select a module CI plan while remaining absent from every selected nox session target list. Renaming the test to match an ownership wildcard therefore produces a false-green CI path: classification passes but the changed test is never collected. Require fail-closed proof that every changed test file is reachable from at least one selected executable CI plan, with explicit diagnostics and regression coverage.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: changes are limited to CI classification, pytest collection receipts, workflow policy evidence, standards, and their tests; no backend runtime, database, trading, model, or experiment semantics change",
+    "no_silent_error": "passed: missing static reachability, nox parse failures, missing selected sessions, and absent actual pytest collection produce explicit file-level diagnostics and non-zero fail-closed results",
+    "no_simplified_delivery": "passed: the repair combines early classifier reachability with an actual changed-test-only pytest collection receipt, covers exact file, nodeid, parent directory, wildcard rejection, dynamic targets, deleted files, Windows BOM, and unrelated-session cases",
+    "no_unrequested_gate_or_approval": "passed: this implements the user-requested correctness check inside the existing CI verdict and runner allocation; it adds no business gate, manual approval, extra job, artifact upload, dependency install, process control, or database action",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260904-ad60a7f32441",
       "timestamp": "2026-09-04T06:00:01.841549Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add the classifier, direct regression tests, policy scanner, and synchronized human/machine CI standard required for changed-test execution reachability enforcement.",
+      "timestamp": "2026-09-04T06:03:08.032740Z"
+    },
+    {
+      "action": "contract_allowed_write_scope",
+      "actor": "codex",
+      "note": "Keep noxfile.py unchanged; inject the receipt plugin once through the existing CI backend-step environment so direct and helper pytest calls share one mechanism.",
+      "timestamp": "2026-09-04T06:25:37.370729Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add an actual pytest collection receipt and CI post-session comparison so static nox reachability cannot be bypassed by dormant or misresolved target declarations.",
+      "timestamp": "2026-09-04T06:03:08.032740Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every changed Python test that remains in the merge tree must be statically reachable from its own selected executable nox plan and must appear in the actual pytest collection receipt before CI verdict can pass.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +69,31 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ]
   },
   "first_seen_at": "2026-09-04T06:00:01.841565Z",
   "fix_branch": null,
@@ -54,7 +110,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
   "required_verification": [
     "l0",
     "validation_center_backend"
@@ -189,5 +245,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }

@@ -28,6 +28,16 @@ def _write_bug(
     )
 
 
+def _write_test_file(root: Path, relative_path: str) -> None:
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("def test_contract():\n    assert True\n", encoding="utf-8")
+
+
+def _write_noxfile(root: Path, body: str) -> None:
+    (root / "noxfile.py").write_text(body, encoding="utf-8")
+
+
 def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="fixed")
@@ -815,7 +825,7 @@ def test_aistock_mcp_server_test_uses_direct_workflow_target(tmp_path: Path) -> 
     assert payload["unmapped_code_files"] == []
 
 
-def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
+def test_announcement_issuer_binding_tests_are_blocked_when_selected_plan_omits_them() -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/services/event_signal/announcement_adapter.py",
@@ -831,10 +841,17 @@ def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
         ]
     )
 
-    assert payload["classification"] == "targeted_ci_required"
-    assert payload["workflow_gate"] == "passed"
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
     assert payload["unmapped_code_files"] == []
     assert "data_sync_autonomy_backend" in payload["backend_sessions"]
+    assert payload["unexecuted_test_files"] == [
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_sync_stock_namechange.py",
+    ]
 
 
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
@@ -862,6 +879,163 @@ def test_qrun_mlflow_retry_test_uses_qe_sector_risk_overlay_lane(tmp_path: Path)
     assert payload["backend_plan_keys"] == ["l0", "qe_sector_risk_overlay_backend"]
     assert payload["backend_sessions"] == ["qe_sector_risk_overlay_backend"]
     assert payload["unmapped_code_files"] == []
+
+
+def test_changed_test_is_blocked_when_selected_nox_session_does_not_execute_it(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_sector_risk_overlay.py")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path, added_files=[test_path])
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == [test_path]
+    assert payload["changed_test_plan_coverage"]["coverage"] == {test_path: []}
+    assert "not executed by any selected CI plan" in payload["blocking"][0]
+
+
+def test_changed_test_passes_only_when_selected_nox_session_executes_exact_file(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        f"""
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "{test_path}", "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path, added_files=[test_path])
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unexecuted_test_files"] == []
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["qe_sector_risk_overlay_backend"]
+    }
+
+
+def test_changed_test_directory_target_is_reachable_but_unselected_session_is_not(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver")
+
+def qe_read_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py")
+""",
+    )
+
+    reachable = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+    assert reachable["workflow_gate"] == "passed"
+    assert reachable["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["qe_sector_risk_overlay_backend"]
+    }
+
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_sector_risk_overlay.py")
+
+def qe_read_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py")
+""",
+    )
+    unreachable = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+    assert unreachable["workflow_gate"] == "blocked"
+    assert unreachable["unexecuted_test_files"] == [test_path]
+
+
+def test_nox_target_resolver_handles_dynamic_path_candidates(tmp_path: Path) -> None:
+    _write_noxfile(
+        tmp_path,
+        """
+def model_registry_backend(session):
+    tests_dir = ROOT / "backend" / "tests" / "model_registry"
+    pytest_targets = []
+    for candidate in ("test_governance.py", "test_registry.py"):
+        path = tests_dir / candidate
+        if path.exists():
+            pytest_targets.append(f"backend/tests/model_registry/{candidate}")
+    _run_pytest(session, *pytest_targets, "-q")
+""",
+    )
+
+    targets, error = classifier._selected_nox_test_targets(  # noqa: SLF001
+        repo_root=tmp_path,
+        sessions=["model_registry_backend"],
+    )
+
+    assert error is None
+    assert targets == {
+        "model_registry_backend": {
+            "backend/tests/model_registry/test_governance.py",
+            "backend/tests/model_registry/test_registry.py",
+        }
+    }
+
+
+def test_nox_wildcard_does_not_claim_changed_test_execution(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_*.py")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
+def test_deleted_test_path_does_not_require_execution_in_merge_tree(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_removed_contract.py"
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["changed_test_plan_coverage"]["changed_test_files"] == []
+    assert payload["unexecuted_test_files"] == []
+
+
+def test_mixed_pr_keeps_workflow_tests_out_of_backend_collection_contract(tmp_path: Path) -> None:
+    backend_test = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    workflow_test = "backend/tests/scripts/test_ci_changed_files.py"
+    _write_test_file(tmp_path, backend_test)
+    _write_test_file(tmp_path, workflow_test)
+    _write_noxfile(
+        tmp_path,
+        f"""
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "{backend_test}")
+""",
+    )
+
+    payload = classifier.classify_changed_files(
+        [backend_test, workflow_test],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_changed_test_files"] == [backend_test]
+    assert workflow_test in payload["workflow_test_targets"]
 
 
 def test_ci_changed_file_resolver_uses_its_direct_workflow_target(tmp_path: Path) -> None:
