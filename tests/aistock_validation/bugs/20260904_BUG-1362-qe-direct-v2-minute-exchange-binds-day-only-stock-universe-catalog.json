@@ -2,7 +2,9 @@
   "actual": "Loop1 trained and produced IC/RankIC, then failed before backtest with instrument not exists: minute_bin_candidate/instruments/stock_universe.txt.",
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
+    "scripts/qrun_limit_minute.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
     "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
     "tests/aistock_validation/bugs/20260904_BUG-1362-qe-direct-v2-minute-exchange-binds-day-only-stock-universe-catalog.json"
   ],
@@ -22,6 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260904-641663fb5b3d",
       "timestamp": "2026-09-04T20:29:35.597471Z"
+    },
+    {
+      "action": "scope_expanded_for_runtime_validator_parity",
+      "actor": "codex",
+      "note": "The generated direct-v2 Exchange must use the hash-pinned minute all catalog while the preflight validator must continue comparing it against the day stock_universe selection contract; both producer and validator require a coordinated fix.",
+      "timestamp": "2026-09-04T20:45:00Z"
+    },
+    {
+      "action": "root_cause_fixed_and_regression_validated",
+      "actor": "codex",
+      "note": "ConfigComposer now emits market=stock_universe for day/model/buy selection and codes=all for the direct-v2 1min Exchange. The qrun preflight independently validates the day selection hash, minute all hash, and every selection span against minute coverage; stale codes=stock_universe fails closed. Related matrix: 163 passed, 38 skipped; required nox sessions: 8, 87, and 156 passed.",
+      "timestamp": "2026-09-04T20:59:32.5072945Z"
     }
   ],
   "evidence_uris": [
@@ -32,7 +46,9 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
+      "scripts/qrun_limit_minute.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
     ],
     "changed_files_source": "planned_intake",
@@ -105,13 +121,17 @@
     },
     "planned_files": [
       "backend/services/quantevolver/config_composer.py",
+      "scripts/qrun_limit_minute.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
+      "scripts/qrun_limit_minute.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
     ]
   },

@@ -4355,11 +4355,19 @@ class ConfigComposer:
             for code in quote_universe_codes:
                 lines.append(f"                - {self._yaml_scalar(str(code).upper())}")
         elif backtest_freq != "day":
-            # The Qlib Exchange defaults to the provider's ``all`` catalog when
-            # ``codes`` is omitted.  Direct-v2 keeps benchmark-only instruments
-            # in that catalog, so bind the default quote/sell universe to the
-            # same explicit stock pool used by the model and strategy.
-            lines.append("            codes: *market")
+            if direct_binding is not None:
+                # Direct-v2 intentionally has two named-universe contracts:
+                # ``stock_universe`` exists only in the day provider and drives
+                # model/buy selection, while the separately hash-pinned minute
+                # provider exposes its executable quote/sell universe as
+                # ``all``.  A 1min Exchange resolves ``codes`` against the
+                # minute provider, so reusing the day-only name is invalid.
+                lines.append("            codes: all")
+            else:
+                # Legacy/formal providers use one shared named universe across
+                # frequencies; keep their quote/sell universe aligned with the
+                # configured model and strategy market.
+                lines.append("            codes: *market")
         risk_policy = (custom_params or {}).get("risk_policy")
         if risk_policy:
             lines.append("        # risk_policy:")
