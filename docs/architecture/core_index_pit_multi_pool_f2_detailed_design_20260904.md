@@ -254,8 +254,8 @@ resolve_universe(
 数据库使用半开区间；Qlib instruments 使用含首尾日期。渲染时将 `effective_to_exclusive` 转换为前一交易日，并在与 canonical equity PIT 相交后输出：
 
 ```text
-SH600000  2024-01-02  2024-12-13
-SH600000  2025-06-16  2026-08-31
+600000.SH  2024-01-02  2024-12-13
+600000.SH  2025-06-16  2026-08-31
 ```
 
 文件策略：
