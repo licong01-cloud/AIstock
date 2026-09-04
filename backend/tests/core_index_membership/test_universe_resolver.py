@@ -160,6 +160,32 @@ def test_missing_pool_history_returns_typed_unavailable() -> None:
     assert captured.value.reason is UniverseUnavailableReason.MEMBERSHIP_HISTORY_UNAVAILABLE
 
 
+def test_pool_with_later_ready_from_allows_only_later_request_windows() -> None:
+    ready_from = date(2020, 12, 14)
+    repo = Repository(
+        membership=(membership("csi300", "000001.SZ", ready_from, None),),
+        canonical=(canonical("000001.SZ", date(2018, 8, 1), date(2024, 1, 10)),),
+        coverage={"csi300": PoolCoverage("csi300", ready_from, 1, REVISION)},
+    )
+
+    later = resolve_universe(
+        UniverseSelection(mode=UniverseMode.SINGLE_INDEX, pool_ids=("csi300",)),
+        date(2024, 1, 2),
+        date(2024, 1, 10),
+        repository=repo,
+    )
+    assert {row.ts_code for row in later.intervals} == {"000001.SZ"}
+
+    with pytest.raises(CoreIndexMembershipUnavailable) as captured:
+        resolve_universe(
+            UniverseSelection(mode=UniverseMode.SINGLE_INDEX, pool_ids=("csi300",)),
+            date(2018, 8, 1),
+            date(2024, 1, 10),
+            repository=repo,
+        )
+    assert captured.value.reason is UniverseUnavailableReason.MEMBERSHIP_HISTORY_UNAVAILABLE
+
+
 def test_overlapping_same_pool_intervals_fail_closed() -> None:
     rows = (
         membership("csi300", "000001.SZ", date(2024, 1, 2), date(2024, 1, 9)),
