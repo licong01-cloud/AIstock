@@ -1,0 +1,247 @@
+{
+  "actual": "DEV full validation returned 2,253 union intervals from 2024-06-03 while production returned 3,517 from 2018-08-01 using the same membership authority.",
+  "allowed_write_scope": [
+    "backend/services/core_index_membership.py",
+    "backend/tests/core_index_membership/test_membership_repository.py",
+    "tests/aistock_validation/bugs/20260904_BUG-1366-core-index-pit-resolver-derives-calendar-from-sparse-price-rows.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1366",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T21:28:36.636996Z",
+  "description": "DEV full validation returned 2,253 union intervals from 2024-06-03 while production returned 3,517 from 2018-08-01 using the same membership authority.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-a0d4ecd595ff",
+      "timestamp": "2026-09-04T21:28:36.636978Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_dataset_candidates\\core_index_membership_pit\\dev-full-validate-20260905.json"
+  ],
+  "expected": "Index membership PIT interval normalization uses the canonical trading calendar; physical daily/minute coverage remains a separate validation result.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/core_index_membership.py",
+      "backend/tests/core_index_membership/test_membership_repository.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/core_index_membership.py",
+        "backend/tests/core_index_membership/test_membership_repository.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "platform.db",
+        "qe.core",
+        "hmm",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/core_index_membership.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core",
+            "hmm",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "core_index_pit_stock_pools"
+        },
+        {
+          "file": "backend/tests/core_index_membership/test_membership_repository.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core",
+            "hmm",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "core_index_pit_stock_pools"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/core_index_membership.py",
+        "backend/tests/core_index_membership/test_membership_repository.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/core_index_membership.py",
+      "backend/tests/core_index_membership/test_membership_repository.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/core_index_membership.py",
+      "backend/tests/core_index_membership/test_membership_repository.py"
+    ]
+  },
+  "first_seen_at": "2026-09-04T21:28:36.636996Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4303,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4303",
+  "last_seen_at": "2026-09-04T21:28:36.636996Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/prepare_core_index_membership_pit.py --database dev --mode full-validate --start-date 2018-08-01 --end-date 2026-08-31 --candidate-root X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260831-qe_hmm_full_v2-direct-20260902-candidate --result-path X:\\AIstock_dataset_candidates\\core_index_membership_pit\\dev-full-validate-20260905.json",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "core index PIT resolver derives calendar from sparse price rows",
+  "trigger_condition": {
+    "fingerprint": "a0d4ecd595ffa953fcebf987",
+    "source_event_id": "FE-20260904-a0d4ecd595ff"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
