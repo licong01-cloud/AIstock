@@ -2,7 +2,7 @@
   "actual": "Structural validation checks only the daily calendar cutoff and incorrectly accepts a candidate without the required benchmark feature files.",
   "allowed_write_scope": [
     "backend/services/dataset_release/direct_monthly.py",
-    "backend/tests/dataset_release/test_direct_monthly.py",
+    "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
     "scripts/qlib_authoritative_bin_export.py",
     "tests/aistock_validation/bugs/20260904_BUG-1353-direct-v2-daily-candidate-omits-required-000300-sh-benchmark-qlib-featur.json"
   ],
@@ -30,17 +30,19 @@
   ],
   "expected": "Direct monthly data preparation must materialize the same-release 000300.SH index rows through the authoritative Qlib dump implementation, preserve stock PIT spans byte-for-byte, record benchmark-only scope, refresh affected compact metadata/receipts, and validate the BUG-625 benchmark read before CANDIDATE_READY.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py"
+    ],
     "changed_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
       "scripts/qlib_authoritative_bin_export.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
         "scripts/qlib_authoritative_bin_export.py"
       ],
       "impacted_modules": [
@@ -62,7 +64,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/tests/dataset_release/test_direct_monthly.py",
+          "file": "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -89,20 +91,20 @@
       ],
       "suggested_scope": [
         "backend/services/dataset_release/direct_monthly.py",
-        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
         "scripts/qlib_authoritative_bin_export.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
       "scripts/qlib_authoritative_bin_export.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
       "scripts/qlib_authoritative_bin_export.py"
     ]
   },
