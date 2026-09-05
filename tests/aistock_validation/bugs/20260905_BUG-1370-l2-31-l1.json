@@ -157,7 +157,7 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule/preset-daily-status",
-    "database_readback_ref": "market.sw_daily joined to market.sw_index_classify for published SW2021 L1 coverage",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python process imported the task-worktree TDXScheduler and read DEV 2026-08-31 coverage as L1 expected=31 present=31 with retry_reason=None; no backend process control"
     ],
