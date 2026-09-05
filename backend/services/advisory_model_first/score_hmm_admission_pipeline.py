@@ -2230,12 +2230,7 @@ def _load_verified_sources(request: FrozenAdvisoryScoreHMMAdmissionRequestV1) ->
     calendar = _load_and_verify_calendar(n1["request"])
     if tuple(value.date() for value in calendar) != request.trading_calendar:
         _raise("score/HMM trading calendar changed", "ADVISORY_SCORE_HMM_SOURCE_IDENTITY_MISMATCH")
-    factor_schema = validate_factor_file_schemas(
-        _resolve_bound_path(request.factor_data_root),
-        data_cutoff=request.data_cutoff.isoformat(),
-    )
-    if _factor_schema_identity(factor_schema) != request.factor_schema_identity:
-        _raise("score/HMM factor schema identity changed", "ADVISORY_SCORE_HMM_SOURCE_IDENTITY_MISMATCH")
+    _validate_bound_factor_schema(request=request, n1_request=n1["request"])
     pit_path = _resolve_bound_path(request.pit_snapshot_path)
     pit_snapshot = frozen_pit_snapshot_from_mapping(_read_json(pit_path, "ADVISORY_SCORE_HMM_SOURCE_IDENTITY_MISMATCH"))
     if sha256_file(pit_path) != request.pit_snapshot_file_sha256 or pit_snapshot.spans_sha256 != request.pit_spans_sha256:
@@ -3064,6 +3059,19 @@ def _factor_schema_identity(receipt: Any) -> str:
             "static_factor_schema_hash": str(receipt.static_factor_schema_hash),
         }
     )
+
+
+def _validate_bound_factor_schema(
+    *,
+    request: FrozenAdvisoryScoreHMMAdmissionRequestV1,
+    n1_request: AdvisoryN1Tier1RequestV1,
+) -> None:
+    factor_schema = validate_factor_file_schemas(
+        _resolve_bound_path(request.factor_data_root),
+        data_cutoff=n1_request.factor_data_cutoff.isoformat(),
+    )
+    if _factor_schema_identity(factor_schema) != request.factor_schema_identity:
+        _raise("score/HMM factor schema identity changed", "ADVISORY_SCORE_HMM_SOURCE_IDENTITY_MISMATCH")
 
 
 def _parse_current_route(path: Path) -> dict[str, Any]:
