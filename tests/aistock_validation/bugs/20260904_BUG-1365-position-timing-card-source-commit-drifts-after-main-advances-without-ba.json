@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1365",
-  "closed_at": null,
+  "closed_at": "2026-09-05T19:37:06.934844Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -145,10 +145,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1365/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1365",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b17aa22d014be4e46c4b743cf58a33ea91ce5ca10d81ddfae34b3546b197abc2",
+      "contract_digest": "712a1ed3a5784c23b236b5ad6b294ee93156b2126ea241e7ffa8a0d394e92030",
+      "expected_identity": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-05T19:35:29.025035Z",
+      "mode": "read_only",
+      "observed_identity": "d942a1bcac82b3af008d3ad807dcf60d8e3be605",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "feebfbaee10a95c00bbb62c22f47f9d42e0a1229acaf7cad76cc18d328aafa66",
+      "receipt_sha256": "8f0555518c619c59867036e0c6ebb8468ff121768342a179e82277cdddc996d0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f46f4b7e523476f43ba50e13f682d6d6f2c8903e81b2e7c602a15d196919b6b1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -181,7 +203,7 @@
     ],
     "validation_evidence_digest": "ac6d0b3040abea6327d0a2158e503acf6078f233943c39cf1a70b2c9db9614a4"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "position_timing"
   ],
