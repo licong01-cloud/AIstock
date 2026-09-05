@@ -1,6 +1,9 @@
 {
-  "actual": "MA-E19-D1B LSTM fresh-process training was pre-registered with random_seed=123, but generated conf.yaml omitted task.model.kwargs.seed and Qlib GeneralPTNN logged seed : None. This violates the fixed-seed reproducibility contract and makes LSTM/PTNN comparisons nondeterministic. Expected: custom GeneralPTNN receives the explicit fixed seed while preserving model/data/strategy semantics; missing or invalid seed must not silently downgrade. Evidence: qe_mae19d1b_lstm_h1_20260905_120751_20260831 Loop01/02, stopped during Epoch0/1 with zero completed loops. Scope must stay within QE ConfigComposer seed routing, focused tests, and BUG record; no data, backend process, DDL/DML, dependency, or experiment-result mutation.",
+  "actual": "MA-E19-D1B LSTM fresh-process training was pre-registered with random_seed=123, but generated conf.yaml omitted task.model.kwargs.seed and Qlib GeneralPTNN logged seed : None. The runner seeded Python, NumPy, and Torch globally before model construction, so the stopped attempt is not evidence of realized numerical drift; however, the persisted model constructor contradicted qe_runtime.random_seed and the constructor-level/seed-ensemble contract was not auditable. Expected: custom GeneralPTNN receives the explicit fixed seed while preserving model/data/strategy semantics; missing or invalid seed must not silently downgrade. Evidence: qe_mae19d1b_lstm_h1_20260905_120751_20260831 Loop01/02, stopped during Epoch0/1 with zero completed loops. Scope must stay within QE ConfigComposer seed routing, focused tests, and BUG record; no data, backend process, DDL/DML, dependency, or experiment-result mutation.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260905_BUG-1373-qe-generalptnn-generated-config-omits-fixed-seed.json"
   ],
   "assigned_agent": null,
@@ -12,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-05T11:23:04.600966Z",
-  "description": "MA-E19-D1B LSTM fresh-process training was pre-registered with random_seed=123, but generated conf.yaml omitted task.model.kwargs.seed and Qlib GeneralPTNN logged seed : None. This violates the fixed-seed reproducibility contract and makes LSTM/PTNN comparisons nondeterministic. Expected: custom GeneralPTNN receives the explicit fixed seed while preserving model/data/strategy semantics; missing or invalid seed must not silently downgrade. Evidence: qe_mae19d1b_lstm_h1_20260905_120751_20260831 Loop01/02, stopped during Epoch0/1 with zero completed loops. Scope must stay within QE ConfigComposer seed routing, focused tests, and BUG record; no data, backend process, DDL/DML, dependency, or experiment-result mutation.",
+  "description": "MA-E19-D1B LSTM fresh-process training was pre-registered with random_seed=123, but generated conf.yaml omitted task.model.kwargs.seed and Qlib GeneralPTNN logged seed : None. The runner seeded Python, NumPy, and Torch globally before model construction, so the stopped attempt is not evidence of realized numerical drift; however, the persisted model constructor contradicted qe_runtime.random_seed and the constructor-level/seed-ensemble contract was not auditable. Expected: custom GeneralPTNN receives the explicit fixed seed while preserving model/data/strategy semantics; missing or invalid seed must not silently downgrade. Evidence: qe_mae19d1b_lstm_h1_20260905_120751_20260831 Loop01/02, stopped during Epoch0/1 with zero completed loops. Scope must stay within QE ConfigComposer seed routing, focused tests, and BUG record; no data, backend process, DDL/DML, dependency, or experiment-result mutation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,9 +27,18 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20260905_BUG-1373-qe-generalptnn-generated-config-omits-fixed-seed.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20260905_BUG-1373-qe-generalptnn-generated-config-omits-fixed-seed.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +47,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20260905_BUG-1373-qe-generalptnn-generated-config-omits-fixed-seed.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20260905_BUG-1373-qe-generalptnn-generated-config-omits-fixed-seed.json"
+    ]
   },
   "first_seen_at": "2026-09-05T11:23:04.600966Z",
   "fix_branch": null,
@@ -61,15 +83,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/strategies",
+    "fresh_process_evidence": [
+      "fresh-process python ConfigComposer compose -> passed BUG1373_FRESH_PROCESS_GENERAL_PTNN_SEED=123"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

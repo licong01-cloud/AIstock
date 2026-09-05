@@ -170,6 +170,8 @@ def model_seed_param_keys(model_class: str | None) -> tuple[str, ...]:
     """Return constructor-safe seed kwargs for a concrete Qlib model class."""
 
     normalized = str(model_class or "").strip()
+    if normalized in {"GeneralPTNN", "AIStockGeneralPTNNLTR"}:
+        return ("seed",)
     if normalized in {"LGBModel", "AIStockXGBModel", "XGBModel"}:
         return ("seed", "random_state")
     if normalized == "CatBoostModel":
