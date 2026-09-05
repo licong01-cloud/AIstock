@@ -164,9 +164,15 @@ def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
         encoding="utf-8",
     )
 
+    config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] = "stock_universe"
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_MISSING"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] = "all"
     runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
-    assert config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "stock_universe"
+    assert config["market"] == "stock_universe"
+    assert config["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "all"
 
     minute_all.write_text(
         "000001.SZ\t2026-06-02 09:30:00\t2026-06-30 15:00:00\n",
