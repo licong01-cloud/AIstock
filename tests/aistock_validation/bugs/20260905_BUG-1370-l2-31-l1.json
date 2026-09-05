@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1370",
-  "closed_at": null,
+  "closed_at": "2026-09-05T09:10:37.283662Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -157,7 +157,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule/preset-daily-status",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python process imported the task-worktree TDXScheduler and read DEV 2026-08-31 coverage as L1 expected=31 present=31 with retry_reason=None; no backend process control"
@@ -167,10 +167,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1370-close-sync-20260905\\tmp\\issue_workflow\\BUG-1370\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1370",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b17aa22d014be4e46c4b743cf58a33ea91ce5ca10d81ddfae34b3546b197abc2",
+      "contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+      "expected_identity": "466e1dd470b64d1c109b9886b38639be2de2699d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-05T09:08:26.150915Z",
+      "mode": "read_only",
+      "observed_identity": "16566aba8280bc953c7af8f8d00c20c7db65a8fa",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9547aa056d038952fba47ff4fb1ca43dfe31cf0adc44a0f72169c1ad1ef1d3fb",
+      "receipt_sha256": "50f1f1b0b6770074c77cfd54b7527d044b14c3257dc88f9b4f072c4216fcaed2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ce3affcc98f6fb531286672bd63a46ab937a70711c7ad00931635d32a6aa5b6b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -203,7 +225,7 @@
     ],
     "validation_evidence_digest": "3bb1b5f89f20cd10381f3e8a7a8d75839e8d15410728b9084b0b26679b4f4279"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
