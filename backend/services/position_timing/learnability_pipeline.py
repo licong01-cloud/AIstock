@@ -13,6 +13,7 @@ import importlib.metadata
 import json
 import math
 import os
+import platform
 import shutil
 from statistics import NormalDist
 import subprocess
@@ -76,8 +77,6 @@ SOURCE_ROLES = (
     "suspend_meta",
     "suspend_rows",
     "benchmark_receipt",
-    "ranking_manifest",
-    "ranking_rows",
     "historical_registry",
     "cost_policy",
     "exit_guard",
@@ -106,7 +105,6 @@ class FrozenL2LearnabilityRequestV1(BaseModel):
     candidate_root: str = Field(min_length=1)
     daily_provider_root: str = Field(min_length=1)
     suspend_root: str = Field(min_length=1)
-    ranking_bundle_root: str = Field(min_length=1)
     timing_artifact_root: str = Field(min_length=1)
     historical_registry_path: str = Field(min_length=1)
     output_root: str = Field(min_length=1)
@@ -116,6 +114,7 @@ class FrozenL2LearnabilityRequestV1(BaseModel):
     population_end: date = POPULATION_END
     source_refs: dict[str, EvidenceReferenceV1]
     model_runtime_identities: dict[str, dict[str, Any]]
+    numeric_runtime_identity: dict[str, Any]
     notional_observations: tuple[dict[str, str], ...]
     notional_distribution_sha256: str = Field(pattern=_SHA256_PATTERN)
     prospective_event_counts: dict[str, int]
@@ -137,6 +136,10 @@ class FrozenL2LearnabilityRequestV1(BaseModel):
             raise ValueError("L2 request population window drift")
         if set(self.model_runtime_identities) != set(MODEL_ORDER):
             raise ValueError("L2 request must freeze Ridge then GBDT and no other model")
+        numeric_runtime = dict(self.numeric_runtime_identity)
+        numeric_runtime_sha256 = str(numeric_runtime.pop("identity_sha256", ""))
+        if numeric_runtime_sha256 != canonical_sha256(numeric_runtime):
+            raise ValueError("L2 numeric runtime identity mismatch")
         if set(self.source_refs) != set(SOURCE_ROLES):
             raise ValueError("L2 request source roles drift")
         if any(reference.role != f"position_timing_l2_{role}" for role, reference in self.source_refs.items()):
@@ -316,6 +319,48 @@ def frozen_model_runtime_identities() -> dict[str, dict[str, Any]]:
     }
 
 
+def frozen_numeric_runtime_identity() -> dict[str, Any]:
+    """Freeze numeric packages and loaded BLAS/OpenMP pools used by the audit."""
+
+    from threadpoolctl import threadpool_info
+
+    package_names = (
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "scipy",
+        "scikit-learn",
+        "lightgbm",
+        "pyqlib",
+        "threadpoolctl",
+    )
+    pools = sorted(
+        (_json_ready(item) for item in threadpool_info()),
+        key=lambda item: (
+            str(item.get("internal_api")),
+            str(item.get("prefix")),
+            str(item.get("filepath")),
+        ),
+    )
+    values = {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "platform_machine": platform.machine(),
+        "packages": {name: importlib.metadata.version(name) for name in package_names},
+        "threadpools": pools,
+        "thread_environment": {
+            name: os.environ.get(name)
+            for name in (
+                "OMP_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+            )
+        },
+    }
+    return {**values, "identity_sha256": canonical_sha256(values)}
+
+
 def build_l2_cpcv_paths(rows: pd.DataFrame, *, request_sha256: str) -> tuple[dict[str, Any], ...]:
     """Build the exact 28 information-overlap-purged paths grouped by entry date."""
 
@@ -436,7 +481,6 @@ def choose_supported_model(results: Sequence[L2HypothesisResultV1]) -> str | Non
 def prepare_l2_learnability_request(
     *,
     candidate_root: str | Path,
-    ranking_bundle_root: str | Path,
     timing_artifact_root: str | Path,
     historical_registry_path: str | Path,
     repository_root: str | Path,
@@ -445,7 +489,6 @@ def prepare_l2_learnability_request(
     """Freeze one exact, idempotent L2 request without fitting a model."""
 
     candidate = Path(candidate_root).resolve()
-    rankings = Path(ranking_bundle_root).resolve()
     timing_root = Path(timing_artifact_root).resolve()
     historical_registry = Path(historical_registry_path).resolve()
     repository = Path(repository_root).resolve()
@@ -471,8 +514,6 @@ def prepare_l2_learnability_request(
         "suspend_meta": suspend_root / "meta.json",
         "suspend_rows": suspend_root / "suspend_d.parquet",
         "benchmark_receipt": candidate / "reports" / "daily_benchmark_000300_completion.json",
-        "ranking_manifest": rankings / "manifest.json",
-        "ranking_rows": rankings / "candidate_rankings.parquet",
         "historical_registry": historical_registry,
     }
     for role, path in source_paths.items():
@@ -556,9 +597,10 @@ def prepare_l2_learnability_request(
         for role, path in source_paths.items()
     }
     model_identities = frozen_model_runtime_identities()
+    numeric_runtime_identity = frozen_numeric_runtime_identity()
     feature_schema = {
         "feature_order": list(POSITION_TIMING_L2_RESEARCH_CONTRACT_V1.feature_order),
-        "selection_feature_join": "ENTRY_DECISION_DATE_LEFT_JOIN_ELSE_MISSING",
+        "selection_feature_policy": "EXCLUDED_FROM_V1_INCOMPLETE_TEMPORAL_COVERAGE",
         "market_regime": "CSI300_TRAILING20_CLOSE_RETURN_SIGN_AT_REVIEW_CLOSE_V1",
         "adjusted_return": "RAW_PRICE_TIMES_ADJ_FACTOR_RATIO_V1",
         "exit_guard_snapshot_sha256": exit_hash,
@@ -578,8 +620,6 @@ def prepare_l2_learnability_request(
                     "suspend_meta",
                     "suspend_rows",
                     "benchmark_receipt",
-                    "ranking_manifest",
-                    "ranking_rows",
                 )
             },
             "population_contract": POSITION_TIMING_L2_RESEARCH_CONTRACT_V1.population_spec,
@@ -595,7 +635,6 @@ def prepare_l2_learnability_request(
         "candidate_root": candidate.as_posix(),
         "daily_provider_root": daily_root.as_posix(),
         "suspend_root": suspend_root.as_posix(),
-        "ranking_bundle_root": rankings.as_posix(),
         "timing_artifact_root": timing_root.as_posix(),
         "historical_registry_path": historical_registry.as_posix(),
         "output_root": target_root.as_posix(),
@@ -605,6 +644,7 @@ def prepare_l2_learnability_request(
         "population_end": POPULATION_END,
         "source_refs": source_refs,
         "model_runtime_identities": model_identities,
+        "numeric_runtime_identity": numeric_runtime_identity,
         "notional_observations": tuple(held),
         "notional_distribution_sha256": canonical_sha256(tuple(held)),
         "prospective_event_counts": event_counts,
@@ -704,33 +744,6 @@ def materialize_l2_population(request: FrozenL2LearnabilityRequestV1) -> Populat
     suspend["trade_date"] = pd.to_datetime(suspend["trade_date"]).dt.normalize()
     suspend["ts_code"] = suspend["ts_code"].astype(str).str.upper()
     suspended = set(zip(suspend["trade_date"], suspend["ts_code"], strict=False))
-
-    try:
-        ranking = pd.read_parquet(Path(request.source_refs["ranking_rows"].artifact_uri))
-    except Exception as exc:
-        _raise(
-            "L2 ranking source cannot be read",
-            "POSITION_TIMING_L2_SOURCE_UNAVAILABLE",
-            error_type=type(exc).__name__,
-        )
-    required_ranking = (
-        "trade_date",
-        "instrument",
-        "selection_effective_rank",
-        "combined_score",
-    )
-    if not set(required_ranking).issubset(ranking):
-        _raise(
-            "L2 ranking source schema drift",
-            "POSITION_TIMING_L2_SOURCE_IDENTITY_MISMATCH",
-            missing=sorted(set(required_ranking) - set(ranking)),
-        )
-    ranking = ranking[list(required_ranking)].copy()
-    ranking["trade_date"] = pd.to_datetime(ranking["trade_date"]).dt.normalize()
-    ranking["instrument"] = ranking["instrument"].astype(str).str.upper()
-    if ranking.duplicated(["trade_date", "instrument"]).any():
-        _raise("L2 ranking identity is duplicated", "POSITION_TIMING_L2_SOURCE_IDENTITY_MISMATCH")
-    ranking = ranking.set_index(["trade_date", "instrument"]).sort_index()
 
     market = market.loc[market["datetime"] <= load_end].copy()
     if market.duplicated(["datetime", "instrument"]).any():
@@ -1001,16 +1014,6 @@ def materialize_l2_population(request: FrozenL2LearnabilityRequestV1) -> Populat
         close_location = (review_matrix["close"] - review_matrix["low"]) / (
             review_matrix["high"] - review_matrix["low"]
         )
-        rank_keys = pd.MultiIndex.from_arrays(
-            [
-                np.repeat(entry_decision, n_valid),
-                np.asarray(valid_symbols, dtype=object),
-            ],
-            names=["trade_date", "instrument"],
-        )
-        rank_rows = ranking.reindex(rank_keys)
-        entry_rank = pd.to_numeric(rank_rows["selection_effective_rank"], errors="coerce").to_numpy()
-        entry_score = pd.to_numeric(rank_rows["combined_score"], errors="coerce").to_numpy()
         elapsed = np.arange(1, 20, dtype=np.float32)
         regime_values = benchmark_regime.reindex(review_dates).to_numpy(dtype=float)
         regime_down = np.broadcast_to((regime_values < 0).astype(np.float32), (n_valid, 19))
@@ -1040,8 +1043,6 @@ def materialize_l2_population(request: FrozenL2LearnabilityRequestV1) -> Populat
             "entry_gross_notional_cny": np.repeat(entry_gross[valid_indices], 19),
             "target_available": target_available.reshape(-1),
             "full_exit_incremental_net_value_bps": target.reshape(-1),
-            "selection_rank": np.repeat(entry_rank, 19),
-            "selection_score": np.repeat(entry_score, 19),
             "holding_trading_days_elapsed": np.tile(elapsed, n_valid),
             "holding_fraction_of_time_stop": np.tile(elapsed / float(time_stop_days), n_valid),
             "unrealized_close_return_bps": unrealized.reshape(-1),
@@ -1133,6 +1134,8 @@ def _verify_request_sources(request: FrozenL2LearnabilityRequestV1) -> None:
         _raise("L2 contract changed after request freeze", "POSITION_TIMING_L2_REQUEST_STALE")
     if request.model_runtime_identities != frozen_model_runtime_identities():
         _raise("L2 model runtime identity changed", "POSITION_TIMING_L2_ENVIRONMENT_MISMATCH")
+    if request.numeric_runtime_identity != frozen_numeric_runtime_identity():
+        _raise("L2 numeric runtime identity changed", "POSITION_TIMING_L2_ENVIRONMENT_MISMATCH")
     if _repository_commit(Path(request.repository_root)) != request.repository_commit:
         _raise("L2 repository commit changed", "POSITION_TIMING_L2_REQUEST_STALE")
     dirty = _repository_dirty(Path(request.repository_root))
@@ -1903,6 +1906,7 @@ def run_l2_learnability_audit(request_path: str | Path) -> dict[str, Any]:
             staging / "model_runtime_identities.json",
             request.model_runtime_identities,
         )
+        _write_json(staging / "numeric_runtime_identity.json", request.numeric_runtime_identity)
         _write_parquet(staging / "episodes.parquet", population.episodes)
         _write_parquet(staging / "review_rows.parquet", population.rows)
         oof = population.rows[
@@ -2279,7 +2283,6 @@ def _parse_cli(argv: Sequence[str] | None = None) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--candidate-root", required=True)
-    prepare.add_argument("--ranking-bundle-root", required=True)
     prepare.add_argument("--timing-artifact-root", required=True)
     prepare.add_argument("--historical-registry-path", required=True)
     prepare.add_argument("--repository-root", required=True)
@@ -2297,7 +2300,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "prepare":
             result = prepare_l2_learnability_request(
                 candidate_root=args.candidate_root,
-                ranking_bundle_root=args.ranking_bundle_root,
                 timing_artifact_root=args.timing_artifact_root,
                 historical_registry_path=args.historical_registry_path,
                 repository_root=args.repository_root,
@@ -2464,6 +2466,7 @@ __all__ = [
     "circular_block_interval",
     "classify_effect",
     "frozen_model_runtime_identities",
+    "frozen_numeric_runtime_identity",
     "inspect_l2_learnability_bundle",
     "map_monotone_exposure",
     "materialize_l2_population",

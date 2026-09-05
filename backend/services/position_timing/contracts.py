@@ -774,7 +774,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "target_action_date": "REVIEW_DATE_PLUS_1_TRADING_DAY",
         "terminal_exit_max_defer_trading_days": 5,
         "selection_top20_filter": False,
-        "selection_feature_join": "IMMUTABLE_QE_ENTRY_DATE_RANKING_ELSE_MISSING",
+        "selection_features": "EXCLUDED_FROM_V1_INCOMPLETE_TEMPORAL_COVERAGE",
         "market_regime": "CSI300_TRAILING20_CLOSE_RETURN_SIGN_AT_REVIEW_CLOSE_V1",
         "corporate_action_valuation": "RAW_PRICE_TIMES_ADJ_FACTOR_RATIO_V1",
         "policy_value_basis": "LEGAL_ENTRY_QUANTITY_TIMES_ENTRY_RAW_OPEN",
@@ -796,8 +796,6 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "missing_policy": "TYPED_UNAVAILABLE_NO_FIXED_NOTIONAL_FALLBACK",
     },
     feature_order=(
-        "selection_rank",
-        "selection_score",
         "holding_trading_days_elapsed",
         "holding_fraction_of_time_stop",
         "unrealized_close_return_bps",

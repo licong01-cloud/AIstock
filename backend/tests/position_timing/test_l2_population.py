@@ -22,6 +22,8 @@ def test_l2_contract_is_frozen_without_pipeline_imports() -> None:
     assert contract.registry_spec["generate_current_route"] is False
     assert contract.registry_spec["direction_gate_scope"] == "L3_LABEL_ONLY_NEVER_L1_L1A_OR_RELEASE"
     assert "hmm" not in " ".join(contract.feature_order).lower()
+    assert "selection" not in " ".join(contract.feature_order).lower()
+    assert contract.population_spec["selection_features"].startswith("EXCLUDED_FROM_V1")
     assert "action_side" in contract.required_card_issued_fields
 
 

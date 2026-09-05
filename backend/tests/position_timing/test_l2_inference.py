@@ -209,6 +209,8 @@ def test_immutable_bundle_readback_keeps_two_hypotheses_and_no_runtime_write(tmp
         )
         for role in SOURCE_ROLES
     }
+    numeric_runtime = {"runtime": "test"}
+    numeric_runtime["identity_sha256"] = canonical_sha256(numeric_runtime)
     values = {
         "contract_sha256": canonical_sha256(POSITION_TIMING_L2_RESEARCH_CONTRACT_V1),
         "dataset_identity_sha256": "5" * 64,
@@ -216,7 +218,6 @@ def test_immutable_bundle_readback_keeps_two_hypotheses_and_no_runtime_write(tmp
         "candidate_root": tmp_path.as_posix(),
         "daily_provider_root": tmp_path.as_posix(),
         "suspend_root": tmp_path.as_posix(),
-        "ranking_bundle_root": tmp_path.as_posix(),
         "timing_artifact_root": (tmp_path / "timing").as_posix(),
         "historical_registry_path": historical.as_posix(),
         "output_root": (tmp_path / "timing").as_posix(),
@@ -227,6 +228,7 @@ def test_immutable_bundle_readback_keeps_two_hypotheses_and_no_runtime_write(tmp
             "SKLEARN_RIDGE_V1": {"identity_sha256": "8" * 64},
             "LIGHTGBM_GBDT_V1": {"identity_sha256": "9" * 64},
         },
+        "numeric_runtime_identity": numeric_runtime,
         "notional_observations": ({"card_id": "card", "planned_full_notional_cny": "10000"},),
         "notional_distribution_sha256": canonical_sha256(({"card_id": "card", "planned_full_notional_cny": "10000"},)),
         "prospective_event_counts": {"CARD_ISSUED": 1},
