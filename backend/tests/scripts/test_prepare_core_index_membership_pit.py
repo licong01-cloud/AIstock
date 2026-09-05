@@ -98,6 +98,8 @@ def test_physical_coverage_reports_exact_missing_symbols_without_writing(tmp_pat
 
     result = subject._physical_coverage(candidate, {"000001.SZ", "600000.SH"})
 
+    assert result["status"] == "DATA_GAPS"
+    assert result["missing_count"] == 2
     assert result["daily_missing"] == ["600000.SH"]
     assert result["minute_missing"] == ["000001.SZ"]
 
@@ -211,6 +213,50 @@ def test_tushare_successor_code_backcast_does_not_override_official_pit(monkeypa
     assert result["tushare_crosscheck"]["mismatch_month_count"] == 1
 
 
+def test_physical_price_gaps_are_reported_without_overriding_authority_status(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class Repository:
+        def __init__(self, _factory):
+            pass
+
+        def fetch_pool_coverage(self, pool_ids):
+            return {
+                pool_id: type(
+                    "Coverage",
+                    (),
+                    {"first_effective_from": subject.POOL_DEFINITIONS[pool_id].history_start},
+                )()
+                for pool_id in pool_ids
+            }
+
+    interval = type("Interval", (), {"ts_code": "000001.SZ"})()
+    resolved = type(
+        "Resolved",
+        (),
+        {"intervals": (interval,), "membership_revision": "official:test"},
+    )()
+    candidate = tmp_path / "candidate"
+    (candidate / "components" / "daily_bin_candidate" / "features").mkdir(parents=True)
+    (candidate / "components" / "minute_bin_candidate" / "features").mkdir(parents=True)
+    monkeypatch.setattr(subject, "CoreIndexMembershipRepository", Repository)
+    monkeypatch.setattr(subject, "resolve_universe", lambda *_args, **_kwargs: resolved)
+
+    result = subject.validate_full_database(
+        subject.DatabaseConfig("dev", "127.0.0.1", 5433, "u", "p", "aistock_dev", ".env"),
+        pool_ids=("csi300",),
+        start_date=date(2018, 8, 1),
+        end_date=date(2018, 8, 31),
+        candidate_root=candidate,
+        tushare_fetcher=None,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["error_count"] == 0
+    assert result["reported_data_gap_count"] == 2
+    assert result["physical_coverage"]["status"] == "DATA_GAPS"
+
+
 def test_migration_is_one_table_without_freeze_hash_or_extension() -> None:
     sql = (subject.REPO_ROOT / "backend" / "migrations" / subject.MIGRATION_NAME).read_text(encoding="utf-8")
     lowered = sql.lower()
@@ -220,6 +266,21 @@ def test_migration_is_one_table_without_freeze_hash_or_extension() -> None:
     assert "create extension" not in lowered
     assert "sha256" not in lowered
     assert "freeze" not in lowered
+
+
+def test_raw_price_source_migration_allows_truthful_tushare_fallback() -> None:
+    root = subject.REPO_ROOT / "backend" / "migrations"
+    preflight = (root / "kline_raw_tushare_source_20260905.preflight.sql").read_text(encoding="utf-8")
+    migration = (root / "kline_raw_tushare_source_20260905.sql").read_text(encoding="utf-8")
+    rollback = (root / "kline_raw_tushare_source_20260905.rollback.sql").read_text(encoding="utf-8")
+
+    assert "ALTER TABLE" not in preflight
+    assert "market.kline_daily_raw" in migration
+    assert "market.kline_minute_raw" in migration
+    assert migration.count("'tushare_api'") >= 2
+    assert migration.count("NOT VALID") == 2
+    assert "VALIDATE CONSTRAINT" not in migration
+    assert "rollback refused while tushare_api rows exist" in rollback
 
 
 def test_upsert_orders_intervals_before_batch_write(monkeypatch) -> None:
