@@ -85,7 +85,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/strategies",
     "fresh_process_evidence": [
-      "fresh-process python ConfigComposer compose -> passed BUG1373_FRESH_PROCESS_GENERAL_PTNN_SEED=123"
+      "fresh-process python ConfigComposer compose -> passed BUG1373_FRESH_PROCESS_GENERAL_PTNN_SEED=123",
+      "fresh-process ConfigComposer on final HEAD 0197e066 -> passed BUG1373_FINAL_HEAD_FRESH_PROCESS_SEED=123"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
