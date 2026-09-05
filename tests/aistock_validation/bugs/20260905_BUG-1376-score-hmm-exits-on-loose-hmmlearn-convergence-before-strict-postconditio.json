@@ -1,0 +1,227 @@
+{
+  "actual": "Formal request advscorehmm_2b7430bf25778f9026fb6cdc stops with ADVISORY_SCORE_HMM_MARKET_HMM_INVALID after hmmlearn prematurely exits on small negative deltas, including -0.000126259.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+    "backend/tests/advisory_model_first/test_score_hmm_context.py",
+    "tests/aistock_validation/bugs/20260905_BUG-1376-score-hmm-exits-on-loose-hmmlearn-convergence-before-strict-postconditio.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1376",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-05T16:48:24.000393Z",
+  "description": "Formal request advscorehmm_2b7430bf25778f9026fb6cdc stops with ADVISORY_SCORE_HMM_MARKET_HMM_INVALID after hmmlearn prematurely exits on small negative deltas, including -0.000126259.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260905-d29021982d04",
+      "timestamp": "2026-09-05T16:48:24.000381Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/formal_run_v2.stdout.log",
+    "F:/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/formal_run_v2.stderr.log"
+  ],
+  "expected": "Use a deterministic monitor whose stopping rule matches the frozen finite absolute final log-likelihood delta below 1e-4 contract; preserve n_iter=200, tol=1e-4, fixed seed, and fail closed if the strict criterion is still not reached.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+      "backend/tests/advisory_model_first/test_score_hmm_context.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+        "backend/tests/advisory_model_first/test_score_hmm_context.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_score_hmm_context.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+        "backend/tests/advisory_model_first/test_score_hmm_context.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+      "backend/tests/advisory_model_first/test_score_hmm_context.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
+      "backend/tests/advisory_model_first/test_score_hmm_context.py"
+    ]
+  },
+  "first_seen_at": "2026-09-05T16:48:24.000393Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4333,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4333",
+  "last_seen_at": "2026-09-05T16:48:24.000393Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "AISTOCK_ADVISORY_SCORE_HMM_FORMAL_RUN=1 python scripts/advisory_score_hmm_admission_mve.py run --request /mnt/f/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/score_hmm_request_v2.json",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Score/HMM exits on loose hmmlearn convergence before strict postcondition",
+  "trigger_condition": {
+    "fingerprint": "d29021982d0498926d4377e1",
+    "source_event_id": "FE-20260905-d29021982d04"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
