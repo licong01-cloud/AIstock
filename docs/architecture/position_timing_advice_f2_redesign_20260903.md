@@ -3,13 +3,13 @@
 > 版本：v2.0
 > 日期：2026-09-03
 > Feature tier：F2
-> 状态：`IMPLEMENTATION_BLOCK_ONE_SOURCE_MERGED_BLOCK_TWO_AND_SCOPE_QUEUED`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > decision use：`HUMAN_TRADING_ADVICE`
 > 对照蓝图：`F:/Dev/AIstock_worktrees/stock-timing-strategy-blueprint-20260831/docs/architecture/stock_timing_strategy_system_blueprint_f2_20260831.md`
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
-`DESIGN_VERIFIED` 只表示对应设计条款已经闭合。实现块一已由 PR `#4277` 合入 `main`（merge commit `7c9fdd9cf86aa472fb2e84bac6211eb2378350ed`）；这只证明块一源码合入。L1a 提醒、prospective outcome、轻量分析范围管理、完整首发验证与生产激活仍未完成。源码合入不授权自动交易、数据库变更、进程控制或生产激活，也不得被表述为完整首发已经交付。
+`DESIGN_VERIFIED` 只表示对应设计条款已经闭合。实现块一由 PR `#4277` 合入；包含 L1a、prospective outcome 与轻量分析范围管理的完整首发源码由 PR `#4287` 合入（merge commit `a8922fb82d4163ab4194c2efdde2ae584e5100a4`）。2026-09-06 的 backend-main 重启后收据已验证 BUG-1365 修复所在 merge commit `19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc` 为运行进程身份的祖先，业务探针与身份摘要均通过，close-sync PR `#4311` 已合入。该状态不授权自动交易、数据库变更或后续 L2/L4 研究，也不得把尚未成熟的 prospective 结果表述为模型有效性证据。
 
 ## 1. Background / 背景与结论
 
@@ -707,6 +707,8 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 第一批结束的用户可见结果是：日频明确卡、盘中到点提示、失败原因、成本和持续累积的结果证据。L2 未实现不降低这一定义。
 
 2026-09-05 的首发源码实现保持一个 namespace、一个页面和一个 artifact root：F-027 scope、8 个 API、`ALERT_EMISSION_AUTHORIZED`、五 horizon `OUTCOME_EVALUATED`、四态 evidence 与集中 `position_timing_first_release` 验证均已落地。块二唯一新增服务文件为 `alerts.py`；outcome 仍在既有 `service.py`，没有新增数据库、worker、scheduler、SSE、通知平台或订单接口。该状态表示首发源码已实现并完成本地验证，不表示生产进程已经加载。
+
+2026-09-06 的运行态收口已完成：backend-main 健康、运行身份通过 `origin_main_descendant` 证明、`/api/v1/position-timing/intents` 的 target-owned collection 语义探针识别 468 个条目，canonical BUG-1365 状态为 `verified`。实时读回仍是 2 个持仓进入分析范围、2 张目标日 2026-09-07 的 `HOLD` 卡；非交易日返回 `NO_VALID_CARD_TODAY`，没有虚构触价或送达。L2 仍按既定顺序等待 prospective 数据，不构成 L1/L1a 门禁。
 
 ### 9.4 后续 C：L2/L3
 

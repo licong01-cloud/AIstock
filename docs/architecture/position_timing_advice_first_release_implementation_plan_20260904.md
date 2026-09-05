@@ -2,11 +2,11 @@
 
 > 日期：2026-09-04
 >
-> 状态：`FIRST_RELEASE_RUNTIME_ACTIVE_PROVENANCE_FIX_PENDING_USER_RESTART`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
-> 当前修复分支：`bug/BUG-1365-position-timing-card-source-commit-drifts-after-20260904`
+> 收口状态：BUG-1365 已验证，源码与 close-sync 任务分支/工作树已清理
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
@@ -44,7 +44,15 @@
 - evidence 返回 10 个 `PENDING_DERIVED` horizon、0 matured/unavailable/materialization-missing，费用口径为 `PER_PARENT_ORDER / BROKER_UNVERIFIED`，阈值为 58,824 / 117,648 / 235,295。非交易日 alert poll 返回 `NO_VALID_CARD_TODAY`；这证明提醒链路可用但没有虚构真实触价或送达。
 - 定向 Playwright 与真实 3000/8001 DOM 回读均通过：两张真实持仓卡、2 个锁定勾选项、466 个未选自选项均可见，无 API/page error，且不存在下单或自动交易按钮。
 - 运行态验收同时发现 BUG-1365：进程启动后若 canonical worktree 快进，原 `_source_commit()` 会在下次物化时重新读取可变 `HEAD`，使卡片错误绑定未被当前进程加载的提交。修复后源码身份在模块加载时冻结；显式 `AISTOCK_GIT_COMMIT` 仍优先，解析失败仍由 materialize 返回 typed unavailable，不影响其他后端路由导入。
-- 本次首张卡在 worktree 快进前已正确绑定进程加载提交 `4506ea73ea5db1b19315577f5226980b425b2463`。BUG-1365 合入后仍须由用户再次重启 backend-main 才能激活修复；源码合入、既有首发运行态和修复后运行态继续分开报告。
+- 本次首张卡在 worktree 快进前已正确绑定进程加载提交 `4506ea73ea5db1b19315577f5226980b425b2463`。截至本节检查点，BUG-1365 合入后仍须由用户再次重启 backend-main 才能激活修复；该外部动作及其最终收口见 §0.3。
+
+## 0.3 2026-09-06 重启后验证与收口
+
+- 用户完成 backend-main 重启后，digest-bound 收据以 BUG-1365 merge commit `19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc` 为 expected identity，以运行进程的 `d942a1bcac82b3af008d3ad807dcf60d8e3be605` 为 observed identity；`origin_main_descendant` 证明、health、identity 与业务 smoke 均通过，收据 SHA-256 为 `8f0555518c619c59867036e0c6ebb8468ff121768342a179e82277cdddc996d0`。
+- 业务 smoke 使用 `/api/v1/position-timing/intents` 的 target-owned collection 语义契约，确认 468 个条目。该契约缺口由 BUG-1378 的源码 PR `#4341` 修复并由 close-sync PR `#4342` 固化；它只增加精确端点映射与测试，不改变产品运行时，也不要求再次重启。
+- BUG-1365 close-sync PR `#4311` 已合入 `main`（merge commit `a87e239e2a0ffaeae28bc87dec96741d4476144b`）；Issue `#4301` 已关闭，canonical BUG 状态为 `verified`、`post_restart_effective_gate=passed`、`runtime_identity_match=true`。
+- 最终只读业务读回为 468 个候选、2 个有效持仓、2 张目标交易日 2026-09-07 的 `HOLD` 卡；10 个 horizon 仍为 pending，2026-09-06 非交易日 alert 为 `NO_VALID_CARD_TODAY`。四个 BUG-1365/BUG-1378 源码与 close-sync 工作树、对应本地/远端分支及 BUG-id reservation 均已按精确清单清理。
+- 下一项仍是 `PT-NEXT-002 / WAIT_FOR_PROSPECTIVE_DATA`；这只是研究顺序，不阻塞已经可用的 L1/L1a，也不新增样本量、MDE 或人工审批门禁。
 
 ## 1. 执行结论
 
@@ -341,8 +349,8 @@ production_dependency_gate = noop
 
 | 顺序 | task_id | 状态 | 一次性交付边界 |
 |---:|---|---|---|
-| 1 | `PT-NEXT-001` | `SOURCE_IMPLEMENTED_AND_LOCALLY_VERIFIED` | 已在同一个块二任务中完成 F-027、L1a 与 prospective outcome；只增加批准的 `alerts.py`，未拆新阶段、审批或发布平台 |
+| 1 | `PT-NEXT-001` | `RUNTIME_VERIFIED` | 已在同一个块二任务中完成 F-027、L1a 与 prospective outcome，并通过 §0.3 的重启后收据；只增加批准的 `alerts.py`，未拆新阶段、审批或发布平台 |
 | 2 | `PT-NEXT-002` | `WAIT_FOR_PROSPECTIVE_DATA` | 按冻结契约执行一次 L2 Ridge+GBDT learnability audit；结果不阻塞 L1/L1a |
 | 3 | `PT-NEXT-003` | `DEFERRED` | 独立评估 L4b-1 分钟执行窗口；L4b-2 仍在范围外 |
 
-首发源码任务 `PT-NEXT-001` 已完成；后续若继续研究则从 `PT-NEXT-002` 开始，但 prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a。
+首发任务 `PT-NEXT-001` 已完成并通过运行态验收；后续若继续研究则从 `PT-NEXT-002` 开始，但 prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a。
