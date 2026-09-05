@@ -1,12 +1,12 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.44
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.45
 
 > 初始日期：2026-07-10
-> 修订日期：2026-09-05
+> 修订日期：2026-09-06
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0_FAMILY_FROZEN_N1_N2_COMPLETE_N3_EVENT_FORMAL_SELECTED_ZERO_SCORE_HMM_AUX_IMPLEMENTATION_INCLUDED_FORMAL_RUN_NEXT`
+> 当前状态：`P0_FAMILY_FROZEN_N1_N2_COMPLETE_N3_SCORE_HMM_FORMAL_SELECTED_ZERO_CAUSAL_ADMISSION_V2_DESIGN_READY_WAITING_CANONICAL_SECTOR_OOF`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件均已有真实模型实现与独立验证，但尚未形成一个当前同时提供四类输出的组合bundle。两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode；P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线shadow重排，但该meta-label role不包含M3 outcome或M4 price-range child，当前两项返回typed unavailable。自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前策略包边界：荐股编排和动态 binding 已支持按 Program 解析不同 StrategyPackage，但当前学习模型不是“策略包无关模型”。Top20 候选来自目标策略包，M5/P0 重排、M3 outcome/holding 和 M4 价格区间均绑定该包的候选、父 Alpha 特征、manifest/style/runtime semantics 与 exact descriptor；当前只有目标多 Alpha 包具备模型 bundle，其他包无 bundle 时基线继续且模型 typed unavailable
-> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A、N0控制面、QE Alpha generator、N3融资融券、财务事件source-readiness及财务事件信息集MVE源码均已进入`main`；财务事件正式实验已完成且selected=0。本版本包含同包评分/市场/HMM辅助准入的冻结合同、N1 PIT Top50同源标签重建、宽PIT市场形态、fold-local causal HMM、五臂CPCV、0至5只准入、评价、immutable delivery、registry/aux-route及direct tests，合入后才允许从clean main冻结正式request。N1 bundle `74827d03...`、N2-A bundle `6784df1a...`、N2-B v2 bundle `bcdcb31d...`、Entry/Exit action bundle `5c5946a7...`及Exit fixed-information learnability bundle `03d17a18...`均已完成且仅为开发窗口诊断。N3 QE上游Alpha MVE `09137f0c...`、父包增量overlay `fdca2130...`、腿间共识/分歧 `42ac23b6...`、分钟信息集 `0076a3a6...`、自动generator `9327330c...`、融资融券 `b50411d8...`及财务事件 `ad234f4c...`均已正式完成且selected=0。生产descriptor仍指向P0-D exact bundle，只激活`meta_label_take_skip_confidence` shadow role；M3/M4是已实现但当前descriptor未组合的独立历史bundle。N1/N2/N3研究均不修改baseline、Selection或运行时
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A、N0控制面、QE Alpha generator、N3融资融券、财务事件及同包评分/市场/HMM辅助准入源码均已进入`main`。Score/HMM v1 正式 bundle `f8da2f70...`已完成三个可执行arm且selected=0，sector两臂因canonical source缺失保持NOT_RUN；失败分解已排除target错接/符号反向并确认当前信息集没有可靠阈值增量。N1 bundle `74827d03...`、N2-A bundle `6784df1a...`、N2-B v2 bundle `bcdcb31d...`、Entry/Exit action bundle `5c5946a7...`及Exit fixed-information learnability bundle `03d17a18...`均已完成且仅为开发窗口诊断。N3 QE上游Alpha MVE `09137f0c...`、父包增量overlay `fdca2130...`、腿间共识/分歧 `42ac23b6...`、分钟信息集 `0076a3a6...`、自动generator `9327330c...`、融资融券 `b50411d8...`及财务事件 `ad234f4c...`均已正式完成且selected=0。生产descriptor仍指向P0-D exact bundle，只激活`meta_label_take_skip_confidence` shadow role；M3/M4是已实现但当前descriptor未组合的独立历史bundle。N1/N2/N3研究均不修改baseline、Selection或运行时
 > P0-J权威结果：正式request `advselpriorresreq_3a50e2f6fd9cf43cb1f6ad3e`在首条outer path的inner block 3形成完全平坦的decreasing-isotonic prior，按预登记条件以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`停止；evidence-only bundle为`eb8ade9b...`，exact retry返回同identity，零trial、无winner/PBO/Stage B。该结果证明rank-to-return单调关系跨时间分区不稳定，不证明Selection全局无效
 > P0-K权威结果：源码、PR/CI、合入和正式 Stage A 均已完成。request `advselgatereq_943f9e551d5fee35e57340cc`完成`168/168`，bundle为`fee9b561...`，结果`NEGATIVE_STOP_NOT_ADVANCED`且未激活。168条trial全部选择`0.4`、拒绝数均为0，策略与Selection恒等；liability日Spearman约`0.254589`，但约束选择器没有让信号进入决策。`PBO=1.0`来自六个arm的block分数完全相同和固定tie-break，不按普通过拟合解释
 > P0-L权威结果：BUG-1251修复后的正式request `advp0lreq_b86425d3b5ce508904fa01b0`生成evidence-only bundle `4476afeb...`。第一条outer path的identity control精确复现P0-G但无真实干预；gain `12/8/4/1`分别产生`33/71/85/85`次实际entry变化并把OOF换手从`0.276692`降至`0.272180/0.272180/0.269173/0.269173`，均低于P0-D预算`0.299248`，但cash day从`1`增至`2`、active-slot coverage从`0.999248`降至`0.998496/0.997744`，不满足冻结完整性合同，以`ADVISORY_P0L_LOCAL_RERANK_INFEASIBLE`在`0/168`停止。结果为`NEGATIVE_STOP_INCOMPLETE_CPCV`，无winner、无可计算PBO、无Stage B、无激活；exact retry返回同一bundle identity
@@ -27,7 +27,8 @@
 > N3融资融券信息集权威结果：正式request `advn3margreq_0e6f63e49ae12d5b2e79f789`、source bundle `633c4058...`和经济bundle `b50411d8...`完成`3/3/0`。candidate RankIC/Top5净超额为`0.11385/252.80 bps`，父包为`0.12284/443.65 bps`，相对父包delta/lift为`-0.00899/-202.21 bps`；四个时间块没有一个同时取得正RankIC增量与正Top5 lift。323个共同可评价日低于预注册支持度要求，故结果为`EXPLORATORY_INSUFFICIENT_SUPPORT/NAVIGATION_ONLY`且selected=0；sealed=false，数据库/网络/因子库/StrategyPackage/runtime写入均为0。该结果关闭本次十二项融资融券动态+冻结Ridge的精确frontier，不外推为全部融资融券信息不可学，next task为`N3_FINANCIAL_EVENT_SOURCE_READINESS_DESIGN`
 > N3财务事件source-readiness正式结果：F2 v1.2与源码经PR #4288合入merge commit `5f2fda091...`。clean main正式bundle `211b8db1...`在单一repeatable-read/read-only snapshot中选择三类raw的最早本地观察版本，保留84,272行projection，其中qualifying 44,953、neutral 39,319；120交易日Top20 disclosure/qualifying支持为`100%/87.8756%`，Top50 qualifying为`83.4974%`，378/386日具有Top50混合干预。forecast/express/fina event-type revision drift为`0/0/1.6528%`，耗时9.937716秒、采样RSS 1,089,490,944 bytes、temp 7,114,549 bytes、8次SELECT且DB write/network/Tushare均为0；inspect通过，第二次deliver为registry duplicate-noop与route exact-noop。因数据最早于2026-05本地回填，证据固定为`DATE_ONLY_BACKFILLED_NON_VINTAGE/NAVIGATION_ONLY`，只放行事件信息集MVE设计
 > N3财务事件信息集正式结果：clean-main bundle `ad234f4c...`完成固定`3/3/0`；signed-content candidate 的 RankIC `0.063685`低于parent `0.122839`，Top5成本后净超额`359.41 bps`低于parent `443.65 bps`，四个时间块无一同时取得正RankIC增量与正Top5 lift。结果为non-vintage `EXPLORATORY_NOT_SELECTED/NAVIGATION_ONLY`，不进入vintage source、confirmation或activation；route按预注册结果进入同包评分/市场/HMM辅助准入实现
-> 当前主动路线：正式route为`N3_SCORE_HMM_ADMISSION_MVE_IMPLEMENTATION`、累计candidate index `83`。本版本已落实该辅助F2源码并完成真实源烟测：从N1绑定Prediction Store重建405日/20,250行PIT Top50 context，候选窗口逐字段复现N1；生成7,720个同源policy labels；宽PIT raw-market覆盖386/386日；28个fold-local HMM产出9,122条状态且0 unavailable block。旧policy Top40与N1 Top20各有212个独有键，明确禁止内连接取交集。下一步是审核合入后从clean main冻结唯一request并运行；sector两臂继续`NOT_RUN_SOURCE_UNAVAILABLE`，任何结果不得读取sealed holdout或直接激活运行时
+> N3同包评分/市场/HMM正式结果：request `advscorehmm_2a442c84ecdac872a4e56e45`、bundle `f8da2f70...`覆盖386日/1,930个Top5槽位。score-only、raw-market、market-HMM三臂分别只在3/5/9日TAKE，日均相对父基线lift为`-26.71/-30.77/-28.55 bps`且区间均为负；正式结论`AUX_EXECUTED_FRONTIER_INSUFFICIENT_SUPPORT`、selected=0。243点zero-trial失败分解中117点支持充分但方向性正增量为0，最佳仍为`-2.292 bps/day`、95%区间`[-6.234,1.294]`；exact retry的diagnostic identity为`7f565394...`。结果排除target错接和符号反向，同时发现CPCV补集train intercept/base rate主导跨日期绝对预测；v1冻结且不得作为activation calibration
+> 当前主动路线：正式 `current_route.md` 仍保存财务事件selected=0后的历史next task `N3_SCORE_HMM_ADMISSION_MVE_IMPLEMENTATION`（candidate index 83），正式 `current_auxiliary_route.md` 已保存v1终态 `N3_AUX_SCORE_HMM_EXECUTED_FRONTIER_CLOSED`（candidate index 88）；二者均不改写。蓝图当前业务任务为`N3_AUX_CAUSAL_ADMISSION_V2_SOURCE_PREFLIGHT`。v2 F2以单一past-only chronological split替代CPCV补集绝对水平，旧score/raw/market-HMM只作不可选control，只有新增sector/combined arm可成为candidate。最新主线尚无canonical `rotation_L1` development OOF/prediction reader，因此当前精确状态为`SOURCE_NOT_READY_NO_TRIAL`：不冻结request、不占trial、不写假adapter、不读取sealed holdout；等待上游source合入后先执行target-free preflight，再实现和运行v2
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -38,7 +39,7 @@
 
 M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自2026-09-02起，所有工作必须先归入以下四类，只有第一类默认获得研发和算力：
 
-1. **主动业务主线**：直接寻找、确认并接入能改善成本后超额收益或风险管理收益的模型/信号；N3融资融券与财务事件信息集MVE均已正式完成且selected=0，route已进入同包评分/市场/HMM辅助准入实现。本版本交付该F2源码，合入后从clean main运行固定实验；它写独立aux route且不回选已关闭frontier。已完成的父包增量overlay不得重跑或调权。
+1. **主动业务主线**：直接寻找、确认并接入能改善成本后超额收益或风险管理收益的模型/信号；N3融资融券、财务事件和Score/HMM v1均已正式完成且selected=0。当前蓝图任务只推进canonical sector新信息与chronological Admission v2；source未进入最新main时保持零trial停止，不回选已关闭frontier。已完成的父包增量overlay不得重跑或调权。
 2. **被动业务观察**：每日自然 forward observation/outcome 按现有调度形成，不回填、不等待、不派生独立开发项目。
 3. **条件性阻塞修复**：只修直接阻碍主动主线或每日荐股正确性的 BUG；H0 只有满足该条件时才执行最小范围。
 4. **零工作约束与历史事实**：研究族冻结、已完成实验、已消费窗口、trial registry 身份和旧 artifact 只防止重复犯错，不构成待办；历史分析、证据固化、归档和旧任务清理分配零主动工时。
@@ -59,7 +60,7 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 12. P0-L冻结P0-G收益anchor与P0-K liability head，用relative liability rank执行有界局部ENTER重排；源码、BUG-1251修复和正式Stage A均已完成，结果为`NEGATIVE_STOP_INCOMPLETE_CPCV`，不进入Stage B。
 13. P0-D至P0-L作为一个共享开发数据、候选、特征和模型族的研究族正式冻结；负面结果与已消费窗口保持原结论，不派生P0-M，不以结果后阈值、gain、family、seed或新loss改判。
 14. 新主线先建立最小JSONL trial registry、可由其生成的单页活动路线和父包预测延伸可行性spike，再在开发窗口执行分层clairvoyant oracle与固定cross-fitted learnability audit；oracle、探索和模型trial分类计数，sealed holdout不参与诊断。
-15. Tier 1完成后，N2辅助工作包先对当前父包的LSTM腿、FUNDGROWTH腿和exact IC加权组合执行一次固定三臂共同窗口Alpha信号审计，Top25/Top50不得重复计作信号，结果只用于导航。随后Entry Guard MVE与Exit-label oracle补齐Entry/Exit动作空间诊断；同一时刻只允许其中一个进入candidate训练/confirmation。QE上游alpha MVE准备件不产生研究证据、不计作实验线。候选来源与Entry/Exit诊断齐全后再按四象限只选择一条模型主线。N3融资融券与财务事件均selected=0后，route已进入结果独立的同包评分/市场/HMM辅助准入；它把评分校准、原始市场形态、市场HMM和板块HMM拆成可归因对照并冻结包身份、时钟、目标合同和HMM能力边界。前向residual成熟后执行P1-A，两个以上兼容包具备独立bundle后执行P1-B，长期趋势包就绪后执行P2。
+15. Tier 1完成后，N2辅助工作包先对当前父包的LSTM腿、FUNDGROWTH腿和exact IC加权组合执行一次固定三臂共同窗口Alpha信号审计，Top25/Top50不得重复计作信号，结果只用于导航。随后Entry Guard MVE与Exit-label oracle补齐Entry/Exit动作空间诊断；同一时刻只允许其中一个进入candidate训练/confirmation。QE上游alpha MVE准备件不产生研究证据、不计作实验线。候选来源与Entry/Exit诊断齐全后再按四象限只选择一条模型主线。N3融资融券、财务事件和同包Score/HMM v1均selected=0；当前v2把评分校准、原始市场形态、市场HMM和板块rotation拆成可归因对照，修正跨日absolute clock，并等待canonical sector新信息。前向residual成熟后执行P1-A，两个以上兼容包具备独立bundle后执行P1-B，长期趋势包就绪后执行P2。
 16. H0详细设计继续保留，但状态降为条件性阻塞修复；仅当实盘/历史同核错误或已测得的回放资源瓶颈直接阻断当前模型验证时，才以已冻结44日A/B/C结果为golden执行最小必要范围。它不获得默认并行资源，也不决定模型方向。
 17. 上述真实功能和新模型路线均不自动解禁历史补账、历史归档、ModelOps、旧任务清理、动态资金仓位或通用数据/缓存平台；H0也不得成为恢复这些任务的入口。
 
@@ -137,7 +138,7 @@ H0 的权威详细设计为
 | 层 | 是否依赖目标策略包 | 当前事实 |
 |---|---|---|
 | 候选召回与原始排序 | 必然依赖 | Top20/40/50及父score由目标StrategyPackage产生；上游没有召回的股票，下游模型不能重新发现 |
-| 同包评分校准与准入 | 条件化依赖 | 当前父包各腿按交易日标准化后加权，combined score只具有同日排序意义；跨日筛选必须使用绑定package/manifest/style/policy的cross-fitted percentile/收益校准，禁止直接对raw score设全历史绝对阈值 |
+| 同包评分校准与准入 | 条件化依赖 | 当前父包各腿按交易日标准化后加权，combined score只具有同日排序意义；跨日筛选必须使用绑定package/manifest/style/policy的past-only chronological收益/概率校准，禁止直接对raw score或CPCV补集绝对输出设全历史阈值 |
 | 市场形态与HMM上下文 | 输入可复用、结论条件化 | 原始市场宽度是独立control；市场HMM用于日级风险/准入，板块HMM或rotation score用于候选级排名/Entry。模型输出仍绑定父包候选和policy，不能补回Top50以外股票 |
 | Program/binding编排 | 部分解耦 | 动态resolver可按Program读取不同package，但要求单一原生包和exact descriptor；无bundle时仅返回typed unavailable |
 | Top20重排/Top5 | 条件化依赖 | LightGBM是独立训练模型，但必需特征包括父包combined score/rank、LSTM/FUND腿分数、rank、weight及腿间分歧，并绑定package manifest/style/runtime semantics |
@@ -148,7 +149,7 @@ H0 的权威详细设计为
 
 正确的业务目标不是强行删除策略信息，而是实现“通用模型框架 + 明确的策略条件化artifact”：每个新包要么拥有独立验证的exact bundle，要么进入P1-B兼容包共享实验并证明无负迁移。当前动态编排基本具备，但特征投影仍硬编码`lstm/fund`两角色；只有一个多Alpha包拥有P0-D重排shadow，而且该descriptor没有组合M3/M4 child，因此跨策略包通用性和单Program完整模型覆盖均尚未完成。
 
-截至 2026-09-05：
+截至 2026-09-06：
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
@@ -159,10 +160,10 @@ H0 的权威详细设计为
 | 每日前向发布与 episode | `FORWARD_RUNNING_NATURAL_OOS_IMMATURE` | 两个 ENABLED Program 均已形成真实发布、target-open settlement和active episode；截至2026-08-28第一个Program有4条P0-D observation、最早成熟日为2026-09-22，第二个Program尚无模型observation。当前没有成熟自然模型outcome |
 | 多 Program 模型分发 | `DYNAMIC_BINDING_VERIFIED_ONE_P0D_PACKAGE` | active binding动态解析已完成；目标多Alpha Program绑定P0-D exact bundle `e555903e...`，单Alpha无bundle时基线继续且模型typed unavailable。P0-E至P0-L均未接入descriptor |
 | 跨策略包荐股模型覆盖 | `FRAMEWORK_DYNAMIC_MODEL_PACKAGE_CONDITIONED_RERANK_ONE_PACKAGE_ONLY` | 编排可动态解析package，但模型特征和descriptor仍精确绑定目标多Alpha包；当前只有该包的P0-D重排role在线，M3/M4 child未组合，不同包也不能直接复用这些历史bundle，P1-B共享模型实验未就绪 |
-| 同包评分与市场/HMM条件化 | `IMPLEMENTATION_INCLUDED_SOURCE_SMOKE_PASSED_FORMAL_RUN_NEXT` | F2 v1.1与源码已实现；aligned PIT Top50 context/7,720 labels、386日raw-market、28 fold HMM真实源烟测通过，首轮sector两臂NOT_RUN。尚未形成正式经济bundle或改变每日荐股输出 |
+| 同包评分与市场/HMM条件化 | `V1_FORMAL_SELECTED_ZERO_FROZEN_V2_DESIGN_READY_SOURCE_NOT_READY` | v1正式bundle `f8da2f70...`完成三个可执行arm且selected=0；243点失败分解没有可靠阈值增量并识别CPCV补集绝对校准限制。v2改用past-only chronological calibration，等待canonical sector OOF后才运行；当前不改变每日荐股输出 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 | P0-D至P0-L研究族 | `FROZEN_NO_ACTIVATABLE_WINNER` | 同一P0-C开发数据/候选/feature schema/CORE家族上的九轮自适应研究已事实收敛；旧结果、合同和消费窗口不改写，不派生P0-M |
-| 新模型演进路线 | `N3_SCORE_HMM_AUX_IMPLEMENTATION_INCLUDED_FORMAL_RUN_NEXT` | 固定proposal、overlay、腿间、分钟、generator、融资融券和财务事件七个N3 frontier均`selected=0`且关闭。本版本实现同包score/raw-market/market-HMM辅助准入；sector两臂typed unavailable，不重跑旧screen、不改生产权重、不读sealed holdout |
+| 新模型演进路线 | `N3_CAUSAL_ADMISSION_V2_WAITING_CANONICAL_SECTOR_OOF` | 固定proposal、overlay、腿间、分钟、generator、融资融券、财务事件和Score/HMM v1均`selected=0`且关闭。当前只推进新增sector信息与正确chronological绝对校准组合的v2；source未进入主线前零trial停止，不重跑旧screen、不改生产权重、不读sealed holdout |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
 
@@ -254,7 +255,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 - 父包预测延伸先执行可行性spike，区分“冻结模型可直接推理新窗口”“只有历史预测且运行资产不足”“必须重训并形成新StrategyPackage identity”三种状态。
 - 综合oracle按Tier 1至Tier 3逐层放行；每层同时区分clairvoyant/action上限与固定cross-fitted learnability结果，全部只使用开发窗口，不读取sealed holdout。
 - Entry Guard与Exit-label组成一个边界明确的辅助工作包，但分别使用独立目标合同、decision clock、policy hash和增量价值标签；同一时刻只允许其中一个进入candidate训练/confirmation。条件化上游alpha仅准备无研究证据的输入/预算。动态资金权重不在当前范围，第一版只允许固定等权槽位中的`SKIP`和现金/空槽结果。
-- 同包评分校准只消费exact StrategyPackage的父score/rank、当日score分布和冻结outcome；原始combined score只用于同日横截面排序，跨日期准入只能使用train-fold拟合、cross-fitted输出的percentile、成本后绝对/超额收益和概率/区间。
+- 同包评分校准只消费exact StrategyPackage的父score/rank、当日score分布和冻结outcome；原始combined score只用于同日横截面排序，跨日期准入只能使用evaluation前成熟标签拟合的past-only chronological成本后绝对收益、概率和区间。v1 CPCV输出只保留历史研究用途。
 - 市场形态、市场HMM和板块HMM/rotation作为三类可分离上下文进入一个后续辅助F2设计；原始市场宽度必须是HMM增量对照，HMM不可直接乘父score、不可单独形成默认硬否决，也不可把Top50外股票带入Advisory候选池。
 
 ## 3. Non-goals / 明确禁止
@@ -479,7 +480,7 @@ existing admitted StrategyPackage
 | Exit | 每个持有决策时点判断继续持有或退出 | 持仓后每日as-of | 退出相对继续基线policy的剩余净价值、MDD和尾部损失 |
 | 组合风险 | 约束regime、beta、集中度和尾部风险 | 与对应Advisory动作同clock | 风险改善及机会损失；当前仅研究overlay，不形成资金仓位 |
 
-同包评分校准和市场/HMM条件化不是第七、第八条并行模型线。评分校准为Ranking、Admission和Entry提供package-bound可比尺度；原始市场形态、市场HMM和板块HMM是决策上下文。市场HMM回答“当天是否值得承担风险”，板块HMM回答“候选处于何种板块环境”，StrategyPackage父Alpha仍回答“候选池内哪只股票优先”。任何一层均不能单独补回上游未召回股票。
+同包评分校准和市场/HMM条件化不是第七、第八条并行模型线。评分校准为Ranking、Admission和Entry提供package-bound可比尺度，但跨日absolute尺度必须来自past-only chronological训练；原始市场形态、市场HMM和板块rotation是决策上下文。市场HMM回答“当天是否值得承担风险”，板块rotation回答“候选处于何种板块环境”，StrategyPackage父Alpha仍回答“候选池内哪只股票优先”。任何一层均不能单独补回上游未召回股票。
 
 双目标合同在实验创建时冻结，结果后不得改判：
 
@@ -673,16 +674,16 @@ P0系列输出不因存在局部信号而自动成为ensemble成员。进入组�
 
 ### 6.11 同包评分校准与市场/HMM条件化准入
 
-该能力解决两个彼此相关但必须分开归因的问题：同一StrategyPackage在不同日期的父score是否能转换为可比较的收益尺度；在同包score信息之外，原始市场形态、市场HMM和板块HMM是否能改善“今日是否推荐”和“候选是否值得进入”的决策。它不替代上游Alpha、不扩大候选池，也不等待所有荐股角色完善后才研究；其F2详细设计在N3融资融券正式结果之后启动，独立确认通过后才进入N4组合。
+该能力解决两个彼此相关但必须分开归因的问题：同一StrategyPackage在不同日期的父score是否能转换为可比较的收益尺度；在同包score信息之外，原始市场形态、市场HMM和板块rotation是否能改善“今日是否推荐”和“候选是否值得进入”的决策。v1正式实验已selected=0，且失败分解证明放宽阈值不能产生可靠增量；同时识别出CPCV validation-complement的train intercept/base rate不能直接充当跨日期绝对校准。当前路线不是重跑v1，而是等待canonical sector新信息后，以past-only chronological calibration建立v2。独立确认通过后才进入N4组合。
 
 #### 6.11.1 同包评分校准
 
 - 当前多Alpha父包先对每条腿按`trade_date`执行横截面标准化，再按冻结terminal weights形成combined score；因此raw/combined score只具有同日排序意义，不能直接用跨日期固定数值作荐股门槛。
-- 该校准不是重跑M5B outcome-head calibration，也不是P0-D二分类meta-label；它单独估计父包score/rank在不同日期、市场条件和冻结policy下对应的未来成本后收益分布。
-- 校准输入至少包括同日`parent_rank_pct`、冻结候选深度内score percentile、候选深度、score分布位置/离散度及exact component evidence；研究审计可读取同一父包的Top20/40/50曲线，但当前Program的可行动作候选仍是其冻结Top20，所有变换只在train fold拟合并生成cross-fitted输出。
+- 该校准不是重跑M5B outcome-head calibration，也不是P0-D二分类meta-label；它单独估计父包score/rank在不同日期、市场条件和冻结policy下对应的未来成本后收益分布。v1的CPCV absolute output永久保持历史研究结果，不进入运行时。
+- 校准输入至少包括同日`parent_rank_pct`、冻结候选深度内score percentile、候选深度、score分布位置/离散度及exact component evidence；研究审计可读取同一父包的Top20/40/50曲线，但当前Program的可行动作候选仍是其冻结Top20。v2所有模型、残差和base rate只能由evaluation之前已成熟的past-only标签拟合，每个evaluation row恰有一个chronological prediction，禁止validation-complement averaging。
 - 分别报告1/5/10/20日成本后绝对收益、benchmark超额收益、正收益概率及不确定区间；首个准入动作只能预注册一个与冻结review policy一致的primary horizon，其余horizon是独立secondary readout，不得结果后择优。
 - 输出只有在对应package id、manifest、style、父模型/权重、候选policy和label/price clock完全匹配时可用；不同策略包必须独立校准，除非后续P1-B matched/leave-one-package-out证明共享无负迁移。
-- 任何准入阈值只能作用于cross-fitted calibrated expected net return/probability及其不确定性；成本后绝对收益大于0是经济底线，置信下界、coverage和abstention阈值由后续F2按MDE与干预支持预注册，禁止直接阈值化raw score。
+- 任何准入阈值只能作用于chronological calibrated expected net return/probability及其不确定性；成本后绝对收益大于0是经济底线。v2固定`LCB>0`与`positive_probability>=0.5`且不提供threshold grid；禁止直接阈值化raw score或从v1失败网格回选。
 
 #### 6.11.2 市场形态与HMM上下文
 
@@ -693,19 +694,19 @@ P0系列输出不因存在局部信号而自动成为ensemble成员。进入组�
 
 #### 6.11.3 固定消融、动作与证据
 
-后续F2详细设计至少冻结以下开发窗口arms；可以因真实source readiness把尚不可用的板块arm标记`NOT_RUN_SOURCE_UNAVAILABLE`，但不能以替代特征或旧snapshot补造：
+v1五臂身份和结果已经冻结。v2保留相同归因顺序但使用新arm id、新chronological clock和新trial lineage；canonical sector source不可用时整个v2保持`SOURCE_NOT_READY_NO_TRIAL`，不能只运行旧信息control、用替代特征或旧snapshot补造：
 
-1. `PACKAGE_SCORE_CALIBRATION_ONLY`：同包score校准，无市场/HMM。
-2. `SCORE_PLUS_RAW_MARKET_SHAPE`：增加原始市场形态，作为HMM增量control。
-3. `SCORE_PLUS_MARKET_HMM`：在相同raw-market输入上增加causal市场HMM。
-4. `SCORE_PLUS_SECTOR_HMM`：增加PIT板块HMM或canonical `rotation_L1` score。
-5. `SCORE_PLUS_MARKET_AND_SECTOR_HMM`：只用于预注册交互与factorial ablation，不形成不可解释手工加权总分。
+1. `PACKAGE_SCORE_CAUSAL_CONTROL_V2`：同包score因果校准，不可选择。
+2. `SCORE_PLUS_RAW_MARKET_CAUSAL_CONTROL_V2`：增加原始市场形态，作为HMM/sector共同control，不可选择。
+3. `SCORE_PLUS_MARKET_HMM_CAUSAL_CONTROL_V2`：在相同raw-market输入上增加causal市场HMM，不可选择。
+4. `SCORE_PLUS_SECTOR_ROTATION_V2`：增加PIT板块canonical `rotation_L1` causal development OOF，是可选新信息arm。
+5. `SCORE_PLUS_MARKET_AND_SECTOR_V2`：只用于预注册交互与factorial ablation，是可选新信息arm，不形成不可解释手工加权总分。
 
 每个arm分别报告校准误差、1/5/10/20日收益/胜率、成本后绝对与超额收益、Top5 lift、MDD、尾部损失、coverage、cash/empty-slot、换手和真实干预支持。胜率只作辅助指标。`ALPHA_RANKING`实验只评价冻结候选/槽位/Entry/Exit下的重排；`RISK_MANAGED_ADVISORY`实验才允许逐候选`SKIP`或日级`SKIP_ALL`，两者不能在结果后互换合同或压成一个总分。
 
 产品输出只从当前Program冻结的可行动作候选集选择最多五只通过预注册经济阈值的候选；现状为Top20，Top40/50只作同父包研究曲线和候选召回诊断，不自动进入输出。零只通过时返回正常业务状态`NO_ELIGIBLE_RECOMMENDATION`及package、score calibration、market/HMM identity、阈值与reason，而不是错误、旧结果、下一名静默补位或强制满槽。若板块预测要把冻结动作候选集之外的股票加入候选，必须另立QE/StrategyPackage上游Alpha实验及相应Program policy确认。
 
-权威后续详细设计目标为`docs/architecture/advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md`。详细设计必须冻结primary horizon、score特征、模型/校准family、五arm可执行性、HMM source/capability identity、double-count检查、阈值、支持度、multiple-testing、0/1 route、artifact、exact retry和无生产副作用；本文不以方向性条款冒充这些实现级合同。
+v1权威历史设计为`docs/architecture/advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md` v1.2；后继权威设计为`docs/architecture/advisory_causal_admission_v2_f2_detailed_design_20260906.md`。v2冻结primary horizon、chronological split、成熟标签、score特征、模型/校准family、五arm、sector source identity、double-count、阈值、支持度、multiple-testing、0/1 route、artifact、exact retry和无生产副作用；本文不以方向性条款冒充实现级合同。
 
 ## 7. 荐股产品行为
 
@@ -1151,9 +1152,9 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 ### N3：四象限分流后的唯一模型主线
 
-优先级：`ACTIVE_SCORE_HMM_ADMISSION_MVE_AFTER_EVENT_SELECTED_ZERO`。
+优先级：`ACTIVE_CAUSAL_ADMISSION_V2_AFTER_SCORE_HMM_SELECTED_ZERO`。
 
-状态：`QE_ALPHA_GENERATOR_MARGIN_AND_EVENT_FORMAL_COMPLETE_SELECTED_ZERO__SCORE_HMM_IMPLEMENTATION_INCLUDED_FORMAL_RUN_NEXT`。
+状态：`QE_ALPHA_GENERATOR_MARGIN_EVENT_AND_SCORE_HMM_FORMAL_SELECTED_ZERO__CAUSAL_ADMISSION_V2_DESIGN_READY_SOURCE_NOT_READY`。
 
 - Top40/50赢家召回或候选流不足：进入QE/StrategyPackage上游alpha MVE。
 - 召回充足且Top20理论、learnability均高：进入包含新信息的Top20 ranker；禁止继续P0同信息集loss/model轮换。
@@ -1162,7 +1163,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 每条主线建立新hypothesis lineage和frontier合同，只能从inner-train选择一次candidate；confirmation失败后不得回选。
 
-当前分流事实：Top50全市场赢家召回95%上界约`2.59%`，远低于预注册`20%`门槛；N1 ranker `direction_ready=false`，Entry无confirmatory-positive arm，Exit固定信息集未确认可学。固定QE 24-proposal、父overlay、腿间交互、分钟八聚合、自动daily/static generator、融资融券动态和财务事件七个frontier均selected=0。财务事件receipt按预注册route进入同包评分/市场/HMM辅助准入；Entry/Exit和已关闭信息集不回选。该辅助线写独立route，不改变既有主线实验结论。
+当前分流事实：Top50全市场赢家召回95%上界约`2.59%`，远低于预注册`20%`门槛；N1 ranker `direction_ready=false`，Entry无confirmatory-positive arm，Exit固定信息集未确认可学。固定QE 24-proposal、父overlay、腿间交互、分钟八聚合、自动daily/static generator、融资融券动态、财务事件和Score/HMM v1 frontier均selected=0。Score/HMM失败分解进一步排除“只因门槛过严”的解释，并识别CPCV补集绝对校准限制；Entry/Exit和已关闭信息集不回选。当前唯一主动方向是canonical sector新信息加chronological Admission v2，source未就绪时零trial停止。
 
 N3首批是固定6族×4 proposal、总计24次的轻量探索屏：声明式AST只消费Qlib daily与冻结`static_factors.parquet`的T-visible字段，目标使用N2-B `CURRENT_IC_PARENT`共同窗口H20成本后outcome；所有same-date rank/zscore只在当日canonical PIT成员内计算，窗口并集中的非成员必须mask。每个proposal报告RankIC、Top5净超额、相对父包Top5 lift、coverage、churn、父包相关、20日block 95%区间、24-trial family-wise区间和DSR；只有全部预注册门槛满足时一次选择0或1个candidate。结果始终为`EXPLORATORY_SCREEN/NAVIGATION_ONLY`，不写因子库、不生成StrategyPackage、不激活运行时。
 
@@ -1192,15 +1193,16 @@ QE Alpha generator MVE权威设计与结果为`advisory_n3_qe_alpha_generator_mv
 
 优先级：`AFTER_MARGIN_IMMUTABLE_RESULT_DESIGN_ALLOWED_BEFORE_N4`。
 
-状态：`F2_V1_1_IMPLEMENTATION_INCLUDED_REAL_SOURCE_SMOKE_PASSED_FORMAL_RUN_AFTER_MERGE`。
+状态：`V1_FORMAL_SELECTED_ZERO_FROZEN__V2_F2_READY_CANONICAL_SECTOR_OOF_SOURCE_UNAVAILABLE`。
 
-该辅助线回答“同一策略包的评分是否能转换为跨日可比较的收益准入尺度”以及“市场形态和HMM是否在score之外提供增量”。它不生成新候选，不替代财务事件主线，符合最多一主线一独立辅助线的资源边界。
+该辅助线回答“同一策略包的评分是否能转换为跨日可比较的收益准入尺度”以及“市场形态和HMM/rotation是否在score之外提供增量”。它不生成新候选。v1已正式结束；v2是当前唯一执行路线，不与另一条模型主线并行。
 
-1. 权威F2为`advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md` v1.1；本版本已实现20日内policy episode primary、H1/H5/H10/H20 secondary、同日score transform、五个消融arm、market/HMM source identity、double-count检测、28-path/inner OOF、80%一侧下界、支持度、multiple-testing、artifact和独立aux route，正式经济实验仍待合入后运行。
+1. v1权威F2为`advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md` v1.2；正式request `advscorehmm_2a442c84ecdac872a4e56e45`和bundle `f8da2f70...`已完成三个可执行arm，sector两臂NOT_RUN，结果selected=0且frontier冻结。
 2. 实现期发现并修复源合同矛盾：旧policy Top40标签与N1 PIT Top50的Top20各有212个独有键，故旧标签只作diagnostic；程序从N1已绑定Prediction Store重建405日/20,250行Top50 context，386候选日逐字段复现N1后生成7,720个同源policy labels和baseline。N1 PIT缺少前60日warm-up，故正式request前从创建N1的权威primary canonical source以repeatable-read/readonly冻结宽PIT，裁剪后的membership projection必须与N1完全一致；DEV profile因两个symbol的成员结束日漂移已被实测拒绝。正式MVE自身数据库访问为0。
-3. score-only、raw-market与fold-local causal market-HMM三臂首轮可执行；真实源烟测为386/386 raw-market可用、28 fold/9,122 HMM状态/0 unavailable block。sector/combined两臂必须等待canonical causal OOF/prediction bundle，首轮固定`NOT_RUN_SOURCE_UNAVAILABLE`。
-4. 首轮只属于`RISK_MANAGED_ADVISORY`的score-calibrated admission/abstention；只允许父Top5形成0至5个TAKE，不重排、不以rank6补位。若另行评价冻结候选深度内的sector-conditioned rerank，必须建立独立`ALPHA_RANKING`experiment id与trial计数，不得结果后换合同。
-5. selected=1只进入独立confirmation设计；selected=0只关闭该冻结arm/model/threshold frontier。任何探索结果均不改生产descriptor、不写StrategyPackage、不激活runtime。只有独立角色取得确认增量后，才在N4执行factorial ablation与组合。
+3. v1三个arm分别只在3/5/9日TAKE且相对父基线lift均为负。243点zero-trial失败分解有117点支持充分但0个方向性正增量，最佳支持点仍为负；标签/符号审核通过，不能以反向预测或阈值放宽继续。
+4. 日期分解显示v1预测方差主要由CPCV complement train intercept/base rate解释；该限制不推翻selected=0，却禁止把v1绝对概率作为跨日生产准入。v2权威F2为`advisory_causal_admission_v2_f2_detailed_design_20260906.md`，改用evaluation前成熟标签和单一past-only chronological prediction。
+5. v2的score/raw/market-HMM三臂只作不可选control；只有canonical sector/combined新信息臂可选。最新主线尚无可消费`rotation_L1` development OOF reader，所以状态为`SOURCE_NOT_READY_NO_TRIAL`；不冻结request、不占trial、不写假adapter或重复实现上游HMM。
+6. v2 selected=1只进入独立confirmation设计；selected=0只关闭该source/model/window/threshold frontier。任何探索结果均不改生产descriptor、不写StrategyPackage、不激活runtime。只有独立角色取得确认增量后，才在N4执行组合与重训窗口对照。
 
 ### N4：信号组合、重训窗口与prospective activation
 
@@ -1373,7 +1375,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-196 | 腿间正式selected=0后先完成target-free分钟source-ready，再只实现固定parent-only comparator与固定parent+minute candidate；T日时钟、八字段/八聚合、normal missing、28-path/7-OOF、双baseline family-wise门槛和selected=0转generator/selected=1转confirmation必须预注册 |
 | F-197 | 分钟正式selected=0后只实现固定QE Alpha generator MVE：目录只读准备、LLM无target声明式AST生成和DB/network-off经济评价三阶段隔离；固定生成/经济trial预算、原创性/已知效应/防衰减、10%父包rank overlay、累计多重检验与0/1一次性route |
 | F-198 | generator正式selected=0后只选择融资融券新信息源：冻结candidate H5 source projection、T-1时钟、十二项动态、parent/membership controls、三个Ridge trial、28-path/7-OOF、累计多重检验和0/1 route；不删unsupported股票、不读sealed、不写生产 |
-| F-199 | 父包raw/combined score只保留同日横截面排序语义；跨日准入必须使用exact package/manifest/style/policy绑定的train-only transform与cross-fitted percentile/绝对和超额收益校准，禁止raw score固定阈值 |
+| F-199 | 父包raw/combined score只保留同日横截面排序语义；跨日准入必须使用exact package/manifest/style/policy绑定的train-only transform与past-only chronological绝对收益/概率校准，禁止raw score固定阈值和CPCV补集绝对水平 |
 | F-200 | 原始市场形态、市场HMM、板块HMM/rotation和两类HMM组合使用显式固定arm消融；原始市场形态是无HMM control，HMM必须证明增量且不得直接乘父score或单状态默认硬否决 |
 | F-201 | HMM只消费causal forward-filter或canonical causal OOF/prediction bundle，使用PIT行业映射并记录父score重复消费；smoothed/Viterbi未来状态、latest snapshot、neutral静默填充和缺失删股均禁止 |
 | F-202 | `ADMISSION_RISK`按`RISK_MANAGED_ADVISORY`输出逐候选TAKE/SKIP和日级TAKE_SOME/SKIP_ALL；零只通过是`NO_ELIGIBLE_RECOMMENDATION`正常状态，最多五个固定槽位，不补位、不形成资金权重 |
@@ -1381,6 +1383,16 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-204 | N3-AUX详细设计只能在margin不可变结果后启动，代码/实验必须等待F2冻结；独立确认通过后才进入N4组合，sector runtime还必须等待`rotation_L1`自身Advisory capability/forward证据 |
 | F-205 | margin selected=0后财务事件source readiness只读三类raw最早本地版本并保留neutral disclosure；date-only只从公告后首个交易日生效，revision/support只作target-free诊断，non-vintage ready只放行后续MVE设计 |
 | F-230 | 财务事件MVE只消费immutable non-vintage projection，固定parent/disclosure/signed三trial、事件时钟、28-path/7-OOF、双control增量门槛、一次0/1 route；正结果也只放行vintage source决策，不得直接确认或激活 |
+| F-231 | Score/HMM v1正式selected=0与zero-trial失败分解保持不可变；排除标签/符号错误，禁止旧frontier阈值放宽、反向预测或结果后regime选择 |
+| F-232 | Admission v2只使用evaluation前成熟标签、单一past-only chronological split和每行一个prediction；CPCV仅保留横截面/选择偏差用途，不再提供跨日绝对阈值水平 |
+| F-233 | canonical `rotation_L1` causal development OOF是v2 request前硬依赖；source未进入主线时`SOURCE_NOT_READY_NO_TRIAL`，不写假adapter、不预占trial |
+| F-234 | v2五个arm全部计入累计multiplicity；score/raw/market-HMM是不可选control，只有sector/combined新增信息arm可一次选择0/1 |
+| F-235 | v2固定Ridge/Logistic、inner chronological residual、LCB>0和probability>=0.5；不换模型、不调参、不提供threshold grid |
+| F-236 | v2 Admission只作用父Top5并允许0～5与`NO_ELIGIBLE_RECOMMENDATION`；unavailable与主动SKIP分离，不重排、不补位、不形成动态权重 |
+| F-237 | v2用同一shadow-policy simulator评价causal prior calibration、支持度、family-wise lift、predecessor增量和五块稳定性；胜率只作辅助 |
+| F-238 | v2绑定RISK objective、LEARNABILITY_AUDIT、NAVIGATION_ONLY、policy/source/window lineage、一次选点和exact-retry防退化 |
+| F-239 | v2 source/PIT/maturity/future poison/normal missing/sealed holdout/三级证据边界fail closed，不删股票或日期改善coverage |
+| F-240 | v2实现范围保持最小，不重复实现rotation/HMM产品，不新增DB/API/UI/scheduler/治理平台；restart和DDL仍是用户独立授权门 |
 
 ## 11. Design Acceptance Matrix
 
@@ -1484,14 +1496,24 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-196 | §9 N3分钟信息集MVE；`advisory_n3_minute_information_set_mve_f2_detailed_design_20260903.md` v1.2；`minute_information_set_contracts.py`；`minute_information_set_pipeline.py`；`advisory_minute_information_set_mve_run.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/learnability_receipt.json`；99 targeted tests；Advisory suite `774 passed/16 skipped`；exact retry | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: navigation-only frontier已消费关闭；no runtime/factor/package/position write |
 | F-197 | §9；`advisory_n3_qe_alpha_generator_mve_f2_detailed_design_20260903.md` v1.6；`qe_alpha_generator_contracts.py`；`qe_alpha_generator_pipeline.py`；`advisory_qe_alpha_generator_mve_run.py` | `backend/tests/advisory_model_first/test_qe_alpha_generator_contracts.py`; `test_qe_alpha_generator_pipeline.py`; `test_qe_alpha_generator_delivery.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_qe_alpha_generator_formal_v5_20260904/qe_alpha_generator_mve_bundles/9327330c11082d656463a85007f03744c47ad52224c764e006235025b5c8fc64/receipt.json` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | none |
 | F-198 | §9；`advisory_n3_margin_information_set_mve_f2_detailed_design_20260904.md` v1.7；`margin_information_set_contracts.py`/`margin_information_set_pipeline.py`/thin CLI | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_margin_information_set_formal_v1_20260904/margin_information_set_bundles/b50411d8d68838a3162d5d4e5070259af9a0ba02a515b556c8340ad968537ae4/learnability_receipt.json`; `backend/tests/advisory_model_first/test_margin_information_set_delivery.py` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO_INSUFFICIENT_SUPPORT | approved_by_user: navigation-only；no runtime/factor/package/position write |
-| F-199 | §1.1、§6.11.1；F2 v1.1；`build_package_score_features` | `test_package_score_calibration.py`；真实N1 7,720行finite/affine transform smoke；future formal receipt | IMPLEMENTED_SOURCE_SMOKE_PASSED_FORMAL_PENDING | raw cross-date threshold prohibited |
-| F-200 | §6.11.2～§6.11.3；F2 v1.1固定arm/raw control/HMM | `test_score_hmm_admission_pipeline.py`、`test_score_hmm_context.py`；386日raw、28-fold HMM source smoke | IMPLEMENTED_SOURCE_SMOKE_PASSED_FORMAL_PENDING | HMM incremental economics pending |
-| F-201 | §4.5；F2 v1.1 causal/PIT/double-count/missing contracts | `test_score_hmm_context.py`覆盖future poison、分块fit、宽PIT membership、sector unavailable和duplicate exposure | IMPLEMENTED_MARKET_SOURCE_READY_SECTOR_SOURCE_UNAVAILABLE | sector canonical input仍不可用且不得伪造 |
-| F-202 | §5.6、§6.11.3、§7.3；`AdvisoryAdmissionDecisionV1`/pipeline | `test_admission_decision.py`覆盖zero-to-five、NO_ELIGIBLE_RECOMMENDATION、label-independent action、no-backfill/no-position | IMPLEMENTED_DIRECT_TESTED_FORMAL_PENDING | dynamic position remains out of scope |
-| F-203 | §5.3、§6.11；F2 v1.1 objective-specific experiment/route | `test_score_hmm_objective_isolation.py`覆盖trial隔离、nested predecessor与一次选点 | IMPLEMENTED_DIRECT_TESTED_FORMAL_PENDING | no combined total score or cross-contract activation |
-| F-204 | §9 N3-AUX/N4；`advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md` v1.1；score/HMM contracts/pipeline/CLI | F2 validate；六组direct tests；真实aligned 405日rank/7,720 label/386日raw/28-fold HMM source smoke；future formal/confirmation receipts | IMPLEMENTATION_INCLUDED_SOURCE_SMOKE_PASSED_FORMAL_RUN_NEXT | sector source unavailable；无runtime activation、restart或DDL，formal run pending |
+| F-199 | §1.1、§6.11.1；F2 v1.2；`build_package_score_features`；v2 chronological contract | `backend/tests/advisory_model_first/test_package_score_calibration.py`；artifact: formal bundle `f8da2f70...`；v2 target tests | V1_FORMAL_COMPLETE_V2_DESIGN_READY | approved_by_user: raw threshold and CPCV-complement absolute calibration prohibited |
+| F-200 | §6.11.2～§6.11.3；F2 v1.2 fixed arm/raw control/HMM | `backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py`；`backend/tests/advisory_model_first/test_score_hmm_context.py`；artifact: formal bundle `f8da2f70...` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: v1 frontier frozen; future sector uses v2 lineage |
+| F-201 | §4.5；F2 v1.2 causal/PIT/double-count/missing contracts | `backend/tests/advisory_model_first/test_score_hmm_context.py`覆盖future poison、分块fit、宽PIT membership、sector unavailable和duplicate exposure | IMPLEMENTED_MARKET_SOURCE_READY_SECTOR_SOURCE_UNAVAILABLE | approved_by_user: sector canonical input仍不可用且不得伪造 |
+| F-202 | §5.6、§6.11.3、§7.3；`AdvisoryAdmissionDecisionV1`/pipeline | `backend/tests/advisory_model_first/test_admission_decision.py`覆盖zero-to-five、NO_ELIGIBLE_RECOMMENDATION、label-independent action、no-backfill/no-position；formal v1 decisions | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: dynamic position remains out of scope |
+| F-203 | §5.3、§6.11；F2 v1.2 objective-specific experiment/route | `backend/tests/advisory_model_first/test_score_hmm_objective_isolation.py`覆盖trial隔离、nested predecessor与一次选点；formal v1 selected=0 | IMPLEMENTED_FORMAL_VERIFIED_FRONTIER_FROZEN | approved_by_user: no combined total score or cross-contract activation |
+| F-204 | §9 N3-AUX/N4；`advisory_score_hmm_conditioned_admission_f2_detailed_design_20260904.md` v1.2；score/HMM contracts/pipeline/CLI | F2 validate；六组direct tests；artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/score_hmm_admission_bundles/f8da2f70eb51b151b303ee5d19f12d9a651ba4b386291626f3dd33689a78f471/frontier_receipt.json` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: v1 frozen; no runtime activation/restart/DDL |
 | F-205 | §9 N3财务事件source readiness；`advisory_n3_financial_event_source_readiness_f2_detailed_design_20260904.md` v1.2；`financial_event_source_readiness.py`/thin CLI | `backend/tests/advisory_model_first/test_financial_event_source_readiness.py`; `backend/tests/advisory_model_first/test_financial_event_source_delivery.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_financial_event_source_readiness_formal_v1_20260905/financial_event_source_bundles/211b8db192c83b79f7731649e84a2f929c1d56579e337c438d84e90aa3fb7ead/source_readiness_receipt.json` | FORMAL_SOURCE_READY_DELIVERED | approved_by_user: no model/runtime/DDL/DML；next task only MVE design |
-| F-230 | §9 N3 event MVE；`advisory_n3_financial_event_information_set_mve_f2_detailed_design_20260905.md` v1.0；`financial_event_information_set_contracts.py`/pipeline/thin CLI | `backend/tests/advisory_model_first/test_financial_event_information_set_contracts.py`; `backend/tests/advisory_model_first/test_financial_event_information_set_pipeline.py`; `backend/tests/advisory_model_first/test_financial_event_information_set_delivery.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_n3_financial_event_information_set_mve_f2_detailed_design_20260905.md --tier F2` | IMPLEMENTED_LOCAL_VERIFIED_FORMAL_RUN_PENDING | approved_by_user: formal economic run only after clean-main merge；no runtime/restart/DDL/DML/network/Tushare |
+| F-230 | §9 N3 event MVE；`advisory_n3_financial_event_information_set_mve_f2_detailed_design_20260905.md` v1.0；`financial_event_information_set_contracts.py`/pipeline/thin CLI | `backend/tests/advisory_model_first/test_financial_event_information_set_contracts.py`; `test_financial_event_information_set_pipeline.py`; `test_financial_event_information_set_delivery.py`; artifact: formal bundle `ad234f4c...` | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO | approved_by_user: no runtime/restart/DDL/DML/network/Tushare |
+| F-231 | §1、§6.11、§9 N3-AUX；v1 formal failure decomposition | artifact: v1 `f8da2f70.../frontier_receipt.json`; exact-retry diagnostic hashes recorded in v2 F2 §1 | DESIGN_AND_RESULT_BOUNDARY_VERIFIED | none |
+| F-232 | §6.11；`advisory_causal_admission_v2_f2_detailed_design_20260906.md` §§5.2/5.5 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` chronological/future-block/base-rate tests | DESIGN_READY | approved_by_user: implementation follows source readiness |
+| F-233 | v2 F2 §§2.2/5.1 source preflight | target: `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py` zero-trial source gate | DESIGN_READY_SOURCE_UNAVAILABLE | approved_by_user: latest main lacks canonical sector OOF reader; no fake source |
+| F-234 | v2 F2 §§5.4/6.3 fixed arm and selection contract | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` control-unselectable and 0/1 selection tests | DESIGN_READY | none |
+| F-235 | v2 F2 §§5.5/5.6 frozen model/action | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` fixed family/no-grid tests | DESIGN_READY | none |
+| F-236 | v2 F2 §5.6 Admission | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` 0..5/no-backfill/unavailable tests | DESIGN_READY | none |
+| F-237 | v2 F2 §6 evaluation | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` baseline/calibration/support/multiplicity tests | DESIGN_READY | none |
+| F-238 | v2 F2 §§5.1/6.3/7 identity, registry and delivery | target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` retry/route/tamper tests | DESIGN_READY | none |
+| F-239 | v2 F2 §§5.2～5.3/9 PIT and evidence boundaries | target: `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py`; `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` | DESIGN_READY | none |
+| F-240 | v2 F2 §§3/7～12 false gates and minimal scope | target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_causal_admission_v2_f2_detailed_design_20260906.md --tier F2` | DESIGN_READY_NO_PRODUCTION_MUTATION | approved_by_user: restart and DDL remain separate gates |
 
 ## 12. Verification Plan
 
@@ -1562,7 +1584,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 - 固定arm消融必须分别产生score-only、raw-market、market-HMM、sector-HMM和combined结果；market-HMM增量只相对相同raw-market control判断，任一缺臂不得把组合效果归因给HMM。
 - HMM测试拒绝smoothed/Viterbi全序列状态、未来posterior、非PIT行业映射、latest snapshot扫描和父score重复暴露；正常停牌/映射/HMM缺失保留候选并输出typed unavailable。
 - Admission测试覆盖0至5只通过、`NO_ELIGIBLE_RECOMMENDATION`、不向后补位、无动态资金权重、package/manifest/style/policy错配fail closed及ALPHA/RISK合同隔离。
-- `rotation_L1`未形成canonical causal OOF/prediction bundle时sector arm只能typed source unavailable；研究bundle不等于runtime capability，正式绑定还需两边独立confirmation与forward证据。
+- v1在`rotation_L1`未形成canonical causal OOF/prediction bundle时只把sector arm记为typed source unavailable；v2则必须在request/trial之前整体以`SOURCE_NOT_READY_NO_TRIAL`停止。研究bundle不等于runtime capability，正式绑定还需两边独立confirmation与forward证据。
 
 ### 12.6 DESIGN-COMPLIANCE-001
 
@@ -1596,8 +1618,10 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 15. `COMPLETED_N3_PARENT_OVERLAY_SELECTED_ZERO`：固定6信号×4小权重overlay正式完成`24/24/24/0`；干预支持充分但所有Top5 family-wise lift下界不大于0，exact retry稳定，关闭同窗overlay权重路线。
 16. `COMPLETED_N3_LEG_DISAGREEMENT_SELECTED_ZERO`：固定两trial腿间learnability MVE已完成，support充分但四项增量门槛失败；lineage关闭并转分钟信息集，不回选三腿feature/alpha/fold。
 17. `COMPLETED_N3_MARGIN_SELECTED_ZERO`：融资融券源码与正式MVE已完成，bundle `b50411d8...`为`EXPLORATORY_INSUFFICIENT_SUPPORT`且selected=0；不回选margin arm，主线按receipt转财务事件source-readiness。
-18. `COMPLETED_N3_EVENT_SELECTED_ZERO__SCORE_HMM_IMPLEMENTATION_INCLUDED_FORMAL_RUN_NEXT`：财务事件bundle `ad234f4c...`已完成`3/3/0`且关闭；同包评分/市场/HMM F2 v1.1与源码由本版本交付，真实aligned-rank/label/raw-market/HMM source smoke均通过。合入后只运行一次clean-main固定实验；sector两臂source unavailable不运行，单角色确认前不进入N4组合。
-19. `CONDITIONAL_AFTER_CONFIRMATION`：确认信号后才运行种子/正交/LOO/重训窗口与prospective activation；前向标签成熟后运行P1-A，至少两个兼容策略包具备独立bundle后运行P1-B，LONG_TREND包就绪后运行P2。
+18. `COMPLETED_N3_EVENT_SELECTED_ZERO`：财务事件bundle `ad234f4c...`已完成`3/3/0`且关闭，不进入vintage source、confirmation或activation。
+19. `COMPLETED_SCORE_HMM_V1_SELECTED_ZERO_FROZEN`：同包评分/市场/HMM v1正式bundle `f8da2f70...`已完成三个可执行arm；selected=0。243点失败分解没有可靠阈值增量并识别CPCV补集绝对校准限制，旧frontier不得放宽、反向或回选。
+20. `ACTIVE_CAUSAL_ADMISSION_V2_SOURCE_NOT_READY_NO_TRIAL`：v2 F2已冻结past-only chronological calibration、旧信息不可选control和sector/combined新信息candidate；最新主线尚无canonical `rotation_L1` development OOF reader，source就绪前不冻结request、不训练、不占trial。
+21. `CONDITIONAL_AFTER_CONFIRMATION`：确认信号后才运行种子/正交/LOO/重训窗口与prospective activation；前向标签成熟后运行P1-A，至少两个兼容策略包具备独立bundle后运行P1-B，LONG_TREND包就绪后运行P2。
 
 源码合入、WSL训练、模型文件生成、后端重启、模型加载和页面可见是独立状态，不得合并声明完成。
 
@@ -1692,7 +1716,7 @@ score_hmm_admission_runtime_activation = noop until independent confirmation and
 
 ## 16. 当前下一步
 
-M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1、N2，以及N3固定单信号、父包overlay、腿间共识/分歧、分钟、QE Alpha generator、融资融券与财务事件信息集均已正式完成且selected=0。当前route为`N3_SCORE_HMM_ADMISSION_MVE_IMPLEMENTATION`；本版本已完成同包评分/市场/HMM辅助F2 v1.1、源码、direct tests和真实source smoke，下一步是审核合入后从clean main运行固定MVE。它不是旧P0/N3重跑，首轮sector arms明确source unavailable，任何角色均不能在独立确认和相应HMM能力就绪前接入运行时。
+M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5A/M5B/M5C均不激活。P0-A/P0-B已在两个ENABLED Program上持续形成真实`PUBLISHED` run，P0-C/P0-D、forward evaluation和P0-D exact shadow descriptor已合入并运行；v6 44日对照和P0-D/P0-E历史回放已冻结。P0-D至P0-L研究族保持冻结且无可激活winner。N0、N1、N2，以及N3固定单信号、父包overlay、腿间共识/分歧、分钟、QE Alpha generator、融资融券、财务事件和同包Score/HMM v1均已正式完成且selected=0。正式main route仍保留财务事件当时写入的next task，正式aux route已闭合v1；蓝图当前业务任务是`N3_AUX_CAUSAL_ADMISSION_V2_SOURCE_PREFLIGHT`。v2详细设计已冻结chronological absolute calibration与sector新信息边界，但最新主线尚无canonical `rotation_L1` development OOF reader，所以保持`SOURCE_NOT_READY_NO_TRIAL`。下一步只是在上游source合入后执行target-free preflight；不得重跑旧信息、伪造sector输入或提前接入运行时。
 
 ### 16.1 主动业务任务（严格顺序）
 
@@ -1706,12 +1730,15 @@ M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5
 8. **融资融券新信息源MVE详细设计（已完成）**：v1.7冻结candidate H5 source projection、T-1可见性、十二项1D/5D动态、parent-only和membership-only controls、三个Ridge trial、28-path/7-OOF、累计多重检验及0/1路由；DEV表为空不冒充数据就绪，unsupported股票不删除。
 9. **融资融券MVE源码与正式实验（已完成）**：源码已合入clean main，正式bundle `b50411d8...`完成`3/3/0`且selected=0；candidate RankIC/Top5均低于父包，323个共同可评价日使证据归类为`EXPLORATORY_INSUFFICIENT_SUPPORT`，四段稳定性失败。只关闭本次十二项动态+冻结Ridge的精确margin frontier，不证明全部margin信息全局不可学。
 10. **财务事件source-readiness交付（已完成）**：F2 v1.2、最小源码和direct tests经PR #4288合入；clean-main正式bundle `211b8db1...`为`SOURCE_READY_NAVIGATION_ONLY_NON_VINTAGE`，registry/route重复交付幂等。它只放行事件信息集MVE详细设计，不授权Tushare/网络、回填、DEV/生产DDL/DML或运行时，不能扩张为通用事件平台。
-11. **同包评分/市场/HMM F2详细设计（已完成，独立辅助线）**：F2 v1.1冻结aligned PIT Top50 policy episode primary、同日score transform、宽PIT raw-market control、fold-local market-HMM、sector/combined五arm、双头线性校准、CPCV/inner OOF、0至5只和独立aux route。首轮sector两臂等待canonical causal prediction input并固定NOT_RUN；设计本身不产生实验或激活授权。
+11. **同包评分/市场/HMM F2详细设计（已完成，独立辅助线）**：F2 v1.2记录aligned PIT Top50 policy episode primary、同日score transform、宽PIT raw-market control、fold-local market-HMM、五arm、双头线性校准、CPCV/inner OOF、0至5只和独立aux route，并补充正式结果与v1绝对校准结论边界。
 12. **财务事件信息集MVE设计、源码与正式实验（已完成）**：正式bundle `ad234f4c...`为`3/3/0`，candidate的RankIC、Top5和四段稳定性均未优于parent；frontier关闭并转score/HMM，不回选、不进入vintage source或activation。
-13. **同包评分/市场/HMM源码实现（本版本完成）**：F2 v1.1、contracts、aligned PIT Top50 policy sources、宽PIT raw-market、fold-local HMM、固定五臂、双头cross-fit、0至5只admission、shared policy evaluation、immutable bundle和aux route均实现；六组direct tests与真实source smoke通过。旧Top40 labels不得内连接冒充N1 target。
-14. **同包评分/市场/HMM正式MVE（合入后当前下一步）**：先从N1权威primary canonical source以只读source-freeze生成并验证宽PIT immutable file，再从clean main冻结唯一request，在WSL `rdagent-gpu`运行三条可执行arm；sector两臂登记`NOT_RUN_SOURCE_UNAVAILABLE`。三个可执行arm完整时，selected=1只进入独立confirmation设计，selected=0关闭该精确frontier；任一可执行arm source unavailable则形成`AUX_PARTIAL_SOURCE_UNAVAILABLE`且不得选点。不重启后端、不执行DDL/DML、不读sealed holdout。
-15. **确认后进入业务接入**：只有新lineage在独立证据上形成确认增量后，才执行原创性/已知效应重叠、种子稳定性、残差正交、LOO、成本后组合和重训窗口对照；随后按§5.6通过exact package-conditioned role binding进入对应Program shadow，并积累prospective activation证据。探索结果本身不能写因子库、生成StrategyPackage或激活运行时。
-16. **扩展策略包覆盖**：当前目标包形成可确认角色信号后，为下一兼容包建立独立exact bundle基线；至少两个兼容包有真实bundle后才执行P1-B共享实验。这里追求通用框架和可验证覆盖，不追求未经验证的统一权重文件。
+13. **同包评分/市场/HMM源码与正式MVE（已完成）**：contracts、aligned PIT Top50 policy sources、宽PIT raw-market、fold-local HMM、固定五臂、双头cross-fit、0至5只admission、shared policy evaluation、immutable bundle和aux route均已实现；正式bundle `f8da2f70...`完成三个可执行arm且selected=0，sector两臂NOT_RUN。
+14. **v1失败分解（已完成）**：243点固定预测边际重放有117点支持充分但0个方向性正增量；排除target错接/符号反向，定位CPCV补集base-rate主导跨日绝对预测。exact retry identity稳定；不写registry、不选择阈值、不读sealed。
+15. **因果Admission v2 F2（本版本完成）**：`advisory_causal_admission_v2_f2_detailed_design_20260906.md`冻结blocks 0～2训练/校准、blocks 3～7一次性development evaluation、成熟标签、每行一个past-only prediction、五臂与旧control不可选规则。source未就绪时零trial停止。
+16. **canonical sector/rotation OOF target-free preflight（当前下一步，等待上游source）**：仅当最新main出现真实causal development OOF reader和完整model/input/mapping/availability identity后执行；不读取label/收益/sealed。上游PR #4343当前只交付direct-v2 input bundle/设计且尚未合入，不等于prediction authority；本任务不重复实现上游HMM。
+17. **v2源码与正式MVE（source preflight通过后）**：按F2最小范围实现、重复审核并运行一次；只有sector/combined可选。selected=1转独立confirmation，selected=0转sector信息集review，不改阈值/窗口/模型。
+18. **确认后进入业务接入**：只有新lineage在独立证据上形成确认增量后，才执行原创性/已知效应重叠、种子稳定性、残差正交、LOO、成本后组合和重训窗口对照；随后按§5.6通过exact package-conditioned role binding进入对应Program shadow，并积累prospective activation证据。探索结果本身不能写因子库、生成StrategyPackage或激活运行时。
+19. **扩展策略包覆盖**：当前目标包形成可确认角色信号后，为下一兼容包建立独立exact bundle基线；至少两个兼容包有真实bundle后才执行P1-B共享实验。这里追求通用框架和可验证覆盖，不追求未经验证的统一权重文件。
 
 ### 16.2 被动观察（零研发排期）
 
@@ -1725,8 +1752,8 @@ M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5
 
 ### 16.4 零工作约束与已完成状态
 
-- P0-D至P0-L冻结、N1/N2 immutable结论、N3固定proposal/overlay/腿间/分钟/generator/margin的selected=0与已消费窗口都只作为约束，不是任务；不得创建P0-M、放宽旧合同、回选旧arm、回选Entry/Exit或把旧窗口声称为新OOS。
+- P0-D至P0-L冻结、N1/N2 immutable结论，以及N3固定proposal/overlay/腿间/分钟/generator/margin/event/Score-HMM-v1的selected=0与已消费窗口都只作为约束，不是任务；不得创建P0-M、放宽旧合同、回选旧arm、回选Entry/Exit或把旧窗口声称为新OOS。
 - 历史实验复盘、历史证据/数据固化、归档、Phase 1R、旧batch/root清理、通用缓存/调度/ModelOps、registry UI和额外治理均分配零主动工时。
 - 最小PIT、policy hash、成本、窗口、package/descriptor identity继续保留，因为它们防止未来泄漏、跨包误用和结果后改判；不得将这些最小正确性字段扩张为独立数据平台。
 
-固定分钟、QE Alpha generator与融资融券MVE均已完成且未形成资金权重、仓位或交易输入。财务事件正式source projection、后续MVE和同包评分/HMM辅助线同样只允许离线source/OOF研究，不写因子库或StrategyPackage，无需等待动态资金仓位授权。只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。§16.1的后续源码和实验默认不需要后端重启或DDL；如详细设计证明产生这些操作，仍须由用户执行或另行授权。
+固定分钟、QE Alpha generator、融资融券、财务事件和Score/HMM v1 MVE均已完成且未形成资金权重、仓位或交易输入。因果Admission v2同样只允许离线source/OOF研究，不写因子库或StrategyPackage，无需等待动态资金仓位授权。只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。§16.1的后续源码和实验默认不需要后端重启或DDL；如详细设计证明产生这些操作，仍须由用户执行或另行授权。

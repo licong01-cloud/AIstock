@@ -1,7 +1,7 @@
-# Advisory 同包评分校准与市场/HMM 条件化准入 F2 详细设计 v1.1
+# Advisory 同包评分校准与市场/HMM 条件化准入 F2 详细设计 v1.2
 
-> 日期：2026-09-05
-> 状态：`IMPLEMENTATION_INCLUDED_REAL_SOURCE_SMOKE_PASSED_FORMAL_RUN_AFTER_MERGE`
+> 日期：2026-09-06
+> 状态：`FORMAL_COMPLETE_SELECTED_ZERO_FROZEN_CAUSAL_ABSOLUTE_CALIBRATION_LIMIT_IDENTIFIED`
 > tier：`F2`
 > research stage：`N3_AUX_SCORE_HMM_CONDITIONED_ADMISSION`
 > objective contract：`RISK_MANAGED_ADVISORY`
@@ -21,8 +21,11 @@
 4. 冻结 policy dataset `81e2c9ba...` 继续提供 baseline/shadow/cost policy 合同，hash 分别为 `cd48c766.../8bc008c9.../fbef59ed...`；shadow policy 固定 Top5、T+1 可执行开盘入场、20 日 time stop、止损/移动止盈和 T+1 可执行开盘退出。但其 `advisory_exact_weighted_top40_v1` Top20 与 N1 `advisory_exact_weighted_pit_top50_v1` Top20 在同一 7,720 键中各有 212 个独有键，不能作为 N1 候选的 primary label 或 baseline。实现改为从 N1 已绑定的两条 Prediction Store 资产重建 405 日/20,250 行 PIT Top50 context，先逐字段复现 N1 的 386 日/19,300 行候选投影，再按同一 policy 生成 7,720 个同源标签；真实只读烟测为 7,716 `MATURED`、3 `NOT_ENTERED_LIMIT_UP`、1 `CENSORED_RIGHT_BOUNDARY`，shadow 回放最终无悬空持仓。
 5. 旧 M1 feature artifact 的 6,960 行/348 日只作 source feasibility：原始市场形态列 6,960/6,960 完整，PIT L2 映射 6,371 行，旧 sector HMM posterior 5,975 行。它不是本实验输入，也不能证明新 386 日 fold-local HMM 已就绪。
 6. `rotation_L1` 当前仍为 `NOT_AVAILABLE`：没有 canonical causal OOF/prediction bundle，research surface、rotation capability、forward confirmation 与 Advisory capability 均未闭合。因此首轮不得运行 sector 两臂，也不得用旧 snapshot、旧 score、smoothed state 或 neutral 填充代替。
-7. 财务事件信息集正式 bundle `ad234f4c...` 已完成 `3/3/0`，signed-content candidate 的 RankIC/Top5 为 `0.063685/359.41 bps`，低于 parent `0.122839/443.65 bps`，四个时间块无一 joint-positive；主线 route 已按冻结结果进入 `N3_SCORE_HMM_ADMISSION_MVE_IMPLEMENTATION`。本设计仍写独立 auxiliary route，不回选财务事件结果，也不与其候选混合。
+7. 财务事件信息集正式 bundle `ad234f4c...` 已完成 `3/3/0`，signed-content candidate 的 RankIC/Top5 为 `0.063685/359.41 bps`，低于 parent `0.122839/443.65 bps`，四个时间块无一 joint-positive；其冻结 route 随后已执行本 v1。本设计继续写独立 auxiliary route，不回选财务事件结果，也不与其候选混合。
 8. N1 PIT 快照只覆盖 `2024-07-04..2026-03-10`，不能伪造首个 HMM block 所需的 60 日过去 warm-up。实现增加正式 request 之前对 N1 权威 primary canonical source profile 的一次只读 source freeze，得到 `2023-09-01..2026-03-10` 宽快照：file SHA-256 `6cd13fd3...`、spans SHA-256 `4fb83ce6...`、5,116 只股票/5,156 段。裁剪回 N1 窗口后股票及 eligible 起止日完全一致；当前 source fingerprint 的唯一差异是 `301117.SZ` 的 reason-only `generation_end -> st_negative`，成员资格未变化。另行生成的 DEV 快照因 `600297.SH`、`601028.SH` 成员结束日漂移被 parity gate 拒绝，不得用于本实验。正式 MVE 只读已验证 immutable file，数据库访问仍为 0。
+9. 正式 request `advscorehmm_2a442c84ecdac872a4e56e45`、bundle `f8da2f70...` 已完成三个可执行 arm，sector/combined 两臂保持 `NOT_RUN_SOURCE_UNAVAILABLE`；结果为 `AUX_EXECUTED_FRONTIER_INSUFFICIENT_SUPPORT`、`selected=0`、`deployable=false`。三个 arm 分别只在 3/5/9 个决策日 TAKE，日均相对父基线 lift 为 `-26.71/-30.77/-28.55 bps`，不支持 activation 或阈值放宽。
+10. 运行后 zero-trial 失败分解覆盖 243 个由预测边际预先生成的阈值点，其中 117 个满足全局支持，但方向性正增量点为 0；最接近零的支持充分点仍为 `-2.292 bps/day`、95% moving-block 区间 `[-6.234,1.294]`。exact retry 的 diagnostic/summary/frontier SHA-256 分别为 `7f565394.../d86ca638.../5a38db80...`，未读取 sealed holdout、未重选 candidate、未写正式 registry。
+11. 标签逐值回读与实现审核排除了 target 错接、收益方向取反或因子代码加负号。负相关主要来自 CPCV validation-complement 的 train intercept/base rate 主导跨日期绝对预测；同日去均值关系近零，raw/HMM 信息扣除 base rate 后也没有可靠正增量。因此 v1 的 `selected=0` 保持不可变，但其绝对 prediction/probability 不得作为跨日固定阈值或 activation contract。后继纠偏必须使用新 lineage 的 past-only chronological calibration，并等 canonical sector/rotation OOF 新信息到达，详见 `advisory_causal_admission_v2_f2_detailed_design_20260906.md`。
 
 ## 2. Scope / 目标、成功边界与终止条件
 
@@ -51,6 +54,7 @@
 - 不把 source unavailable 填 0、填 neutral、前向填充或删除股票/日期；正常停牌与行情缺口不阻断 score-only 父基线。
 - 不读取 sealed holdout，不结果后改 primary target、模型 family、阈值、arm、objective 或候选深度。
 - 不写数据库、因子库、StrategyPackage、生产 descriptor、推荐表、仓位或订单；不建设通用 HMM/校准平台。
+- 不在正式结果之后放宽本 v1 的 LCB/probability/support 门槛，不从失败分解网格选择阈值，不把 prediction 乘负号，不复用本 bundle 启动 v2。
 
 ## 4. Architecture / 数据流与责任边界
 
@@ -180,7 +184,7 @@ GaussianHMM(n_components=2, covariance_type="full", n_iter=200,
             tol=1e-4, random_state=42, min_covar=1e-5)
 ```
 
-observation 固定为 §6.2 八项在 outer-train 上拟合的 median + standard scaler。每个 outer fold 只拟合一次 HMM；outer-train 的不连续 CPCV 块以 `lengths` 分段拟合，禁止把块尾和下一块首伪装成相邻转移。收敛不采用 hmmlearn 的宽松 `monitor.converged`（达到最大迭代或负 delta 也可能返回 true），而要求最后两次有限 log-likelihood 的绝对 delta 严格小于冻结 `tol=1e-4`，并把 delta 写入 fold receipt。state 语义只用 train-standardized state mean 的 `csi300_ret_20 + market_up_ratio` 有序组合确定，较高者为 `risk_on`，tie/nonfinite/空 state 使该 fold HMM unavailable。每个不连续 validation block 均从其起点前 60 个真实交易日的 T-visible observation 重新 warm-up，并使用冻结 train 参数逐日 forward-filter；warm-up 输出丢弃、标签不读，两个 validation block 不传递 posterior，任何 warm-up 缺口使该 block typed unavailable。posterior 行和为 1、finite、非负，不读取旧 snapshot。真实源烟测完成 28 个 fold、9,122 条状态且 0 个 unavailable block；合入后正式运行将按强化后的收敛判据重新生成 receipt。
+observation 固定为 §6.2 八项在 outer-train 上拟合的 median + standard scaler。每个 outer fold 只拟合一次 HMM；outer-train 的不连续 CPCV 块以 `lengths` 分段拟合，禁止把块尾和下一块首伪装成相邻转移。收敛不采用 hmmlearn 的宽松 `monitor.converged`（达到最大迭代或负 delta 也可能返回 true），而要求最后两次有限 log-likelihood 的绝对 delta 严格小于冻结 `tol=1e-4`，并把 delta 写入 fold receipt。state 语义只用 train-standardized state mean 的 `csi300_ret_20 + market_up_ratio` 有序组合确定，较高者为 `risk_on`，tie/nonfinite/空 state 使该 fold HMM unavailable。每个不连续 validation block 均从其起点前 60 个真实交易日的 T-visible observation 重新 warm-up，并使用冻结 train 参数逐日 forward-filter；warm-up 输出丢弃、标签不读，两个 validation block 不传递 posterior，任何 warm-up 缺口使该 block typed unavailable。posterior 行和为 1、finite、非负，不读取旧 snapshot。真实源烟测和正式运行均完成 28 个 fold、9,122 条状态且 0 个 unavailable block；该实现事实不消除 §1.4 所述跨日期 absolute-calibration 限制。
 
 HMM hard rule `risk_off => SKIP_ALL` 只允许作为不计入 candidate selection 的透明 diagnostic control；模型 arm 不直接按 state 否决，也不将 posterior 乘父 score。
 
@@ -379,7 +383,7 @@ registry 每个 arm 一条记录，固定 `objective_contract=RISK_MANAGED_ADVIS
 
 ## 15. Rollout、rollback 与后续
 
-本设计先独立合入。随后才允许按 §11 实现并重复审核；正式 MVE 可在 mainline 财务事件实验之外运行，但不得竞争同一 route 或把两个未确认信号组合。selected=1 只进入新 confirmation 设计；selected=0 只关闭已执行的 score/raw/market-HMM exact frontier。future `rotation_L1` source 到达后必须以新 source identity、新 trial reservation 和新 lineage 运行 sector arms，不能补写或回选已消费 frontier。
+本设计、实现和正式 MVE 已完成。正式结果 selected=0，已执行的 score/raw/market-HMM exact frontier 与其 CPCV absolute-calibration 合同冻结；不得补写、回选或放宽阈值。future `rotation_L1` source 到达后也不得补写本 bundle，必须进入 `advisory_causal_admission_v2_f2_detailed_design_20260906.md` 定义的新 source identity、chronological clock、trial reservation 和 lineage。
 
 只有独立 confirmation 与 prospective evidence 通过后，才讨论 Program shadow binding。production activation、后端重启、DDL/DML 和动态资金仓位仍需各自独立授权。回滚仅删除未激活的 experimental binding/reference；immutable research bundle 与 registry 记录不改写。
 
@@ -428,14 +432,14 @@ position_or_order_write = false
 | F-206 | §1、§5.1～§5.2 Frozen request；`backend/services/advisory_model_first/score_hmm_admission_contracts.py` | `backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py`；artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/canonical_market_warmup_pit_snapshot.json` | IMPLEMENTED_VERIFIED | none |
 | F-207 | §1.3、§6.1；`build_package_score_features` | `backend/tests/advisory_model_first/test_package_score_calibration.py`；真实 source smoke 为7,720行 finite | IMPLEMENTED_VERIFIED | none |
 | F-208 | §5.2～§5.3 aligned target；`build_policy_episode_labels` | `backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py`；真实 aligned labels 为 `7716/3/1` | IMPLEMENTED_VERIFIED | none |
-| F-209 | §7、§9.3 fixed family/splits/trials；contracts/pipeline | `backend/tests/advisory_model_first/test_score_hmm_objective_isolation.py`、`backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py` | IMPLEMENTED_VERIFIED | none |
+| F-209 | §7、§9.3 fixed family/splits/trials；contracts/pipeline | `backend/tests/advisory_model_first/test_score_hmm_objective_isolation.py`、`backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py`；formal bundle `f8da2f70...` | IMPLEMENTED_FORMAL_COMPLETE_SELECTED_ZERO | approved_by_user: CPCV absolute-calibration limitation freezes v1 and routes future work to v2 |
 | F-210 | §6.2～§6.3 raw/HMM；`backend/services/advisory_model_first/score_hmm_admission_pipeline.py` | `backend/tests/advisory_model_first/test_score_hmm_context.py`；真实 source smoke 为3,042,199行、386/386 raw available、28 HMM folds/0 unavailable | IMPLEMENTED_VERIFIED | none |
 | F-211 | §1.6、§6.4～§6.5 source gate | artifact/design authority: `docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md`; target `backend/tests/advisory_model_first/test_score_hmm_context.py` source-unavailable cases | DESIGN_READY_SOURCE_UNAVAILABLE | approved_by_user: sector arm does not block score/raw/market design |
 | F-212 | §6.6 exposure lineage；`_build_parent_context_exposure` | `backend/tests/advisory_model_first/test_score_hmm_context.py` explicit absence/unknown lineage，name-only=false | IMPLEMENTED_VERIFIED | none |
 | F-213 | §8；`AdvisoryAdmissionDecisionV1`/`build_admission_decisions` | `backend/tests/advisory_model_first/test_admission_decision.py` 0..5/no-backfill/label-independent action/unavailable distinction | IMPLEMENTED_VERIFIED | none |
 | F-214 | §8～§9.2；aligned simulator/evaluation/MDE | `backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py`；真实 aligned baseline 为398日且最终 active=0 | IMPLEMENTED_VERIFIED | none |
-| F-215 | §9.3 one-selection frontier；receipt/evaluator | `backend/tests/advisory_model_first/test_score_hmm_objective_isolation.py` nested predecessor、contract isolation、0/1 lock、partial-source truth | IMPLEMENTED_VERIFIED | none |
-| F-216 | §10 delivery；content-addressed publisher/inspect/registry/aux route | `backend/tests/advisory_model_first/test_score_hmm_delivery.py` closure/manifest semantics/tamper/retry/route byte identity | IMPLEMENTED_VERIFIED | none |
+| F-215 | §9.3 one-selection frontier；receipt/evaluator | `backend/tests/advisory_model_first/test_score_hmm_objective_isolation.py` nested predecessor、contract isolation、0/1 lock、partial-source truth；formal selected=0 | IMPLEMENTED_FORMAL_VERIFIED_SELECTED_ZERO_FROZEN | none |
+| F-216 | §10 delivery；content-addressed publisher/inspect/registry/aux route | `backend/tests/advisory_model_first/test_score_hmm_delivery.py` closure/manifest semantics/tamper/retry/route byte identity；formal bundle `f8da2f70...` inspect/exact retry | IMPLEMENTED_FORMAL_VERIFIED | none |
 | F-217 | §3、§13、§16 false gates；thin CLI | `backend/tests/advisory_model_first/test_score_hmm_context.py`、`backend/tests/advisory_model_first/test_score_hmm_delivery.py`；canonical profile readonly SELECT、正式 request DB/network/runtime false | IMPLEMENTED_VERIFIED_NO_DATABASE_MUTATION | none |
 
 ## 19. DESIGN-COMPLIANCE-001
