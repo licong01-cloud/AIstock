@@ -3140,6 +3140,7 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
 _BUSINESS_SMOKE_ADVISORY_PROGRAMS_URL = "http://127.0.0.1:8001/api/v1/advisory/programs"
+_BUSINESS_SMOKE_POSITION_TIMING_INTENTS_URL = "http://127.0.0.1:8001/api/v1/position-timing/intents"
 _BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
 )
@@ -4005,6 +4006,76 @@ def test_post_restart_verify_rejects_failed_advisory_program_collection(
     assert smoke["semantic"]["contract_id"] == "collection"
     assert smoke["semantic"]["verdict"] == "failed"
     assert smoke["semantic"]["reason"] == "collection payload reports ok=false"
+
+
+def test_post_restart_verify_accepts_position_timing_intent_collection(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_POSITION_TIMING_INTENTS_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "schema_version": "position_timing_intent_list_v1",
+                "position_source": "legacy_portfolio",
+                "items": [],
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "collection"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"] == {"items_key": "items", "size": 0}
+
+
+def test_post_restart_verify_rejects_failed_position_timing_intent_collection(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_POSITION_TIMING_INTENTS_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "schema_version": "position_timing_intent_list_v1",
+                "items": [],
+                "errors": ["POSITION_SOURCE_UNAVAILABLE"],
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] == "collection"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert smoke["semantic"]["reason"] == "collection payload reports errors"
 
 
 def test_post_restart_verify_blocks_business_success_when_identity_mismatches(
