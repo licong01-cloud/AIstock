@@ -5,6 +5,7 @@
     "scripts/update_backtest_dataset_monthly.py",
     "backend/tests/dataset_release/test_direct_monthly.py",
     "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260905_BUG-1372-direct-v2-31.json"
   ],
   "assigned_agent": null,
@@ -52,7 +53,8 @@
         "backend/services/dataset_release/direct_monthly.py",
         "scripts/update_backtest_dataset_monthly.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
-        "backend/tests/scripts/test_update_backtest_dataset_monthly.py"
+        "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        "noxfile.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -121,14 +123,16 @@
       "backend/services/dataset_release/direct_monthly.py",
       "scripts/update_backtest_dataset_monthly.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py"
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/direct_monthly.py",
       "scripts/update_backtest_dataset_monthly.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py"
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "noxfile.py"
     ]
   },
   "first_seen_at": "2026-09-05T09:50:06.768993Z",
