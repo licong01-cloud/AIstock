@@ -654,8 +654,8 @@ class L2ResearchContractV1(StrictModel):
     schema_version: Literal["position_timing_l2_research_contract_v1"] = (
         "position_timing_l2_research_contract_v1"
     )
-    implementation_status: Literal["PIPELINE_DEFERRED_BY_APPROVED_SCOPE"] = (
-        "PIPELINE_DEFERRED_BY_APPROVED_SCOPE"
+    implementation_status: Literal["OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL"] = (
+        "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL"
     )
     population_id: Literal["POSITION_TIMING_L2_POPULATION_V1"] = "POSITION_TIMING_L2_POPULATION_V1"
     objective: Literal["HELD_POSITION_EXIT_REDUCE_VERSUS_HOLD"] = (
@@ -767,12 +767,17 @@ def outcome_event_idempotency_key(card_id: str, horizon_trading_days: int) -> st
 POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
     population_spec={
         "cohort_stride_global_trading_days": 20,
+        "cohort_anchor": "FIRST_GLOBAL_TRADING_DAY_ON_OR_AFTER_2018_08_01",
         "entry_fill": "E_PLUS_1_RAW_OPEN",
         "baseline_terminal": "HOLDING_SESSION_20_RAW_CLOSE",
         "review_holding_sessions": list(range(1, 20)),
         "target_action_date": "REVIEW_DATE_PLUS_1_TRADING_DAY",
         "terminal_exit_max_defer_trading_days": 5,
         "selection_top20_filter": False,
+        "selection_feature_join": "IMMUTABLE_QE_ENTRY_DATE_RANKING_ELSE_MISSING",
+        "market_regime": "CSI300_TRAILING20_CLOSE_RETURN_SIGN_AT_REVIEW_CLOSE_V1",
+        "corporate_action_valuation": "RAW_PRICE_TIMES_ADJ_FACTOR_RATIO_V1",
+        "policy_value_basis": "LEGAL_ENTRY_QUANTITY_TIMES_ENTRY_RAW_OPEN",
         "unavailable_rows": "RETAIN_TYPED_STATUS",
         "episode_identity_fields": [
             "population_identity",
@@ -823,6 +828,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "paths": 28,
         "oof_predictions_per_row": 7,
         "oof_aggregation": "ARITHMETIC_MEAN",
+        "path_policy_aggregation": "MEDIAN_EXPOSURE_ACROSS_SEVEN_VALIDATION_PATHS",
         "grouping": ["episode_id", "entry_decision_date"],
         "final_refit": False,
         "parameter_search": False,
@@ -843,6 +849,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "bootstrap_seed_base": 20260903,
         "model_offsets": [0, 1],
         "confidence_level": 0.95,
+        "target_power": 0.8,
         "nominal_alpha": 0.05,
         "familywise_method": "BONFERRONI",
         "familywise_hypothesis_count": 2,
@@ -852,6 +859,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "otherwise": "INCONCLUSIVE",
         "underpowered": "MDE_DIV_ORACLE_GT_0.25",
         "mde_is_admission_gate": False,
+        "cost_parent_order_scenarios": [1, 2, 3],
     },
     registry_spec={
         "path": "research_registry/timing_trial_registry_v1.jsonl",

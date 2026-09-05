@@ -1429,7 +1429,7 @@ class PositionTimingService:
             "product_evidence_tier": "RULE_BASED_RISK_MANAGEMENT",
             "event_counts": self.store.event_counts(),
             "l2_research_contract_sha256": canonical_sha256(POSITION_TIMING_L2_RESEARCH_CONTRACT_V1),
-            "l2_runtime_status": "PIPELINE_DEFERRED_BY_APPROVED_SCOPE",
+            "l2_runtime_status": POSITION_TIMING_L2_RESEARCH_CONTRACT_V1.implementation_status,
             "hmm_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
             "selection_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
             "outcome_evidence": outcome_evidence,

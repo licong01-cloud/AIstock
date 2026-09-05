@@ -104,7 +104,7 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
       await route.fulfill({ json: {
         product_evidence_tier: "RULE_BASED_RISK_MANAGEMENT",
         event_counts: { CARD_ISSUED: 1, OUTCOME_EVALUATED: 0 },
-        l2_runtime_status: "PIPELINE_DEFERRED_BY_APPROVED_SCOPE",
+        l2_runtime_status: "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL",
         hmm_runtime_role: "CONTEXT_ONLY",
         selection_runtime_role: "CONTEXT_ONLY",
         cost_disclosure: { min_commission_scope_verification: "BROKER_UNVERIFIED", thresholds_cny: { "1.00": 58824, "0.50": 117648, "0.25": 235295 } },
