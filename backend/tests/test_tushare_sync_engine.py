@@ -793,6 +793,15 @@ def test_sw_index_member_spec_enables_replace_by_code():
     assert SW_DAILY.replace_by_code is False
 
 
+def test_sw_daily_spec_selects_only_published_sw2021_l1_and_l2():
+    normalized = " ".join((SW_DAILY.code_source_sql or "").split())
+
+    assert "level IN ('L1', 'L2')" in normalized
+    assert "src = 'SW2021'" in normalized
+    assert "is_pub = '1'" in normalized
+    assert "ORDER BY index_code" in normalized
+
+
 def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()

@@ -779,6 +779,93 @@ def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
     assert enqueue["execution_dataset"] == "sw_sector"
 
 
+def test_sw_daily_level_coverage_normalizes_l1_and_l2_rows():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda _sql, _params=(): [
+        {
+            "trade_date": dt.date(2026, 9, 4),
+            "level": "L1",
+            "expected": 31,
+            "present": 30,
+            "missing_codes": ["801010.SI"],
+        },
+        {
+            "trade_date": dt.date(2026, 9, 4),
+            "level": "L2",
+            "expected": 124,
+            "present": 124,
+            "missing_codes": [],
+        },
+    ]
+
+    coverage = scheduler._sw_daily_level_coverage(dt.date(2026, 9, 4))
+
+    assert coverage == {
+        "status": "ok",
+        "trade_date": dt.date(2026, 9, 4),
+        "levels": {
+            "L1": {"expected": 31, "present": 30, "missing_codes": ["801010.SI"]},
+            "L2": {"expected": 124, "present": 124, "missing_codes": []},
+        },
+    }
+
+
+def test_sw_daily_l1_incomplete_is_warning_retry_not_job_failure(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    scheduler._execute = lambda *_args, **_kwargs: None
+    scheduler._sw_daily_level_coverage = lambda _end: {
+        "status": "ok",
+        "trade_date": dt.date(2026, 9, 4),
+        "levels": {
+            "L1": {"expected": 31, "present": 30, "missing_codes": ["801010.SI"]},
+            "L2": {"expected": 124, "present": 124, "missing_codes": []},
+        },
+    }
+    scheduler._schedule_delayed_retry = lambda *args, **kwargs: calls.append((args, kwargs))
+
+    class _Engine:
+        def sync(self, *, spec, mode, start_date, end_date, job_id):
+            inserted = 154 if spec.name == "sw_daily" else 1
+            return SimpleNamespace(ok=True, inserted_rows=inserted)
+
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", _Engine)
+
+    scheduler._run_sw_sector_composite_sync(
+        run_id=uuid.uuid4(),
+        schedule_id=None,
+        mode="incremental",
+        triggered_by="unit",
+        options={},
+    )
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ("sw_sector", "incremental")
+    assert kwargs["delay_minutes"] == 60
+    assert "present=30" in kwargs["reason"]
+
+
+@pytest.mark.parametrize(
+    ("inserted_rows", "coverage", "expected_reason"),
+    [
+        (0, {"status": "ok", "levels": {}}, "sw_daily_zero_rows_provider_not_ready"),
+        (155, {"status": "unavailable"}, "sw_daily_l1_coverage_unavailable"),
+        (
+            155,
+            {
+                "status": "ok",
+                "trade_date": dt.date(2026, 9, 4),
+                "levels": {"L1": {"expected": 31, "present": 31}},
+            },
+            None,
+        ),
+    ],
+)
+def test_sw_daily_retry_reason(inserted_rows, coverage, expected_reason):
+    assert TDXScheduler._sw_daily_retry_reason(inserted_rows, coverage) == expected_reason
+
+
 def test_due_target_without_schedule_owner_records_retry_state(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
