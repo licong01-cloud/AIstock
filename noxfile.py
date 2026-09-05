@@ -589,6 +589,12 @@ def qlib_data_backend(session: nox.Session) -> None:
         session,
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "backend/tests/core_index_membership",
+        "backend/tests/dataset_release/test_index_pool_sidecar.py",
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/scripts/test_build_core_index_membership_authority.py",
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1221,6 +1227,9 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
         "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_requires_day_minute_window_parity",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_missing_market_fails_closed",
         "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
         "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
@@ -1238,11 +1247,13 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "backend/tests/unified_engine/test_qe_config_truth.py::test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
         "backend/tests/quantevolver/test_p0_d2_sector_oracle.py",
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
+        "backend/tests/quantevolver/test_stock_pool_sync.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
     ]
@@ -2563,6 +2574,51 @@ def position_timing_backend(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+
+
+@nox.session(venv_backend="none")
+def position_timing_first_release(session: nox.Session) -> None:
+    """Run the one concentrated source gate for the human-only first release."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    _ensure_frontend_node_modules(session)
+    frontend_env = _env(
+        {
+            "BACKEND_PORT": "8012",
+            "FRONTEND_PORT": "3012",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+        }
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
+        session.run("npm", "run", "build", env=frontend_env, external=True)
+    finally:
+        os.chdir(old_cwd)
+    _run_mocked_frontend_target(session, "tests/position-timing/position-timing.spec.ts")
 
 
 @nox.session(venv_backend="none")

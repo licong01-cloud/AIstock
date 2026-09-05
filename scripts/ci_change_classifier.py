@@ -251,6 +251,9 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_leg_disagreement_mve_run.py": ("advisory_modeling_backend",),
     "scripts/advisory_minute_information_set_mve_run.py": ("advisory_modeling_backend",),
     "scripts/advisory_margin_information_set_mve_run.py": ("advisory_modeling_backend",),
+    "scripts/advisory_financial_event_source_readiness.py": ("advisory_modeling_backend",),
+    "scripts/advisory_financial_event_information_set_mve.py": ("advisory_modeling_backend",),
+    "scripts/advisory_score_hmm_admission_mve.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {

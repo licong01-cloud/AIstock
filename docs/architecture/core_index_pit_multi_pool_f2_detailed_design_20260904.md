@@ -254,8 +254,8 @@ resolve_universe(
 数据库使用半开区间；Qlib instruments 使用含首尾日期。渲染时将 `effective_to_exclusive` 转换为前一交易日，并在与 canonical equity PIT 相交后输出：
 
 ```text
-SH600000  2024-01-02  2024-12-13
-SH600000  2025-06-16  2026-08-31
+600000.SH  2024-01-02  2024-12-13
+600000.SH  2025-06-16  2026-08-31
 ```
 
 文件策略：
@@ -301,12 +301,14 @@ P0 五个指数作为一个初始批次按以下顺序执行：
 - 表结构、主键、代码格式、日期合法性；
 - 同一指数/股票区间无重叠，进入/退出边界与官方生效日一致；
 - 官方每次调整前后成分数量与增删名单闭合；
-- 可获得的 Tushare 月度快照与相应月末 PIT 名单一致；
+- 对可获得的 Tushare 月度快照与相应月末 PIT 名单逐月比对并报告差异；
+- Tushare 月度快照是 L2 交叉核对：差异必须在结果中保留，但不得覆盖或阻断已有 L1 官方历史事实；例如代码变更后上游把前身代码回溯改写为继任代码时，数据库继续保留官方历史附件中的当时代码；
 - P0 各指数在声明可用窗口内均有明确成员集合；
 - 与 canonical equity PIT 相交后，结果只包含当日合格 A 股；
 - 单指数与任意 P0 组合满足 order-invariant、重复股票一次、多区间正确；
 - 2026-08-31 数据集的日线、分钟线物理 feature 目录能覆盖解析出的股票区间；
 - 已知缺口必须形成精确小名单并走定向补齐，不能通过丢股票、缩日期、前填或全量重导掩盖。
+- 物理价格缺口与成员权威校验分层：缺口必须以 `physical_coverage=DATA_GAPS` 和精确名单保留，但不得把准确的官方成员 PIT 标成失败；无法从现有来源补齐时，由消费者沿用既定缺失数据处理规则，不新增发布阻断或伪造行情。
 
 此前抽样已发现至少以下历史 feature 缺口：日线 `600837.SH`、`601989.SH`、`000627.SZ`、`300379.SZ`、`601028.SH`，分钟线 `600837.SH`、`601777.SH`。实施时先重新做一次精确覆盖清单；若仍缺失，只补这些证券的缺失组件和日期，不重导全市场。
 
@@ -380,6 +382,7 @@ P0 五个指数作为一个初始批次按以下顺序执行：
 一次完成：
 
 - `backend/migrations/core_index_membership_pit_20260904.sql`：唯一成员 PIT 表；
+- `scripts/build_core_index_membership_authority.py`：以官方当前成分表和官方调入/调出事件反向重建初始历史，输出 repo-external authority JSON；
 - `scripts/prepare_core_index_membership_pit.py`：官方成分变更与 Tushare 快照核对、DEV/生产 plan/apply/readback；
 - `backend/services/core_index_membership.py`：`UniverseSelection`、repository 和共享 resolver；
 - `backend/services/dataset_release/index_pool_sidecar.py`：primitive/union sidecar 渲染；
@@ -426,6 +429,7 @@ P0 五个指数作为一个初始批次按以下顺序执行：
 
 - `backend/tests/core_index_membership/test_membership_repository.py`：约束、半开区间、增量 upsert/readback；
 - `backend/tests/core_index_membership/test_universe_resolver.py`：单指数、并集、重复股票、多区间、order-invariant、canonical PIT 相交；
+- `backend/tests/scripts/test_build_core_index_membership_authority.py`：官方调整链反向重建、半开区间、连续性和失败关闭；
 - `backend/tests/scripts/test_prepare_core_index_membership_pit.py`：官方生效日与 Tushare 快照分工；
 - DEV/生产完整校验命令只在首次固化各执行一次；生产 DDL/DML 分别保留授权和 readback 状态。
 

@@ -22,7 +22,17 @@ from backend.services.trading_core.exit_guard import ExitGuardContext, evaluate 
 from backend.services.trading_core.price_guard import PriceGuardContext, evaluate as evaluate_price_guard
 
 from .artifact_store import PositionTimingArtifactStore
+from .alerts import (
+    ParsedAlertQuote,
+    eligibility_identity,
+    eligibility_payload,
+    evaluate_frozen_trigger,
+    fetch_quotes_in_contract_chunks,
+    parse_alert_quote,
+)
 from .contracts import (
+    AlertClaimRequest,
+    AlertEmissionAuthorizedEventV1,
     CHINA_TIMEZONE,
     POSITION_SOURCE,
     POSITION_TIMING_L2_RESEARCH_CONTRACT_V1,
@@ -30,9 +40,14 @@ from .contracts import (
     HoldingAgeBucket,
     LegCostEstimateV1,
     MarketRegime,
+    MaturityStatus,
+    OutcomeEvaluatedEventV1,
+    PolicyFillStatus,
+    PositionTimingAnalysisScopeV1,
     PositionTimingCardSetV1,
     PositionTimingCardV1,
     PositionTimingIntentV1,
+    PositionTimingMaterializationStateV1,
     SourceRole,
     TimingAction,
     TradabilityStatus,
@@ -40,7 +55,9 @@ from .contracts import (
     TriggerSide,
     TriggerV1,
     TypedStatus,
+    alert_event_idempotency_key,
     canonical_sha256,
+    outcome_event_idempotency_key,
 )
 from .policy import (
     COST_POLICY_SHA256,
@@ -51,6 +68,7 @@ from .policy import (
     PRICE_GUARD_SNAPSHOT_ARTIFACT_SHA256,
     assert_shared_guard_defaults_unmodified,
     board_lot_identity,
+    component_cost_for_parent_notionals,
     estimate_leg_cost,
     frozen_exit_guard_policy,
     frozen_price_guard_policy,
@@ -95,6 +113,15 @@ class _UniverseMember:
 
 
 @dataclass(frozen=True)
+class _OutcomeFill:
+    status: PolicyFillStatus
+    selected_trigger: TriggerV1 | None
+    planned_delta_qty: int
+    fill_price_raw: Decimal | None
+    reason_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PositionTimingDependencies:
     holdings_loader: Callable[[], list[dict[str, Any]]]
     watchlist_page_loader: Callable[[int, int], dict[str, Any]]
@@ -104,6 +131,8 @@ class PositionTimingDependencies:
     delist_snapshot_loader: Callable[[list[str], date], dict[str, Any]]
     now_provider: Callable[[], datetime]
     source_commit_provider: Callable[[], str]
+    realtime_quote_loader: Callable[[list[str]], dict[str, dict[str, Any]]] | None = None
+    outcome_snapshot_loader: Callable[[list[str], date, date], dict[str, Any]] | None = None
 
 
 class PositionTimingService:
@@ -112,12 +141,37 @@ class PositionTimingService:
         self.dependencies = dependencies
 
     def list_intents(self) -> dict[str, Any]:
-        members, universe_identity = self._load_universe()
+        members, discovery_identity = self._load_universe()
+        scope = self.store.get_analysis_scope()
+        analysis_members, analysis_identity = self._analysis_members(members=members, scope=scope)
+        analysis_symbols = {member.canonical_symbol for member in analysis_members}
+        holding_symbols = {
+            member.canonical_symbol
+            for member in members
+            if member.primary_source_role is SourceRole.HOLDING
+        }
+        confirmed_watchlist_symbols = {
+            member.canonical_symbol
+            for member in members
+            if SourceRole.WATCHLIST in member.source_roles
+        }
+        selected_symbols = set(scope.selected_watchlist_symbols)
         intent_by_symbol = {item.canonical_symbol: item for item in self.store.list_intents()}
         return {
             "schema_version": "position_timing_intent_list_v1",
             "position_source": POSITION_SOURCE,
-            "universe_identity_sha256": universe_identity,
+            "universe_identity_sha256": discovery_identity,
+            "discovery_universe_identity_sha256": discovery_identity,
+            "analysis_universe_identity_sha256": analysis_identity,
+            "analysis_scope": scope,
+            "scope_warnings": [
+                {
+                    "canonical_symbol": symbol,
+                    "reason_code": "SELECTED_SOURCE_INELIGIBLE",
+                }
+                for symbol in scope.selected_watchlist_symbols
+                if symbol not in confirmed_watchlist_symbols and symbol not in holding_symbols
+            ],
             "items": [
                 {
                     "canonical_symbol": member.canonical_symbol,
@@ -127,9 +181,81 @@ class PositionTimingService:
                     "pre_action_qty": _non_negative_int((member.holding or {}).get("quantity")),
                     "intent": intent_by_symbol.get(member.canonical_symbol),
                     "normalization_reason": member.normalization_reason,
+                    "analysis_selected": member.canonical_symbol in selected_symbols,
+                    "analysis_effective": member.canonical_symbol in analysis_symbols,
+                    "analysis_locked": member.primary_source_role is SourceRole.HOLDING,
+                    "analysis_reason_code": (
+                        "HOLDING_ALWAYS_INCLUDED"
+                        if member.primary_source_role is SourceRole.HOLDING
+                        else "SELECTED"
+                        if member.canonical_symbol in analysis_symbols
+                        else "NOT_SELECTED"
+                    ),
                 }
                 for member in members
             ],
+        }
+
+    def put_analysis_scope(self, *, raw_symbol: str, analysis_enabled: bool) -> dict[str, Any]:
+        canonical_symbol, reason = normalize_position_symbol(raw_symbol)
+        if reason is not None or canonical_symbol is None or not _is_supported_a_share(canonical_symbol):
+            raise PositionTimingServiceError(
+                "UNSUPPORTED_SYMBOL", "首发仅支持可识别的沪深 A 股代码", context={"symbol": raw_symbol}
+            )
+        members, _ = self._load_universe()
+        member_by_symbol = {item.canonical_symbol: item for item in members}
+        member = member_by_symbol.get(canonical_symbol)
+        current = self.store.get_analysis_scope()
+        selected = canonical_symbol in current.selected_watchlist_symbols
+        if member is not None and member.primary_source_role is SourceRole.HOLDING:
+            return {
+                "schema_version": "position_timing_analysis_scope_write_result_v1",
+                "status": "UNCHANGED",
+                "changed": False,
+                "canonical_symbol": canonical_symbol,
+                "analysis_selected": selected,
+                "analysis_effective": True,
+                "analysis_locked": True,
+                "analysis_reason_code": "HOLDING_ALWAYS_INCLUDED",
+                "scope_sha256": current.scope_sha256,
+                "effective_card_policy": "NEXT_CARD_SET_ONLY",
+            }
+        confirmed_watchlist = member is not None and SourceRole.WATCHLIST in member.source_roles
+        if analysis_enabled and not confirmed_watchlist:
+            raise PositionTimingServiceError(
+                "SYMBOL_OUTSIDE_TIMING_UNIVERSE",
+                "只能启用当前已确认自选池中的股票",
+                context={"canonical_symbol": canonical_symbol},
+            )
+        if not analysis_enabled and not selected:
+            return {
+                "schema_version": "position_timing_analysis_scope_write_result_v1",
+                "status": "UNCHANGED",
+                "changed": False,
+                "canonical_symbol": canonical_symbol,
+                "analysis_selected": False,
+                "analysis_effective": False,
+                "analysis_locked": False,
+                "analysis_reason_code": "NOT_SELECTED",
+                "scope_sha256": current.scope_sha256,
+                "effective_card_policy": "NEXT_CARD_SET_ONLY",
+            }
+        updated, changed = self.store.put_analysis_scope_symbol(
+            canonical_symbol=canonical_symbol,
+            analysis_enabled=analysis_enabled,
+            updated_at=self._now(),
+        )
+        return {
+            "schema_version": "position_timing_analysis_scope_write_result_v1",
+            "status": "UPDATED" if changed else "UNCHANGED",
+            "changed": changed,
+            "canonical_symbol": canonical_symbol,
+            "analysis_selected": canonical_symbol in updated.selected_watchlist_symbols,
+            "analysis_effective": bool(analysis_enabled and confirmed_watchlist),
+            "analysis_locked": False,
+            "analysis_reason_code": "SELECTED" if analysis_enabled else "NOT_SELECTED",
+            "scope_sha256": updated.scope_sha256,
+            "effective_card_policy": "NEXT_CARD_SET_ONLY",
         }
 
     def put_intent(
@@ -178,6 +304,15 @@ class PositionTimingService:
         return intent, True
 
     def materialize(self) -> dict[str, Any]:
+        card_result = self._materialize_card_set()
+        outcome_result = self._materialize_due_outcomes()
+        return {
+            **card_result,
+            "outcome_materialization_status": outcome_result["status"],
+            "outcome_materialization": outcome_result,
+        }
+
+    def _materialize_card_set(self) -> dict[str, Any]:
         now = self._now()
         decision_date, decision_as_of, target_date, calendar_identity = self._resolve_decision_clock(now)
         existing = self.store.get_card_set(decision_trade_date=decision_date)
@@ -216,16 +351,26 @@ class PositionTimingService:
         self.store.publish_policy_snapshot(name="exit-guard-v1", payload=EXIT_GUARD_SNAPSHOT_ENVELOPE_V1)
         self.store.publish_policy_snapshot(name="personal-manual-component-cost-v1", payload=PERSONAL_MANUAL_COMPONENT_COST_V1)
 
-        members, universe_identity = self._load_universe()
+        discovery_members, discovery_universe_identity = self._load_universe()
+        analysis_scope = self.store.get_analysis_scope()
+        members, analysis_universe_identity = self._analysis_members(
+            members=discovery_members,
+            scope=analysis_scope,
+        )
         if not members:
+            discovery_empty = not discovery_members
             return {
                 "schema_version": "position_timing_materialize_result_v1",
-                "status": "UNIVERSE_EMPTY_NO_NEW_CARD",
+                "status": (
+                    "UNIVERSE_EMPTY_NO_NEW_CARD"
+                    if discovery_empty
+                    else "ANALYSIS_UNIVERSE_EMPTY_NO_NEW_CARD"
+                ),
                 "created": False,
                 "card_set": None,
                 "decision_trade_date": decision_date,
                 "target_trade_date": target_date,
-                "reason_codes": ["TIMING_UNIVERSE_EMPTY"],
+                "reason_codes": ["TIMING_UNIVERSE_EMPTY" if discovery_empty else "ANALYSIS_UNIVERSE_EMPTY"],
             }
         intents = self.store.list_intents()
         intent_by_symbol = {item.canonical_symbol: item for item in intents}
@@ -318,7 +463,11 @@ class PositionTimingService:
                 }
 
         input_identity = {
-            "universe_identity_sha256": universe_identity,
+            "universe_identity_sha256": analysis_universe_identity,
+            "analysis_universe_identity_sha256": analysis_universe_identity,
+            "discovery_universe_identity_sha256": discovery_universe_identity,
+            "analysis_scope_snapshot": analysis_scope.model_dump(mode="json"),
+            "analysis_scope_snapshot_sha256": canonical_sha256(analysis_scope),
             "position_snapshot_sha256": position_snapshot_sha256,
             "intent_snapshot_sha256": intent_snapshot_sha256,
             "daily_snapshot_identity": daily_snapshot.get("identity"),
@@ -403,6 +552,584 @@ class PositionTimingService:
             "card_set": published,
         }
 
+    def _materialize_due_outcomes(self) -> dict[str, Any]:
+        now = self._now()
+        completed_trade_date = self._latest_completed_trade_date(now)
+        card_sets = self.store.list_card_sets()
+        due: list[dict[str, Any]] = []
+        calendar_error: str | None = None
+        for card_set in card_sets:
+            if card_set.target_trade_date > completed_trade_date:
+                continue
+            try:
+                timeline = self.dependencies.calendar_service.list_trading_days(
+                    card_set.target_trade_date,
+                    completed_trade_date,
+                    allow_empty=True,
+                )
+            except Exception as exc:
+                calendar_error = type(exc).__name__
+                break
+            for card in card_set.cards:
+                for horizon in (1, 3, 5, 10, 20):
+                    if len(timeline) < horizon:
+                        continue
+                    due.append(
+                        {
+                            "card": card,
+                            "horizon": horizon,
+                            "nominal_terminal_trade_date": timeline[horizon - 1],
+                            "timeline": timeline,
+                            "nominal_index": horizon - 1,
+                        }
+                    )
+
+        existing_events = {
+            str(item["idempotency_key"]): item
+            for item in self.store.list_events(event_type="OUTCOME_EVALUATED")
+        }
+        expected_due = len(due)
+        prior_state = self.store.get_materialization_state()
+        failure_reasons: list[str] = []
+        if calendar_error is not None:
+            failure_reasons.append(f"TRADING_CALENDAR_UNAVAILABLE:{calendar_error}")
+        missing_due = [
+            item
+            for item in due
+            if outcome_event_idempotency_key(item["card"].card_id, item["horizon"])
+            not in existing_events
+        ]
+        snapshot: dict[str, Any] | None = None
+        if missing_due and not failure_reasons:
+            if self.dependencies.outcome_snapshot_loader is None:
+                failure_reasons.append("OUTCOME_DATA_SOURCE_UNAVAILABLE")
+            else:
+                try:
+                    snapshot = self.dependencies.outcome_snapshot_loader(
+                        sorted({item["card"].canonical_symbol for item in missing_due}),
+                        min(item["card"].target_trade_date for item in missing_due),
+                        completed_trade_date,
+                    )
+                    if not isinstance(snapshot, dict) or not _valid_outcome_snapshot_identity(snapshot):
+                        raise ValueError("OUTCOME_DATA_IDENTITY_INVALID")
+                except Exception as exc:
+                    snapshot = None
+                    failure_reasons.append(f"OUTCOME_DATA_SOURCE_UNAVAILABLE:{type(exc).__name__}")
+
+        pending_events: list[tuple[dict[str, Any], str]] = []
+        waiting_for_defer = 0
+        if snapshot is not None:
+            for item in missing_due:
+                try:
+                    event = self._evaluate_outcome(
+                        card=item["card"],
+                        horizon=item["horizon"],
+                        nominal_terminal_trade_date=item["nominal_terminal_trade_date"],
+                        timeline=item["timeline"],
+                        nominal_index=item["nominal_index"],
+                        snapshot=snapshot,
+                    )
+                except Exception as exc:
+                    failure_reasons.append(
+                        f"OUTCOME_EVALUATION_FAILED:{item['card'].card_id}:{item['horizon']}:{type(exc).__name__}"
+                    )
+                    continue
+                if event is None:
+                    waiting_for_defer += 1
+                    continue
+                pending_events.append((event.model_dump(mode="python"), event.idempotency_key))
+        appended = self.store.append_events(pending_events) if pending_events else 0
+        after_events = {
+            str(item["idempotency_key"]): item
+            for item in self.store.list_events(event_type="OUTCOME_EVALUATED")
+        }
+        accounted = sum(
+            1
+            for item in due
+            if outcome_event_idempotency_key(item["card"].card_id, item["horizon"])
+            in after_events
+        )
+        complete = calendar_error is None and accounted == expected_due
+        state = PositionTimingMaterializationStateV1(
+            last_successful_materialization_scan_through_trade_date=(
+                completed_trade_date
+                if complete
+                else prior_state.last_successful_materialization_scan_through_trade_date
+            ),
+            last_run_at=now,
+            expected_due_count=expected_due,
+            accounted_outcome_count=accounted,
+            run_status="COMPLETE" if complete else "PARTIAL",
+        )
+        state = self.store.put_materialization_state(state)
+        if complete and expected_due == 0:
+            status = "NO_DUE_OUTCOMES"
+        elif complete and appended:
+            status = "OUTCOMES_MATERIALIZED"
+        elif complete:
+            status = "OUTCOMES_ALREADY_MATERIALIZED"
+        else:
+            status = "OUTCOME_MATERIALIZATION_PARTIAL"
+        return {
+            "schema_version": "position_timing_outcome_materialization_result_v1",
+            "status": status,
+            "completed_trade_date": completed_trade_date,
+            "expected_due_count": expected_due,
+            "accounted_outcome_count": accounted,
+            "materialized_count": appended,
+            "waiting_for_terminal_defer_count": waiting_for_defer,
+            "reason_codes": tuple(dict.fromkeys(failure_reasons)),
+            "materialization_state": state,
+        }
+
+    def _evaluate_outcome(
+        self,
+        *,
+        card: PositionTimingCardV1,
+        horizon: int,
+        nominal_terminal_trade_date: date,
+        timeline: list[date],
+        nominal_index: int,
+        snapshot: Mapping[str, Any],
+    ) -> OutcomeEvaluatedEventV1 | None:
+        target_row = _outcome_row(snapshot, card.canonical_symbol, card.target_trade_date)
+        fill = self._select_outcome_fill(card=card, target_row=target_row)
+        if "TARGET_DAY_MARKET_DATA_UNAVAILABLE" in fill.reason_codes:
+            return self._unavailable_outcome_event(
+                card=card,
+                horizon=horizon,
+                nominal_terminal_trade_date=nominal_terminal_trade_date,
+                effective_terminal_trade_date=nominal_terminal_trade_date,
+                deferred_trading_days=0,
+                fill=fill,
+                snapshot=snapshot,
+                reason_codes=fill.reason_codes,
+            )
+        if fill.status is not PolicyFillStatus.FILLED:
+            return self._zero_lift_outcome_event(
+                card=card,
+                horizon=horizon,
+                nominal_terminal_trade_date=nominal_terminal_trade_date,
+                fill=fill,
+                snapshot=snapshot,
+            )
+        assert fill.fill_price_raw is not None
+        fill_adjustment = _positive_decimal((target_row or {}).get("adj_factor"))
+        if fill_adjustment is None:
+            return self._unavailable_outcome_event(
+                card=card,
+                horizon=horizon,
+                nominal_terminal_trade_date=nominal_terminal_trade_date,
+                effective_terminal_trade_date=nominal_terminal_trade_date,
+                deferred_trading_days=0,
+                fill=fill,
+                snapshot=snapshot,
+                reason_codes=("FILL_ADJUSTMENT_IDENTITY_UNAVAILABLE",),
+            )
+
+        start_index = nominal_index
+        reason_codes = list(fill.reason_codes)
+        if fill.planned_delta_qty > 0 and horizon == 1:
+            start_index += 1
+            reason_codes.append("TERMINAL_T1_LOCKED")
+        max_index = nominal_index + 5
+        terminal_row: Mapping[str, Any] | None = None
+        terminal_date: date | None = None
+        terminal_unavailable_reasons: list[str] = []
+        for index in range(start_index, min(len(timeline), max_index + 1)):
+            candidate_date = timeline[index]
+            row = _outcome_row(snapshot, card.canonical_symbol, candidate_date)
+            terminal_status = _terminal_sellability_status(row)
+            if terminal_status == "SELLABLE":
+                terminal_row = row
+                terminal_date = candidate_date
+                break
+            terminal_unavailable_reasons.append(terminal_status)
+        if terminal_row is None or terminal_date is None:
+            if len(timeline) <= max_index:
+                return None
+            return self._unavailable_outcome_event(
+                card=card,
+                horizon=horizon,
+                nominal_terminal_trade_date=nominal_terminal_trade_date,
+                effective_terminal_trade_date=timeline[max_index],
+                deferred_trading_days=5,
+                fill=fill,
+                snapshot=snapshot,
+                reason_codes=(
+                    *reason_codes,
+                    *tuple(dict.fromkeys(terminal_unavailable_reasons)),
+                    "TERMINAL_SELL_UNAVAILABLE_AFTER_MAX_DEFER",
+                ),
+            )
+
+        terminal_close = _positive_decimal(terminal_row.get("close"))
+        terminal_adjustment = _positive_decimal(terminal_row.get("adj_factor"))
+        assert terminal_close is not None and terminal_adjustment is not None
+        quantity = abs(fill.planned_delta_qty)
+        fill_notional = fill.fill_price_raw * quantity
+        terminal_quantity_equivalent = Decimal(quantity) * terminal_adjustment / fill_adjustment
+        terminal_notional = terminal_close * terminal_quantity_equivalent
+        terminal_sell_cost = component_cost_for_parent_notionals(
+            side=TriggerSide.SELL,
+            notionals=(terminal_notional,),
+        )
+        if fill.planned_delta_qty > 0:
+            fill_cost = component_cost_for_parent_notionals(
+                side=TriggerSide.BUY,
+                notionals=(fill_notional,),
+            )
+            candidate_net = terminal_notional - terminal_sell_cost["total"] - fill_cost["total"]
+            do_nothing_net = fill_notional
+            candidate_path = {
+                "path": "BUY_THEN_TERMINAL_SELL",
+                "quantity": quantity,
+                "fill_notional_cny": fill_notional,
+                "fill_cost_components": fill_cost,
+                "terminal_quantity_equivalent": terminal_quantity_equivalent,
+                "terminal_gross_notional_cny": terminal_notional,
+                "terminal_sell_cost_components": terminal_sell_cost,
+                "net_value_cny": candidate_net,
+                "cash_yield": "0",
+            }
+            do_nothing_path = {
+                "path": "KEEP_CASH",
+                "starting_cash_cny": fill_notional,
+                "cash_yield": "0",
+                "net_value_cny": do_nothing_net,
+            }
+        else:
+            fill_cost = component_cost_for_parent_notionals(
+                side=TriggerSide.SELL,
+                notionals=(fill_notional,),
+            )
+            candidate_net = fill_notional - fill_cost["total"]
+            do_nothing_net = terminal_notional - terminal_sell_cost["total"]
+            candidate_path = {
+                "path": "SELL_THEN_HOLD_CASH",
+                "quantity": quantity,
+                "fill_notional_cny": fill_notional,
+                "fill_cost_components": fill_cost,
+                "cash_yield": "0",
+                "net_value_cny": candidate_net,
+            }
+            do_nothing_path = {
+                "path": "HOLD_THEN_TERMINAL_SELL",
+                "quantity": quantity,
+                "terminal_quantity_equivalent": terminal_quantity_equivalent,
+                "terminal_gross_notional_cny": terminal_notional,
+                "terminal_sell_cost_components": terminal_sell_cost,
+                "net_value_cny": do_nothing_net,
+            }
+        net_lift_bps = (
+            (candidate_net - do_nothing_net) / fill_notional * Decimal("10000")
+            if fill_notional > 0
+            else Decimal("0")
+        )
+        deferred = timeline.index(terminal_date) - nominal_index
+        maturity = MaturityStatus.MATURED if deferred == 0 else MaturityStatus.DEFERRED_THEN_MATURED
+        if deferred > 0 and "TERMINAL_T1_LOCKED" not in reason_codes:
+            reason_codes.append("TERMINAL_VALUE_DEFERRED")
+        reason_codes.extend(terminal_unavailable_reasons)
+        return self._outcome_event(
+            card=card,
+            horizon=horizon,
+            fill=fill,
+            maturity_status=maturity,
+            nominal_terminal_trade_date=nominal_terminal_trade_date,
+            effective_terminal_trade_date=terminal_date,
+            deferred_trading_days=deferred,
+            reason_codes=tuple(dict.fromkeys(reason_codes)),
+            candidate_path=candidate_path,
+            do_nothing_path=do_nothing_path,
+            candidate_net_value_cny=candidate_net,
+            do_nothing_net_value_cny=do_nothing_net,
+            net_lift_bps=net_lift_bps,
+            snapshot=snapshot,
+        )
+
+    @staticmethod
+    def _select_outcome_fill(
+        *, card: PositionTimingCardV1, target_row: Mapping[str, Any] | None
+    ) -> _OutcomeFill:
+        if not card.triggers or card.requested_delta_qty == 0:
+            return _OutcomeFill(
+                status=PolicyFillStatus.NO_ACTION,
+                selected_trigger=None,
+                planned_delta_qty=0,
+                fill_price_raw=None,
+                reason_codes=("NO_ACTION",),
+            )
+        if target_row is None:
+            return _OutcomeFill(
+                status=PolicyFillStatus.POLICY_FILL_UNAVAILABLE_EXPIRED,
+                selected_trigger=None,
+                planned_delta_qty=card.requested_delta_qty,
+                fill_price_raw=None,
+                reason_codes=("TARGET_DAY_MARKET_DATA_UNAVAILABLE",),
+            )
+        if bool(target_row.get("is_suspended")):
+            return _OutcomeFill(
+                status=PolicyFillStatus.POLICY_FILL_UNAVAILABLE_EXPIRED,
+                selected_trigger=None,
+                planned_delta_qty=card.requested_delta_qty,
+                fill_price_raw=None,
+                reason_codes=("TARGET_DAY_SUSPENDED",),
+            )
+        values = {
+            name: _positive_decimal(target_row.get(name))
+            for name in ("open", "high", "low", "close")
+        }
+        if any(value is None for value in values.values()):
+            return _OutcomeFill(
+                status=PolicyFillStatus.POLICY_FILL_UNAVAILABLE_EXPIRED,
+                selected_trigger=None,
+                planned_delta_qty=card.requested_delta_qty,
+                fill_price_raw=None,
+                reason_codes=("TARGET_DAY_MARKET_DATA_UNAVAILABLE",),
+            )
+        open_price = values["open"]
+        high_price = values["high"]
+        low_price = values["low"]
+        close_price = values["close"]
+        assert open_price is not None and high_price is not None and low_price is not None and close_price is not None
+        side = TriggerSide.BUY if card.requested_delta_qty > 0 else TriggerSide.SELL
+        limit = card.limit_up_raw if side is TriggerSide.BUY else card.limit_down_raw
+        if limit is not None and all(abs(value - limit) < Decimal("0.005") for value in values.values()):
+            return _OutcomeFill(
+                status=PolicyFillStatus.POLICY_FILL_UNAVAILABLE_EXPIRED,
+                selected_trigger=None,
+                planned_delta_qty=card.requested_delta_qty,
+                fill_price_raw=None,
+                reason_codes=(
+                    "TARGET_DAY_ONE_WORD_LIMIT_UP_BUY_UNAVAILABLE"
+                    if side is TriggerSide.BUY
+                    else "TARGET_DAY_ONE_WORD_LIMIT_DOWN_SELL_UNAVAILABLE",
+                ),
+            )
+        actionable = [trigger for trigger in card.triggers if trigger.planned_delta_qty != 0]
+        always = [trigger for trigger in actionable if trigger.operator is TriggerOperator.ALWAYS]
+        if always:
+            selected = always[0]
+            return _OutcomeFill(
+                status=PolicyFillStatus.FILLED,
+                selected_trigger=selected,
+                planned_delta_qty=selected.planned_delta_qty,
+                fill_price_raw=open_price,
+                reason_codes=("AT_OPEN_FILL",),
+            )
+        if side is TriggerSide.BUY:
+            candidates = [
+                trigger
+                for trigger in actionable
+                if trigger.operator is TriggerOperator.LTE and trigger.trigger_price_raw is not None
+            ]
+            open_eligible = [trigger for trigger in candidates if open_price <= trigger.trigger_price_raw]
+            if open_eligible:
+                selected = min(open_eligible, key=lambda item: item.trigger_price_raw or Decimal("Infinity"))
+                return _OutcomeFill(
+                    PolicyFillStatus.FILLED,
+                    selected,
+                    selected.planned_delta_qty,
+                    open_price,
+                    ("OPEN_SATISFIED_FROZEN_TRIGGER",),
+                )
+            touched = [trigger for trigger in candidates if low_price <= trigger.trigger_price_raw]
+            if touched:
+                selected = min(
+                    touched,
+                    key=lambda item: (abs(item.planned_delta_qty), -(item.trigger_price_raw or Decimal("0"))),
+                )
+                reason = (
+                    "INTRADAY_SEQUENCE_UNOBSERVED_CONSERVATIVE_FILL"
+                    if len(touched) > 1
+                    else "INTRADAY_LOW_TOUCHED_FROZEN_TRIGGER"
+                )
+                return _OutcomeFill(
+                    PolicyFillStatus.FILLED,
+                    selected,
+                    selected.planned_delta_qty,
+                    selected.trigger_price_raw,
+                    (reason,),
+                )
+        else:
+            candidates = [
+                trigger
+                for trigger in actionable
+                if trigger.operator is TriggerOperator.GTE and trigger.trigger_price_raw is not None
+            ]
+            open_eligible = [trigger for trigger in candidates if open_price >= trigger.trigger_price_raw]
+            if open_eligible:
+                selected = max(open_eligible, key=lambda item: item.trigger_price_raw or Decimal("0"))
+                return _OutcomeFill(
+                    PolicyFillStatus.FILLED,
+                    selected,
+                    selected.planned_delta_qty,
+                    open_price,
+                    ("OPEN_SATISFIED_FROZEN_TRIGGER",),
+                )
+            touched = [trigger for trigger in candidates if high_price >= trigger.trigger_price_raw]
+            if touched:
+                selected = min(
+                    touched,
+                    key=lambda item: (abs(item.planned_delta_qty), item.trigger_price_raw or Decimal("0")),
+                )
+                reason = (
+                    "INTRADAY_SEQUENCE_UNOBSERVED_CONSERVATIVE_FILL"
+                    if len(touched) > 1
+                    else "INTRADAY_HIGH_TOUCHED_FROZEN_TRIGGER"
+                )
+                return _OutcomeFill(
+                    PolicyFillStatus.FILLED,
+                    selected,
+                    selected.planned_delta_qty,
+                    selected.trigger_price_raw,
+                    (reason,),
+                )
+        skip = next((trigger for trigger in card.triggers if trigger.planned_delta_qty == 0), None)
+        return _OutcomeFill(
+            status=PolicyFillStatus.SKIPPED_BY_GUARD,
+            selected_trigger=skip,
+            planned_delta_qty=0,
+            fill_price_raw=None,
+            reason_codes=((skip.reason_code if skip is not None else "FROZEN_TRIGGER_NOT_MET"),),
+        )
+
+    def _zero_lift_outcome_event(
+        self,
+        *,
+        card: PositionTimingCardV1,
+        horizon: int,
+        nominal_terminal_trade_date: date,
+        fill: _OutcomeFill,
+        snapshot: Mapping[str, Any],
+    ) -> OutcomeEvaluatedEventV1:
+        path = {
+            "path": "INTENTION_TO_TREAT_DO_NOTHING",
+            "status": fill.status,
+            "quantity": 0,
+            "gross_value_cny": Decimal("0"),
+            "net_value_cny": Decimal("0"),
+        }
+        return self._outcome_event(
+            card=card,
+            horizon=horizon,
+            fill=fill,
+            maturity_status=MaturityStatus.MATURED,
+            nominal_terminal_trade_date=nominal_terminal_trade_date,
+            effective_terminal_trade_date=nominal_terminal_trade_date,
+            deferred_trading_days=0,
+            reason_codes=fill.reason_codes,
+            candidate_path=path,
+            do_nothing_path=path,
+            candidate_net_value_cny=Decimal("0"),
+            do_nothing_net_value_cny=Decimal("0"),
+            net_lift_bps=Decimal("0"),
+            snapshot=snapshot,
+        )
+
+    def _unavailable_outcome_event(
+        self,
+        *,
+        card: PositionTimingCardV1,
+        horizon: int,
+        nominal_terminal_trade_date: date,
+        effective_terminal_trade_date: date,
+        deferred_trading_days: int,
+        fill: _OutcomeFill,
+        snapshot: Mapping[str, Any],
+        reason_codes: tuple[str, ...],
+    ) -> OutcomeEvaluatedEventV1:
+        unavailable_path = {"status": "UNAVAILABLE", "reason_codes": reason_codes}
+        return self._outcome_event(
+            card=card,
+            horizon=horizon,
+            fill=fill,
+            maturity_status=MaturityStatus.UNAVAILABLE_AT_HORIZON,
+            nominal_terminal_trade_date=nominal_terminal_trade_date,
+            effective_terminal_trade_date=effective_terminal_trade_date,
+            deferred_trading_days=deferred_trading_days,
+            reason_codes=reason_codes,
+            candidate_path=unavailable_path,
+            do_nothing_path=unavailable_path,
+            candidate_net_value_cny=None,
+            do_nothing_net_value_cny=None,
+            net_lift_bps=None,
+            snapshot=snapshot,
+        )
+
+    @staticmethod
+    def _outcome_event(
+        *,
+        card: PositionTimingCardV1,
+        horizon: int,
+        fill: _OutcomeFill,
+        maturity_status: MaturityStatus,
+        nominal_terminal_trade_date: date,
+        effective_terminal_trade_date: date,
+        deferred_trading_days: int,
+        reason_codes: tuple[str, ...],
+        candidate_path: dict[str, Any],
+        do_nothing_path: dict[str, Any],
+        candidate_net_value_cny: Decimal | None,
+        do_nothing_net_value_cny: Decimal | None,
+        net_lift_bps: Decimal | None,
+        snapshot: Mapping[str, Any],
+    ) -> OutcomeEvaluatedEventV1:
+        key = outcome_event_idempotency_key(card.card_id, horizon)
+        occurred_date = effective_terminal_trade_date or nominal_terminal_trade_date
+        return OutcomeEvaluatedEventV1(
+            event_id=f"evt_{canonical_sha256({'event_type': 'OUTCOME_EVALUATED', 'key': key})[:24]}",
+            idempotency_key=key,
+            occurred_at=datetime.combine(occurred_date, time(15, 0), tzinfo=CHINA_TZ),
+            card_id=card.card_id,
+            card_artifact_sha256=canonical_sha256(card),
+            horizon_trading_days=horizon,
+            policy_fill_status=fill.status,
+            maturity_status=maturity_status,
+            selected_trigger_id=fill.selected_trigger.trigger_id if fill.selected_trigger else None,
+            planned_delta_qty=fill.planned_delta_qty,
+            effective_target_exposure=(
+                fill.selected_trigger.target_exposure if fill.selected_trigger is not None else card.pre_action_exposure
+            ),
+            fill_price_raw=fill.fill_price_raw,
+            fill_time_policy=(
+                "DAILY_OHLC_CONSERVATIVE_FILL_V1" if fill.status is PolicyFillStatus.FILLED else None
+            ),
+            nominal_terminal_trade_date=nominal_terminal_trade_date,
+            effective_terminal_trade_date=effective_terminal_trade_date,
+            deferred_trading_days=deferred_trading_days,
+            reason_codes=reason_codes,
+            candidate_path=candidate_path,
+            do_nothing_path=do_nothing_path,
+            candidate_net_value_cny=candidate_net_value_cny,
+            do_nothing_net_value_cny=do_nothing_net_value_cny,
+            net_lift_bps=net_lift_bps,
+            dataset_identity_sha256=_identity_hash(snapshot.get("identity")),
+            calendar_identity_sha256=_identity_hash(card.calendar_identity),
+            limit_identity_sha256=_identity_hash(snapshot.get("limit_identity")),
+            board_lot_identity_sha256=_identity_hash(card.board_lot_identity),
+            adjustment_identity_sha256=_identity_hash(snapshot.get("adjustment_identity")),
+            cost_policy_sha256=card.cost_policy_sha256,
+        )
+
+    def _latest_completed_trade_date(self, now: datetime) -> date:
+        try:
+            status = self.dependencies.calendar_service.status(as_of_date=now.date())
+            if bool(status.get("is_trading_day")) and now.time() >= time(15, 0):
+                value = now.date()
+            elif bool(status.get("is_trading_day")):
+                value = date.fromisoformat(str(status["previous_trading_day"]))
+            else:
+                value = date.fromisoformat(str(status["latest_completed_trading_day"]))
+            return value
+        except Exception as exc:
+            raise PositionTimingServiceError(
+                "TRADING_CALENDAR_UNAVAILABLE",
+                "无法确定 outcome 的最近完成交易日",
+                context={"cause": type(exc).__name__},
+            ) from exc
+
     def current_cards(self) -> dict[str, Any]:
         now = self._now()
         card_set = self.store.latest_card_set()
@@ -425,7 +1152,278 @@ class PositionTimingService:
             "card_set": card_set,
         }
 
+    def poll_alerts(self) -> dict[str, Any]:
+        """Evaluate frozen T+1 trigger edges without writing any artifact."""
+
+        now = self._now()
+        card_set = self.store.latest_card_set()
+        if card_set is None:
+            return {
+                "schema_version": "position_timing_alert_poll_v1",
+                "status": "NO_CARD_SET",
+                "evaluated_at": now,
+                "items": [],
+            }
+        if now.date() != card_set.target_trade_date or now > datetime.combine(
+            card_set.target_trade_date, time(15, 0), tzinfo=CHINA_TZ
+        ):
+            return {
+                "schema_version": "position_timing_alert_poll_v1",
+                "status": "NO_VALID_CARD_TODAY",
+                "evaluated_at": now,
+                "card_set_id": card_set.card_set_id,
+                "items": [],
+            }
+        active_cards = [card for card in card_set.cards if card.triggers]
+        if not active_cards:
+            return {
+                "schema_version": "position_timing_alert_poll_v1",
+                "status": "NO_ACTIVE_TRIGGER",
+                "evaluated_at": now,
+                "card_set_id": card_set.card_set_id,
+                "items": [],
+            }
+        members, _ = self._load_universe()
+        member_by_symbol = {item.canonical_symbol: item for item in members}
+        quote_payload: dict[str, dict[str, Any]] = {}
+        quote_source_error: str | None = None
+        if self.dependencies.realtime_quote_loader is None:
+            quote_source_error = "QUOTE_SOURCE_UNAVAILABLE"
+        else:
+            try:
+                quote_payload = fetch_quotes_in_contract_chunks(
+                    symbols=[card.canonical_symbol for card in active_cards],
+                    quote_loader=self.dependencies.realtime_quote_loader,
+                )
+            except Exception as exc:
+                quote_source_error = f"QUOTE_SOURCE_UNAVAILABLE:{type(exc).__name__}"
+
+        items: list[dict[str, Any]] = []
+        for card in active_cards:
+            item = {
+                "card_id": card.card_id,
+                "card_artifact_sha256": canonical_sha256(card),
+                "canonical_symbol": card.canonical_symbol,
+                "action": card.action,
+                "system_edge_eligibility": False,
+                "market_touch_opportunity": "NOT_EVALUATED_RUNTIME",
+                "already_alerted": False,
+            }
+            snapshots = self._current_alert_snapshot_hashes(
+                card=card,
+                member=member_by_symbol.get(card.canonical_symbol),
+            )
+            item.update(snapshots)
+            if snapshots["position_snapshot_sha256"] != card.position_snapshot_sha256:
+                item["status"] = "POSITION_SNAPSHOT_CHANGED"
+                items.append(item)
+                continue
+            if snapshots["intent_snapshot_sha256"] != card.intent_snapshot_sha256:
+                item["status"] = "INTENT_SNAPSHOT_CHANGED"
+                items.append(item)
+                continue
+            if quote_source_error is not None:
+                item["status"] = "QUOTE_UNAVAILABLE"
+                item["reason_code"] = quote_source_error
+                items.append(item)
+                continue
+            quote, quote_status, quote_details = parse_alert_quote(
+                symbol=card.canonical_symbol,
+                raw_quote=quote_payload.get(card.canonical_symbol),
+                evaluated_at=now,
+            )
+            item.update(quote_details)
+            if quote is None:
+                item["status"] = quote_status
+                items.append(item)
+                continue
+            item.update(
+                {
+                    "quote_price_raw": quote.price_raw,
+                    "quote_open_raw": quote.open_raw,
+                    "quote_observed_at": quote.observed_at,
+                    "alert_evaluated_at": quote.evaluated_at,
+                    "quote_source": quote.source,
+                    "staleness_state": "FRESH",
+                }
+            )
+            trigger, status = evaluate_frozen_trigger(card=card, quote=quote)
+            item["status"] = status
+            if trigger is None:
+                items.append(item)
+                continue
+            identity_payload = eligibility_payload(
+                card=card,
+                trigger=trigger,
+                quote=quote,
+                position_snapshot_sha256=snapshots["position_snapshot_sha256"],
+                intent_snapshot_sha256=snapshots["intent_snapshot_sha256"],
+            )
+            item.update(
+                {
+                    "system_edge_eligibility": True,
+                    "trigger": trigger,
+                    "trigger_id": trigger.trigger_id,
+                    "eligibility_identity": eligibility_identity(identity_payload),
+                    "already_alerted": self.store.get_event(
+                        event_type="ALERT_EMISSION_AUTHORIZED",
+                        idempotency_key=alert_event_idempotency_key(card.card_id, trigger.trigger_id),
+                    )
+                    is not None,
+                }
+            )
+            items.append(item)
+        return {
+            "schema_version": "position_timing_alert_poll_v1",
+            "status": "EVALUATED",
+            "evaluated_at": now,
+            "card_set_id": card_set.card_set_id,
+            "items": items,
+        }
+
+    def claim_alert(self, *, trigger_id: str, request: AlertClaimRequest) -> dict[str, Any]:
+        """Revalidate a polled edge and atomically grant one alert authorization."""
+
+        now = self._now()
+        card_set = self.store.latest_card_set()
+        if card_set is None:
+            raise PositionTimingServiceError("NO_CARD_SET", "当前没有可用于提醒的行动卡")
+        if now.date() != card_set.target_trade_date or now > datetime.combine(
+            card_set.target_trade_date, time(15, 0), tzinfo=CHINA_TZ
+        ):
+            raise PositionTimingServiceError("CARD_NOT_VALID_TODAY", "行动卡已过期或尚未生效")
+        card = next((item for item in card_set.cards if item.card_id == request.card_id), None)
+        if card is None:
+            raise PositionTimingServiceError("CARD_NOT_FOUND", "提醒卡片不属于当前 card set")
+        trigger = next((item for item in card.triggers if item.trigger_id == trigger_id), None)
+        if trigger is None:
+            raise PositionTimingServiceError("TRIGGER_NOT_FOUND", "提醒分支不属于当前卡片")
+        key = alert_event_idempotency_key(card.card_id, trigger.trigger_id)
+        existing = self.store.get_event(event_type="ALERT_EMISSION_AUTHORIZED", idempotency_key=key)
+        if existing is not None:
+            return {
+                "schema_version": "position_timing_alert_claim_result_v1",
+                "status": "ALREADY_AUTHORIZED",
+                "granted": False,
+                "event": existing,
+            }
+
+        members, _ = self._load_universe()
+        member = next((item for item in members if item.canonical_symbol == card.canonical_symbol), None)
+        snapshots = self._current_alert_snapshot_hashes(card=card, member=member)
+        if snapshots["position_snapshot_sha256"] != card.position_snapshot_sha256:
+            raise PositionTimingServiceError("POSITION_SNAPSHOT_CHANGED", "持仓快照已经变化，旧提醒失效")
+        if snapshots["intent_snapshot_sha256"] != card.intent_snapshot_sha256:
+            raise PositionTimingServiceError("INTENT_SNAPSHOT_CHANGED", "择时意图已经变化，旧提醒失效")
+        if (
+            request.position_snapshot_sha256 != snapshots["position_snapshot_sha256"]
+            or request.intent_snapshot_sha256 != snapshots["intent_snapshot_sha256"]
+        ):
+            raise PositionTimingServiceError("ELIGIBILITY_IDENTITY_MISMATCH", "提醒资格快照与当前状态不一致")
+        polled_quote = ParsedAlertQuote(
+            symbol=card.canonical_symbol,
+            price_raw=request.quote_price_raw,
+            open_raw=request.quote_open_raw,
+            observed_at=request.quote_observed_at.astimezone(CHINA_TZ),
+            evaluated_at=request.alert_evaluated_at.astimezone(CHINA_TZ),
+            source=request.quote_source,
+        )
+        claimed_payload = eligibility_payload(
+            card=card,
+            trigger=trigger,
+            quote=polled_quote,
+            position_snapshot_sha256=request.position_snapshot_sha256,
+            intent_snapshot_sha256=request.intent_snapshot_sha256,
+        )
+        if eligibility_identity(claimed_payload) != request.eligibility_identity:
+            raise PositionTimingServiceError("ELIGIBILITY_IDENTITY_MISMATCH", "提醒资格 identity 校验失败")
+        original_quote, original_status, _ = parse_alert_quote(
+            symbol=card.canonical_symbol,
+            raw_quote={
+                "quote_price_raw": request.quote_price_raw,
+                "quote_open_raw": request.quote_open_raw,
+                "quote_observed_at": request.quote_observed_at,
+                "price_basis": "raw_cny",
+            },
+            evaluated_at=request.alert_evaluated_at,
+        )
+        original_trigger = (
+            evaluate_frozen_trigger(card=card, quote=original_quote)[0]
+            if original_quote is not None
+            else None
+        )
+        if original_status != "FRESH" or original_trigger is None or original_trigger.trigger_id != trigger_id:
+            raise PositionTimingServiceError("ELIGIBILITY_IDENTITY_MISMATCH", "原始轮询快照不具备该提醒资格")
+        if self.dependencies.realtime_quote_loader is None:
+            raise PositionTimingServiceError("QUOTE_UNAVAILABLE", "TDX 实时报价源不可用")
+        try:
+            current_payload = fetch_quotes_in_contract_chunks(
+                symbols=[card.canonical_symbol],
+                quote_loader=self.dependencies.realtime_quote_loader,
+            )
+        except Exception as exc:
+            raise PositionTimingServiceError(
+                "QUOTE_UNAVAILABLE", "TDX 实时报价重验失败", context={"cause": type(exc).__name__}
+            ) from exc
+        current_quote, current_status, _ = parse_alert_quote(
+            symbol=card.canonical_symbol,
+            raw_quote=current_payload.get(card.canonical_symbol),
+            evaluated_at=now,
+        )
+        current_trigger = (
+            evaluate_frozen_trigger(card=card, quote=current_quote)[0]
+            if current_quote is not None
+            else None
+        )
+        if current_quote is None:
+            raise PositionTimingServiceError(current_status, "当前报价不满足提醒新鲜度契约")
+        if current_trigger is None or current_trigger.trigger_id != trigger_id:
+            raise PositionTimingServiceError("EDGE_NO_LONGER_ELIGIBLE", "价格已离开该冻结触发分支")
+        event = AlertEmissionAuthorizedEventV1(
+            event_id=f"evt_{canonical_sha256({'event_type': 'ALERT_EMISSION_AUTHORIZED', 'key': key})[:24]}",
+            idempotency_key=key,
+            occurred_at=now,
+            card_id=card.card_id,
+            card_artifact_sha256=canonical_sha256(card),
+            trigger_id=trigger.trigger_id,
+            eligibility_identity=request.eligibility_identity,
+            quote_price_raw=request.quote_price_raw,
+            quote_open_raw=request.quote_open_raw,
+            quote_observed_at=request.quote_observed_at,
+            alert_evaluated_at=request.alert_evaluated_at,
+            quote_source=request.quote_source,
+            staleness_state="FRESH",
+            quote_age_seconds=polled_quote.age_seconds,
+        )
+        authorized, granted = self.store.claim_alert_authorization(event)
+        return {
+            "schema_version": "position_timing_alert_claim_result_v1",
+            "status": "AUTHORIZED" if granted else "ALREADY_AUTHORIZED",
+            "granted": granted,
+            "event": authorized,
+        }
+
+    def _current_alert_snapshot_hashes(
+        self, *, card: PositionTimingCardV1, member: _UniverseMember | None
+    ) -> dict[str, str]:
+        position_snapshot = canonical_sha256(
+            {
+                "canonical_symbol": card.canonical_symbol,
+                "holding": dict(member.holding or {}) if member is not None else {"status": "MISSING"},
+                "position_source": POSITION_SOURCE,
+            }
+        )
+        current_intent = self.store.get_intent(card.canonical_symbol)
+        intent_snapshot = canonical_sha256(
+            {"canonical_symbol": card.canonical_symbol, "intent": current_intent}
+        )
+        return {
+            "position_snapshot_sha256": position_snapshot,
+            "intent_snapshot_sha256": intent_snapshot,
+        }
+
     def evidence(self) -> dict[str, Any]:
+        outcome_evidence = self._outcome_evidence()
         return {
             "schema_version": "position_timing_evidence_v1",
             "product_evidence_tier": "RULE_BASED_RISK_MANAGEMENT",
@@ -434,6 +1432,7 @@ class PositionTimingService:
             "l2_runtime_status": "PIPELINE_DEFERRED_BY_APPROVED_SCOPE",
             "hmm_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
             "selection_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
+            "outcome_evidence": outcome_evidence,
             "cost_disclosure": {
                 "min_commission_scope": PERSONAL_MANUAL_COMPONENT_COST_V1["min_commission_scope"],
                 "min_commission_scope_verification": PERSONAL_MANUAL_COMPONENT_COST_V1[
@@ -445,6 +1444,128 @@ class PositionTimingService:
                     "0.25": planned_full_notional_threshold(Decimal("0.25")),
                 },
             },
+        }
+
+    def _outcome_evidence(self) -> dict[str, Any]:
+        card_sets = self.store.list_card_sets()
+        state = self.store.get_materialization_state()
+        if not card_sets:
+            return {
+                "status": "NO_CARD_HISTORY",
+                "coverage_counts": {
+                    "matured": 0,
+                    "pending": 0,
+                    "pending_derived": 0,
+                    "pending_materialization": 0,
+                    "unavailable": 0,
+                    "materialization_missing": 0,
+                },
+                "paired_matured": {"count": 0, "mean_net_lift_bps": None, "median_net_lift_bps": None},
+                "intervention_intent": {"count": 0, "mean_net_lift_bps": None, "median_net_lift_bps": None},
+                "base_rates": [],
+                "materialization_state": state,
+            }
+        now = self._now()
+        try:
+            completed_trade_date = self._latest_completed_trade_date(now)
+        except PositionTimingServiceError as exc:
+            return {
+                "status": "OUTCOME_COVERAGE_UNAVAILABLE",
+                "reason_codes": [exc.code],
+                "materialization_state": state,
+            }
+        events = {
+            str(item["idempotency_key"]): item
+            for item in self.store.list_events(event_type="OUTCOME_EVALUATED")
+        }
+        counts = {
+            "matured": 0,
+            "pending": 0,
+            "pending_derived": 0,
+            "pending_materialization": 0,
+            "unavailable": 0,
+            "materialization_missing": 0,
+        }
+        paired_values: list[Decimal] = []
+        intervention_values: list[Decimal] = []
+        grouped: dict[tuple[str, str, str], list[Decimal]] = {}
+        calendar_failures: list[str] = []
+        for card_set in card_sets:
+            if card_set.target_trade_date > completed_trade_date:
+                timeline: list[date] = []
+            else:
+                try:
+                    timeline = self.dependencies.calendar_service.list_trading_days(
+                        card_set.target_trade_date,
+                        completed_trade_date,
+                        allow_empty=True,
+                    )
+                except Exception as exc:
+                    calendar_failures.append(f"{card_set.card_set_id}:{type(exc).__name__}")
+                    continue
+            for card in card_set.cards:
+                intervention_intent = any(trigger.planned_delta_qty != 0 for trigger in card.triggers)
+                action_side = (
+                    "BUY" if card.requested_delta_qty > 0 else "SELL" if card.requested_delta_qty < 0 else "NONE"
+                )
+                for horizon in (1, 3, 5, 10, 20):
+                    key = outcome_event_idempotency_key(card.card_id, horizon)
+                    event = events.get(key)
+                    if event is not None:
+                        maturity = _enum_value(event.get("maturity_status"))
+                        value = event.get("net_lift_bps")
+                        if maturity == MaturityStatus.UNAVAILABLE_AT_HORIZON.value:
+                            counts["unavailable"] += 1
+                        else:
+                            counts["matured"] += 1
+                            if value is not None:
+                                lift = Decimal(str(value))
+                                paired_values.append(lift)
+                                if intervention_intent:
+                                    intervention_values.append(lift)
+                                    grouped.setdefault(
+                                        (
+                                            card.primary_source_role.value,
+                                            action_side,
+                                            card.holding_age_bucket.value,
+                                        ),
+                                        [],
+                                    ).append(lift)
+                        continue
+                    if len(timeline) < horizon:
+                        counts["pending"] += 1
+                        counts["pending_derived"] += 1
+                        continue
+                    nominal = timeline[horizon - 1]
+                    watermark = state.last_successful_materialization_scan_through_trade_date
+                    if watermark is not None and nominal <= watermark:
+                        counts["materialization_missing"] += 1
+                    else:
+                        counts["pending"] += 1
+                        counts["pending_materialization"] += 1
+        base_rates = []
+        for (role, action_side, age_bucket), values in sorted(grouped.items()):
+            positive = sum(1 for value in values if value > 0)
+            base_rates.append(
+                {
+                    "primary_source_role": role,
+                    "action_side": action_side,
+                    "holding_age_bucket": age_bucket,
+                    "sample_count": len(values),
+                    "positive_lift_count": positive,
+                    "positive_lift_ratio": Decimal(positive) / Decimal(len(values)),
+                    "median_lift_bps": _median_decimal(values),
+                    "display_status": "AVAILABLE" if len(values) >= 30 else "INSUFFICIENT_HISTORY",
+                }
+            )
+        return {
+            "status": "AVAILABLE" if not calendar_failures else "PARTIAL_CALENDAR_UNAVAILABLE",
+            "reason_codes": calendar_failures,
+            "coverage_counts": counts,
+            "paired_matured": _lift_summary(paired_values),
+            "intervention_intent": _lift_summary(intervention_values),
+            "base_rates": base_rates,
+            "materialization_state": state,
         }
 
     def _build_card(
@@ -1291,6 +2412,38 @@ class PositionTimingService:
         )
         return members, identity
 
+    @staticmethod
+    def _analysis_members(
+        *,
+        members: tuple[_UniverseMember, ...],
+        scope: PositionTimingAnalysisScopeV1,
+    ) -> tuple[tuple[_UniverseMember, ...], str]:
+        selected = set(scope.selected_watchlist_symbols)
+        analysis_members = tuple(
+            member
+            for member in members
+            if member.primary_source_role is SourceRole.HOLDING
+            or (
+                SourceRole.WATCHLIST in member.source_roles
+                and member.canonical_symbol in selected
+            )
+        )
+        identity = canonical_sha256(
+            [
+                {
+                    "canonical_symbol": member.canonical_symbol,
+                    "primary_source_role": member.primary_source_role,
+                    "source_roles": member.source_roles,
+                    "display_name": member.display_name,
+                    "holding_id": (member.holding or {}).get("id"),
+                    "watchlist_id": (member.watchlist or {}).get("id"),
+                    "normalization_reason": member.normalization_reason,
+                }
+                for member in analysis_members
+            ]
+        )
+        return analysis_members, identity
+
     def _resolve_decision_clock(self, now: datetime) -> tuple[date, datetime, date, dict[str, Any]]:
         try:
             status = self.dependencies.calendar_service.status(as_of_date=now.date())
@@ -1476,6 +2629,115 @@ def _has_valid_batch_identity(payload: Mapping[str, Any]) -> bool:
     material = dict(identity)
     claimed = str(material.pop("identity_sha256", "")).strip().lower()
     return len(claimed) == 64 and claimed == canonical_sha256(material)
+
+
+def _valid_identity_hash(identity: Mapping[str, Any]) -> bool:
+    material = dict(identity)
+    claimed = str(material.pop("identity_sha256", "")).strip().lower()
+    return len(claimed) == 64 and claimed == canonical_sha256(material)
+
+
+def _valid_outcome_snapshot_identity(snapshot: Mapping[str, Any]) -> bool:
+    if not _has_valid_batch_identity(snapshot):
+        return False
+    rows = snapshot.get("rows")
+    identity = snapshot.get("identity")
+    adjustment_identity = snapshot.get("adjustment_identity")
+    limit_identity = snapshot.get("limit_identity")
+    if not isinstance(rows, Mapping) or not isinstance(identity, Mapping):
+        return False
+    if str(identity.get("rows_sha256") or "") != canonical_sha256(dict(rows)):
+        return False
+    if not isinstance(adjustment_identity, Mapping) or not _valid_identity_hash(adjustment_identity):
+        return False
+    if not isinstance(limit_identity, Mapping) or not _valid_identity_hash(limit_identity):
+        return False
+    adjustment_rows: dict[str, dict[str, str]] = {}
+    limit_rows: dict[str, dict[str, dict[str, str]]] = {}
+    for symbol, by_date in rows.items():
+        if not isinstance(by_date, Mapping):
+            return False
+        values: dict[str, str] = {}
+        symbol_limits: dict[str, dict[str, str]] = {}
+        for trade_date, row in by_date.items():
+            if not isinstance(row, Mapping):
+                return False
+            factor = _positive_decimal(row.get("adj_factor"))
+            if factor is not None:
+                values[str(trade_date)] = format(factor, "f")
+            up_limit = _positive_decimal(row.get("up_limit"))
+            down_limit = _positive_decimal(row.get("down_limit"))
+            if up_limit is not None and down_limit is not None:
+                symbol_limits[str(trade_date)] = {
+                    "up_limit": format(up_limit, "f"),
+                    "down_limit": format(down_limit, "f"),
+                }
+        adjustment_rows[str(symbol)] = values
+        limit_rows[str(symbol)] = symbol_limits
+    return (
+        str(adjustment_identity.get("rows_sha256") or "") == canonical_sha256(adjustment_rows)
+        and str(limit_identity.get("rows_sha256") or "") == canonical_sha256(limit_rows)
+    )
+
+
+def _identity_hash(identity: Any) -> str:
+    material = dict(identity or {})
+    if _valid_identity_hash(material):
+        return str(material["identity_sha256"])
+    return canonical_sha256(material)
+
+
+def _outcome_row(snapshot: Mapping[str, Any], symbol: str, trade_date: date) -> dict[str, Any] | None:
+    symbol_rows = (snapshot.get("rows") or {}).get(symbol)
+    if not isinstance(symbol_rows, Mapping):
+        return None
+    row = symbol_rows.get(trade_date.isoformat())
+    return dict(row) if isinstance(row, Mapping) else None
+
+
+def _terminal_sellability_status(row: Mapping[str, Any] | None) -> str:
+    if not isinstance(row, Mapping):
+        return "TERMINAL_MARKET_DATA_UNAVAILABLE"
+    if bool(row.get("is_suspended")):
+        return "TERMINAL_SUSPENDED"
+    prices = {
+        name: _positive_decimal(row.get(name))
+        for name in ("open", "high", "low", "close")
+    }
+    if any(value is None for value in prices.values()):
+        return "TERMINAL_MARKET_DATA_UNAVAILABLE"
+    if _positive_decimal(row.get("adj_factor")) is None:
+        return "TERMINAL_ADJUSTMENT_UNAVAILABLE"
+    down_limit = _positive_decimal(row.get("down_limit"))
+    if down_limit is None:
+        return "TERMINAL_LIMIT_AUTHORITY_UNAVAILABLE"
+    if all(abs(value - down_limit) < Decimal("0.005") for value in prices.values() if value is not None):
+        return "TERMINAL_ONE_WORD_LIMIT_DOWN"
+    return "SELLABLE"
+
+
+def _enum_value(value: Any) -> str:
+    return str(value.value) if hasattr(value, "value") else str(value)
+
+
+def _median_decimal(values: list[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / Decimal("2")
+
+
+def _lift_summary(values: list[Decimal]) -> dict[str, Any]:
+    if not values:
+        return {"count": 0, "mean_net_lift_bps": None, "median_net_lift_bps": None}
+    return {
+        "count": len(values),
+        "mean_net_lift_bps": sum(values, Decimal("0")) / Decimal(len(values)),
+        "median_net_lift_bps": _median_decimal(values),
+    }
 
 
 def _floor_to_tick(value: Decimal) -> Decimal:
@@ -1736,7 +2998,196 @@ def _default_delist_snapshot_loader(symbols: list[str], trade_date: date) -> dic
     return {"rows": rows, "identity": identity}
 
 
-def _source_commit() -> str:
+def _default_outcome_snapshot_loader(
+    symbols: list[str], start_date: date, end_date: date
+) -> dict[str, Any]:
+    """Read mature raw OHLC, suspension, and adjustment rows without fallback."""
+
+    from datetime import datetime as dt
+
+    import pandas as pd
+    import psycopg2.extras as pgx
+
+    from backend.data_service.timescaledb_adapter import fetch_history_window_ts
+    from backend.db.pg_pool import get_conn
+
+    validated = normalize_and_validate_ts_codes(
+        symbols,
+        source="position_timing.outcome_snapshot",
+        start_date=start_date,
+        end_date=end_date,
+        allow_empty=False,
+    )
+    frame = fetch_history_window_ts(
+        validated,
+        start=dt.combine(start_date, time.min),
+        end=dt.combine(end_date, time.max),
+        fields=["open", "high", "low", "close", "volume", "amount"],
+        freq="1d",
+        adj="none",
+    )
+    rows: dict[str, dict[str, dict[str, Any]]] = {symbol: {} for symbol in validated}
+    if not frame.empty:
+        for _, source_row in frame.reset_index().iterrows():
+            symbol = str(source_row.get("instrument") or source_row.get("ts_code") or "").strip().upper()
+            trade_date = pd.Timestamp(source_row.get("datetime") or source_row.get("trade_date")).date()
+            if symbol not in rows or not (start_date <= trade_date <= end_date):
+                continue
+            key = trade_date.isoformat()
+            if key in rows[symbol]:
+                raise ValueError(f"OUTCOME_DAILY_IDENTITY_CONFLICT:{symbol}:{key}")
+            rows[symbol][key] = {
+                "symbol": symbol,
+                "trade_date": key,
+                **{
+                    field: None if pd.isna(source_row.get(field)) else float(source_row.get(field))
+                    for field in ("open", "high", "low", "close", "volume", "amount")
+                },
+                "price_basis": "raw_cny",
+                "is_suspended": False,
+            }
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT ts_code, trade_date, adj_factor
+                FROM market.adj_factor
+                WHERE ts_code = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                ORDER BY ts_code, trade_date
+                """,
+                (validated, start_date, end_date),
+            )
+            adjustment_rows = [dict(row) for row in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT ts_code, trade_date, up_limit, down_limit
+                FROM market.stk_limit
+                WHERE ts_code = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                ORDER BY ts_code, trade_date
+                """,
+                (validated, start_date, end_date),
+            )
+            limit_rows = [dict(row) for row in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT ts_code, trade_date
+                FROM market.suspend_d
+                WHERE ts_code = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                  AND suspend_type = 'S'
+                GROUP BY ts_code, trade_date
+                ORDER BY ts_code, trade_date
+                """,
+                (validated, start_date, end_date),
+            )
+            suspension_rows = [dict(row) for row in cur.fetchall()]
+
+    adjustment_map: dict[str, dict[str, str]] = {symbol: {} for symbol in validated}
+    for source_row in adjustment_rows:
+        symbol = str(source_row.get("ts_code") or "").strip().upper()
+        observed_date = source_row.get("trade_date")
+        factor = _positive_decimal(source_row.get("adj_factor"))
+        if symbol not in adjustment_map or not isinstance(observed_date, date) or factor is None:
+            continue
+        key = observed_date.isoformat()
+        if key in adjustment_map[symbol]:
+            raise ValueError(f"OUTCOME_ADJUSTMENT_IDENTITY_CONFLICT:{symbol}:{key}")
+        adjustment_map[symbol][key] = format(factor, "f")
+        rows[symbol].setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "trade_date": key,
+                "price_basis": "raw_cny",
+                "is_suspended": False,
+            },
+        )["adj_factor"] = factor
+    limit_map: dict[str, dict[str, dict[str, str]]] = {symbol: {} for symbol in validated}
+    for source_row in limit_rows:
+        symbol = str(source_row.get("ts_code") or "").strip().upper()
+        observed_date = source_row.get("trade_date")
+        up_limit = _positive_decimal(source_row.get("up_limit"))
+        down_limit = _positive_decimal(source_row.get("down_limit"))
+        if (
+            symbol not in limit_map
+            or not isinstance(observed_date, date)
+            or up_limit is None
+            or down_limit is None
+            or down_limit >= up_limit
+        ):
+            continue
+        key = observed_date.isoformat()
+        if key in limit_map[symbol]:
+            raise ValueError(f"OUTCOME_LIMIT_IDENTITY_CONFLICT:{symbol}:{key}")
+        limit_map[symbol][key] = {
+            "up_limit": format(up_limit, "f"),
+            "down_limit": format(down_limit, "f"),
+        }
+        rows[symbol].setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "trade_date": key,
+                "price_basis": "raw_cny",
+                "is_suspended": False,
+            },
+        ).update({"up_limit": up_limit, "down_limit": down_limit})
+    for source_row in suspension_rows:
+        symbol = str(source_row.get("ts_code") or "").strip().upper()
+        observed_date = source_row.get("trade_date")
+        if symbol not in rows or not isinstance(observed_date, date):
+            continue
+        key = observed_date.isoformat()
+        rows[symbol].setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "trade_date": key,
+                "price_basis": "raw_cny",
+            },
+        )["is_suspended"] = True
+
+    adjustment_identity = {
+        "source": "market.adj_factor",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "symbol_set": validated,
+        "rows_sha256": canonical_sha256(adjustment_map),
+        "corporate_action_valuation": "RAW_CLOSE_TIMES_ADJ_FACTOR_RATIO_V1",
+    }
+    adjustment_identity["identity_sha256"] = canonical_sha256(adjustment_identity)
+    limit_identity = {
+        "source": "market.stk_limit",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "symbol_set": validated,
+        "rows_sha256": canonical_sha256(limit_map),
+        "terminal_sellability_policy": "ONE_WORD_LIMIT_DOWN_DEFERS_TERMINAL_V1",
+    }
+    limit_identity["identity_sha256"] = canonical_sha256(limit_identity)
+    identity = {
+        "source": "market.kline_daily_raw+market.suspend_d+market.stk_limit+market.adj_factor",
+        "table_contract": "POSITION_TIMING_OUTCOME_RAW_V1",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "symbol_set": validated,
+        "rows_sha256": canonical_sha256(rows),
+    }
+    identity["identity_sha256"] = canonical_sha256(identity)
+    return {
+        "rows": rows,
+        "identity": identity,
+        "adjustment_identity": adjustment_identity,
+        "limit_identity": limit_identity,
+    }
+
+
+def _resolve_source_commit() -> str:
+    """Resolve the code identity once while this module is being imported."""
+
     from_env = str(os.getenv("AISTOCK_GIT_COMMIT") or "").strip().lower()
     if len(from_env) == 40 and all(char in "0123456789abcdef" for char in from_env):
         return from_env
@@ -1749,13 +3200,36 @@ def _source_commit() -> str:
         text=True,
         timeout=5,
     )
-    return completed.stdout.strip().lower()
+    resolved = completed.stdout.strip().lower()
+    if len(resolved) != 40 or any(char not in "0123456789abcdef" for char in resolved):
+        raise RuntimeError("resolved source commit is not a 40-character lowercase git sha")
+    return resolved
+
+
+try:
+    _PROCESS_SOURCE_REPOSITORY_COMMIT = _resolve_source_commit()
+    _PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR: str | None = None
+except Exception as exc:  # Keep unrelated backend routes importable; materialization fails typed.
+    _PROCESS_SOURCE_REPOSITORY_COMMIT = None
+    _PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR = type(exc).__name__
+
+
+def _source_commit() -> str:
+    """Return the immutable code identity captured for this running process."""
+
+    if _PROCESS_SOURCE_REPOSITORY_COMMIT is None:
+        raise RuntimeError(
+            "position timing source commit was unavailable when process code loaded: "
+            f"{_PROCESS_SOURCE_REPOSITORY_COMMIT_ERROR or 'UNKNOWN'}"
+        )
+    return _PROCESS_SOURCE_REPOSITORY_COMMIT
 
 
 def build_position_timing_service(*, artifact_root: str | Path | None = None) -> PositionTimingService:
     from portfolio_manager import portfolio_manager
 
     from backend.repositories.watchlist_repo_impl import WatchlistRepoPG
+    from backend.services.simulation_data.tdx_causal_minute import fetch_tdx_realtime_quotes
     from backend.services.trading_calendar_status import TradingCalendarStatusService
 
     watchlist_repo = WatchlistRepoPG()
@@ -1770,6 +3244,8 @@ def build_position_timing_service(*, artifact_root: str | Path | None = None) ->
         delist_snapshot_loader=_default_delist_snapshot_loader,
         now_provider=lambda: datetime.now(CHINA_TZ),
         source_commit_provider=_source_commit,
+        realtime_quote_loader=fetch_tdx_realtime_quotes,
+        outcome_snapshot_loader=_default_outcome_snapshot_loader,
     )
     return PositionTimingService(store=PositionTimingArtifactStore(artifact_root), dependencies=dependencies)
 

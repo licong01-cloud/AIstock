@@ -562,6 +562,24 @@ def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
     assert "contract: stock_event_risk_policy_v1" in yaml_text
 
 
+def test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog():
+    yaml_text = _base_yaml(
+        execution_algo="TWAP",
+        execution_algo_params={},
+        custom_params={"stock_pool": "stock_universe"},
+    )
+    exchange = _slice_yaml_between(
+        yaml_text,
+        "        exchange_kwargs:",
+        "task:",
+    )
+
+    assert "market: &market stock_universe" in yaml_text
+    assert "codes: *market" in exchange
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+    assert parsed["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "stock_universe"
+
+
 def test_qe_risk_policy_wraps_outer_strategy_and_emits_runtime_kwargs():
     yaml_text = _base_yaml(
         custom_params={
@@ -1920,6 +1938,33 @@ def _custom_timeseries_lstm_model_info(training_hp=None):
         },
         "code_text": "class LSTMModel: pass\nmodel_cls = LSTMModel\n",
     }
+
+
+def test_custom_timeseries_general_ptnn_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={"random_seed": 123},
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "GeneralPTNN"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 123
+    assert parsed["qe_runtime"]["random_seed"] == 123
+
+
+def test_custom_timeseries_ltr_adapter_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={
+            "random_seed": 314,
+            "ltr_loss_mode": "approx_ndcg_at_k",
+        },
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "AIStockGeneralPTNNLTR"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 314
+    assert parsed["qe_runtime"]["random_seed"] == 314
 
 
 def _builtin_transformer_model_info():

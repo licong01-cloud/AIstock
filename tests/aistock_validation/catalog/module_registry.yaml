@@ -354,7 +354,7 @@ modules:
     ui_routes: [/position-timing]
     api_routes: [/api/v1/position-timing/*]
     test_plans:
-      required_on_change: [l0, position_timing_backend, frontend_type_lint]
+      required_on_change: [l0, position_timing_backend, position_timing_first_release]
   - module_id: qmt
     display_name: QMT
     module_type: trading_infra

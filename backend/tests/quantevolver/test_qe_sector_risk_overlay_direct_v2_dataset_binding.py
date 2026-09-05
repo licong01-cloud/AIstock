@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
@@ -295,6 +296,12 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
     assert binding.provider_uri_1min in conf
     assert "market: &market stock_universe" in conf
     assert "market: &market all" not in conf
+    parsed_conf = yaml.safe_load(conf)
+    assert parsed_conf["market"] == "stock_universe"
+    assert (
+        parsed_conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"]
+        == "all"
+    )
     prepare = result["experiment_files"]["prepare_factors.py"]
     assert repr(dict(binding.factor_meta)) in prepare
     assert binding.factor_meta_sha256 in prepare

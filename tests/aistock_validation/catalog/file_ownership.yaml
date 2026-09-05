@@ -7,6 +7,7 @@ rules:
       - backend/routers/position_timing.py
       - backend/tests/position_timing/**
       - frontend/src/app/position-timing/**
+      - frontend/tests/position-timing/**
       - docs/architecture/position_timing_advice_f2_redesign_*.md
       - docs/architecture/position_timing_advice_first_release_implementation_plan_*.md
     primary_module: position_timing
@@ -38,6 +39,7 @@ rules:
       - scripts/advisory_exit_learnability_audit.py
       - scripts/advisory_qe_alpha_mve_prepare.py
       - scripts/advisory_qe_alpha_mve_run.py
+      - scripts/advisory_score_hmm_admission_mve.py
       - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py
       - scripts/advisory_outcome_calibration_train_wsl.py
@@ -71,6 +73,7 @@ rules:
       - docs/architecture/advisory_n2_entry_exit_formal_audit_f2_detailed_design_*.md
       - docs/architecture/advisory_n2_qe_alpha_mve_preparation_f2_detailed_design_*.md
       - docs/architecture/advisory_n3_qe_upstream_alpha_mve_f2_detailed_design_*.md
+      - docs/architecture/advisory_score_hmm_conditioned_admission_f2_detailed_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
     layer: data_pipeline
@@ -567,6 +570,7 @@ rules:
       - backend/routers/quantevolver*.py
       - backend/tests/quantevolver/test_factor_emit_hook.py
       - backend/tests/quantevolver/test_canonical_pit_dataset_binding.py
+      - backend/tests/quantevolver/test_stock_pool_sync.py
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py
@@ -1011,6 +1015,22 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: core_index_pit_stock_pools
+    priority: 110
+    include:
+      - backend/services/core_index_membership.py
+      - backend/services/dataset_release/index_pool_sidecar.py
+      - backend/tests/core_index_membership/**
+      - backend/tests/dataset_release/test_index_pool_sidecar.py
+      - backend/tests/scripts/test_build_core_index_membership_authority.py
+      - backend/tests/scripts/test_prepare_core_index_membership_pit.py
+      - scripts/build_core_index_membership_authority.py
+      - scripts/prepare_core_index_membership_pit.py
+    primary_module: qlib_data
+    impact_modules: [platform.db, qe.core, hmm, selection_center, paper_v2]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: Core-index PIT authority, shared resolver, sidecar renderer, operator, and direct tests form one Qlib universe-selection data boundary.
   - rule_id: qlib_monthly_dataset_release
     priority: 96
     include:

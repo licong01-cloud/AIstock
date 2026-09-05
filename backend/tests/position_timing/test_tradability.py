@@ -3,6 +3,7 @@ from backend.services.position_timing.service import normalize_position_symbol
 
 def test_st_changes_limit_rate_but_does_not_make_card_unavailable(service_factory) -> None:
     service = service_factory()
+    service.put_analysis_scope(raw_symbol="600000.SH", analysis_enabled=True)
     card = next(
         item for item in service.materialize()["card_set"].cards if item.canonical_symbol == "600000.SH"
     )
