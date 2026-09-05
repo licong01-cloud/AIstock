@@ -66,8 +66,10 @@ from backend.services.dataset_release.direct_monthly import (  # noqa: E402
     default_candidate_path,
     discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
+    hardlink_baseline_components,
     production_handlers,
     read_state,
+    validate_direct_candidate,
     validate_direct_candidate_with_smoke,
 )
 
@@ -113,6 +115,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     cleanup.add_argument("--latest", action="store_true", help="select newest direct candidate")
     cleanup.add_argument("--apply", action="store_true", help="remove the exact planned targets")
+
+    augment = subparsers.add_parser(
+        "augment-sw-l1",
+        help="derive a new direct candidate by hardlinking completed components and building only SW L1",
+    )
+    augment.add_argument("--candidate-only", action="store_true", help="required safety declaration")
+    augment.add_argument("--baseline-candidate", type=Path, required=True)
+    augment.add_argument("--candidate-root", type=Path, required=True)
 
     events = subparsers.add_parser("events", help="read one bounded event page")
     event_target = events.add_mutually_exclusive_group(required=True)
@@ -249,16 +259,32 @@ def _direct_monthly(
         observed_on=observed_at.date(),
     )
     baseline_root = discover_latest_validated_baseline(candidate_parent, cutoff=cutoff)
+    baseline_reuse: Mapping[str, Any] | None = None
     if existing_root is not None:
         raw_state = json.loads((existing_root / "direct_monthly_state.json").read_text(encoding="utf-8"))
-        raw_baseline = raw_state.get("baseline_root")
-        baseline_root = Path(str(raw_baseline)) if raw_baseline is not None else None
+        raw_components = raw_state.get("components")
+        if (
+            raw_state.get("status") == "CANDIDATE_READY"
+            and isinstance(raw_components, Mapping)
+            and "sw_l1_index" not in raw_components
+        ):
+            baseline_root = existing_root
+            candidate_root = default_candidate_path(
+                candidate_parent,
+                cutoff=cutoff,
+                observed_on=observed_at.date(),
+            )
+        else:
+            raw_baseline = raw_state.get("baseline_root")
+            baseline_root = Path(str(raw_baseline)) if raw_baseline is not None else None
     layout = DirectMonthlyLayout.create(
         candidate_parent=candidate_parent,
         candidate_root=candidate_root,
         baseline_root=baseline_root,
         cutoff=cutoff,
     )
+    if baseline_root == existing_root and candidate_root != existing_root:
+        baseline_reuse = hardlink_baseline_components(layout)
     state = DirectMonthlyRunner(
         production_handlers(project_root=REPOSITORY_ROOT),
         validator=lambda current_layout: validate_direct_candidate_with_smoke(
@@ -269,13 +295,16 @@ def _direct_monthly(
         layout,
         adopt_known_direct_work=True,
     )
-    return {
+    result = {
         "ok": True,
         "action": "monthly-direct",
         **compact_status(state),
         "execution_started_by_cli": True,
         "production_activation": "not_requested",
     }
+    if baseline_reuse is not None:
+        result["baseline_reuse"] = baseline_reuse
+    return result
 
 
 def _status(
@@ -362,6 +391,41 @@ def _direct_cleanup(args: argparse.Namespace) -> Mapping[str, Any]:
         "ok": True,
         **result,
         "execution_started_by_cli": False,
+        "production_activation": "not_requested",
+    }
+
+
+def _direct_augment_sw_l1(args: argparse.Namespace) -> Mapping[str, Any]:
+    if not args.candidate_only:
+        raise ValueError("augment-sw-l1 requires --candidate-only")
+    parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
+    baseline = args.baseline_candidate.expanduser().resolve(strict=True)
+    if baseline.parent != parent:
+        raise ValueError("baseline-candidate must be a direct child of the candidate parent")
+    try:
+        baseline_state = json.loads(
+            (baseline / "direct_monthly_state.json").read_text(encoding="utf-8")
+        )
+        cutoff = date.fromisoformat(str(baseline_state["cutoff"]))
+    except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("baseline-candidate has no readable direct monthly cutoff") from exc
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=args.candidate_root,
+        baseline_root=baseline,
+        cutoff=cutoff,
+    )
+    reuse = hardlink_baseline_components(layout)
+    state = DirectMonthlyRunner(
+        production_handlers(project_root=REPOSITORY_ROOT),
+        validator=validate_direct_candidate,
+    ).run(layout, adopt_known_direct_work=True)
+    return {
+        "ok": True,
+        "action": "augment-sw-l1-direct",
+        **compact_status(state),
+        "baseline_reuse": reuse,
+        "execution_started_by_cli": True,
         "production_activation": "not_requested",
     }
 
@@ -598,8 +662,14 @@ def main(
             result = _direct_cleanup(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "augment-sw-l1":
+            result = _direct_augment_sw_l1(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
         if args.action == "cleanup":
             raise ValueError("cleanup is available only for qe_hmm_full_v2")
+        if args.action == "augment-sw-l1":
+            raise ValueError("augment-sw-l1 is available only for qe_hmm_full_v2")
         control = service or build_control_service()
         _selected_profile_id(control, args)
         if args.action == "monthly":
