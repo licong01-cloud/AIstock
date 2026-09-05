@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**: v2.41
+> **版本**: v2.42
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-09-04
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的 P2-3A～P2-4、C-012-RL1/HR1/RW1均保持不可变终态；历史证据同时包含真实模型弱点与低功效，RW1 fold符号变化不足以单独证明关系时变。当前唯一G2-A仍为HMM/jump因果market context加浅层监督式L1横截面scorer。用户已批准：Rank IC 0.02为唯一binding MBE；MDE只决定forward confirmation；research product与tail access双门解耦；`min_child_samples=310/min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上界`<=0`；market context跨5D/10D共享。真实因果OOF可先闭合experimental repository/API/UI，但不得冒充rotation capability；只有development达到MBE才进入research prediction capability，只有forward通过才成为advisory。其余窗口、feature minimum、horizon差异、模型参数、coverage、依赖与DDL仍pending，源码/battery/fit/product/DB/runtime均未执行。严格产品进度仍为`11/17=64.71%`，CAPABILITY_AVAILABLE、FULL_READY和真实API/UI均为0。本次DDL/DML/dependency/runtime均为`noop`（§13）。
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的 P2-3A～P2-4、C-012-RL1/HR1/RW1均保持不可变终态；历史证据同时包含真实模型弱点与低功效，RW1 fold符号变化不足以单独证明关系时变。当前唯一G2-A仍为HMM/jump因果market context加浅层监督式L1横截面scorer。用户已一次性批准G2-A v1.2 §10.1全部精确合同，包括504日rolling、9项feature与8/9 availability、Ridge 5D/10D选择、共享market context、固定LightGBM 4.6.0单一profile、39-fit上限、Rank IC 0.02 binding MBE、research/tail双门、310/20叶结构、coverage/state projection、forward HAC边界及最小DB/API设计。真实因果OOF可先闭合experimental repository/API/UI，但不得冒充rotation capability；只有development达到MBE才进入research prediction capability，只有forward通过才成为advisory。详细设计已达到`DESIGN_READY_USER_APPROVED`；源码、battery、39 fits、tail读取、model/product、DEV/production DDL和runtime activation均未授权或执行。严格产品进度仍为`11/17=64.71%`，CAPABILITY_AVAILABLE、FULL_READY和真实API/UI均为0。本次DDL/DML/dependency/runtime均为`noop`（§13）。
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -374,9 +374,9 @@ Decision C-004 明确冻结 `scripts/precompute_hmm_risk_gate.py`、`hmm_risk_ga
 
 **旧B3历史摘要**：C-009/C-010输入闭包、B3 `5184/5184` fits、后续blocker/structure/refit诊断均已诚实完成，但没有两family完整candidate、model、READY或产品能力。相关参数、两family/四level合取、D1/P6/D5/D6和大规模artifact只保留为历史证据，不再构成新G2-A的active contract；不得重跑、调参、复用已消费窗口或继续解释历史mechanism制造进度。旧源码、`hmmlearn==0.3.3`和已验证Conda环境保持不变，不代表新GBDT依赖已获授权。
 
-**当前唯一G2-A方向**：用户确认`HMM/jump market context + supervised nonlinear cross-sectional rotation scorer`，active入口为`docs/architecture/hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md`。2026-09-04进一步批准Rank IC 0.02 binding MBE、MDE仅作forward功效状态、research/tail双门、310/20叶结构、HAC上界effect failure及horizon-independent market context。market regime只作为输入，不独立产品化；risk与L2不并行。rolling长度、确切日期、feature minimum、Ridge/horizon差异、其余GBDT参数、stability/coverage、`lightgbm`依赖和DDL仍待批准，因此不得开始源码、battery、fit、依赖安装或产品写入。
+**当前唯一G2-A方向**：用户确认`HMM/jump market context + supervised nonlinear cross-sectional rotation scorer`，active入口为`docs/architecture/hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` v1.2。2026-09-04已一次性批准其§10.1全部精确合同：504日rolling与冻结fold日期、9项feature及8/9 availability、Ridge 5D/10D选择、共享K=2 market context、固定LightGBM 4.6.0单一profile、39-fit上限、Rank IC 0.02 binding MBE、MDE/coverage/state projection、research/tail双门、310/20叶结构、HAC forward边界及最小DB/API设计。market regime只作为输入，不独立产品化；risk与L2不并行。详细设计已可进入后续独立授权的源码实施，但本次未授权源码、battery、fit、tail读取、DDL实施或产品写入；既有LightGBM精确pin无需安装依赖。
 
-**G2-A最小DB/API/UI权威**：新详细设计§8～§9是首个`rotation_L1`纵切的唯一implementation-level入口。旧`sector_state_timeline.state_probabilities`面向HMM概率，不能填造GBDT概率；新G2-A推荐独立最小`hmm_risk.rotation_l1_prediction`表，保存连续score、派生state、availability/reason、model/input/mapping identity和revision。精确DDL仍待用户批准并须先在DEV验证。
+**G2-A最小DB/API/UI权威**：新详细设计§8～§9是首个`rotation_L1`纵切的唯一implementation-level入口。旧`sector_state_timeline.state_probabilities`面向HMM概率，不能填造GBDT概率；已批准的G2-A设计使用独立最小`hmm_risk.rotation_l1_prediction`表，保存连续score、派生state、availability/reason、model/input/mapping identity和revision。schema设计批准不授权DDL执行；未来DDL仍须先在DEV验证并取得目标明确的独立授权。
 
 G2-A只开放：
 
@@ -743,11 +743,11 @@ docs/
 
 Gate 2 不再按技术层或小功能拆阶段，只保留三个可产生用户结果的纵向业务闭环。P2-1～P2-4、C-012/C-013编号继续作为设计与历史证据索引，不再作为独立任务队列。第一个闭环必须交付真实用户可访问结果；模型、bundle、receipt或backend-only均不是闭环终点。
 
-1. **G2-A 输入权威到首个真实`rotation_L1`产品闭环（部分精确合同已批准）**：旧RW1保持终态且不得重跑。新G2-A只允许一个浅层监督式L1 scorer；HMM/jump market context在公共fold train上拟合一次，由5D/10D共享。battery选择horizon并报告功效，但MDE不淘汰GBDT。GBDT后先以无效果阈值的research gate闭合真实OOF repository/API/UI，再以development OOF Rank IC 0.02 tail gate决定是否消费尾部；forward通过才升级advisory，低功效/inconclusive/failed均不得调参或打开第二candidate。剩余精确参数、依赖和DDL未批准，源码、fit和产品均未执行。
+1. **G2-A 输入权威到首个真实`rotation_L1`产品闭环（精确设计合同已批准）**：旧RW1保持终态且不得重跑。新G2-A只允许一个浅层监督式L1 scorer；HMM/jump market context在公共fold train上拟合一次，由5D/10D共享。battery选择horizon并报告功效，但MDE不淘汰GBDT。GBDT后先以无效果阈值的research gate闭合真实OOF repository/API/UI，再以development OOF Rank IC 0.02 tail gate决定是否消费尾部；forward通过才升级advisory，低功效/inconclusive/failed均不得调参或打开第二candidate。v1.2 §10.1全部精确参数、既有依赖pin和最小DB/API设计已获批准；源码、39 fits、tail读取、model/product、DDL执行与runtime均未授权或执行。
 2. **G2-B 首个产品到扩展分析与预警闭环（不可执行：无G2-A capability）**：G2-B只允许建立在已验收的真实G2-A canonical identity和API/UI上。当前不存在该前置能力，因此不得单独开发历史分析、transition/severity、预警、详情或UI，也不得用失败RW1的score、局部正向fold或静态数据伪造产品。
 3. **G2-C 真实产品到受控日任务闭环（不可执行：无G2-B product）**：共同水位、幂等日任务、revision/dedupe、late-data和受控runner继续保留为未来产品集成合同；在没有已验收产品identity前不得建设或激活。
 
-**当前唯一决策点**：方向与功效/交付状态机已经收敛；下一决定仅是对剩余确切日期、rolling长度、feature minimum、Ridge/horizon差异、其余GBDT参数、stability/coverage、依赖和最小DDL作一次性批准。批准前不得编码或实验；批准后同一G2-A连续完成实现、受控实验与真实纵切，不再建立独立diagnostic、schema、adapter、backend或UI小阶段。
+**当前下一动作**：方向、功效/交付状态机与全部精确设计合同已经收敛；下一步只能在用户另行授权后，按v1.2同一G2-A范围连续实施源码、直接测试、受控39-fit实验与真实纵切，不再建立独立diagnostic、schema、adapter、backend或UI小阶段。源码授权不推导tail读取、DDL执行、runtime activation或服务重启授权。
 
 每个闭环内部允许因用户授权边界存在多个动作状态，例如source merge、实验执行、用户重启和post-restart verify，但不得把动作状态改写为新的功能阶段或单独积累完成度。小型设计补充、测试、同范围BUG、审查修复和状态文档随当前闭环收敛。
 
@@ -835,7 +835,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v2.41 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个业务闭环必须将对应行替换为真实引用和结果证据后才能报告完成，闭环内部的单个PR、实验或动作不得单独增加产品完成度。
+本表记录 v2.42 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个业务闭环必须将对应行替换为真实引用和结果证据后才能报告完成，闭环内部的单个PR、实验或动作不得单独增加产品完成度。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -850,7 +850,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 父蓝图v2.41；`hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` v1.1 D1～D6；旧Phase 2详细设计与RW1源码仅作历史参考 | 目标`backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；旧RW1 failure保持不可变 | APPROVED_BY_USER_POWER_AND_DELIVERY_SPLIT_REMAINING_EXACT_CONTRACT_PENDING | 已批准Rank IC 0.02、MDE角色、双门、310/20叶结构、forward失败公式和共享market context；剩余窗口、参数、coverage、依赖待批准，CAPABILITY_AVAILABLE仍为0 |
+| F-011 | 父蓝图v2.42；`hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` v1.2 D1～D6；旧Phase 2详细设计与RW1源码仅作历史参考；源码、39 fits、tail、model/product、DDL/runtime均未执行 | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md --tier F2`；目标`backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；旧RW1 failure保持不可变 | DESIGN_READY_USER_APPROVED | 无 |
 | F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | DESIGN_READY_USER_APPROVED | 用户明确批准 legacy producer/consumer 冻结与 advisory-only 隔离；源码与结果证据待实现 PR 回填 |
 | F-013 | 新G2-A详细设计D6：真实OOF prediction、最小repository/read API、真实L1热力图；旧Phase 2设计§9～§11仅保留后续G2-B/G2-C合同 | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径，必须真实数据且无mock） | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | research gate通过可闭合真实experimental surface；development未达MBE时rotation capability仍NOT_AVAILABLE，forward未通过时advisory仍NOT_AVAILABLE |
 | F-014 | 本文 Phase 3 UI/隔离方向；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径，尚未建立） | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准跨阶段方向；不得从父蓝图直接编码，身份、训练任务、artifact、状态机、API/UI 和验证合同待独立设计 |
@@ -901,7 +901,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 - `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` - Phase 1 实现级详细设计
 - `hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md` - Phase 2 实现级详细设计与当前模型验收权威状态
-- `hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` - 新G2-A `rotation_L1`一次性F2详细设计；功效/交付双门、binding MBE、310/20叶结构、forward失败公式与共享market context已批准，其余精确D1～D6合同仍待用户批准
+- `hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` - 新G2-A `rotation_L1`一次性F2详细设计v1.2；D1～D6与§10.1全部精确合同已获用户批准，源码、39 fits、tail、model/product、DDL与runtime仍待分别授权和实施
 - `docs/architecture/research_pipeline_and_mcp_gateway_design_v2.md` - Research Pipeline 架构
 - `docs/analysis/hmm_offline_diagnostic_qe_20260502_131502_9b54.md` - 离线诊断示例
 - `docs/analysis/hmm_risk_gate_validation_20260517.md` - 风险门控验证
@@ -917,6 +917,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.42 | 2026-09-04 | 回填用户对G2-A v1.2 §10.1全部精确合同的一次性批准：504日rolling、9项feature、Ridge horizon选择、共享market context、固定LightGBM 4.6.0 profile、39-fit上限、MBE/MDE、双门、coverage/state projection、leaf/forward边界及最小DB/API设计均达到design ready；明确设计批准不推导源码、tail、模型、产品、DDL或runtime完成。 |
 | v2.41 | 2026-09-04 | 按用户批准解耦research product与tail access；Rank IC 0.02成为唯一binding MBE，MDE只决定forward功效状态；批准310/20叶结构、HAC上界effect failure及跨horizon共享market context；真实OOF可闭合experimental surface但不得冒充capability。逐次历史迁至`hmm_evolution_phase2_decision_log_20260812_20260904.md`，更早版本保留于Git历史。 |
 
 ---

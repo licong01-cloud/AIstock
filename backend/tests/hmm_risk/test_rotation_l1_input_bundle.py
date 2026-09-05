@@ -1376,13 +1376,22 @@ def _asset_binding(tmp_path: Path) -> tuple[Path, Path]:
     return manifest_path, release
 
 
-def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
-    root = tmp_path / "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+def _direct_v2_candidate(
+    tmp_path: Path,
+    *,
+    state_schema_version: str = subject.DIRECT_V2_STATE_SCHEMA_VERSION,
+    root_name: str = "20260831-qe_hmm_full_v2-direct-test-candidate",
+) -> tuple[Path, Path, Path]:
+    root = (tmp_path / root_name).resolve()
     day = root / "components" / "daily_bin_candidate"
     factor = root / "components" / "factor_h5_static_candidate_v2"
     index_root = root / "components" / "index_context"
     suspend = root / "components" / "suspend_d_daily_candidate_v2"
-    for path in (day / "calendars", day / "instruments", factor, index_root, suspend):
+    sw_l1 = root / "components" / "sw_l1_index_daily_candidate_v1"
+    paths = [day / "calendars", day / "instruments", factor, index_root, suspend]
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        paths.append(sw_l1)
+    for path in paths:
         path.mkdir(parents=True, exist_ok=True)
     (day / "calendars" / "day.txt").write_text(
         "\n".join(
@@ -1395,10 +1404,17 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    stock_row = f"000001.SZ\t{subject.SOURCE_START.isoformat()}\t{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+    benchmark_row = (
+        f"000300.SH\t{subject.DIRECT_V2_RELEASE_START.isoformat()}\t{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+    )
     (day / "instruments" / "all.txt").write_text(
-        f"000001.SZ\t{subject.SOURCE_START.isoformat()}\t{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n",
+        stock_row + (benchmark_row if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION else ""),
         encoding="utf-8",
     )
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        (day / "instruments" / "stock_universe.txt").write_text(stock_row, encoding="utf-8")
+        (day / "instruments" / "benchmark.txt").write_text(benchmark_row, encoding="utf-8")
     (day / "meta_export.json").write_text(
         json.dumps(
             {
@@ -1407,6 +1423,19 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
                 "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
                 "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                **(
+                    {
+                        "benchmark_only": {
+                            "code": "000300.SH",
+                            "selection_eligible": False,
+                            "provider_catalog": "instruments/all.txt",
+                            "selection_universe": "instruments/stock_universe.txt",
+                            "benchmark_universe": "instruments/benchmark.txt",
+                        }
+                    }
+                    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION
+                    else {}
+                ),
             }
         ),
         encoding="utf-8",
@@ -1502,7 +1531,42 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
-    declared_root = r"X:\AIstock_dataset_candidates\backtest_dataset_candidates" + f"\\{root.name}"
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        sw_days = (subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF)
+        sw_rows = []
+        for day_value in sw_days:
+            for offset in range(31):
+                sector_code = f"{110000 + offset:06d}"
+                sw_rows.append(
+                    {
+                        "datetime": pd.Timestamp(day_value),
+                        "sector_code": sector_code,
+                        "index_code": f"{801000 + offset:06d}.SI",
+                        "close": float(100 + offset + (day_value - subject.SOURCE_START).days / 1000),
+                    }
+                )
+        pd.DataFrame(sw_rows).set_index(["datetime", "sector_code"]).to_hdf(
+            sw_l1 / "sector_data.h5", key="data", format="fixed"
+        )
+        (sw_l1 / "meta.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": subject.DIRECT_V2_SW_L1_SCHEMA_VERSION,
+                    "component": "sw_l1_index",
+                    "source_identity": subject.DIRECT_V2_SW_L1_SOURCE_IDENTITY,
+                    "columns": ["index_code", "close"],
+                    "start": subject.SOURCE_START.isoformat(),
+                    "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                    "sector_count": 31,
+                    "open_days": len(sw_days),
+                    "rows": len(sw_rows),
+                    "source_freeze": False,
+                    "full_history_content_hash": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+    declared_root = str(root)
     components = {
         "daily_bin": ("daily_bin_candidate", "daily_bin"),
         "factor_h5_static": ("factor_h5_static_candidate_v2", "factor_h5_static"),
@@ -1510,10 +1574,12 @@ def _direct_v2_candidate(tmp_path: Path) -> tuple[Path, Path, Path]:
         "minute_bin": ("minute_bin_candidate", "minute_bin"),
         "suspend_d": ("suspend_d_daily_candidate_v2", "suspend_d"),
     }
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        components["sw_l1_index"] = ("sw_l1_index_daily_candidate_v1", "sw_l1_index")
     (root / "direct_monthly_state.json").write_text(
         json.dumps(
             {
-                "schema_version": subject.DIRECT_V2_STATE_SCHEMA_VERSION,
+                "schema_version": state_schema_version,
                 "profile": subject.DIRECT_V2_PROFILE,
                 "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
                 "status": "CANDIDATE_READY",
@@ -1561,6 +1627,55 @@ def _stub_direct_factor_inventory(path: Path, *, expected_columns, expected_dtyp
     }
 
 
+def test_direct_v2_factor_table_layout_inventory_and_window_are_formally_readable(tmp_path: Path) -> None:
+    path = tmp_path / "daily_basic.h5"
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-08-28", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(
+        {
+            "db_close": np.arange(4, dtype=np.float32) + 10,
+            "db_circ_mv": np.arange(4, dtype=np.float32) + 100,
+        },
+        index=index,
+    )
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+
+    inventory = subject._fixed_h5_inventory(
+        path,
+        expected_columns=("db_close", "db_circ_mv"),
+        expected_dtype="<f4",
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("db_close", "db_circ_mv"),
+        expected_dtype="<f4",
+        start=date(2026, 8, 31),
+        end=date(2026, 8, 31),
+    )
+
+    assert inventory == {
+        "columns": ["db_close", "db_circ_mv"],
+        "dtype": "float32",
+        "layout": "pandas_table",
+        "date_min": "2026-08-28",
+        "date_max": "2026-08-31",
+        "code_count": 2,
+        "row_count": 4,
+    }
+    assert loaded.equals(frame.loc[pd.IndexSlice[pd.Timestamp("2026-08-31"), :], :])
+
+
+def _stub_direct_source_preflights(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
+    monkeypatch.setattr(
+        subject,
+        "_preflight_qlib_feature_inventory",
+        lambda *_args, **_kwargs: {"stock_count": 1, "field_count": len(subject.QLIB_STOCK_FIELDS)},
+    )
+
+
 def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1585,8 +1700,198 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     assert loaded["files"]["moneyflow"].is_relative_to(root)
     assert loaded["files"]["index_context"].is_relative_to(root)
     assert loaded["files"]["suspend_data"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_index"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_meta"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_index"].parent.name == "sw_l1_index_daily_candidate_v1"
+    assert all(
+        path.parent.name != "factor_h5_static_candidate_v2" or path.name in {"daily_basic.h5", "moneyflow.h5"}
+        for name, path in loaded["files"].items()
+        if name not in {"security_identity", "provider_absence"}
+    )
+    assert loaded["instrument_universe_path"].name == "stock_universe.txt"
     assert "minute_bin" not in loaded["files"]
     assert loaded["source_revision"] == subject.DIRECT_V2_SOURCE_REVISION
+    assert loaded["release_identity"]["release_id"] == root.name
+    assert len(loaded["sector_index_code_by_sector"]) == 31
+    assert len(loaded["sector_index_close"]) == 31 * 3
+    assert set(loaded["benchmark_close"]) == {
+        subject.SOURCE_START,
+        subject.SOURCE_END,
+        subject.DIRECT_V2_RELEASE_CUTOFF,
+    }
+
+
+def test_direct_v2_schema_boundary_keeps_v2_compatible_but_g2a_requires_v3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(
+        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
+    )
+    _stub_direct_source_preflights(monkeypatch)
+
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+    )
+
+    assert loaded["release_identity"]["schema_version"] == subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1
+    assert loaded["sector_index_close"] is None
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_rejects_unknown_state_schema(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["schema_version"] = "qe_direct_monthly_state_v4"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_candidate_root_must_be_absolute_and_direct(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(subject.RotationL1InputBundleError) as relative:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            Path("relative-candidate"),
+            security_identity_manifest=tmp_path / "security.json",
+            provider_absence_manifest=tmp_path / "provider.json",
+        )
+    assert relative.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    original = subject._is_indirect_path
+    monkeypatch.setattr(subject, "_is_indirect_path", lambda path: path == root or original(path))
+    with pytest.raises(subject.RotationL1InputBundleError) as indirect:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert indirect.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_v3_requires_sw_l1_component_and_matching_receipt(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path / "missing")
+    (root / "components" / "sw_l1_index_daily_candidate_v1" / "sector_data.h5").unlink()
+    with pytest.raises(subject.RotationL1InputBundleError) as missing:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert missing.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+    root, security, provider = _direct_v2_candidate(tmp_path / "receipt")
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["components"]["sw_l1_index"]["receipt"]["path"] = str(root / "components" / "factor_h5_static_candidate_v2")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(subject.RotationL1InputBundleError) as mismatch:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert mismatch.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_direct_source_preflights(monkeypatch)
+    roots = []
+    for suffix in ("release-a", "release-b"):
+        root, security, provider = _direct_v2_candidate(tmp_path / suffix, root_name=f"candidate-{suffix}")
+        loaded = subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+        assert loaded["release_identity"]["release_id"] == root.name
+        assert all(
+            path.is_relative_to(root)
+            for name, path in loaded["files"].items()
+            if name not in {"security_identity", "provider_absence"}
+        )
+        assert "20260902-candidate" not in json.dumps(loaded["release_identity"])
+        roots.append(root)
+    assert roots[0] != roots[1]
+
+
+def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    sw_root = root / "components" / "sw_l1_index_daily_candidate_v1"
+    calendar = (subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF)
+    first = subject._load_direct_v2_sw_l1_index(
+        sw_root / "sector_data.h5",
+        sw_root / "meta.json",
+        expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        calendar=calendar,
+    )
+    shuffled = pd.read_hdf(sw_root / "sector_data.h5").sample(frac=1.0, random_state=42)
+    shuffled.to_hdf(sw_root / "sector_data.h5", key="data", mode="w", format="fixed")
+    second = subject._load_direct_v2_sw_l1_index(
+        sw_root / "sector_data.h5",
+        sw_root / "meta.json",
+        expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        calendar=calendar,
+    )
+
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    (
+        ("missing_sector", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("duplicate", subject.REASON_DUPLICATE_KEY),
+        ("non_finite", subject.REASON_SOURCE_UNIT_INVALID),
+        ("non_positive", subject.REASON_SOURCE_UNIT_INVALID),
+        ("missing_date", subject.REASON_SOURCE_RANGE_INCOMPLETE),
+    ),
+)
+def test_direct_v2_sw_l1_readback_fails_closed_on_invalid_panel(
+    tmp_path: Path, mutation: str, reason_code: str
+) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    sw_root = root / "components" / "sw_l1_index_daily_candidate_v1"
+    path = sw_root / "sector_data.h5"
+    frame = pd.read_hdf(path).reset_index()
+    if mutation == "missing_sector":
+        frame = frame.loc[frame["sector_code"] != frame["sector_code"].iloc[0]]
+    elif mutation == "duplicate":
+        frame = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
+    elif mutation == "non_finite":
+        frame.loc[0, "close"] = np.nan
+    elif mutation == "non_positive":
+        frame.loc[0, "close"] = 0.0
+    elif mutation == "missing_date":
+        frame = frame.loc[frame["datetime"] != frame["datetime"].iloc[0]]
+    frame.set_index(["datetime", "sector_code"]).to_hdf(path, key="data", mode="w", format="fixed")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_direct_v2_sw_l1_index(
+            path,
+            sw_root / "meta.json",
+            expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
+        )
+
+    assert exc_info.value.reason_code == reason_code
 
 
 def test_direct_v2_source_binding_rejects_cross_release_and_legacy_fallback(
@@ -1649,7 +1954,7 @@ def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_fut
     root, _security, _provider = _direct_v2_candidate(tmp_path)
     path = root / "components" / "index_context" / "index_daily.h5"
 
-    inventory, benchmark = subject._load_direct_v2_index_context(
+    inventory, benchmark, benchmark_close = subject._load_direct_v2_index_context(
         path,
         expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
         calendar=(subject.SOURCE_START, subject.SOURCE_END),
@@ -1658,6 +1963,7 @@ def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_fut
     assert inventory["code_count"] == 12
     assert inventory["date_max"] == subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()
     assert set(benchmark) == {subject.SOURCE_START, subject.SOURCE_END}
+    assert set(benchmark_close) == {subject.SOURCE_START, subject.SOURCE_END}
     assert benchmark[subject.SOURCE_START] == pytest.approx((100.0 + 2) / (100.0 + 2 - 0.001) - 1.0)
     frame = pd.read_hdf(path)
     frame = frame.loc[frame["ts_code"] != subject.DIRECT_V2_INDEX_CODES[-1]]
@@ -1703,11 +2009,12 @@ def test_direct_v2_bundle_identity_round_trip_preserves_candidate_universe(tmp_p
     }
     release_identity = {
         "schema_version": subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION,
-        "release_id": subject.DIRECT_V2_RELEASE_ID,
+        "release_id": "20260831-qe_hmm_full_v2-direct-test-candidate",
         "profile": subject.DIRECT_V2_PROFILE,
         "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
         "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
         "rule_version": "shsz_a_252td_st_delist_asof_v2",
+        "state_schema_version": subject.DIRECT_V2_STATE_SCHEMA_VERSION,
         "metadata_sha256": {
             name: "abcdef"[index % 6] * 64
             for index, name in enumerate(
@@ -1717,12 +2024,17 @@ def test_direct_v2_bundle_identity_round_trip_preserves_candidate_universe(tmp_p
                     "factor_meta",
                     "index_meta",
                     "suspend_meta",
+                    "sw_l1_meta",
                     "security_identity",
                     "provider_absence",
                 )
             )
         },
-        "component_sha256": {"index_context": "1" * 64, "suspend_data": "2" * 64},
+        "component_sha256": {
+            "index_context": "1" * 64,
+            "suspend_data": "2" * 64,
+            "sw_l1_index": "3" * 64,
+        },
     }
     source_identity = {
         **_source_identity(),

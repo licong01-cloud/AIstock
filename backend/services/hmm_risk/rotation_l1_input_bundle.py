@@ -65,19 +65,29 @@ MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_input_bundle_manifest_v2"
 BUILD_RECEIPT_SCHEMA_VERSION = "hmm_risk_rotation_l1_input_bundle_build_receipt_v1"
 CANONICAL_SERIALIZATION_VERSION = "hmm_risk_rotation_l1_input_bundle_canonical_v1"
 SOURCE_REVISION = "c013-g2a-hmm-input-bundle-v1"
-DIRECT_V2_SOURCE_REVISION = "c013-g2a-hmm-input-bundle-direct-v2-v1"
+DIRECT_V2_SOURCE_REVISION_V1 = "c013-g2a-hmm-input-bundle-direct-v2-v1"
+DIRECT_V2_SOURCE_REVISION = "c013-g2a-hmm-input-bundle-direct-v2-v2"
 SOURCE_ASSET_SCHEMA_VERSION = "hmm_risk_dataset_release_asset_binding_v1"
 SOURCE_INVENTORY_SCHEMA_VERSION = "hmm_risk_rotation_l1_source_inventory_v1"
-DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v1"
-DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v2"
+DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1 = "hmm_risk_qe_direct_v2_dataset_identity_v1"
+DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v2"
+DIRECT_V2_STATE_SCHEMA_VERSION_V2 = "qe_direct_monthly_state_v2"
+DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v3"
+DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset(
+    {DIRECT_V2_STATE_SCHEMA_VERSION_V2, DIRECT_V2_STATE_SCHEMA_VERSION}
+)
 DIRECT_V2_FACTOR_SCHEMA_VERSION = "qe_direct_factor_h5_static_v2"
 DIRECT_V2_INDEX_SCHEMA_VERSION = "qe_direct_index_context_v1"
 DIRECT_V2_SUSPEND_SCHEMA_VERSION = "qe_direct_suspend_d_v1"
+DIRECT_V2_SW_L1_SCHEMA_VERSION = "qe_direct_sw_l1_index_daily_v1"
+DIRECT_V2_SW_L1_SOURCE_IDENTITY = "market.sw_index_classify:SW2021:L1:published+market.sw_daily"
 DIRECT_V2_PROFILE = "qe_hmm_full_v2"
 DIRECT_V2_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DIRECT_V2_RELEASE_START = date(2018, 8, 1)
-DIRECT_V2_RELEASE_CUTOFF = date(2026, 8, 31)
-DIRECT_V2_RELEASE_ID = "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+DIRECT_V2_MINIMUM_CUTOFF = date(2026, 8, 31)
+# Compatibility name for existing tests and callers that describe the first
+# supported release. Runtime binding derives the actual cutoff from state.
+DIRECT_V2_RELEASE_CUTOFF = DIRECT_V2_MINIMUM_CUTOFF
 DIRECT_V2_INDEX_CODES = (
     "000001.SH",
     "000016.SH",
@@ -429,6 +439,71 @@ def _validate_fixed_h5_date_labels(label_node: Any, *, level_count: int, max_row
             previous = int(labels[-1])
 
 
+def _table_h5_columns(group: Any, *, expected_columns: Sequence[str], expected_dtype: np.dtype[Any]) -> tuple[Any, int]:
+    try:
+        table = group.table
+        non_index_axes = group._v_attrs.non_index_axes
+        data_columns = set(group._v_attrs.data_columns)
+        visible_columns = tuple(non_index_axes[0][1])
+        block_columns = tuple(table._v_attrs.values_block_0_kind)
+        block_dtype = np.dtype(table._v_attrs.values_block_0_dtype)
+    except (AttributeError, IndexError, KeyError, tables.NoSuchNodeError) as exc:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "table H5 metadata differs") from exc
+    if (
+        data_columns != {"datetime", "instrument"}
+        or visible_columns != ("datetime", "instrument", *tuple(expected_columns))
+        or set(block_columns) != set(expected_columns)
+        or len(block_columns) != len(expected_columns)
+        or block_dtype != expected_dtype
+        or tuple(table.colnames[:2]) != ("index", "values_block_0")
+        or set(table.colnames[2:]) != {"instrument", "datetime"}
+        or table.dtype["values_block_0"].base != expected_dtype
+        or table.dtype["values_block_0"].shape != (len(expected_columns),)
+    ):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "table H5 contract differs")
+    return table, int(table.nrows)
+
+
+def _load_table_h5_window(
+    path: Path,
+    *,
+    expected_columns: Sequence[str],
+    expected_dtype: np.dtype[Any],
+    start: date,
+    end: date,
+) -> pd.DataFrame:
+    expression = f'datetime >= Timestamp("{start.isoformat()}") & datetime <= Timestamp("{end.isoformat()}")'
+    try:
+        with pd.HDFStore(path, mode="r") as store:
+            frame = store.select("data", where=expression)
+    except Exception as exc:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 window cannot be read") from exc
+    empty_index = pd.MultiIndex.from_arrays([[], []], names=["datetime", "instrument"])
+    if frame.empty:
+        return pd.DataFrame(columns=list(expected_columns), index=empty_index, dtype=expected_dtype)
+    if (
+        not isinstance(frame.index, pd.MultiIndex)
+        or tuple(frame.index.names) != ("datetime", "instrument")
+        or tuple(frame.columns) != tuple(expected_columns)
+        or any(dtype != expected_dtype for dtype in frame.dtypes)
+    ):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 window schema differs")
+    timestamps = pd.DatetimeIndex(frame.index.get_level_values("datetime"))
+    instruments = tuple(str(value) for value in frame.index.get_level_values("instrument"))
+    if frame.index.has_duplicates:
+        raise _fail(REASON_DUPLICATE_KEY, f"{path.name} table H5 window keys are duplicated")
+    if (
+        timestamps.tz is not None
+        or not timestamps.equals(timestamps.normalize())
+        or any(_STOCK_CODE.fullmatch(value) is None for value in instruments)
+        or not frame.index.is_monotonic_increasing
+        or timestamps[0].date() < start
+        or timestamps[-1].date() > end
+    ):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 window keys differ")
+    return frame
+
+
 def _load_fixed_h5_window(
     path: Path,
     *,
@@ -439,6 +514,21 @@ def _load_fixed_h5_window(
     max_rows: int = 100_000,
     labels_prevalidated: bool = False,
 ) -> pd.DataFrame:
+    dtype = np.dtype(expected_dtype)
+    with tables.open_file(path, mode="r") as probe:
+        try:
+            group = probe.root.data
+        except tables.NoSuchNodeError as exc:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} H5 data group is missing") from exc
+        if hasattr(group, "table"):
+            _table_h5_columns(group, expected_columns=expected_columns, expected_dtype=dtype)
+            return _load_table_h5_window(
+                path,
+                expected_columns=expected_columns,
+                expected_dtype=dtype,
+                start=start,
+                end=end,
+            )
     parts: list[pd.DataFrame] = []
     lower_ns = int(pd.Timestamp(start).value)
     upper_ns = int(pd.Timestamp(end).value)
@@ -453,7 +543,6 @@ def _load_fixed_h5_window(
             values = group.block0_values
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 nodes differ") from exc
-        dtype = np.dtype(expected_dtype)
         if (
             columns != tuple(expected_columns)
             or values.dtype != dtype
@@ -519,8 +608,48 @@ def _fixed_h5_inventory(
     expected_dtype: str | np.dtype[Any],
 ) -> dict[str, Any]:
     with tables.open_file(path, mode="r") as handle:
+        dtype = np.dtype(expected_dtype)
         try:
             group = handle.root.data
+            if hasattr(group, "table"):
+                table, rows = _table_h5_columns(group, expected_columns=expected_columns, expected_dtype=dtype)
+                if rows <= 0:
+                    raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 is empty")
+                first_date = int(table.cols.datetime[0])
+                last_date = int(table.cols.datetime[rows - 1])
+                if first_date > last_date:
+                    raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
+                instruments: set[str] = set()
+                previous_date: int | None = None
+                for start in range(0, rows, 100_000):
+                    stop = min(rows, start + 100_000)
+                    dates = np.asarray(table.cols.datetime[start:stop], dtype=np.int64)
+                    codes = np.asarray(table.cols.instrument[start:stop])
+                    if np.any(dates[1:] < dates[:-1]) or (
+                        previous_date is not None and len(dates) and int(dates[0]) < previous_date
+                    ):
+                        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
+                    if len(dates):
+                        previous_date = int(dates[-1])
+                    for raw in codes:
+                        try:
+                            code = bytes(raw).rstrip(b"\x00").decode("ascii")
+                        except UnicodeDecodeError as exc:
+                            raise _fail(
+                                REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 instrument is invalid"
+                            ) from exc
+                        if _STOCK_CODE.fullmatch(code) is None:
+                            raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 instrument is invalid")
+                        instruments.add(code)
+                return {
+                    "columns": list(expected_columns),
+                    "dtype": dtype.name,
+                    "layout": "pandas_table",
+                    "date_min": pd.Timestamp(first_date, unit="ns").date().isoformat(),
+                    "date_max": pd.Timestamp(last_date, unit="ns").date().isoformat(),
+                    "code_count": len(instruments),
+                    "row_count": rows,
+                }
             columns = tuple(bytes(value).rstrip(b"\x00").decode("utf-8") for value in group.axis0.read())
             dates = np.asarray(group.axis1_level0.read(), dtype=np.int64)
             codes = np.asarray(group.axis1_level1.read())
@@ -529,7 +658,6 @@ def _fixed_h5_inventory(
             rows = int(date_labels.shape[0])
         except tables.NoSuchNodeError as exc:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} fixed H5 inventory nodes differ") from exc
-        dtype = np.dtype(expected_dtype)
         if (
             columns != tuple(expected_columns)
             or values.dtype != dtype
@@ -991,19 +1119,44 @@ def _normalized_external_locator(value: Any, *, field: str) -> str:
     return normalized
 
 
+def _portable_external_locator(value: Any, *, field: str) -> str:
+    """Normalize the same external root across native Windows and WSL mounts."""
+
+    normalized = _normalized_external_locator(value, field=field)
+    drive_match = re.fullmatch(r"([A-Za-z]):(/.*)", normalized)
+    if drive_match is not None:
+        return f"{drive_match.group(1).lower()}:{drive_match.group(2)}"
+    wsl_match = re.fullmatch(r"/mnt/([A-Za-z])(/.*)", normalized)
+    if wsl_match is not None:
+        return f"{wsl_match.group(1).lower()}:{wsl_match.group(2)}"
+    return normalized
+
+
+def _is_indirect_path(path: Path) -> bool:
+    junction = getattr(os.path, "isjunction", None)
+    return path.is_symlink() or (junction is not None and bool(junction(path)))
+
+
 def _require_direct_component_state(
-    state: Mapping[str, Any], *, name: str, declared_root: str, relative_path: str
+    state: Mapping[str, Any],
+    *,
+    name: str,
+    declared_root: str,
+    relative_path: str,
+    expected_cutoff: date,
 ) -> None:
     components = state.get("components")
     component = components.get(name) if isinstance(components, Mapping) else None
     receipt = component.get("receipt") if isinstance(component, Mapping) else None
-    expected_path = f"{declared_root}/components/{relative_path}"
+    expected_path = _portable_external_locator(
+        f"{declared_root}/components/{relative_path}", field=f"components.{name}.expected_path"
+    )
     if (
         not isinstance(receipt, Mapping)
         or component.get("status") != "PASS"
         or receipt.get("status") != "PASS"
-        or receipt.get("cutoff") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
-        or _normalized_external_locator(receipt.get("path"), field=f"components.{name}.path") != expected_path
+        or receipt.get("cutoff") != expected_cutoff.isoformat()
+        or _portable_external_locator(receipt.get("path"), field=f"components.{name}.path") != expected_path
     ):
         raise _fail(REASON_MANIFEST_INVALID, f"direct-v2 {name} receipt differs from the selected release")
 
@@ -1013,7 +1166,7 @@ def _load_direct_v2_index_context(
     *,
     expected_cutoff: date,
     calendar: Sequence[date],
-) -> tuple[dict[str, Any], dict[date, float]]:
+) -> tuple[dict[str, Any], dict[date, float], dict[date, float]]:
     try:
         frame = pd.read_hdf(path)
     except Exception as exc:
@@ -1062,13 +1215,25 @@ def _load_direct_v2_index_context(
         raise _fail(REASON_DUPLICATE_KEY, "direct-v2 CSI300 benchmark dates are duplicated")
     benchmark_frame["return"] = benchmark_frame["close"].pct_change(fill_method=None)
     return_by_day = dict(zip(benchmark_frame["trade_date"], benchmark_frame["return"], strict=True))
+    close_by_day = dict(zip(benchmark_frame["trade_date"], benchmark_frame["close"], strict=True))
     expected_days = tuple(calendar)
+    if not expected_days:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 CSI300 expected calendar is empty")
     benchmark: dict[date, float] = {}
+    benchmark_close: dict[date, float] = {}
     for day in expected_days:
         value = return_by_day.get(day)
-        if value is None or not math.isfinite(float(value)):
+        close_value = close_by_day.get(day)
+        if (
+            value is None
+            or not math.isfinite(float(value))
+            or close_value is None
+            or not math.isfinite(float(close_value))
+            or float(close_value) <= 0
+        ):
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 CSI300 benchmark calendar coverage differs")
         benchmark[day] = float(value)
+        benchmark_close[day] = float(close_value)
     inventory = {
         "columns": list(expected_columns),
         "dtype": {column: str(numeric[column].dtype) for column in numeric_columns},
@@ -1081,7 +1246,117 @@ def _load_direct_v2_index_context(
             column: int((~np.isfinite(numeric[column].to_numpy(dtype=np.float64))).sum()) for column in numeric_columns
         },
     }
-    return inventory, benchmark
+    return inventory, benchmark, benchmark_close
+
+
+def _load_direct_v2_sw_l1_index(
+    path: Path,
+    meta_path: Path,
+    *,
+    expected_cutoff: date,
+    calendar: Sequence[date],
+) -> tuple[dict[str, Any], dict[tuple[date, str], float], dict[str, str]]:
+    """Read the published SW2021 L1 close panel without filling or aggregation."""
+
+    meta = _read_json_object(meta_path, reason=REASON_SOURCE_SCHEMA_INVALID)
+    try:
+        frame = pd.read_hdf(path)
+    except Exception as exc:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 index cannot be read") from exc
+    if (
+        not isinstance(frame.index, pd.MultiIndex)
+        or tuple(frame.index.names) != ("datetime", "sector_code")
+        or tuple(frame.columns) != ("index_code", "close")
+        or frame.empty
+    ):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 index schema differs")
+    try:
+        timestamps = pd.DatetimeIndex(pd.to_datetime(frame.index.get_level_values("datetime"), errors="raise"))
+    except Exception as exc:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 dates are invalid") from exc
+    if timestamps.tz is not None or not timestamps.equals(timestamps.normalize()):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 dates are not canonical sessions")
+    dates = tuple(timestamps.date)
+    raw_sector_codes = frame.index.get_level_values("sector_code")
+    sector_codes = tuple(str(value) for value in raw_sector_codes)
+    if any(re.fullmatch(r"[0-9]{6}", value) is None for value in sector_codes):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 sector codes are not canonical")
+    raw_index_codes = frame["index_code"]
+    index_codes = tuple(str(value) for value in raw_index_codes)
+    if any(re.fullmatch(r"[0-9]{6}[.]SI", value) is None for value in index_codes):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 published index codes are not canonical")
+    close = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    if not np.isfinite(close).all() or np.any(close <= 0):
+        raise _fail(REASON_SOURCE_UNIT_INVALID, "direct-v2 SW L1 close values are invalid")
+    keys = pd.MultiIndex.from_arrays([dates, sector_codes], names=["datetime", "sector_code"])
+    if keys.has_duplicates:
+        raise _fail(REASON_DUPLICATE_KEY, "direct-v2 SW L1 contains duplicate date/sector rows")
+
+    mapping_pairs = set(zip(sector_codes, index_codes, strict=True))
+    unique_sectors = tuple(sorted(set(sector_codes)))
+    unique_indices = tuple(sorted(set(index_codes)))
+    if (
+        len(unique_sectors) != 31
+        or len(unique_indices) != 31
+        or len(mapping_pairs) != 31
+        or any(sum(sector == item for item, _index in mapping_pairs) != 1 for sector in unique_sectors)
+        or any(sum(index == item for _sector, item in mapping_pairs) != 1 for index in unique_indices)
+    ):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 sector/index identity is not one-to-one")
+    index_code_by_sector = dict(sorted(mapping_pairs))
+
+    expected_days = tuple(calendar)
+    if not expected_days:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 SW L1 expected calendar is empty")
+    observed_days = tuple(sorted(set(dates)))
+    day_counts: dict[date, int] = defaultdict(int)
+    for day in dates:
+        day_counts[day] += 1
+    if (
+        observed_days != expected_days
+        or any(day_counts.get(day) != 31 for day in expected_days)
+        or len(frame) != len(expected_days) * 31
+    ):
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 SW L1 calendar coverage is incomplete")
+
+    expected_meta = {
+        "schema_version": DIRECT_V2_SW_L1_SCHEMA_VERSION,
+        "component": "sw_l1_index",
+        "source_identity": DIRECT_V2_SW_L1_SOURCE_IDENTITY,
+        "columns": ["index_code", "close"],
+        "start": expected_days[0].isoformat(),
+        "end": expected_cutoff.isoformat(),
+        "sector_count": 31,
+        "open_days": len(expected_days),
+        "rows": len(expected_days) * 31,
+        "source_freeze": False,
+        "full_history_content_hash": False,
+    }
+    if set(meta) != set(expected_meta) or any(meta.get(field) != value for field, value in expected_meta.items()):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 SW L1 metadata differs from the selected release")
+
+    canonical_rows = sorted(
+        zip(dates, sector_codes, index_codes, close, strict=True),
+        key=lambda item: (item[0], item[1]),
+    )
+    sector_close = {(day, sector): float(value) for day, sector, _index, value in canonical_rows}
+    inventory = {
+        "schema_version": DIRECT_V2_SW_L1_SCHEMA_VERSION,
+        "columns": ["index_code", "close"],
+        "date_min": observed_days[0].isoformat(),
+        "date_max": observed_days[-1].isoformat(),
+        "sector_count": len(unique_sectors),
+        "index_count": len(unique_indices),
+        "open_days": len(observed_days),
+        "row_count": len(frame),
+        "non_finite_close_count": int((~np.isfinite(close)).sum()),
+        "non_positive_close_count": int((close <= 0).sum()),
+        "mapping_sha256": canonical_sha256([[sector, index_code_by_sector[sector]] for sector in unique_sectors]),
+        "logical_rows_sha256": canonical_sha256(
+            [[day.isoformat(), sector, index, float(value)] for day, sector, index, value in canonical_rows]
+        ),
+    }
+    return inventory, sector_close, index_code_by_sector
 
 
 def load_rotation_l1_direct_v2_source_assets(
@@ -1095,8 +1370,8 @@ def load_rotation_l1_direct_v2_source_assets(
     unresolved_root = Path(candidate_root)
     if not unresolved_root.is_absolute():
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root must be absolute")
-    if unresolved_root.is_symlink():
-        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root cannot be a symlink")
+    if _is_indirect_path(unresolved_root):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root cannot be a symlink or junction")
     try:
         root = unresolved_root.resolve(strict=True)
     except OSError as exc:
@@ -1104,39 +1379,69 @@ def load_rotation_l1_direct_v2_source_assets(
     state_path = root / "direct_monthly_state.json"
     state = _read_json_object(state_path)
     validation = state.get("validation")
-    required_components = {
+    state_schema_version = state.get("schema_version")
+    try:
+        release_cutoff = _as_date(state.get("cutoff"), "direct-v2 cutoff")
+    except RotationL1InputBundleError:
+        raise
+    if release_cutoff < DIRECT_V2_MINIMUM_CUTOFF:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 candidate cutoff predates the G2-A minimum")
+    consumed_components = {
         "daily_bin": "daily_bin_candidate",
         "factor_h5_static": "factor_h5_static_candidate_v2",
         "index_context": "index_context",
         "suspend_d": "suspend_d_daily_candidate_v2",
     }
+    state_components = dict(consumed_components)
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        state_components.update(
+            {
+                "minute_bin": "minute_bin_candidate",
+                "sw_l1_index": "sw_l1_index_daily_candidate_v1",
+            }
+        )
+        consumed_components["sw_l1_index"] = "sw_l1_index_daily_candidate_v1"
     if (
-        state.get("schema_version") != DIRECT_V2_STATE_SCHEMA_VERSION
+        state_schema_version not in DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS
         or state.get("profile") != DIRECT_V2_PROFILE
-        or state.get("cutoff") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
+        or state.get("cutoff") != release_cutoff.isoformat()
         or state.get("status") != "CANDIDATE_READY"
         or state.get("source_freeze") is not False
         or state.get("full_history_content_hash") is not False
         or not isinstance(validation, Mapping)
         or validation.get("status") != "PASS"
-        or validation.get("cutoff") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
+        or validation.get("cutoff") != release_cutoff.isoformat()
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate state is not approved for HMM consumption")
     declared_root = _normalized_external_locator(state.get("candidate_root"), field="candidate_root")
-    if declared_root.rsplit("/", 1)[-1] != root.name or root.name != DIRECT_V2_RELEASE_ID:
+    if _portable_external_locator(declared_root, field="candidate_root") != _portable_external_locator(
+        str(root), field="local_candidate_root"
+    ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 local root differs from candidate identity")
+    release_id = root.name
+    if not release_id or "/" in release_id or "\\" in release_id:
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 release identity is invalid")
     checks = validation.get("checks")
-    if not isinstance(checks, Mapping) or any(checks.get(name) is not True for name in required_components):
+    if not isinstance(checks, Mapping) or any(checks.get(name) is not True for name in state_components):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 HMM component validation is incomplete")
-    for name, relative in required_components.items():
-        _require_direct_component_state(state, name=name, declared_root=declared_root, relative_path=relative)
+    for name, relative in state_components.items():
+        _require_direct_component_state(
+            state,
+            name=name,
+            declared_root=declared_root,
+            relative_path=relative,
+            expected_cutoff=release_cutoff,
+        )
 
     qlib_root = root / "components" / "daily_bin_candidate"
     factor_root = root / "components" / "factor_h5_static_candidate_v2"
     index_root = root / "components" / "index_context"
     suspend_root = root / "components" / "suspend_d_daily_candidate_v2"
-    component_roots = (qlib_root, factor_root, index_root, suspend_root)
-    if any(path.is_symlink() or not path.is_dir() for path in component_roots):
+    sw_l1_root = root / "components" / "sw_l1_index_daily_candidate_v1"
+    component_roots = [qlib_root, factor_root, index_root, suspend_root]
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        component_roots.append(sw_l1_root)
+    if any(_is_indirect_path(path) or not path.is_dir() for path in component_roots):
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 HMM component root is missing or indirect")
     files = {
         "daily_basic": factor_root / "daily_basic.h5",
@@ -1147,15 +1452,22 @@ def load_rotation_l1_direct_v2_source_assets(
         "security_identity": Path(security_identity_manifest),
         "provider_absence": Path(provider_absence_manifest),
     }
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        files.update(
+            {
+                "sw_l1_index": sw_l1_root / "sector_data.h5",
+                "sw_l1_meta": sw_l1_root / "meta.json",
+            }
+        )
     resolved: dict[str, Path] = {}
     for name, raw_path in files.items():
-        if raw_path.is_symlink():
+        if _is_indirect_path(raw_path):
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, f"direct-v2 required component is indirect: {name}")
         try:
             path = raw_path.resolve(strict=True)
         except OSError as exc:
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, f"direct-v2 required component is missing: {name}") from exc
-        if path.is_symlink() or not path.is_file():
+        if _is_indirect_path(path) or not path.is_file():
             raise _fail(REASON_SOURCE_COMPONENT_MISSING, f"direct-v2 required component is missing: {name}")
         if name not in {"security_identity", "provider_absence"}:
             try:
@@ -1173,16 +1485,29 @@ def load_rotation_l1_direct_v2_source_assets(
     if (
         daily_meta.get("snapshot_id") != "daily_bin_candidate"
         or daily_meta.get("start") != DIRECT_V2_RELEASE_START.isoformat()
-        or daily_meta.get("end") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
+        or daily_meta.get("end") != release_cutoff.isoformat()
         or daily_meta.get("universe_key") != DIRECT_V2_UNIVERSE_KEY
         or not isinstance(daily_meta.get("rule_version"), str)
         or not daily_meta["rule_version"].strip()
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 daily Bin identity differs")
+    instrument_universe_path = qlib_root / "instruments" / "all.txt"
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        benchmark_contract = daily_meta.get("benchmark_only")
+        if (
+            not isinstance(benchmark_contract, Mapping)
+            or benchmark_contract.get("code") != "000300.SH"
+            or benchmark_contract.get("selection_eligible") is not False
+            or benchmark_contract.get("provider_catalog") != "instruments/all.txt"
+            or benchmark_contract.get("selection_universe") != "instruments/stock_universe.txt"
+            or benchmark_contract.get("benchmark_universe") != "instruments/benchmark.txt"
+        ):
+            raise _fail(REASON_MANIFEST_INVALID, "direct-v2 benchmark-only universe contract differs")
+        instrument_universe_path = qlib_root / "instruments" / "stock_universe.txt"
     factor_identity = {
         "schema_version": DIRECT_V2_FACTOR_SCHEMA_VERSION,
         "start": DIRECT_V2_RELEASE_START.isoformat(),
-        "end": DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "end": release_cutoff.isoformat(),
         "universe_key": DIRECT_V2_UNIVERSE_KEY,
     }
     if any(factor_meta.get(field) != expected for field, expected in factor_identity.items()):
@@ -1190,18 +1515,28 @@ def load_rotation_l1_direct_v2_source_assets(
     if (
         index_meta.get("schema_version") != DIRECT_V2_INDEX_SCHEMA_VERSION
         or index_meta.get("start") != DIRECT_V2_RELEASE_START.isoformat()
-        or index_meta.get("end") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
+        or index_meta.get("end") != release_cutoff.isoformat()
         or index_meta.get("benchmark") != "000300.SH"
         or tuple(sorted(index_meta.get("codes") or ())) != DIRECT_V2_INDEX_CODES
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 index identity differs")
 
     calendar = _load_qlib_calendar(qlib_root / "calendars" / "day.txt")
-    if calendar[-1] != DIRECT_V2_RELEASE_CUTOFF:
+    if calendar[-1] != release_cutoff:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 daily calendar cutoff differs")
-    spans = _parse_instrument_spans(qlib_root / "instruments" / "all.txt")
+    spans = _parse_instrument_spans(instrument_universe_path)
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        all_spans = _parse_instrument_spans(qlib_root / "instruments" / "all.txt")
+        benchmark_spans = _parse_instrument_spans(qlib_root / "instruments" / "benchmark.txt")
+        if (
+            "000300.SH" in spans
+            or set(benchmark_spans) != {"000300.SH"}
+            or benchmark_spans["000300.SH"] != all_spans.get("000300.SH")
+            or {symbol: values for symbol, values in all_spans.items() if symbol != "000300.SH"} != spans
+        ):
+            raise _fail(REASON_MANIFEST_INVALID, "direct-v2 stock/benchmark universe separation differs")
     if not any(
-        symbol == "000001.SZ" and any(end == DIRECT_V2_RELEASE_CUTOFF for _start, end in values)
+        symbol == "000001.SZ" and any(end == release_cutoff for _start, end in values)
         for symbol, values in spans.items()
     ):
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 PIT universe readback differs")
@@ -1215,14 +1550,14 @@ def load_rotation_l1_direct_v2_source_assets(
     for component, inventory in (("daily_basic", daily_basic_inventory), ("moneyflow", moneyflow_inventory)):
         if (
             _as_date(inventory["date_min"], f"{component}.date_min") > SOURCE_START
-            or _as_date(inventory["date_max"], f"{component}.date_max") < DIRECT_V2_RELEASE_CUTOFF
+            or _as_date(inventory["date_max"], f"{component}.date_max") < release_cutoff
         ):
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"direct-v2 {component} release coverage differs")
-    model_calendar = tuple(day for day in calendar if SOURCE_START <= day <= SOURCE_END)
-    index_inventory, benchmark = _load_direct_v2_index_context(
+    release_calendar = tuple(day for day in calendar if SOURCE_START <= day <= release_cutoff)
+    index_inventory, benchmark, benchmark_close = _load_direct_v2_index_context(
         resolved["index_context"],
-        expected_cutoff=DIRECT_V2_RELEASE_CUTOFF,
-        calendar=model_calendar,
+        expected_cutoff=release_cutoff,
+        calendar=release_calendar,
     )
     metadata_hashes = {
         "direct_state": _sha256_file(state_path),
@@ -1233,29 +1568,49 @@ def load_rotation_l1_direct_v2_source_assets(
         "security_identity": _sha256_file(resolved["security_identity"]),
         "provider_absence": _sha256_file(resolved["provider_absence"]),
     }
+    component_hashes = {
+        "index_context": _sha256_file(resolved["index_context"]),
+        "suspend_data": _sha256_file(resolved["suspend_data"]),
+    }
+    sw_l1_inventory = None
+    sector_index_close = None
+    sector_index_code_by_sector = None
+    identity_schema_version = DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1
+    source_revision = DIRECT_V2_SOURCE_REVISION_V1
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        sw_l1_inventory, sector_index_close, sector_index_code_by_sector = _load_direct_v2_sw_l1_index(
+            resolved["sw_l1_index"],
+            resolved["sw_l1_meta"],
+            expected_cutoff=release_cutoff,
+            calendar=release_calendar,
+        )
+        metadata_hashes["sw_l1_meta"] = _sha256_file(resolved["sw_l1_meta"])
+        component_hashes["sw_l1_index"] = _sha256_file(resolved["sw_l1_index"])
+        identity_schema_version = DIRECT_V2_IDENTITY_SCHEMA_VERSION
+        source_revision = DIRECT_V2_SOURCE_REVISION
     release_identity = {
-        "schema_version": DIRECT_V2_IDENTITY_SCHEMA_VERSION,
-        "release_id": DIRECT_V2_RELEASE_ID,
+        "schema_version": identity_schema_version,
+        "release_id": release_id,
         "profile": DIRECT_V2_PROFILE,
-        "cutoff": DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "cutoff": release_cutoff.isoformat(),
         "universe_key": DIRECT_V2_UNIVERSE_KEY,
         "rule_version": daily_meta["rule_version"],
         "metadata_sha256": metadata_hashes,
-        "component_sha256": {
-            "index_context": _sha256_file(resolved["index_context"]),
-            "suspend_data": _sha256_file(resolved["suspend_data"]),
-        },
+        "component_sha256": component_hashes,
     }
+    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
+        release_identity["state_schema_version"] = state_schema_version
     inventory_body = {
         "schema_version": SOURCE_INVENTORY_SCHEMA_VERSION,
         "release_identity": release_identity,
-        "release_cutoff": DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "release_cutoff": release_cutoff.isoformat(),
         "source_window_end": SOURCE_END.isoformat(),
         "qlib": {
             "schema_version": QLIB_STOCK_SCHEMA_VERSION,
             "schema_sha256": qlib_stock_schema_digest(),
             "calendar_sha256": _sha256_file(qlib_root / "calendars" / "day.txt"),
             "instruments_sha256": _sha256_file(qlib_root / "instruments" / "all.txt"),
+            "training_instruments_sha256": _sha256_file(instrument_universe_path),
             "meta_export_sha256": metadata_hashes["daily_meta"],
             "field_preflight": qlib_preflight,
             "full_history_content_hash": False,
@@ -1271,21 +1626,53 @@ def load_rotation_l1_direct_v2_source_assets(
         },
         "full_history_content_hash": False,
     }
+    if sw_l1_inventory is not None:
+        inventory_body["sw_l1_index"] = sw_l1_inventory
     return {
         "release_root": root,
         "qlib_root": qlib_root,
+        "instrument_universe_path": instrument_universe_path,
         "files": resolved,
         "release_identity": release_identity,
-        "release_cutoff": DIRECT_V2_RELEASE_CUTOFF,
+        "release_cutoff": release_cutoff,
         "source_window_end": SOURCE_END,
         "universe_key": DIRECT_V2_UNIVERSE_KEY,
         "universe_rule_version": daily_meta["rule_version"],
-        "source_revision": DIRECT_V2_SOURCE_REVISION,
+        "source_revision": source_revision,
         "suspend_contract": "direct_v2",
         "benchmark": benchmark,
+        "benchmark_close": benchmark_close,
+        "sector_index_close": sector_index_close,
+        "sector_index_code_by_sector": sector_index_code_by_sector,
         "inventory": {**inventory_body, "inventory_sha256": canonical_sha256(inventory_body)},
         "binding_manifest_sha256": canonical_sha256(release_identity),
     }
+
+
+def load_rotation_l1_g2a_direct_v2_source_assets(
+    candidate_root: Path,
+    *,
+    security_identity_manifest: Path,
+    provider_absence_manifest: Path,
+) -> dict[str, Any]:
+    """Bind the G2-A v1.2 source; legacy v2 candidates are not eligible."""
+
+    assets = load_rotation_l1_direct_v2_source_assets(
+        candidate_root,
+        security_identity_manifest=security_identity_manifest,
+        provider_absence_manifest=provider_absence_manifest,
+    )
+    identity = assets.get("release_identity")
+    if (
+        not isinstance(identity, Mapping)
+        or identity.get("schema_version") != DIRECT_V2_IDENTITY_SCHEMA_VERSION
+        or identity.get("state_schema_version") != DIRECT_V2_STATE_SCHEMA_VERSION
+        or assets.get("sector_index_close") is None
+        or assets.get("sector_index_code_by_sector") is None
+        or assets.get("benchmark_close") is None
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "G2-A v1.2 requires the direct-v2 v3 SW L1 source contract")
+    return assets
 
 
 def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence[Path]) -> HMMIndustryPitAdapter:
@@ -2287,7 +2674,7 @@ def build_rotation_l1_inputs_from_assets(
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= SOURCE_END)
     if not calendar or calendar[0] != SOURCE_START or calendar[-1] != SOURCE_END:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "approved Qlib calendar slice is incomplete")
-    spans = _parse_instrument_spans(qlib_root / "instruments" / "all.txt")
+    spans = _parse_instrument_spans(assets.get("instrument_universe_path") or qlib_root / "instruments" / "all.txt")
     adapter = _industry_adapter(industry_authority, forbidden_roots=forbidden_roots)
     security_payload = _read_json_object(assets["files"]["security_identity"], reason=REASON_SOURCE_SCHEMA_INVALID)
     provider_payload = _read_json_object(assets["files"]["provider_absence"], reason=REASON_SOURCE_SCHEMA_INVALID)
@@ -3045,9 +3432,10 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
     release_identity, _universe_key, _rule_version, _source_revision = _validated_release_identity(
         value.get("release_identity")
     )
-    if release_identity.get("schema_version") == DIRECT_V2_IDENTITY_SCHEMA_VERSION and value.get(
-        "source_binding_manifest_sha256"
-    ) != canonical_sha256(release_identity):
+    if release_identity.get("schema_version") in {
+        DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1,
+        DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+    } and value.get("source_binding_manifest_sha256") != canonical_sha256(release_identity):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 source binding identity hash differs")
     for field in (
         "source_inventory_sha256",
@@ -3065,7 +3453,8 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
 
 
 def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, str]:
-    if isinstance(value, Mapping) and value.get("schema_version") == DIRECT_V2_IDENTITY_SCHEMA_VERSION:
+    direct_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    if direct_schema in {DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1, DIRECT_V2_IDENTITY_SCHEMA_VERSION}:
         expected = {
             "schema_version",
             "release_id",
@@ -3076,6 +3465,8 @@ def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, s
             "metadata_sha256",
             "component_sha256",
         }
+        if direct_schema == DIRECT_V2_IDENTITY_SCHEMA_VERSION:
+            expected.add("state_schema_version")
         hashes = value.get("metadata_sha256")
         component_hashes = value.get("component_sha256")
         hash_fields = {
@@ -3087,31 +3478,49 @@ def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, s
             "security_identity",
             "provider_absence",
         }
+        component_hash_fields = {"index_context", "suspend_data"}
+        source_revision = DIRECT_V2_SOURCE_REVISION_V1
+        if direct_schema == DIRECT_V2_IDENTITY_SCHEMA_VERSION:
+            hash_fields.add("sw_l1_meta")
+            component_hash_fields.add("sw_l1_index")
+            source_revision = DIRECT_V2_SOURCE_REVISION
+        release_id = value.get("release_id")
+        try:
+            release_cutoff = _as_date(value.get("cutoff"), "release_identity.cutoff")
+        except RotationL1InputBundleError:
+            release_cutoff = None
         if (
             set(value) != expected
-            or value.get("release_id") != DIRECT_V2_RELEASE_ID
             or value.get("profile") != DIRECT_V2_PROFILE
-            or value.get("cutoff") != DIRECT_V2_RELEASE_CUTOFF.isoformat()
             or value.get("universe_key") != DIRECT_V2_UNIVERSE_KEY
-            or not isinstance(value.get("release_id"), str)
-            or not value["release_id"].strip()
+            or not isinstance(release_id, str)
+            or not release_id.strip()
+            or "/" in release_id
+            or "\\" in release_id
+            or release_cutoff is None
+            or release_cutoff < DIRECT_V2_MINIMUM_CUTOFF
+            or value.get("cutoff") != release_cutoff.isoformat()
             or not isinstance(value.get("rule_version"), str)
             or not value["rule_version"].strip()
             or not isinstance(hashes, Mapping)
             or set(hashes) != hash_fields
             or not isinstance(component_hashes, Mapping)
-            or set(component_hashes) != {"index_context", "suspend_data"}
+            or set(component_hashes) != component_hash_fields
+            or (
+                direct_schema == DIRECT_V2_IDENTITY_SCHEMA_VERSION
+                and value.get("state_schema_version") != DIRECT_V2_STATE_SCHEMA_VERSION
+            )
         ):
             raise _fail(REASON_MANIFEST_INVALID, "direct-v2 bundle release identity is incomplete")
         for field in hash_fields:
             _require_sha256(hashes.get(field), f"release_identity.metadata_sha256.{field}")
-        for field in ("index_context", "suspend_data"):
+        for field in component_hash_fields:
             _require_sha256(component_hashes.get(field), f"release_identity.component_sha256.{field}")
         return (
             dict(value),
             DIRECT_V2_UNIVERSE_KEY,
             str(value["rule_version"]),
-            DIRECT_V2_SOURCE_REVISION,
+            source_revision,
         )
     try:
         release_binding = QEFormalDatasetBinding.from_mapping(value)
@@ -3845,6 +4254,8 @@ __all__ = [
     "SOURCE_ASSET_SCHEMA_VERSION",
     "RotationL1InputBundleError",
     "build_rotation_l1_inputs_from_assets",
+    "load_rotation_l1_direct_v2_source_assets",
+    "load_rotation_l1_g2a_direct_v2_source_assets",
     "load_rotation_l1_source_assets",
     "read_rotation_l1_input_bundle",
     "write_rotation_l1_input_bundle",
