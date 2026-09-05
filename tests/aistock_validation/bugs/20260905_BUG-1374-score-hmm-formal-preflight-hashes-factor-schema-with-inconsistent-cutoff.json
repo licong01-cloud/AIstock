@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1374",
-  "closed_at": null,
+  "closed_at": "2026-09-05T16:17:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -79,8 +79,8 @@
   },
   "first_seen_at": "2026-09-05T14:00:17.130399Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d695d1ba84c155badf18e60bc80f45dda5e130d7",
+  "fixed_at": "2026-09-05T16:17:24Z",
   "github_issue_number": 4327,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4327",
   "last_seen_at": "2026-09-05T14:00:17.130399Z",
@@ -88,6 +88,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4331",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,7 +116,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1374",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0d253472ed3e6a14",
+    "recorded_at": "2026-09-05T16:19:17.174325Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "50517c270c759ece3fe03b569b3d0b7f674877ea",
+    "source_merge_commit": "d695d1ba84c155badf18e60bc80f45dda5e130d7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4331",
+    "validation_evidence": [
+      "validation-receipt: id=a6cc9e956f7da1a5 commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py -q -p no:cacheprovider` result=`11 passed`",
+      "validation-receipt: id=141fca1a90f6edfe commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`918 passed, 16 skipped`",
+      "validation-receipt: id=60cbf5b1cf3d0a43 commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+      "validation-receipt: id=1469cc10d09ff8ea commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/advisory_model_first/score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "6f0d81f0bc1c3849098a532ab1f67be9b97c6ec8a66621e5fd2ef43a5a3e5bb9"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -124,6 +149,12 @@
     "fingerprint": "e014474dc4100e78b798d6b7",
     "source_event_id": "FE-20260905-e014474dc410"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a6cc9e956f7da1a5 commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py -q -p no:cacheprovider` result=`11 passed`",
+    "validation-receipt: id=141fca1a90f6edfe commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`918 passed, 16 skipped`",
+    "validation-receipt: id=60cbf5b1cf3d0a43 commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=1469cc10d09ff8ea commit=50517c270c759ece3fe03b569b3d0b7f674877ea kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/advisory_model_first/score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
