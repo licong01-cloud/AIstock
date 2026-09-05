@@ -3629,6 +3629,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/advisory/programs$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/advisory/historical-range-batches$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/experiments$"), "collection", _validate_collection_payload),
