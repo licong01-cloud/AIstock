@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,9 @@ from backend.services.advisory_model_first.score_hmm_admission_pipeline import (
     _assert_parent_ranking_parity,
     _evaluate_one_arm,
     _fit_crossfit_head,
+    _factor_schema_identity,
     _target_key_overlap,
+    _validate_bound_factor_schema,
     build_calibration_metrics,
     build_score_hmm_targets,
     compute_pre_run_mde,
@@ -438,3 +441,33 @@ def test_reused_cpcv_paths_must_isolate_each_new_label_information_interval() ->
             cpcv_payload=cpcv,
         )
     assert caught.value.reason_code == "ADVISORY_SCORE_HMM_CROSSFIT_INVALID"
+
+
+def test_run_preflight_reuses_the_n1_bound_factor_data_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, str] = {}
+
+    def _validate(factor_root, *, data_cutoff: str):
+        observed["factor_root"] = str(factor_root)
+        observed["data_cutoff"] = data_cutoff
+        return SimpleNamespace(
+            factor_root=str(factor_root),
+            data_cutoff=data_cutoff,
+            h5_schema_hashes={"daily_pv.h5": "1" * 64},
+            static_factor_schema_hash="2" * 64,
+        )
+
+    monkeypatch.setattr(pipeline, "validate_factor_file_schemas", _validate)
+    receipt = _validate(pipeline._resolve_bound_path("/tmp/factors"), data_cutoff="2026-06-30")
+    request = build_test_request().model_copy(
+        update={"factor_schema_identity": _factor_schema_identity(receipt)}
+    )
+
+    _validate_bound_factor_schema(
+        request=request,
+        n1_request=SimpleNamespace(factor_data_cutoff=pd.Timestamp("2026-06-30").date()),
+    )
+
+    assert observed["data_cutoff"] == "2026-06-30"
+    assert observed["data_cutoff"] != request.data_cutoff.isoformat()
