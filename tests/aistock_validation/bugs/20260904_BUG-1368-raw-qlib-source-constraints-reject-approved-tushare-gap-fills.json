@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1368",
-  "closed_at": null,
+  "closed_at": "2026-09-04T23:47:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,8 +150,8 @@
   },
   "first_seen_at": "2026-09-04T22:29:03.682050Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bcfa13eaddc2cb29959324790d6d731200beae8e",
+  "fixed_at": "2026-09-04T23:47:02Z",
   "github_issue_number": 4310,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4310",
   "last_seen_at": "2026-09-04T22:29:03.682050Z",
@@ -159,8 +159,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4312",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "applied",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "insert a valid source=tushare_api row into DEV market.kline_daily_raw inside a rollback transaction",
@@ -177,6 +178,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "database",
@@ -186,7 +188,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1368",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "applied",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "298d1278481857f9",
+    "recorded_at": "2026-09-05T00:43:09.276834Z",
+    "runtime_contract_digest": "71e28b94aca8c495bda1731c47824acd93ac7bf3c04389ea57049912c53fae98",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cc3f8714aaaa424c345bd809e3201633b40f7776",
+    "source_merge_commit": "bcfa13eaddc2cb29959324790d6d731200beae8e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4312",
+    "validation_evidence": [
+      "production source constraint readback -> passed: both parent constraints include tushare_api without historical scan",
+      "production daily gap insert/readback -> passed: 71685 exact rows, 131 symbols, zero overwrite/delete",
+      "production core-index full validation -> passed: 5 pools, 3517 union intervals, error_count=0"
+    ],
+    "validation_evidence_digest": "fee1e0bcfa1bd583857fcbb7d76fdd6fd54c3497e7be41b4da1ff5003458b70e"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -195,6 +220,11 @@
     "fingerprint": "14a7a43996f963c659333ccb",
     "source_event_id": "FE-20260904-14a7a43996f9"
   },
+  "validation_evidence": [
+    "production source constraint readback -> passed: both parent constraints include tushare_api without historical scan",
+    "production daily gap insert/readback -> passed: 71685 exact rows, 131 symbols, zero overwrite/delete",
+    "production core-index full validation -> passed: 5 pools, 3517 union intervals, error_count=0"
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {
