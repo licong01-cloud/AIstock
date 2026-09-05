@@ -342,6 +342,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert financial_event_mve_payload["dev_db_required"] is False
     assert financial_event_mve_payload["unmapped_code_files"] == []
 
+    score_hmm_payload = classifier.classify_changed_files(
+        ["scripts/advisory_score_hmm_admission_mve.py"],
+        repo_root=tmp_path,
+    )
+    assert score_hmm_payload["classification"] == "targeted_ci_required"
+    assert score_hmm_payload["backend_required"] is True
+    assert score_hmm_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert score_hmm_payload["dev_db_required"] is False
+    assert score_hmm_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
