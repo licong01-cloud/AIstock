@@ -545,3 +545,10 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 3. **产品/反过度工程审核**：仍为一个candidate、一个39-fit上限、一个最小表、两个read API和一个真实L1纵切；不建平台、scheduler、通用registry，不迁移历史artifact，不增加performance abstention或人工审批。
 
 结论：`PASS_DESIGN_REVIEW_USER_APPROVED_NOT_IMPLEMENTED`。用户已批准全部§10.1值；本次只允许切换设计状态并重跑F2 validator，未改变任何公式或参数。设计PASS不得推导源码、实验、tail、DDL或runtime完成。
+
+### 19.3 2026-09-06 direct-v2 v3消费适配状态
+
+- 正式reader不再硬编码月度candidate目录名；每次request必须显式传入绝对candidate root，并从经校验的`direct_monthly_state.json`派生`release_id/cutoff`。不扫描`latest`，不回退旧`20260902`目录、数据库、factor `sector_data.h5`或L2数据。
+- 通用direct-v2入口显式区分v2/v3且拒绝未知schema；G2-A v1.2专用入口只接受v3，并强制同release的`sw_l1_index` receipt、meta和H5全部闭合。v2只保留旧C-012兼容，不得进入G2-A。
+- v3股票训练分母使用同release `stock_universe.txt`；`all.txt`中`selection_eligible=false`的`000300.SH`只作为benchmark，不再被误判为缺少股票limit/factor字段。daily-basic/moneyflow同时支持并严格区分已批准fixed与pandas table H5布局。
+- Windows与WSL `rdagent-gpu` fresh process均只读验证：31 sectors、45,787 rows、1,477 open days、`2020-07-30..2026-08-31`、close非有限/非正均为0；CSI300 close与L1 close日期集均为1,477日。该证据只证明正式source adapter可执行，不证明G2-A feature、candidate、tail或产品验收完成。
