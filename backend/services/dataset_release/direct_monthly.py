@@ -28,13 +28,15 @@ from .errors import DatasetReleaseError
 
 DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
 LEGACY_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
-DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
+PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
+DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v3"
 DIRECT_COMPONENTS = (
     "daily_bin",
     "minute_bin",
     "factor_h5_static",
     "index_context",
     "suspend_d",
+    "sw_l1_index",
 )
 DIRECT_TERMINAL_STATUS = "CANDIDATE_READY"
 DIRECT_START_DATE = date(2018, 8, 1)
@@ -44,6 +46,17 @@ DIRECT_FACTOR_COMPONENT_DIR = "factor_h5_static_candidate_v2"
 DIRECT_FACTOR_SCHEMA = "qe_direct_factor_h5_static_v2"
 DIRECT_SUSPEND_COMPONENT_DIR = "suspend_d_daily_candidate_v2"
 DIRECT_SUSPEND_SCHEMA = "qe_direct_suspend_d_v1"
+DIRECT_SW_L1_COMPONENT_DIR = "sw_l1_index_daily_candidate_v1"
+DIRECT_SW_L1_SCHEMA = "qe_direct_sw_l1_index_daily_v1"
+DIRECT_SW_L1_START_DATE = date(2020, 7, 30)
+DIRECT_SW_L1_SECTOR_COUNT = 31
+DIRECT_REUSABLE_COMPONENT_DIRS = (
+    "daily_bin_candidate",
+    "minute_bin_candidate",
+    DIRECT_FACTOR_COMPONENT_DIR,
+    "index_context",
+    DIRECT_SUSPEND_COMPONENT_DIR,
+)
 DIRECT_BENCHMARK_CODE = "000300.SH"
 DIRECT_BENCHMARK_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 DIRECT_BENCHMARK_SCHEMA = "qe_direct_daily_benchmark_v1"
@@ -133,6 +146,10 @@ class DirectMonthlyLayout:
         return self.components_root / DIRECT_SUSPEND_COMPONENT_DIR
 
     @property
+    def sw_l1_root(self) -> Path:
+        return self.components_root / DIRECT_SW_L1_COMPONENT_DIR
+
+    @property
     def industry_authority_root(self) -> Path:
         return (
             self.candidate_parent
@@ -182,6 +199,11 @@ def component_plan(*, july_minute_repaired: bool = True) -> tuple[DirectComponen
             "COMPONENT_REBUILD",
             "same_release_canonical_v2_suspend_history",
         ),
+        DirectComponentPlan(
+            "sw_l1_index",
+            "COMPONENT_REBUILD",
+            "exact_31_published_sw2021_l1_close_series",
+        ),
     )
 
 
@@ -226,7 +248,7 @@ def read_state(layout: DirectMonthlyLayout) -> dict[str, Any] | None:
 
 
 def _upgrade_legacy_state(value: Any) -> Any:
-    """Expose a four-component v1 state as a resumable five-component state.
+    """Expose older direct states as a resumable six-component state.
 
     The conversion is deliberately in-memory.  A read-only status call never
     mutates an existing candidate; the upgraded state is persisted only when
@@ -236,24 +258,36 @@ def _upgrade_legacy_state(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return value
     components = value.get("components")
-    legacy_components = tuple(name for name in DIRECT_COMPONENTS if name != "suspend_d")
-    if (
-        value.get("schema_version") != LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
-        or not isinstance(components, Mapping)
-        or set(components) != set(legacy_components)
-    ):
+    if not isinstance(components, Mapping):
         return value
     upgraded = dict(value)
-    upgraded_components = {name: dict(components[name]) for name in legacy_components}
-    suspend_plan = next(item for item in component_plan() if item.component == "suspend_d")
-    upgraded_components["suspend_d"] = {
-        "action": suspend_plan.action,
-        "reason": suspend_plan.reason,
-        "status": "PENDING",
-    }
+    upgraded_components = {name: dict(record) for name, record in components.items()}
+    schema = value.get("schema_version")
+    four_components = tuple(name for name in DIRECT_COMPONENTS if name not in {"suspend_d", "sw_l1_index"})
+    five_components = tuple(name for name in DIRECT_COMPONENTS if name != "sw_l1_index")
+    if schema == LEGACY_DIRECT_MONTHLY_STATE_SCHEMA and set(components) == set(four_components):
+        suspend_plan = next(item for item in component_plan() if item.component == "suspend_d")
+        upgraded_components["suspend_d"] = {
+            "action": suspend_plan.action,
+            "reason": suspend_plan.reason,
+            "status": "PENDING",
+        }
+        schema = PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA
+    if schema == PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA and set(upgraded_components) == set(five_components):
+        sw_l1_plan = next(item for item in component_plan() if item.component == "sw_l1_index")
+        upgraded_components["sw_l1_index"] = {
+            "action": sw_l1_plan.action,
+            "reason": sw_l1_plan.reason,
+            "status": "PENDING",
+        }
+        schema = DIRECT_MONTHLY_STATE_SCHEMA
+    if schema != DIRECT_MONTHLY_STATE_SCHEMA or set(upgraded_components) != set(DIRECT_COMPONENTS):
+        return value
     upgraded["components"] = upgraded_components
-    upgraded["schema_version"] = DIRECT_MONTHLY_STATE_SCHEMA
-    if upgraded.get("status") == DIRECT_TERMINAL_STATUS:
+    upgraded["schema_version"] = schema
+    if upgraded.get("status") == DIRECT_TERMINAL_STATUS and any(
+        record.get("status") != "PASS" for record in upgraded_components.values()
+    ):
         upgraded["status"] = "PLANNING_DIRECT"
         upgraded.pop("validation", None)
     return upgraded
@@ -514,6 +548,67 @@ def production_handlers(*, project_root: Path) -> Mapping[str, ComponentHandler]
             project_root=root,
         ),
         "suspend_d": build_suspend_d_component,
+        "sw_l1_index": build_sw_l1_index_component,
+    }
+
+
+def hardlink_baseline_components(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+    """Reuse completed same-volume components without reading or copying their contents."""
+
+    baseline = layout.baseline_root
+    if baseline is None or not baseline.is_dir() or baseline.is_symlink():
+        raise DirectMonthlyError("augment requires an existing non-symlink baseline candidate")
+    if layout.candidate_root.exists() and any(layout.candidate_root.iterdir()):
+        raise DirectMonthlyError("augment target candidate must be absent or empty")
+    try:
+        baseline_state = json.loads((baseline / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DirectMonthlyError("baseline direct monthly state is unreadable") from exc
+    if (
+        baseline_state.get("status") != DIRECT_TERMINAL_STATUS
+        or baseline_state.get("cutoff") != layout.cutoff.isoformat()
+    ):
+        raise DirectMonthlyError("baseline candidate is not ready at the requested cutoff")
+
+    source_components = baseline / "components"
+    target_components = layout.components_root
+    linked_files = 0
+    logical_bytes = 0
+    for directory_name in DIRECT_REUSABLE_COMPONENT_DIRS:
+        source_root = source_components / directory_name
+        if not source_root.is_dir() or source_root.is_symlink():
+            raise DirectMonthlyError(f"baseline component is unavailable: {directory_name}")
+        target_root = target_components / directory_name
+        target_root.mkdir(parents=True, exist_ok=False)
+        for source in source_root.rglob("*"):
+            relative = source.relative_to(source_root)
+            target = target_root / relative
+            if source.is_symlink():
+                raise DirectMonthlyError(f"baseline component contains a symlink: {directory_name}/{relative}")
+            if source.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not source.is_file():
+                raise DirectMonthlyError(f"baseline component contains an unsupported entry: {directory_name}/{relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, target)
+            except OSError as exc:
+                raise DirectMonthlyError(
+                    f"same-volume hardlink reuse failed for {directory_name}/{relative}"
+                ) from exc
+            linked_files += 1
+            logical_bytes += source.stat().st_size
+    return {
+        "status": "PASS",
+        "action": "REUSE_BASELINE_HARDLINK",
+        "baseline_root": str(baseline),
+        "candidate_root": str(layout.candidate_root),
+        "linked_files": linked_files,
+        "logical_bytes_reused": logical_bytes,
+        "content_hash_performed": False,
+        "production_writes": 0,
+        "production_pointer_changes": 0,
     }
 
 
@@ -1415,6 +1510,145 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     }
 
 
+def _load_published_sw_l1_close(start: date, end: date):
+    import pandas as pd
+
+    from backend.db.pg_pool import get_conn
+
+    with get_conn() as connection:
+        catalog = pd.read_sql(
+            """
+            SELECT industry_code,index_code
+            FROM market.sw_index_classify
+            WHERE level='L1'
+              AND src='SW2021'
+              AND is_pub='1'
+              AND industry_code IS NOT NULL
+              AND index_code IS NOT NULL
+            ORDER BY industry_code,index_code
+            """,
+            connection,
+        )
+        if catalog.empty:
+            raise DirectMonthlyError("published SW2021 L1 catalog is empty")
+        catalog["sector_code"] = catalog["industry_code"].astype(str).str.strip()
+        catalog["index_code"] = catalog["index_code"].map(_canonical_index_code)
+        if (
+            len(catalog) != DIRECT_SW_L1_SECTOR_COUNT
+            or catalog["sector_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+            or catalog["index_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        ):
+            raise DirectMonthlyError("published SW2021 L1 catalog must contain exactly 31 one-to-one codes")
+        facts = pd.read_sql(
+            """
+            SELECT trade_date,ts_code,close
+            FROM market.sw_daily
+            WHERE trade_date BETWEEN %s AND %s
+              AND ts_code = ANY(%s)
+            ORDER BY trade_date,ts_code
+            """,
+            connection,
+            params=(start, end, catalog["index_code"].tolist()),
+        )
+    if facts.empty:
+        raise DirectMonthlyError("published SW2021 L1 close facts are empty")
+    projection = dict(zip(catalog["index_code"], catalog["sector_code"], strict=True))
+    facts["index_code"] = facts.pop("ts_code").map(_canonical_index_code)
+    facts["sector_code"] = facts["index_code"].map(projection)
+    facts["datetime"] = pd.to_datetime(facts.pop("trade_date")).dt.normalize()
+    facts["close"] = pd.to_numeric(facts["close"], errors="coerce").astype("float32")
+    return facts.set_index(["datetime", "sector_code"])[["index_code", "close"]].sort_index()
+
+
+def _validate_sw_l1_index_frame(frame, *, cutoff: date) -> Mapping[str, Any]:
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(frame.index, pd.MultiIndex) or list(frame.index.names) != [
+        "datetime",
+        "sector_code",
+    ]:
+        raise DirectMonthlyError("SW L1 component requires datetime/sector_code MultiIndex")
+    if not {"index_code", "close"}.issubset(frame.columns) or frame.index.duplicated().any():
+        raise DirectMonthlyError("SW L1 component schema or unique key differs")
+    rows = frame.reset_index()
+    rows["datetime"] = pd.to_datetime(rows["datetime"]).dt.normalize()
+    rows["sector_code"] = rows["sector_code"].astype(str)
+    rows["index_code"] = rows["index_code"].astype(str).str.upper()
+    close = pd.to_numeric(rows["close"], errors="coerce")
+    if not np.isfinite(close.to_numpy(dtype="float64")).all() or bool((close <= 0).any()):
+        raise DirectMonthlyError("SW L1 close contains missing, non-finite, or non-positive values")
+    if (
+        rows["sector_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        or rows["index_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        or rows.groupby("sector_code")["index_code"].nunique().ne(1).any()
+        or rows.groupby("index_code")["sector_code"].nunique().ne(1).any()
+    ):
+        raise DirectMonthlyError("SW L1 component must contain exactly 31 one-to-one sector/index codes")
+    ranges = rows.groupby("sector_code")["datetime"].agg(["min", "max", "count"])
+    sectors_by_date = rows.groupby("datetime")["sector_code"].nunique()
+    if (
+        ranges["min"].ne(pd.Timestamp(DIRECT_SW_L1_START_DATE)).any()
+        or ranges["max"].ne(pd.Timestamp(cutoff)).any()
+        or ranges["count"].nunique() != 1
+        or sectors_by_date.ne(DIRECT_SW_L1_SECTOR_COUNT).any()
+    ):
+        raise DirectMonthlyError("SW L1 component date coverage is incomplete")
+    return {
+        "rows": int(len(rows)),
+        "sector_count": int(rows["sector_code"].nunique()),
+        "open_days": int(ranges["count"].iloc[0]),
+        "start": DIRECT_SW_L1_START_DATE.isoformat(),
+        "end": cutoff.isoformat(),
+    }
+
+
+def build_sw_l1_index_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+    import pandas as pd
+
+    output = layout.sw_l1_root
+    data_path = output / "sector_data.h5"
+    meta_path = output / "meta.json"
+    if _component_output_complete(layout, "sw_l1_index"):
+        return {
+            "status": "PASS",
+            "component": "sw_l1_index",
+            "action": "REUSE_COMPLETED_DIRECT_OUTPUT",
+            "path": str(output),
+            "cutoff": layout.cutoff.isoformat(),
+        }
+    if output.exists() and any(output.iterdir()):
+        raise DirectMonthlyError("partial sw_l1_index output requires explicit inspection")
+    output.mkdir(parents=True, exist_ok=True)
+    frame = _load_published_sw_l1_close(DIRECT_SW_L1_START_DATE, layout.cutoff)
+    summary = _validate_sw_l1_index_frame(frame, cutoff=layout.cutoff)
+    frame.to_hdf(data_path, key="data", mode="w", format="table")
+    readback = pd.read_hdf(data_path, key="data")
+    readback_summary = _validate_sw_l1_index_frame(readback, cutoff=layout.cutoff)
+    if readback_summary != summary:
+        raise DirectMonthlyError("SW L1 writer/readback summary differs")
+    _write_json_new(
+        meta_path,
+        {
+            "schema_version": DIRECT_SW_L1_SCHEMA,
+            "component": "sw_l1_index",
+            **summary,
+            "columns": ["index_code", "close"],
+            "source_identity": "market.sw_index_classify:SW2021:L1:published+market.sw_daily",
+            "source_freeze": False,
+            "full_history_content_hash": False,
+        },
+    )
+    return {
+        "status": "PASS",
+        "component": "sw_l1_index",
+        "action": "COMPONENT_REBUILD",
+        "path": str(output),
+        "cutoff": layout.cutoff.isoformat(),
+        **summary,
+    }
+
+
 def _load_pit_spans(universe_key: str, start: date, end: date):
     import pandas as pd
 
@@ -1858,6 +2092,7 @@ def _validate_adoptable_direct_work(layout: DirectMonthlyLayout) -> None:
             DIRECT_FACTOR_COMPONENT_DIR,
             "index_context",
             DIRECT_SUSPEND_COMPONENT_DIR,
+            DIRECT_SW_L1_COMPONENT_DIR,
         }
         if not {child.name for child in components.iterdir()}.issubset(allowed_components):
             raise DirectMonthlyError("existing direct work contains an unknown component")
@@ -1911,6 +2146,22 @@ def _component_output_complete(layout: DirectMonthlyLayout, component: str) -> b
             and (index / "index_daily.h5").is_file()
             and not (index / "index_daily.h5").is_symlink()
             and _daily_benchmark_complete(layout)
+        )
+    if component == "sw_l1_index":
+        meta = layout.sw_l1_root / "meta.json"
+        data = layout.sw_l1_root / "sector_data.h5"
+        if not _meta_reaches_cutoff(meta, layout.cutoff) or not data.is_file() or data.is_symlink():
+            return False
+        try:
+            value = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return (
+            value.get("schema_version") == DIRECT_SW_L1_SCHEMA
+            and value.get("component") == "sw_l1_index"
+            and value.get("sector_count") == DIRECT_SW_L1_SECTOR_COUNT
+            and value.get("source_freeze") is False
+            and value.get("full_history_content_hash") is False
         )
     if component != "factor_h5_static":
         return True
@@ -1970,13 +2221,21 @@ def validate_direct_candidate(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
         and (index / "index_daily.h5").stat().st_size > 0
         and _daily_benchmark_complete(layout),
         "suspend_d": _component_output_complete(layout, "suspend_d"),
+        "sw_l1_index": _component_output_complete(layout, "sw_l1_index"),
     }
     if not all(checks.values()):
         raise DirectMonthlyError(f"direct candidate structural validation failed: {checks}")
+    import pandas as pd
+
+    sw_l1_summary = _validate_sw_l1_index_frame(
+        pd.read_hdf(layout.sw_l1_root / "sector_data.h5", key="data"),
+        cutoff=layout.cutoff,
+    )
     return {
         "status": "PASS",
         "cutoff": layout.cutoff.isoformat(),
         "checks": checks,
+        "sw_l1_index": sw_l1_summary,
         "full_history_content_hash": False,
         "production_writes": 0,
         "production_pointer_changes": 0,
@@ -2113,6 +2372,9 @@ __all__ = [
     "DIRECT_COMPONENTS",
     "DIRECT_SUSPEND_COMPONENT_DIR",
     "DIRECT_SUSPEND_SCHEMA",
+    "DIRECT_SW_L1_COMPONENT_DIR",
+    "DIRECT_SW_L1_SCHEMA",
+    "DIRECT_REUSABLE_COMPONENT_DIRS",
     "DIRECT_MONTHLY_SCHEMA",
     "DIRECT_TERMINAL_STATUS",
     "DirectComponentPlan",
@@ -2124,6 +2386,8 @@ __all__ = [
     "DIRECT_BENCHMARK_SCHEMA",
     "build_daily_benchmark_component",
     "build_suspend_d_component",
+    "build_sw_l1_index_component",
+    "hardlink_baseline_components",
     "compact_status",
     "component_plan",
     "initial_state",

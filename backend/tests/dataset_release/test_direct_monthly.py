@@ -13,23 +13,29 @@ from backend.services.dataset_release.direct_monthly import (
     DIRECT_FACTOR_SCHEMA,
     DIRECT_INDEX_CODES,
     DIRECT_MONTHLY_STATE_SCHEMA,
+    DIRECT_REUSABLE_COMPONENT_DIRS,
     DIRECT_SECTOR_AUTHORITY,
     DIRECT_SUSPEND_SCHEMA,
+    DIRECT_SW_L1_SCHEMA,
     DIRECT_TERMINAL_STATUS,
     LEGACY_DIRECT_MONTHLY_STATE_SCHEMA,
+    PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA,
     DirectMonthlyError,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
     cleanup_terminal_candidate,
     build_suspend_d_component,
+    build_sw_l1_index_component,
     compact_status,
     component_plan,
     default_candidate_path,
     discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
     initial_state,
+    hardlink_baseline_components,
     read_state,
     validate_direct_candidate_with_smoke,
+    _validate_sw_l1_index_frame,
     write_state,
     _run_qlib_component,
     _date_chunks,
@@ -53,7 +59,7 @@ def _layout(tmp_path) -> DirectMonthlyLayout:
     )
 
 
-def test_component_plan_includes_same_release_suspend_sidecar() -> None:
+def test_component_plan_includes_suspend_and_sw_l1_components() -> None:
     plan = component_plan(july_minute_repaired=True)
 
     assert tuple(item.component for item in plan) == DIRECT_COMPONENTS
@@ -67,14 +73,18 @@ def test_component_plan_includes_same_release_suspend_sidecar() -> None:
     assert next(item for item in plan if item.component == "suspend_d").reason == (
         "same_release_canonical_v2_suspend_history"
     )
+    assert next(item for item in plan if item.component == "sw_l1_index").reason == (
+        "exact_31_published_sw2021_l1_close_series"
+    )
 
 
-def test_legacy_four_component_state_resumes_only_missing_suspend_d(tmp_path) -> None:
+def test_legacy_four_component_state_resumes_only_new_components(tmp_path) -> None:
     layout = _layout(tmp_path)
     legacy = initial_state(layout)
     legacy["schema_version"] = LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
     legacy["status"] = DIRECT_TERMINAL_STATUS
     legacy["components"].pop("suspend_d")
+    legacy["components"].pop("sw_l1_index")
     for component in legacy["components"]:
         legacy["components"][component]["status"] = "PASS"
         legacy["components"][component]["receipt"] = {
@@ -99,6 +109,7 @@ def test_legacy_four_component_state_resumes_only_missing_suspend_d(tmp_path) ->
     assert observed["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
     assert observed["status"] == "PLANNING_DIRECT"
     assert observed["components"]["suspend_d"]["status"] == "PENDING"
+    assert observed["components"]["sw_l1_index"]["status"] == "PENDING"
     persisted_before_run = json.loads(layout.state_path.read_text(encoding="utf-8"))
     assert persisted_before_run["schema_version"] == LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
     assert "suspend_d" not in persisted_before_run["components"]
@@ -119,7 +130,110 @@ def test_legacy_four_component_state_resumes_only_missing_suspend_d(tmp_path) ->
 
     assert result["status"] == DIRECT_TERMINAL_STATUS
     assert result["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
-    assert calls == ["suspend_d"]
+    assert calls == ["suspend_d", "sw_l1_index"]
+
+
+def test_pre_sw_l1_terminal_state_reopens_only_sw_l1(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy = initial_state(layout)
+    legacy["schema_version"] = PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA
+    legacy["status"] = DIRECT_TERMINAL_STATUS
+    legacy["components"].pop("sw_l1_index")
+    for record in legacy["components"].values():
+        record["status"] = "PASS"
+        record["receipt"] = {"status": "PASS", "component": "existing"}
+    layout.candidate_root.mkdir(parents=True, exist_ok=True)
+    layout.state_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    observed = read_state(layout)
+
+    assert observed is not None
+    assert observed["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert observed["status"] == "PLANNING_DIRECT"
+    assert observed["components"]["sw_l1_index"]["status"] == "PENDING"
+
+
+def _sw_l1_frame(*, end: date = date(2020, 7, 31)) -> pd.DataFrame:
+    dates = pd.to_datetime([date(2020, 7, 30), end])
+    sectors = [f"{110000 + position * 10000:06d}" for position in range(31)]
+    index = pd.MultiIndex.from_product([dates, sectors], names=["datetime", "sector_code"])
+    return pd.DataFrame(
+        {
+            "index_code": [f"{801010 + position % 31:06d}.SI" for _day in dates for position in range(31)],
+            "close": [100.0 + position for _day in dates for position in range(31)],
+        },
+        index=index,
+    )
+
+
+def test_sw_l1_component_writes_compact_31_sector_close_without_hashes(tmp_path, monkeypatch) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20200731-qe_hmm_full_v2-direct-20200801-candidate",
+        baseline_root=None,
+        cutoff=date(2020, 7, 31),
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_published_sw_l1_close",
+        lambda _start, _end: _sw_l1_frame(),
+    )
+
+    receipt = build_sw_l1_index_component(layout)
+    meta = json.loads((layout.sw_l1_root / "meta.json").read_text(encoding="utf-8"))
+    readback = pd.read_hdf(layout.sw_l1_root / "sector_data.h5", key="data")
+
+    assert receipt["status"] == "PASS"
+    assert receipt["rows"] == 62
+    assert meta["schema_version"] == DIRECT_SW_L1_SCHEMA
+    assert meta["sector_count"] == 31
+    assert meta["full_history_content_hash"] is False
+    assert meta["source_freeze"] is False
+    assert list(readback.columns) == ["index_code", "close"]
+    assert _validate_sw_l1_index_frame(readback, cutoff=layout.cutoff)["open_days"] == 2
+
+
+def test_sw_l1_component_rejects_missing_sector_and_non_finite_close() -> None:
+    frame = _sw_l1_frame()
+    missing = frame.loc[frame.index.get_level_values("sector_code") != "110000"]
+    with pytest.raises(DirectMonthlyError, match="exactly 31"):
+        _validate_sw_l1_index_frame(missing, cutoff=date(2020, 7, 31))
+    invalid = frame.copy()
+    invalid.iloc[0, invalid.columns.get_loc("close")] = float("nan")
+    with pytest.raises(DirectMonthlyError, match="non-finite"):
+        _validate_sw_l1_index_frame(invalid, cutoff=date(2020, 7, 31))
+
+
+def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp_path) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    baseline.mkdir()
+    (baseline / "direct_monthly_state.json").write_text(
+        json.dumps({"status": DIRECT_TERMINAL_STATUS, "cutoff": "2026-08-31"}),
+        encoding="utf-8",
+    )
+    for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
+        component = baseline / "components" / directory
+        component.mkdir(parents=True)
+        (component / "payload.bin").write_bytes(directory.encode("utf-8"))
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260905-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 8, 31),
+    )
+
+    result = hardlink_baseline_components(layout)
+
+    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS)
+    assert result["content_hash_performed"] is False
+    for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
+        source = baseline / "components" / directory / "payload.bin"
+        linked = layout.components_root / directory / "payload.bin"
+        assert linked.read_bytes() == source.read_bytes()
+        assert linked.stat().st_ino == source.stat().st_ino
 
 
 def test_suspend_component_uses_daily_calendar_and_canonical_pit_without_hashes(tmp_path, monkeypatch) -> None:
@@ -295,6 +409,7 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
             "factor_h5_static": pass_handler("factor_h5_static"),
             "index_context": pass_handler("index_context"),
             "suspend_d": pass_handler("suspend_d"),
+            "sw_l1_index": pass_handler("sw_l1_index"),
         },
         validator=lambda _layout: {"status": "PASS"},
     )
@@ -315,6 +430,7 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
     assert calls.count("factor_h5_static") == 1
     assert calls.count("index_context") == 1
     assert calls.count("suspend_d") == 1
+    assert calls.count("sw_l1_index") == 1
 
 
 def test_runner_rejects_partial_registry_and_invalid_receipt(tmp_path) -> None:
@@ -833,6 +949,23 @@ def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> N
                 "component": "suspend_d",
                 "end": layout.cutoff.isoformat(),
                 "universe_key": "aistock_equity_pit_canonical_v2",
+                "source_freeze": False,
+                "full_history_content_hash": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    layout.sw_l1_root.mkdir(parents=True)
+    _sw_l1_frame(end=layout.cutoff).to_hdf(
+        layout.sw_l1_root / "sector_data.h5", key="data", mode="w", format="table"
+    )
+    (layout.sw_l1_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_SW_L1_SCHEMA,
+                "component": "sw_l1_index",
+                "end": layout.cutoff.isoformat(),
+                "sector_count": 31,
                 "source_freeze": False,
                 "full_history_content_hash": False,
             }

@@ -26,18 +26,27 @@
     }
   ],
   "evidence_uris": [
-    "HMM G2-A v1.2 approved design commit dee236b9fff57ac79eccc6375ed835e0bf89ac00 requires 31 SW L1 close series; current direct-v2 candidate has no L1 component"
+    "HMM G2-A v1.2 approved design commit dee236b9fff57ac79eccc6375ed835e0bf89ac00 requires 31 SW L1 close series; current direct-v2 candidate has no L1 component",
+    "Production read-only SW2021 L1 source check for 2020-07-30..2026-08-31: 45,787 rows, 31 sectors, 1,477 common dates, exact one-to-one industry_code/index_code mapping, finite positive close values"
   ],
   "expected": "月度direct-v2新候选自动包含31个申万一级指数close小组件；对现有2026-08-31候选可通过同盘hardlink复用五个已完成组件并只构建L1组件，旧候选零修改、无全量内容哈希。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260905_BUG-1372-direct-v2-31.json",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "scripts/update_backtest_dataset_monthly.py"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20260905_BUG-1372-direct-v2-31.json",
       "backend/services/dataset_release/direct_monthly.py",
-      "scripts/update_backtest_dataset_monthly.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py"
+      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "scripts/update_backtest_dataset_monthly.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/direct_monthly.py",
@@ -146,10 +155,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
