@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1376",
-  "closed_at": null,
+  "closed_at": "2026-09-05T17:16:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -86,8 +86,8 @@
   },
   "first_seen_at": "2026-09-05T16:48:24.000393Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2599dbd22547d80b5e535f3df6a0e2cd34a5840d",
+  "fixed_at": "2026-09-05T17:16:18Z",
   "github_issue_number": 4333,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4333",
   "last_seen_at": "2026-09-05T16:48:24.000393Z",
@@ -95,6 +95,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4334",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -112,6 +113,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -121,7 +123,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1376",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f1bd330e16f86200",
+    "recorded_at": "2026-09-05T17:17:56.005813Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d3c203edac6542f6898ab47a118c00e9ee5e7465",
+    "source_merge_commit": "2599dbd22547d80b5e535f3df6a0e2cd34a5840d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4334",
+    "validation_evidence": [
+      "validation-receipt: id=ea17822223b53697 commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_score_hmm_context.py backend/tests/advisory_model_first/test_admission_decision.py backend/tests/advisory_model_first/test_package_score_calibration.py backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_delivery.py -q -p no:cacheprovider` result=`37 passed`",
+      "validation-receipt: id=042dab26023ef470 commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`919 passed, 16 skipped`",
+      "validation-receipt: id=c73e18c89f92fe8f commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+      "validation-receipt: id=e514683f03f9135f commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/advisory_model_first/score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_context.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "d362f24557b9b360d26440a6f4e52cf71a0e6e11557b89e495cc23f0d8c2bf5b"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -130,6 +156,12 @@
     "fingerprint": "d29021982d0498926d4377e1",
     "source_event_id": "FE-20260905-d29021982d04"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ea17822223b53697 commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_score_hmm_context.py backend/tests/advisory_model_first/test_admission_decision.py backend/tests/advisory_model_first/test_package_score_calibration.py backend/tests/advisory_model_first/test_score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_delivery.py -q -p no:cacheprovider` result=`37 passed`",
+    "validation-receipt: id=042dab26023ef470 commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`919 passed, 16 skipped`",
+    "validation-receipt: id=c73e18c89f92fe8f commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=e514683f03f9135f commit=d3c203edac6542f6898ab47a118c00e9ee5e7465 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/advisory_model_first/score_hmm_admission_pipeline.py backend/tests/advisory_model_first/test_score_hmm_context.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
