@@ -1940,6 +1940,33 @@ def _custom_timeseries_lstm_model_info(training_hp=None):
     }
 
 
+def test_custom_timeseries_general_ptnn_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={"random_seed": 123},
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "GeneralPTNN"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 123
+    assert parsed["qe_runtime"]["random_seed"] == 123
+
+
+def test_custom_timeseries_ltr_adapter_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={
+            "random_seed": 314,
+            "ltr_loss_mode": "approx_ndcg_at_k",
+        },
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "AIStockGeneralPTNNLTR"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 314
+    assert parsed["qe_runtime"]["random_seed"] == 314
+
+
 def _builtin_transformer_model_info():
     # Built-in qlib Transformer referenced via pt_model_uri (no custom code_text).
     # Reaches the GeneralPTNN "no source code" branch in _compose_conf_yaml.
