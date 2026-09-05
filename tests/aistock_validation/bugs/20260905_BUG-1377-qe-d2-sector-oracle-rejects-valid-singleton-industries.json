@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1377",
-  "closed_at": null,
+  "closed_at": "2026-09-05T19:06:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -100,8 +100,8 @@
   },
   "first_seen_at": "2026-09-05T18:23:42.043647Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6ea02a96c08720085dd94a32ad1f344459fa313e",
+  "fixed_at": "2026-09-05T19:06:18Z",
   "github_issue_number": 4337,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4337",
   "last_seen_at": "2026-09-05T18:23:42.043647Z",
@@ -109,6 +109,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4338",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -126,6 +127,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -135,7 +137,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1377",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7eaf09d9b447ce22",
+    "recorded_at": "2026-09-05T19:07:40.921988Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aad6ff23169253c9b8c0c87834abf15e9b3c3361",
+    "source_merge_commit": "6ea02a96c08720085dd94a32ad1f344459fa313e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4338",
+    "validation_evidence": [
+      "validation-receipt: id=2de7ec9aba389014 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_p0_d2_sector_oracle.py targeted singleton sparse fail-closed nodes -q` result=`passed 3 on final HEAD aad6ff23`",
+      "validation-receipt: id=396d8817e4733e80 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 on final HEAD aad6ff23`",
+      "validation-receipt: id=3d12013629d1e2d7 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`passed 158 on final HEAD aad6ff23`"
+    ],
+    "validation_evidence_digest": "8b39ca3b9162706813935e78a8602bb77c9b069cc69ad32d586c4068d254068b"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -144,6 +169,11 @@
     "fingerprint": "d4e1f6414f2c8fcd1c770b5a",
     "source_event_id": "FE-20260905-d4e1f6414f2c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2de7ec9aba389014 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_p0_d2_sector_oracle.py targeted singleton sparse fail-closed nodes -q` result=`passed 3 on final HEAD aad6ff23`",
+    "validation-receipt: id=396d8817e4733e80 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 on final HEAD aad6ff23`",
+    "validation-receipt: id=3d12013629d1e2d7 commit=aad6ff23169253c9b8c0c87834abf15e9b3c3361 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`passed 158 on final HEAD aad6ff23`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
