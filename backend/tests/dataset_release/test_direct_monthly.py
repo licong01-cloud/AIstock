@@ -14,6 +14,7 @@ from backend.services.dataset_release.direct_monthly import (
     DIRECT_INDEX_CODES,
     DIRECT_MONTHLY_STATE_SCHEMA,
     DIRECT_REUSABLE_COMPONENT_DIRS,
+    DIRECT_REUSABLE_REPORT_FILES,
     DIRECT_SECTOR_AUTHORITY,
     DIRECT_SUSPEND_SCHEMA,
     DIRECT_SW_L1_SCHEMA,
@@ -218,6 +219,10 @@ def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp
         component = baseline / "components" / directory
         component.mkdir(parents=True)
         (component / "payload.bin").write_bytes(directory.encode("utf-8"))
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        report = baseline / "reports" / filename
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(filename, encoding="utf-8")
     layout = DirectMonthlyLayout.create(
         candidate_parent=parent,
         candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260905-candidate",
@@ -227,12 +232,19 @@ def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp
 
     result = hardlink_baseline_components(layout)
 
-    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS)
+    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS) + len(
+        DIRECT_REUSABLE_REPORT_FILES
+    )
     assert result["content_hash_performed"] is False
     for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
         source = baseline / "components" / directory / "payload.bin"
         linked = layout.components_root / directory / "payload.bin"
         assert linked.read_bytes() == source.read_bytes()
+        assert linked.stat().st_ino == source.stat().st_ino
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        source = baseline / "reports" / filename
+        linked = layout.reports_root / filename
+        assert linked.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
         assert linked.stat().st_ino == source.stat().st_ino
 
 

@@ -57,6 +57,10 @@ DIRECT_REUSABLE_COMPONENT_DIRS = (
     "index_context",
     DIRECT_SUSPEND_COMPONENT_DIR,
 )
+DIRECT_REUSABLE_REPORT_FILES = (
+    "daily_benchmark_000300_completion.json",
+    "daily_bin_candidate_stock_daily_all.json",
+)
 DIRECT_BENCHMARK_CODE = "000300.SH"
 DIRECT_BENCHMARK_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 DIRECT_BENCHMARK_SCHEMA = "qe_direct_daily_benchmark_v1"
@@ -599,6 +603,19 @@ def hardlink_baseline_components(layout: DirectMonthlyLayout) -> Mapping[str, An
                 ) from exc
             linked_files += 1
             logical_bytes += source.stat().st_size
+    target_reports = layout.reports_root
+    target_reports.mkdir(parents=True, exist_ok=False)
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        source = baseline / "reports" / filename
+        target = target_reports / filename
+        if not source.is_file() or source.is_symlink():
+            raise DirectMonthlyError(f"baseline completion report is unavailable: {filename}")
+        try:
+            os.link(source, target)
+        except OSError as exc:
+            raise DirectMonthlyError(f"same-volume hardlink reuse failed for reports/{filename}") from exc
+        linked_files += 1
+        logical_bytes += source.stat().st_size
     return {
         "status": "PASS",
         "action": "REUSE_BASELINE_HARDLINK",
@@ -2375,6 +2392,7 @@ __all__ = [
     "DIRECT_SW_L1_COMPONENT_DIR",
     "DIRECT_SW_L1_SCHEMA",
     "DIRECT_REUSABLE_COMPONENT_DIRS",
+    "DIRECT_REUSABLE_REPORT_FILES",
     "DIRECT_MONTHLY_SCHEMA",
     "DIRECT_TERMINAL_STATUS",
     "DirectComponentPlan",
