@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1369",
-  "closed_at": null,
+  "closed_at": "2026-09-05T06:52:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -99,8 +99,8 @@
   },
   "first_seen_at": "2026-09-05T06:03:49.615074Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "42cc938308dd048af2b3af519d0ebc17be57357d",
+  "fixed_at": "2026-09-05T06:52:07Z",
   "github_issue_number": 4314,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4314",
   "last_seen_at": "2026-09-05T06:03:49.615074Z",
@@ -108,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4316",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -125,6 +126,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -134,7 +136,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -143,6 +145,12 @@
     "fingerprint": "dc58266525fe5cd9f763ad44",
     "source_event_id": "FE-20260905-dc58266525fe"
   },
+  "validation_evidence": [
+    "validation-receipt: id=080954be5defd806 commit=56301ab9c2aca80a9ecb009b55d57d0988d1bcdb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k business_smoke_semantic_or_advisory_program_collection_or_unknown_business_smoke_endpoint -q` result=`passed (8 passed)`",
+    "validation-receipt: id=bac8f751d9b32395 commit=56301ab9c2aca80a9ecb009b55d57d0988d1bcdb kind=nox plan=validation_workflow_automation status=passed command=`python -m nox -s validation_workflow_automation` result=`passed (665 passed, 2 skipped)`",
+    "validation-receipt: id=c4b6277ce21e820d commit=56301ab9c2aca80a9ecb009b55d57d0988d1bcdb kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed (blocking 0, ownership 3/3)`",
+    "validation-receipt: id=a6c70665bb305013 commit=56301ab9c2aca80a9ecb009b55d57d0988d1bcdb kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
