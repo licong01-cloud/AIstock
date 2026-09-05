@@ -412,6 +412,28 @@ def build_fold_local_market_hmm(
     return FoldLocalMarketHMMResult(states=output, receipts=tuple(receipts))
 
 
+class _FiniteAbsoluteDeltaConvergenceMonitor:
+    """Keep hmmlearn's monitor bookkeeping but enforce the frozen stop rule."""
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    @property
+    def converged(self) -> bool:
+        iteration = int(getattr(self._delegate, "iter", 0))
+        n_iter = int(getattr(self._delegate, "n_iter", 0))
+        if n_iter > 0 and iteration >= n_iter:
+            return True
+        history = np.asarray(tuple(self._delegate.history)[-2:], dtype=float)
+        if len(history) < 2 or not np.isfinite(history).all():
+            return False
+        final_delta = float(history[-1] - history[-2])
+        return np.isfinite(final_delta) and abs(final_delta) < float(self._delegate.tol)
+
+
 def _fit_market_hmm_path(
     *,
     raw: pd.DataFrame,
@@ -446,6 +468,7 @@ def _fit_market_hmm_path(
             random_state=42,
             min_covar=1e-5,
         )
+        model.monitor_ = _FiniteAbsoluteDeltaConvergenceMonitor(model.monitor_)
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)
             model.fit(train_matrix, lengths=train_block_lengths)

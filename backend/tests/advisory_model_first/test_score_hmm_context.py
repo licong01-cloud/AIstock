@@ -15,6 +15,7 @@ from backend.services.advisory_model_first.score_hmm_admission_contracts import 
     build_default_score_hmm_arms,
 )
 from backend.services.advisory_model_first.score_hmm_admission_pipeline import (
+    _FiniteAbsoluteDeltaConvergenceMonitor,
     _build_parent_context_exposure,
     _causal_forward_filter,
     _contiguous_blocks,
@@ -174,12 +175,37 @@ def test_outer_hmm_fit_resets_discontinuous_training_sequences(monkeypatch) -> N
 
 def test_hmm_convergence_requires_finite_final_delta_inside_tolerance() -> None:
     converged = SimpleNamespace(tol=1e-4, monitor_=SimpleNamespace(history=[-100.0, -99.99995]))
+    converged_after_tiny_regression = SimpleNamespace(
+        tol=1e-4,
+        monitor_=SimpleNamespace(history=[-100.0, -100.00005]),
+    )
     exhausted = SimpleNamespace(tol=1e-4, monitor_=SimpleNamespace(history=[-100.0, -99.0]))
 
     assert _validated_hmm_final_delta(converged, path_id="path-00") == pytest.approx(0.00005)
+    assert _validated_hmm_final_delta(converged_after_tiny_regression, path_id="path-00") == pytest.approx(-0.00005)
     with pytest.raises(AdvisoryModelFirstError) as caught:
         _validated_hmm_final_delta(exhausted, path_id="path-00")
     assert caught.value.reason_code == "ADVISORY_SCORE_HMM_MARKET_HMM_INVALID"
+
+
+def test_hmm_monitor_continues_after_negative_delta_outside_absolute_tolerance() -> None:
+    delegate = SimpleNamespace(
+        tol=1e-4,
+        n_iter=200,
+        iter=2,
+        history=[-100.0, -100.000126259],
+    )
+    monitor = _FiniteAbsoluteDeltaConvergenceMonitor(delegate)
+
+    assert monitor.converged is False
+
+    delegate.iter += 1
+    delegate.history.append(-100.00008)
+    assert monitor.converged is True
+
+    delegate.iter = delegate.n_iter
+    delegate.history[-1] = -99.0
+    assert monitor.converged is True
 
 
 def test_sector_arms_are_typed_unavailable_without_blocking_three_executable_arms() -> None:
