@@ -180,6 +180,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1370",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "542fb87e8039bedb",
+    "recorded_at": "2026-09-05T08:13:29.525648Z",
+    "runtime_contract_digest": "56990fa569925cc1c839639f2a9ab8046c2c72307da6f2630739b73db0d62181",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+    "source_merge_commit": "466e1dd470b64d1c109b9886b38639be2de2699d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4317",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> passed (8 passed) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+      "python -m nox -s data_sync_autonomy_backend -> passed (262 passed, 1 skipped) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+      "python -m nox -s l0 -> passed (blocking=0) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e"
+    ],
+    "validation_evidence_digest": "3bb1b5f89f20cd10381f3e8a7a8d75839e8d15410728b9084b0b26679b4f4279"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
@@ -192,7 +215,10 @@
   "validation_evidence": [
     "python -m nox -s validation_module_registry_l0 -> passed (8 passed) at HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
     "python -m nox -s data_sync_autonomy_backend -> passed (262 passed, 1 skipped) at HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
-    "python -m nox -s l0 -> passed (blocking=0) at HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e"
+    "python -m nox -s l0 -> passed (blocking=0) at HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+    "python -m nox -s data_sync_autonomy_backend -> passed (262 passed, 1 skipped) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e",
+    "python -m nox -s l0 -> passed (blocking=0) at source HEAD 39b37d7aaac1ad2e547c637c7b7ab7e3fd80009e"
   ],
   "verification_budget": {
     "budget": "standard",
