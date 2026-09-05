@@ -90,6 +90,7 @@ _NEXT_DAY_RECOVERY_DEADLINE_DATASETS = frozenset(
 )
 _MODE_INSENSITIVE_SCHEDULE_DATASETS = frozenset({"stock_basic"})
 _HIGH_FREQUENCY_REVIEW_DATASETS = frozenset({"suspend_d", "anns_metadata"})
+_SW2021_L1_PUBLISHED_COUNT = 31
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -2885,26 +2886,43 @@ class TDXScheduler:
                     job_id=child_job_id,
                 )
 
-                # sw_daily zero-row detection: API may return 0 rows if data
-                # not yet published (T+1 delay). Schedule a 1-hour delayed retry.
-                if ds_name == "sw_daily" and result.ok and result.inserted_rows == 0:
-                    _logger.warning(
-                        "sw_sector: sw_daily sync succeeded but inserted 0 rows — "
-                        "API data may not be available yet, scheduling delayed retry"
-                    )
-                    self._schedule_delayed_retry(
-                        "sw_sector", mode, delay_minutes=60,
-                        reason="sw_daily 0 rows — API data not yet published",
-                    )
+                coverage = None
+                retry_reason = None
+                if ds_name == "sw_daily" and result.ok:
+                    try:
+                        coverage = self._sw_daily_level_coverage(end_date)
+                    except Exception as exc:  # noqa: BLE001
+                        coverage = {
+                            "status": "unavailable",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    retry_reason = self._sw_daily_retry_reason(result.inserted_rows, coverage)
+                    if retry_reason:
+                        _logger.warning(
+                            "sw_sector: sw_daily publish incomplete (%s); "
+                            "recording warning and scheduling delayed retry",
+                            retry_reason,
+                        )
+                        self._schedule_delayed_retry(
+                            "sw_sector",
+                            mode,
+                            delay_minutes=60,
+                            reason=retry_reason,
+                        )
 
                 # 更新子 job 完成状态
                 if child_job_id:
                     child_status = "success" if result.ok else "failed"
                     try:
-                        summary_patch = json.dumps(
-                            {"inserted_rows": result.inserted_rows, "dataset": ds_name, "mode": ds_mode},
-                            ensure_ascii=False, default=str,
-                        )
+                        child_summary = {
+                            "inserted_rows": result.inserted_rows,
+                            "dataset": ds_name,
+                            "mode": ds_mode,
+                        }
+                        if coverage is not None:
+                            child_summary["level_coverage"] = coverage
+                            child_summary["coverage_warning"] = retry_reason is not None
+                        summary_patch = json.dumps(child_summary, ensure_ascii=False, default=str)
                         self._execute(
                             """UPDATE market.ingestion_jobs
                                   SET status=%s, finished_at=NOW(),
@@ -2952,6 +2970,92 @@ class TDXScheduler:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=overall_status, last_error=None,
             )
+
+    def _sw_daily_level_coverage(
+        self,
+        requested_end_date: Optional[dt.date],
+    ) -> Dict[str, Any]:
+        """Return published SW2021 L1/L2 close coverage for one trading day.
+
+        The result is observability for the existing ``sw_sector`` job, not a
+        new blocking gate.  A missing L1 row schedules the existing delayed
+        retry while the composite job keeps its normal success semantics.
+        """
+
+        rows = self._fetchall(
+            """
+            WITH target AS (
+                SELECT MAX(cal_date)::date AS trade_date
+                  FROM market.trading_calendar
+                 WHERE is_trading = TRUE
+                   AND cal_date <= COALESCE(%s::date, CURRENT_DATE)
+            )
+            SELECT target.trade_date,
+                   classify.level,
+                   COUNT(*)::integer AS expected,
+                   COUNT(daily.ts_code) FILTER (
+                       WHERE daily.close IS NOT NULL
+                   )::integer AS present,
+                   COALESCE(
+                       ARRAY_AGG(classify.index_code ORDER BY classify.index_code)
+                           FILTER (
+                               WHERE daily.ts_code IS NULL OR daily.close IS NULL
+                           ),
+                       ARRAY[]::text[]
+                   ) AS missing_codes
+              FROM target
+              JOIN market.sw_index_classify AS classify
+                ON classify.level IN ('L1', 'L2')
+               AND classify.src = 'SW2021'
+               AND classify.is_pub = '1'
+              LEFT JOIN market.sw_daily AS daily
+                ON daily.ts_code = classify.index_code
+               AND daily.trade_date = target.trade_date
+             GROUP BY target.trade_date, classify.level
+             ORDER BY classify.level
+            """,
+            (requested_end_date,),
+        )
+        levels: Dict[str, Dict[str, Any]] = {}
+        trade_date = None
+        for row in rows:
+            trade_date = row.get("trade_date") or trade_date
+            level = str(row.get("level") or "").upper()
+            if not level:
+                continue
+            levels[level] = {
+                "expected": int(row.get("expected") or 0),
+                "present": int(row.get("present") or 0),
+                "missing_codes": sorted(str(code) for code in (row.get("missing_codes") or [])),
+            }
+        return {
+            "status": "ok",
+            "trade_date": trade_date,
+            "levels": levels,
+        }
+
+    @staticmethod
+    def _sw_daily_retry_reason(
+        inserted_rows: int,
+        coverage: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Describe why the non-blocking SW daily delayed retry is needed."""
+
+        if int(inserted_rows or 0) == 0:
+            return "sw_daily_zero_rows_provider_not_ready"
+        if not coverage or coverage.get("status") != "ok":
+            return "sw_daily_l1_coverage_unavailable"
+        l1 = dict((coverage.get("levels") or {}).get("L1") or {})
+        expected = int(l1.get("expected") or 0)
+        present = int(l1.get("present") or 0)
+        if expected != _SW2021_L1_PUBLISHED_COUNT or present != expected:
+            trade_date = coverage.get("trade_date") or "unknown"
+            return (
+                "sw_daily_l1_incomplete "
+                f"trade_date={trade_date} catalog_expected={expected} "
+                f"present={present} required={_SW2021_L1_PUBLISHED_COUNT}"
+            )
+        return None
 
     def _run_sector_data_build(
         self,

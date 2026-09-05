@@ -533,13 +533,15 @@ SW_DAILY = DatasetSpec(
     },
     code_source_sql=(
         "SELECT index_code FROM market.sw_index_classify "
-        "WHERE level = 'L2' AND src = 'SW2021' ORDER BY index_code"
+        "WHERE level IN ('L1', 'L2') AND src = 'SW2021' AND is_pub = '1' "
+        "ORDER BY index_code"
     ),
     row_limit=4000,
     batch_sleep=0.2,
     rate_per_minute=300,
-    # SW L2 universe holds ~124-131 rows per day (2026); a partial publish
-    # (e.g. 2026-04-21) landed well below that.
+    # The shared table now contains the 31 published L1 indices and 124
+    # published L2 indices.  Keep this legacy coarse threshold advisory; the
+    # scheduler reports exact L1 coverage and retries an incomplete L1 publish.
     min_expected_rows=100,
 )
 
