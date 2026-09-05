@@ -176,7 +176,7 @@ def prepare_financial_event_information_set_request(
             ("n3_event_source_support", source_path / "source_support_daily.parquet"),
             ("n3_event_n2b_manifest", n2b_path / "manifest.json"),
             ("n3_event_n2b_request", n2b_path / "request.json"),
-            ("n3_event_n2b_receipt", n2b_path / "receipt.json"),
+            ("n3_event_n2b_receipt", n2b_path / "audit_receipt.json"),
             ("n3_event_n2b_outcomes", n2b_path / "arm_signal_outcomes.parquet"),
             ("n3_event_n2b_top5", n2b_path / "arm_top5_daily.parquet"),
             ("n3_event_n2b_signal_daily", n2b_path / "signal_metrics_daily.parquet"),

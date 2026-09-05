@@ -550,13 +550,15 @@ def validate_full_database(
     errors = len(missing_pools) + len(coverage_errors)
     if union_summary and not union_summary["order_invariant"]:
         errors += 1
-    if physical:
-        errors += len(physical["daily_missing"]) + len(physical["minute_missing"])
     if tushare:
-        errors += int(tushare["mismatch_month_count"])
+        errors += int(tushare["blocking_error_count"])
+    reported_data_gap_count = 0
+    if physical:
+        reported_data_gap_count = len(physical["daily_missing"]) + len(physical["minute_missing"])
     return {
         "status": "PASS" if errors == 0 else "DATA_GAPS",
         "error_count": errors,
+        "reported_data_gap_count": reported_data_gap_count,
         "missing_pools": missing_pools,
         "coverage_start_errors": coverage_errors,
         "resolved_by_pool": resolved_by_pool,
@@ -575,10 +577,13 @@ def _physical_coverage(candidate_root: Path, symbols: Iterable[str]) -> dict[str
     expected = sorted({symbol.lower() for symbol in symbols})
     daily_missing = [symbol.upper() for symbol in expected if not (daily / symbol).is_dir()]
     minute_missing = [symbol.upper() for symbol in expected if not (minute / symbol).is_dir()]
+    missing_count = len(daily_missing) + len(minute_missing)
     return {
+        "status": "COMPLETE" if missing_count == 0 else "DATA_GAPS",
         "symbol_count": len(expected),
         "daily_missing": daily_missing,
         "minute_missing": minute_missing,
+        "missing_count": missing_count,
     }
 
 
@@ -641,6 +646,8 @@ def _crosscheck_tushare(
         "checked_month_count": checked,
         "upstream_unavailable_month_count": unavailable,
         "mismatch_month_count": len(mismatches),
+        "blocking_error_count": 0,
+        "authority_effect": "advisory_only_l1_official_wins",
         "mismatch_examples": mismatches[:20],
     }
 

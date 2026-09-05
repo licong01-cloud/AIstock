@@ -1,0 +1,334 @@
+{
+  "actual": "DEV insert rolls back on kline_daily_raw_source_check for a valid Tushare daily row.",
+  "allowed_write_scope": [
+    "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+    "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+    "backend/migrations/kline_raw_tushare_source_20260905.sql",
+    "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+    "tests/aistock_validation/bugs/20260904_BUG-1368-raw-qlib-source-constraints-reject-approved-tushare-gap-fills.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1368",
+  "closed_at": "2026-09-04T23:47:02Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T22:29:03.682050Z",
+  "description": "DEV insert rolls back on kline_daily_raw_source_check for a valid Tushare daily row.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-14a7a43996f9",
+      "timestamp": "2026-09-04T22:29:03.682030Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_dataset_candidates\\core_index_membership_pit\\targeted-price-fill-20260905\\daily-fetch-summary-final.json"
+  ],
+  "expected": "The two raw price tables accept the existing TDX source values and the explicit tushare_api fallback value, with DEV-first migration and readback.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1368-raw-qlib-source-constraints-reject-approved-tushare-gap-fills.json"
+    ],
+    "added_files": [
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
+    ],
+    "changed_files": [
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1368-raw-qlib-source-constraints-reject-approved-tushare-gap-fills.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+        "backend/migrations/kline_raw_tushare_source_20260905.sql",
+        "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "platform.db",
+        "qe.core",
+        "hmm",
+        "selection_center",
+        "paper_v2",
+        "qe.archive",
+        "strategy_package",
+        "validation.center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core",
+            "hmm",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "core_index_pit_stock_pools"
+        },
+        {
+          "file": "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/migrations/kline_raw_tushare_source_20260905.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+        "backend/migrations/kline_raw_tushare_source_20260905.sql",
+        "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+      "backend/migrations/kline_raw_tushare_source_20260905.preflight.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.sql",
+      "backend/migrations/kline_raw_tushare_source_20260905.rollback.sql"
+    ]
+  },
+  "first_seen_at": "2026-09-04T22:29:03.682050Z",
+  "fix_branch": null,
+  "fix_commit": "bcfa13eaddc2cb29959324790d6d731200beae8e",
+  "fixed_at": "2026-09-04T23:47:02Z",
+  "github_issue_number": 4310,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4310",
+  "last_seen_at": "2026-09-04T22:29:03.682050Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4312",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "insert a valid source=tushare_api row into DEV market.kline_daily_raw inside a rollback transaction",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "database",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1368",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "applied",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "298d1278481857f9",
+    "recorded_at": "2026-09-05T00:43:09.276834Z",
+    "runtime_contract_digest": "71e28b94aca8c495bda1731c47824acd93ac7bf3c04389ea57049912c53fae98",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cc3f8714aaaa424c345bd809e3201633b40f7776",
+    "source_merge_commit": "bcfa13eaddc2cb29959324790d6d731200beae8e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4312",
+    "validation_evidence": [
+      "production source constraint readback -> passed: both parent constraints include tushare_api without historical scan",
+      "production daily gap insert/readback -> passed: 71685 exact rows, 131 symbols, zero overwrite/delete",
+      "production core-index full validation -> passed: 5 pools, 3517 union intervals, error_count=0"
+    ],
+    "validation_evidence_digest": "fee1e0bcfa1bd583857fcbb7d76fdd6fd54c3497e7be41b4da1ff5003458b70e"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "raw Qlib source constraints reject approved Tushare gap fills",
+  "trigger_condition": {
+    "fingerprint": "14a7a43996f963c659333ccb",
+    "source_event_id": "FE-20260904-14a7a43996f9"
+  },
+  "validation_evidence": [
+    "production source constraint readback -> passed: both parent constraints include tushare_api without historical scan",
+    "production daily gap insert/readback -> passed: 71685 exact rows, 131 symbols, zero overwrite/delete",
+    "production core-index full validation -> passed: 5 pools, 3517 union intervals, error_count=0"
+  ],
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}

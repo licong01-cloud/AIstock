@@ -94,6 +94,7 @@ def _write_runtime_catalog(root: Path) -> Path:
         "scripts/backfill_tushare_daily_basic_fields.py",
         "scripts/build_core_index_membership_authority.py",
         "scripts/ingest_tushare_daily_basic.py",
+        "scripts/prepare_core_index_membership_pit.py",
         "scripts/qlib_authoritative_bin_export.py",
         "scripts/seed_dataset_refresh_audit.py",
     ):
@@ -110,6 +111,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                     "scripts/backfill_tushare_daily_basic_fields.py",
                     "scripts/build_core_index_membership_authority.py",
                     "scripts/ingest_tushare_daily_basic.py",
+                    "scripts/prepare_core_index_membership_pit.py",
                     "scripts/qlib_authoritative_bin_export.py",
                     "scripts/seed_dataset_refresh_audit.py",
                 ],
@@ -3131,6 +3133,7 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUSINESS_SMOKE_ADVISORY_PROGRAMS_URL = "http://127.0.0.1:8001/api/v1/advisory/programs"
 _BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
 )
@@ -3938,6 +3941,64 @@ def test_post_restart_verify_blocks_unknown_business_smoke_endpoint(
     assert smoke["semantic"]["contract_id"] is None
     assert smoke["semantic"]["verdict"] == "failed"
     assert "no target-owned business-smoke semantic contract" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_accepts_advisory_program_collection(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_ADVISORY_PROGRAMS_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"ok": True, "programs": []}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "collection"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["facts"] == {"items_key": "programs", "size": 0}
+
+
+def test_post_restart_verify_rejects_failed_advisory_program_collection(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_ADVISORY_PROGRAMS_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"ok": False, "programs": []}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] == "collection"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert smoke["semantic"]["reason"] == "collection payload reports ok=false"
 
 
 def test_post_restart_verify_blocks_business_success_when_identity_mismatches(
@@ -5020,6 +5081,22 @@ def test_core_index_authority_builder_is_exact_non_runtime_offline_tool(
     _write_runtime_catalog(isolated_workflow_root)
     inference = workflow._classify_runtime_impact(
         ["scripts/build_core_index_membership_authority.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+
+
+def test_core_index_membership_operator_is_exact_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/prepare_core_index_membership_pit.py"],
         root=isolated_workflow_root,
     )
     assert inference == {

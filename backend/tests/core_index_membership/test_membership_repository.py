@@ -44,3 +44,41 @@ def test_membership_row_rejects_index_identity_drift() -> None:
         )
 
     assert captured.value.reason is subject.UniverseUnavailableReason.MEMBERSHIP_INTERVAL_INVALID
+
+
+def test_repository_uses_canonical_trading_calendar_not_sparse_price_rows() -> None:
+    observed: dict[str, object] = {}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            observed["sql"] = " ".join(sql.split())
+            observed["params"] = params
+
+        def fetchall(self):
+            return [(date(2018, 8, 1),), (date(2018, 8, 2),)]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    repository = subject.CoreIndexMembershipRepository(lambda: Connection())
+
+    result = repository.fetch_trading_dates(date(2018, 8, 1), date(2018, 8, 2))
+
+    assert result == (date(2018, 8, 1), date(2018, 8, 2))
+    assert "FROM market.trading_calendar" in str(observed["sql"])
+    assert "is_trading IS TRUE" in str(observed["sql"])
+    assert "kline_daily_raw" not in str(observed["sql"])
+    assert observed["params"] == (date(2018, 8, 1), date(2018, 8, 2))
