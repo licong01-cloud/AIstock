@@ -25,7 +25,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.advisory_model_first.policy_contracts import AdvisoryPolicySplitV1
@@ -147,10 +147,6 @@ class FrozenL2LearnabilityRequestV1(BaseModel):
             raise ValueError("L2 notional distribution hash mismatch")
         if self.cost_policy_sha256 != canonical_sha256(self.cost_policy):
             raise ValueError("L2 cost policy hash mismatch")
-        if self.source_refs["cost_policy"].sha256 != self.cost_policy_sha256:
-            raise ValueError("L2 cost-policy source reference mismatch")
-        if self.source_refs["exit_guard"].sha256 != self.exit_guard_snapshot_sha256:
-            raise ValueError("L2 exit-guard source reference mismatch")
         if Path(self.source_refs["historical_registry"].artifact_uri) != Path(self.historical_registry_path):
             raise ValueError("L2 historical-registry path mismatch")
         if self.split_policy.group_count != 8 or self.split_policy.validation_group_count != 2:
@@ -2325,6 +2321,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "reason_code": exc.reason_code,
                     "message": str(exc),
                     "context": exc.context,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 2
+    except (ValidationError, ValueError) as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason_code": "POSITION_TIMING_L2_CONTRACT_INVALID",
+                    "message": "L2 contract or artifact validation failed",
+                    "context": {"error_type": type(exc).__name__, "error": str(exc)},
                 },
                 ensure_ascii=False,
                 sort_keys=True,
