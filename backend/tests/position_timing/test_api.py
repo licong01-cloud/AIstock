@@ -70,7 +70,11 @@ def test_block_one_api_surface_and_side_effect_boundaries(service_factory) -> No
 
     evidence = client.get("/api/v1/position-timing/evidence")
     assert evidence.status_code == 200
-    assert evidence.json()["l2_runtime_status"] == "PIPELINE_DEFERRED_BY_APPROVED_SCOPE"
+    assert evidence.json()["l2_runtime_status"] == "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL"
+    assert evidence.json()["l2_formal_audit"]["effect_evidence"] == "INCONCLUSIVE"
+    assert evidence.json()["l2_formal_audit"]["selected_model_id"] is None
+    assert evidence.json()["l2_formal_audit"]["runtime_model_written"] is False
+    assert len(evidence.json()["l2_formal_audit"]["reference_sha256"]) == 64
     assert len(evidence.json()["l2_research_contract_sha256"]) == 64
     assert evidence.json()["event_counts"] == {"CARD_ISSUED": 2}
     assert evidence.json()["outcome_evidence"]["coverage_counts"]["pending_derived"] == 10

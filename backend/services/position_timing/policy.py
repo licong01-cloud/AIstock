@@ -194,9 +194,7 @@ def _split_quantities(
         legal = round_to_board_lot(quantity, symbol, side=side.value, allow_sell_residual=False)
         return (legal,) if legal == quantity and legal > 0 else None
     minimum_required = (
-        min_qty * (requested_count - 1) + 1
-        if side is TriggerSide.SELL and full_exit
-        else min_qty * requested_count
+        min_qty * (requested_count - 1) + 1 if side is TriggerSide.SELL and full_exit else min_qty * requested_count
     )
     if quantity < minimum_required:
         return None
@@ -214,9 +212,7 @@ def _split_quantities(
         part = max(min_qty, part)
         remaining_slots = slots - 1
         reserve = (
-            min_qty * (remaining_slots - 1) + 1
-            if side is TriggerSide.SELL and full_exit
-            else min_qty * remaining_slots
+            min_qty * (remaining_slots - 1) + 1 if side is TriggerSide.SELL and full_exit else min_qty * remaining_slots
         )
         if remaining - part < reserve:
             part = remaining - reserve
@@ -234,6 +230,24 @@ def _split_quantities(
     else:
         return None
     return tuple(parts) if sum(parts) == quantity else None
+
+
+def split_legal_parent_order_quantities(
+    *, quantity: int, symbol: str, side: TriggerSide, requested_count: int, full_exit: bool
+) -> tuple[int, ...] | None:
+    """Expose the single frozen legal-quantity splitter to offline research.
+
+    The L2 audit must stress the same parent-order quantity semantics shown on
+    L1 cards; it must not approximate legal orders by dividing notional only.
+    """
+
+    return _split_quantities(
+        quantity=quantity,
+        symbol=symbol,
+        side=side,
+        requested_count=requested_count,
+        full_exit=full_exit,
+    )
 
 
 def _cost_for_notionals(*, side: TriggerSide, notionals: Iterable[Decimal]) -> dict[str, Decimal]:
@@ -263,9 +277,7 @@ def _cost_for_notionals(*, side: TriggerSide, notionals: Iterable[Decimal]) -> d
     }
 
 
-def component_cost_for_parent_notionals(
-    *, side: TriggerSide, notionals: Iterable[Decimal]
-) -> dict[str, Decimal]:
+def component_cost_for_parent_notionals(*, side: TriggerSide, notionals: Iterable[Decimal]) -> dict[str, Decimal]:
     """Price one or more parent orders with the frozen componentized policy."""
 
     values = tuple(Decimal(value) for value in notionals)
@@ -383,4 +395,5 @@ __all__ = [
     "frozen_price_guard_policy",
     "legal_target_quantity",
     "planned_full_notional_threshold",
+    "split_legal_parent_order_quantities",
 ]

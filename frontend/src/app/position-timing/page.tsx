@@ -100,6 +100,16 @@ type Evidence = {
   product_evidence_tier: string;
   event_counts: Record<string, number>;
   l2_runtime_status: string;
+  l2_formal_audit: {
+    effect_evidence: string;
+    selected_model_id: string | null;
+    runtime_model_written: boolean;
+    hypotheses: Array<{
+      model_id: string;
+      effect_evidence: string;
+      power_status: string;
+    }>;
+  };
   hmm_runtime_role: string;
   selection_runtime_role: string;
   cost_disclosure: {
@@ -623,12 +633,20 @@ export default function PositionTimingPage() {
           <MetricCard label="卡片证据层" value={evidence?.product_evidence_tier || "-"} hint="不显示个股胜率" />
           <MetricCard label="已签发事件" value={evidence?.event_counts?.CARD_ISSUED || 0} hint="append-only CARD_ISSUED" />
           <MetricCard label="已评价 horizon" value={evidence?.outcome_evidence?.coverage_counts?.matured || 0} hint={`待到期 ${evidence?.outcome_evidence?.coverage_counts?.pending || 0} · 不可用 ${evidence?.outcome_evidence?.coverage_counts?.unavailable || 0}`} />
-          <MetricCard label="L2 状态" value={evidence?.l2_runtime_status || "-"} hint="不阻塞规则卡" />
+          <MetricCard
+            label="L2 审计结论"
+            value={evidence?.l2_formal_audit?.effect_evidence || "-"}
+            hint={`${evidence?.l2_formal_audit?.hypotheses?.map((item) => `${item.model_id.replace("SKLEARN_", "").replace("LIGHTGBM_", "")}: ${item.effect_evidence}/${item.power_status}`).join(" · ") || "无审计证据"} · 无运行模型`}
+          />
         </div>
         <p>
           prospective outcome：{evidence?.outcome_evidence?.status || "-"}；配对成熟样本 {evidence?.outcome_evidence?.paired_matured?.count || 0}，
           动作意图样本 {evidence?.outcome_evidence?.intervention_intent?.count || 0}；物化缺失 {evidence?.outcome_evidence?.coverage_counts?.materialization_missing || 0}。
           这些是冻结政策的反事实结果，不代表用户实际成交。
+        </p>
+        <p>
+          L2 仅为总体研究证据：{evidence?.l2_formal_audit?.effect_evidence || "-"}，入选模型 {evidence?.l2_formal_audit?.selected_model_id || "无"}；
+          当前状态 <span className="pv2-mono">{evidence?.l2_runtime_status || "-"}</span>，不得解释为个股胜率或运行时建议。
         </p>
         <p>
           最低佣金按父订单估算，券商聚合口径为 <span className="pv2-mono">{evidence?.cost_disclosure?.min_commission_scope_verification || "-"}</span>。
