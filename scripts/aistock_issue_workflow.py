@@ -1993,6 +1993,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
         "scripts/ci_failure_issue_summary.py",
+        "scripts/cross_tool_review_dispatch.py",
         "scripts/ci/prepare_self_hosted_workspace.py",
         "scripts/export_qe_qlib_candidate.py",
         "scripts/export_suspend_d_candidate.py",

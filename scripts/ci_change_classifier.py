@@ -792,10 +792,20 @@ def classify_changed_files(
     repo_root = repo_root or Path.cwd()
     normalized = [_normalize_path(item) for item in changed_files if _normalize_path(item)]
     normalized_added = [_normalize_path(item) for item in (added_files or []) if _normalize_path(item)]
+    repository_state_available = (repo_root / ".git").exists()
+    deleted_files = [
+        path
+        for path in normalized
+        if repository_state_available and not (repo_root / path).exists()
+    ]
+    deleted_file_set = set(deleted_files)
     reasons: list[str] = []
     blocking: list[str] = []
     bug_registry_files = [path for path in normalized if path.startswith(BUG_REGISTRY_PREFIX)]
     non_bug_registry_files = [path for path in normalized if not path.startswith(BUG_REGISTRY_PREFIX)]
+    routable_non_bug_registry_files = [
+        path for path in non_bug_registry_files if path not in deleted_file_set
+    ]
     prompt_evaluation_files = [path for path in normalized if _prompt_evaluation_required(path)]
     catalog_validation_required = any(_catalog_validation_required(path) for path in normalized)
     docs_lite_only = bool(normalized) and all(_is_docs_lite_path(path) for path in normalized)
@@ -807,6 +817,11 @@ def classify_changed_files(
         blocking.append("no changed files detected; refusing to invent an unrelated test matrix")
     if non_bug_registry_files:
         reasons.append("non-registry files changed; check fast-lane allowlist before skipping backend matrix")
+    if deleted_files:
+        reasons.append(
+            "deleted paths remain in static review but are excluded from executable/test routing: "
+            + ", ".join(deleted_files)
+        )
     if not bug_registry_files:
         reasons.append("no BUG registry metadata file changed")
 
@@ -838,14 +853,16 @@ def classify_changed_files(
         reasons.append("only close-sync BUG JSON metadata changed; backend matrix can be skipped")
 
     workflow_fast_files = [
-        path for path in non_bug_registry_files if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
+        path
+        for path in routable_non_bug_registry_files
+        if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
     workflow_test_targets = _workflow_test_targets(workflow_fast_files)
-    frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
-    go_files = [path for path in non_bug_registry_files if _is_go_path(path)]
+    frontend_files = [path for path in routable_non_bug_registry_files if _is_frontend_path(path)]
+    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path)]
     business_files = [
         path
-        for path in non_bug_registry_files
+        for path in routable_non_bug_registry_files
         if path not in workflow_fast_files
         and path not in go_files
         and not _is_docs_path(path)
@@ -879,7 +896,7 @@ def classify_changed_files(
         and bool(workflow_fast_files)
         and all(
             path in workflow_fast_files or _catalog_validation_required(path) or _is_docs_path(path)
-            for path in non_bug_registry_files
+            for path in routable_non_bug_registry_files
         )
         and not business_files
         and not frontend_files
@@ -948,14 +965,16 @@ def classify_changed_files(
         if backend_required or frontend_required or go_required or dev_db_required
         else "hosted_static"
     )
-    codeql_languages = _codeql_languages(normalized, exclude_test_sources=False)
-    codeql_pr_languages = _codeql_languages(normalized, exclude_test_sources=True)
+    active_files = [path for path in normalized if path not in deleted_file_set]
+    codeql_languages = _codeql_languages(active_files, exclude_test_sources=False)
+    codeql_pr_languages = _codeql_languages(active_files, exclude_test_sources=True)
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
         "changed_file_count": len(normalized),
         "bug_registry_files": bug_registry_files,
         "non_bug_registry_files": non_bug_registry_files,
+        "deleted_files": deleted_files,
         "metadata_statuses": metadata_statuses,
         "metadata_only": metadata_only,
         "docs_only": docs_only,
@@ -997,7 +1016,7 @@ def classify_changed_files(
         "changed_test_plan_coverage": changed_test_plan_coverage,
         "backend_changed_test_files": changed_test_plan_coverage["changed_test_files"],
         "unexecuted_test_files": unexecuted_test_files,
-        "obsolete_surface_removal": False,
+        "obsolete_surface_removal": bool(deleted_files),
         "nightly_deferred_verification": {
             "required": False,
             "reason": None,

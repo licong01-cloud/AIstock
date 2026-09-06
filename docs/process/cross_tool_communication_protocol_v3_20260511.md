@@ -1,5 +1,7 @@
 # Cross-Tool Communication Protocol v3 — Doc-Primary + Drawer-Notify Hybrid
 
+> **RETIRED (2026-09-06):** MemPalace cross-tool communication is decommissioned. Do not use this protocol. Current coordination uses Git, GitHub Issue/PR, BUG JSON, durable validation receipts, and native client session/agent features. This document remains only as historical evidence.
+
 > **作者**: Claude Code 战略 session 2026-05-11
 > **状态**: AUTHORITATIVE — 用户 2026-05-11 已确认
 > **取代**: v2 (2026-05-11) 之上的演进版
