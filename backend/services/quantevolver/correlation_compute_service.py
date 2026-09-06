@@ -809,7 +809,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             # ── 成功响应: 显式汇报成功/失败因子数 + 排除原因分类 ──
             # 排除来源两类 (互斥):
             # 1) missing_from_cache: Phase 1 缺独立指标缓存 (missing_factors)
-            # 2) degenerate_nan: Phase 2 engine 内部剔除 (NaN 覆盖率 > 20%)
+            # 2) degenerate_nan: Phase 2 engine 仅剔除当前相关性窗口 100% NaN 的因子
             #    通过 compute_factors (Phase 1 后) - result.factor_names (Phase 2 后) 反推
             _requested_count = len(factor_names)
             _no_valid_pair_factors = sorted(set(no_valid_pair_factors))

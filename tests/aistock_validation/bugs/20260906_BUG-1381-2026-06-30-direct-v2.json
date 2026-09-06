@@ -6,6 +6,7 @@
     "backend/services/quantevolver/factor_universe_mask_service.py",
     "backend/services/quantevolver/backtest_base_data_memory_cache.py",
     "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/correlation_engine.py",
     "backend/routers/factor_metrics.py",
     "backend/routers/factor_correlation.py",
     "backend/tests/quantevolver/test_official_factor_batch_compute.py",
@@ -27,6 +28,12 @@
   "created_at": "2026-09-06T05:59:12.082424Z",
   "description": "最新候选与canonical v2 PIT均覆盖到2026-08-31，但官方指标和相关性仍截止2026-06-30；只读metadata调用2026-08-31返回ST PIT universe is not ready，远端默认路径与缓存也仍指向旧数据。",
   "events": [
+    {
+      "action": "runtime_followup",
+      "actor": "Codex",
+      "note": "Production refresh reached 2026-08-31; follow-up prevents one current-window all-NaN factor from aborting the full correlation matrix.",
+      "timestamp": "2026-09-06T13:40:00Z"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
@@ -218,7 +225,8 @@
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "fresh_process_evidence": [
       "WSL Ubuntu rdagent-gpu Python 3.10 imported the task-worktree factor services and completed the canonical-v2 DEV smoke against the 2026-08-31 direct-v2 candidate",
-      "WSL Ubuntu rdagent-gpu Python 3.10 task-worktree import and DEV canonical-v2 metric/correlation smoke -> passed"
+      "WSL Ubuntu rdagent-gpu Python 3.10 task-worktree import and DEV canonical-v2 metric/correlation smoke -> passed",
+      "WSL Ubuntu rdagent-gpu Python 3.10 fresh process -> passed: classified current-window all-NaN factor and preserved remaining finite matrix"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
