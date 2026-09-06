@@ -277,6 +277,7 @@ class OfficialFactorBatchComputeService:
                 qlib_bin_path=qlib_bin_path,
                 start_date=start_date,
                 end_date=end_date,
+                universe_key=cfg.universe_key,
             )
         except Exception as exc:
             metrics_error = f"metrics_context_failed: {type(exc).__name__}: {exc}"

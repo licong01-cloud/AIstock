@@ -986,7 +986,13 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "_resource_snapshot",
         lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
     )
-    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    shared_context_calls: list[dict[str, object]] = []
+
+    def _prepare_shared_context(**kwargs):
+        shared_context_calls.append(kwargs)
+        return {"ctx": True}
+
+    monkeypatch.setattr(engine, "prepare_shared_context", _prepare_shared_context)
     monkeypatch.setattr(engine, "compute_single_factor_metrics", lambda *args, **kwargs: {"metrics": {}})
     service._compute_batch_frames = _compute_batch_frames
 
@@ -999,9 +1005,18 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "workers": 2,
         "timeout_per_factor": 1800,
         "expected_factor_count": 4,
+        "universe_key": "aistock_equity_pit_canonical_v2",
     })
 
     assert compute_calls == [["factor_a", "factor_b"]]
+    assert shared_context_calls == [
+        {
+            "qlib_bin_path": None,
+            "start_date": "2018-08-01",
+            "end_date": "2026-04-30",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
+    ]
     assert result["success"] is False
     assert result["fail_count"] == 4
     assert result["runtime_validation"]["checks"]["resource_gate_ok"] is False
