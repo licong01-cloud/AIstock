@@ -132,14 +132,7 @@ def test_pipeline_uses_raw_vwap_component_cost_and_exact_retry(
     assert result["challenger_price_raw"] == 10.0
     assert result["net_improvement_bps"] > 1_000
     assert result["challenger_cost_cny"] > result["benchmark_cost_cny"]
-    buy_item = request.population_items[0].model_copy(update={"action": "OPEN", "side": "BUY"})
-    buy_result = pipeline._evaluate_card(
-        buy_item,
-        request=request,
-        calendar=pipeline._load_calendar(provider / "calendars" / "1min.txt"),
-    )
-    assert buy_result.status == "PAIRED"
-    assert buy_result.net_improvement_bps is not None and buy_result.net_improvement_bps < -1_000
+    assert request.familywise_hypothesis_count == 1
     assert inspect_l4b1_bundle(bundle)["status"] == "BUNDLE_VALID"
 
     retry = run_l4b1_audit(request_path)
@@ -175,6 +168,8 @@ def test_no_action_card_produces_typed_insufficient_receipt(tmp_path: Path, monk
     result = run_l4b1_audit(request_path)
     assert result["status"] == "INSUFFICIENT_PROSPECTIVE_ACTION_CARDS"
     receipt = json.loads((Path(result["bundle_path"]) / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["familywise_hypothesis_count"] == 1
+    assert [item["side"] for item in receipt["direction_summaries"]] == ["SELL"]
     assert receipt["runtime_policy_written"] is False
     assert receipt["card_or_event_written"] is False
     assert receipt["order_written"] is False
@@ -228,7 +223,7 @@ def test_benchmark_and_challenger_preserve_the_same_card_quantity(
     assert row["challenger_raw_volume_shares"] == 500.0
 
 
-def test_buy_and_sell_are_separate_preregistered_hypotheses(tmp_path: Path, monkeypatch, service_factory) -> None:
+def test_sell_is_the_only_reachable_preregistered_hypothesis(tmp_path: Path, monkeypatch, service_factory) -> None:
     service = service_factory()
     service.materialize()
     request, _request_path, _registry = _request(
@@ -238,38 +233,59 @@ def test_buy_and_sell_are_separate_preregistered_hypotheses(tmp_path: Path, monk
         _minute_provider(tmp_path / "minute"),
     )
     base = request.population_items[0]
-    rows: list[MinuteExecutionCardResultV1] = []
-    for side, improvement in (("BUY", -2.0), ("SELL", 2.0)):
-        for ordinal in range(40):
-            rows.append(
-                MinuteExecutionCardResultV1(
-                    card_id=f"{side.lower()}-{ordinal}",
-                    canonical_symbol=base.canonical_symbol,
-                    target_trade_date=TARGET_DATE + timedelta(days=ordinal // 2),
-                    side=side,
-                    quantity=base.quantity,
-                    status="PAIRED",
-                    reason_code="PAIRED_EXECUTION_COUNTERFACTUAL_AVAILABLE",
-                    benchmark_price_raw=9.0,
-                    challenger_price_raw=10.0,
-                    benchmark_cost_cny=6.0,
-                    challenger_cost_cny=6.1,
-                    benchmark_gross_notional_cny=9_000.0,
-                    challenger_gross_notional_cny=10_000.0,
-                    challenger_raw_volume_shares=100_000.0,
-                    net_improvement_cny=improvement,
-                    net_improvement_bps=improvement,
-                )
-            )
-    buy = pipeline._summarize_direction("BUY", request=request, results=rows)
+    assert pipeline._directions_for_family(1) == ("SELL",)
+    assert pipeline._actions_for_family(1) == ("EXIT",)
+    assert pipeline._directions_for_family(2) == ("BUY", "SELL")
+    assert pipeline._matches_risk_exit_contract(service.materialize()["card_set"].cards[0]) is True
+    rows = [
+        MinuteExecutionCardResultV1(
+            card_id=f"sell-{ordinal}",
+            canonical_symbol=base.canonical_symbol,
+            target_trade_date=TARGET_DATE + timedelta(days=ordinal // 2),
+            side="SELL",
+            quantity=base.quantity,
+            status="PAIRED",
+            reason_code="PAIRED_EXECUTION_COUNTERFACTUAL_AVAILABLE",
+            benchmark_price_raw=9.0,
+            challenger_price_raw=10.0,
+            benchmark_cost_cny=6.0,
+            challenger_cost_cny=6.1,
+            benchmark_gross_notional_cny=9_000.0,
+            challenger_gross_notional_cny=10_000.0,
+            challenger_raw_volume_shares=100_000.0,
+            net_improvement_cny=2.0,
+            net_improvement_bps=2.0,
+        )
+        for ordinal in range(40)
+    ]
     sell = pipeline._summarize_direction("SELL", request=request, results=rows)
-    assert buy.effect_evidence == "NEGATIVE"
-    assert buy.adjusted_interval is not None and buy.adjusted_interval.upper_bps < 0
-    assert buy.nominal_interval is not None
-    assert buy.adjusted_interval.lower_bps <= buy.nominal_interval.lower_bps
-    assert buy.adjusted_interval.upper_bps >= buy.nominal_interval.upper_bps
     assert sell.effect_evidence == "SUPPORTED"
     assert sell.adjusted_interval is not None and sell.adjusted_interval.lower_bps > 0
+    assert sell.nominal_interval is not None
+    assert sell.adjusted_interval == sell.nominal_interval
+
+
+def test_active_family_rejects_an_at_open_exit_without_the_risk_exit_trigger(service_factory) -> None:
+    service = service_factory()
+    card = service.materialize()["card_set"].cards[0]
+    wrong_trigger = card.triggers[0].model_copy(
+        update={"branch": "OTHER_AT_OPEN_EXIT", "conditions": {"sell_reason": "other"}}
+    )
+    drifted_card = card.model_copy(update={"triggers": (wrong_trigger,)})
+    item = pipeline._population_item(
+        card=drifted_card,
+        event={"card_artifact_sha256": pipeline.canonical_sha256(drifted_card)},
+        card_set_ref_role=f"card_set:{drifted_card.card_set_id}",
+        coverage_start=drifted_card.target_trade_date,
+        coverage_end=drifted_card.target_trade_date,
+        instrument_spans={
+            drifted_card.canonical_symbol: ((drifted_card.target_trade_date, drifted_card.target_trade_date),)
+        },
+        included_directions=("SELL",),
+        included_actions=("EXIT",),
+        require_risk_exit_contract=True,
+    )
+    assert item.population_status == "ACTION_CONTRACT_OUT_OF_SCOPE"
 
 
 def test_population_excludes_price_trigger_cards_without_inventing_quantity(
