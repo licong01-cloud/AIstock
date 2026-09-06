@@ -215,7 +215,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "fresh_process_evidence": [
       "WSL Ubuntu rdagent-gpu Python 3.10 imported the task-worktree factor services and completed the canonical-v2 DEV smoke against the 2026-08-31 direct-v2 candidate",
