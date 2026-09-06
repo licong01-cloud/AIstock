@@ -4,7 +4,7 @@
 > Feature tier：F2  
 > 日期：2026-09-06  
 > 状态：详细设计审核通过，待用户确认进入源码实现；源码、真实配置切换和生产运行均未实施  
-> 当前设计基线：`origin/main@a7609c41bf3e5eca78765ab759ae54c107c56974`
+> 当前设计基线：`origin/main@983739db3c413ebf78acebdf04f68879673a133e`
 
 ## 1. Background / 背景与当前事实
 
@@ -681,5 +681,6 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | Review-3 | 数据交接与运行时边界 | “部署 sidecar”仍可能被误解为复制或修改整个 candidate；backend、frontend、MCP 和节点重启状态可能被合并 | 固定六个小文件和一个 coverage receipt 的版本化根；明确大组件零写入、三类激活分别报告、节点 API 默认无需重启 | resolved |
 | Review-4 | 日期与指标口径 | cutoff、最新信号日、分钟执行终点和 h20/h40 outcome 可观测终点若共用一个字段，会再次把未成熟标签当成最新结果 | 增加由 release 日历和 label horizon 推导的 `outcome_observable_end`；最新信号继续保留，评价只使用共同成熟窗口 | resolved |
 | Review-5 | F2 完整性与仓库门禁 | 复核必需章节、26 项设计矩阵、可执行证据、文档格式、ownership 和新增 guardrail | F2 validator PASS（26 items/26 rows/0 warnings）；`validation_module_registry_l0` 8 passed；`l0` 0 finding；`git diff --check` clean | pass |
+| Review-6 | 最新主线语义复核 | 同步 `origin/main@983739db3` 后 BUG-1381 已让因子 analytics 接受 direct-v2 universe key，但日期常量、实验 binding 和指数 sidecar 消费仍未统一 | 保留纯因子统计的后续 adapter 边界；确认本设计只收敛真实 QE 训练/预测/回测入口，与 BUG-1381 无文本或语义冲突 | pass |
 
 设计通过只表示可以进入源码实现；不得表述为源码完成、sidecar 已部署、活动 profile 已切换、后端已生效或实验已运行。
