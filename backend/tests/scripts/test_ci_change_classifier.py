@@ -104,6 +104,36 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_validation_required"] is True
 
 
+def test_deleted_code_and_test_paths_do_not_require_impossible_execution_mapping(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    workflow = tmp_path / "scripts" / "aistock_issue_workflow.py"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("# workflow fixture\n", encoding="utf-8")
+    bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260906_BUG-1379-retired.json"
+    _write_bug(bug, status="open")
+
+    payload = classifier.classify_changed_files(
+        [
+            bug.relative_to(tmp_path).as_posix(),
+            "scripts/aistock_issue_workflow.py",
+            "scripts/cross_tool_review_dispatch.py",
+            "backend/tests/test_cross_tool_review_dispatch.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["deleted_files"] == [
+        "scripts/cross_tool_review_dispatch.py",
+        "backend/tests/test_cross_tool_review_dispatch.py",
+    ]
+    assert payload["obsolete_surface_removal"] is True
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+    assert payload["codeql_pr_languages"] == ["python"]
+
+
 def test_self_hosted_workspace_prepare_stays_in_workflow_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
