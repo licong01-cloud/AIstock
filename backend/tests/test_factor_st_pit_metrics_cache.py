@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window
 from backend.services.quantevolver.factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -98,6 +99,39 @@ def test_factor_universe_uses_exact_qe_dataset_snapshot_without_live_refresh() -
         "rule_version": "st_pub_next_trade_restore_active_l_v1",
         "bootstrap_if_missing": True,
     }
+
+
+def test_factor_universe_reads_canonical_v2_state_without_rebuild() -> None:
+    captured: dict[str, object] = {}
+
+    class FakePitService:
+        def get_status_readonly(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "scope": "canonical_all_listed",
+                "start_date": "2018-08-01",
+                "end_date": "2026-08-31",
+                "status": "ready",
+                "dirty": False,
+                "source_fingerprint_sha256": "canonical-v2",
+                "last_build_summary": {"validation": {}},
+            }
+
+        def ensure_immutable_dataset_snapshot(self, **_kwargs):
+            raise AssertionError("canonical v2 must not enter the legacy immutable builder")
+
+    metadata = FactorUniverseMaskService(pit_service=FakePitService()).metadata(
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+    )
+
+    assert captured == {"universe_key": CANONICAL_PIT_UNIVERSE_KEY}
+    assert metadata["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
+    assert metadata["universe_rule_version"] == "shsz_a_252td_st_delist_asof_v2"
+    assert metadata["universe_end_date"] == "2026-08-31"
 
 
 def test_factor_universe_rejects_live_pit_namespace() -> None:

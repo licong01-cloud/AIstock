@@ -51,6 +51,56 @@ def _base_df():
     return pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]}, index=idx)
 
 
+def test_batch_compute_config_preserves_explicit_direct_v2_universe_key() -> None:
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+
+    config = service._coerce_config(
+        {
+            "factor_data_dir": "/data/direct-v2/factors",
+            "qlib_bin_path": "/data/direct-v2/day",
+            "start_date": "2018-08-01",
+            "end_date": "2026-08-31",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
+    )
+
+    assert config.universe_key == "aistock_equity_pit_canonical_v2"
+
+
+def test_batch_compute_checks_universe_before_loading_base_data(monkeypatch, tmp_path) -> None:
+    class _Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [{"factor_name": "factor_a", "code_text": "result = 1"}]
+
+    class _UnavailableUniverse:
+        def metadata(self, **_kwargs):
+            raise RuntimeError("canonical PIT window is unavailable")
+
+    service = OfficialFactorBatchComputeService()
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _UnavailableUniverse()
+
+    monkeypatch.setattr(official_batch_svc, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(official_batch_svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path)
+    monkeypatch.setattr(
+        official_batch_svc.BacktestBaseDataMemoryCache,
+        "load_once",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("base data must not load before the universe preflight")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="canonical PIT window is unavailable"):
+        service.compute(
+            {
+                "factor_data_dir": str(tmp_path),
+                "start_date": "2018-08-01",
+                "end_date": "2026-08-31",
+                "universe_key": "aistock_equity_pit_canonical_v2",
+            }
+        )
+
+
 def test_base_data_memory_cache_reads_allowed_files_once(tmp_path):
     data_dir = tmp_path / "factor_data"
     data_dir.mkdir()
@@ -72,6 +122,7 @@ def test_base_data_memory_cache_reads_allowed_files_once(tmp_path):
     assert counts == {"h5": 1, "parquet": 1}
     assert cache.read_counts["daily_pv.h5"] == 1
     assert cache.get("daily_pv.h5").shape == (4, 1)
+    assert "sha256_16" not in cache.manifest()["files"]["daily_pv.h5"]
 
 
 def test_offline_code_text_executor_redirects_pandas_reads_to_memory(tmp_path):
@@ -862,6 +913,7 @@ def test_drain_success_frames_keeps_factor_success_when_parent_metric_fails(monk
         end_date="2026-04-30",
         factor_ids={},
         batch_id="batch",
+        task_id="task",
     )
 
     assert success_delta == 1
@@ -934,7 +986,13 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "_resource_snapshot",
         lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
     )
-    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    shared_context_calls: list[dict[str, object]] = []
+
+    def _prepare_shared_context(**kwargs):
+        shared_context_calls.append(kwargs)
+        return {"ctx": True}
+
+    monkeypatch.setattr(engine, "prepare_shared_context", _prepare_shared_context)
     monkeypatch.setattr(engine, "compute_single_factor_metrics", lambda *args, **kwargs: {"metrics": {}})
     service._compute_batch_frames = _compute_batch_frames
 
@@ -947,9 +1005,18 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "workers": 2,
         "timeout_per_factor": 1800,
         "expected_factor_count": 4,
+        "universe_key": "aistock_equity_pit_canonical_v2",
     })
 
     assert compute_calls == [["factor_a", "factor_b"]]
+    assert shared_context_calls == [
+        {
+            "qlib_bin_path": None,
+            "start_date": "2018-08-01",
+            "end_date": "2026-04-30",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
+    ]
     assert result["success"] is False
     assert result["fail_count"] == 4
     assert result["runtime_validation"]["checks"]["resource_gate_ok"] is False
