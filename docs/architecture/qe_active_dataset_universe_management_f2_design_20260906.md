@@ -3,8 +3,8 @@
 > Feature ID：`qe_active_dataset_universe_management_v1`  
 > Feature tier：F2  
 > 日期：2026-09-06  
-> 状态：详细设计审核通过，待用户确认进入源码实现；源码、真实配置切换和生产运行均未实施  
-> 当前设计基线：`origin/main@983739db3c413ebf78acebdf04f68879673a133e`
+> 状态：详细设计已合入；源码实现完成并处于合入前验证，活动 profile、运行态和正式实验均未激活
+> 当前实现基线：设计 merge `f05ee69d2c29867703d345c4c9d26cf5700a03be`
 
 ## 1. Background / 背景与当前事实
 
@@ -34,8 +34,8 @@ QE 当前存在两个应当一次解决、不能继续分别打补丁的问题�
 而是：
 
 - sidecar 尚未注册到 QE 活动数据集 profile；
-- 2026-08-31 candidate 的 WSL 和 `rdagent-node1` 部署目录尚未包含这些 sidecar；
-- QE 尚不能把语义化股票池选择解析为 node-specific、hash-pinned run binding。
+- QE 尚不能把控制端已钉 hash 的语义化股票池选择解析为 node-specific、hash-pinned run binding，并随既有 workspace
+  payload 发送到执行节点；无需为此修改 candidate 或维护第二份节点 sidecar 根。
 
 ### 1.2 当前 QE 代码约束
 
@@ -96,10 +96,10 @@ QE 当前存在两个应当一次解决、不能继续分别打补丁的问题�
 - 新请求未填写日期时使用活动 profile 的最新默认窗口；填写合法日期时允许在该 release 覆盖范围内覆盖。
 - 未选择股票池时保持 `stock_universe`；显式支持单指数和多个指数 PIT 并集。
 - 同一策略可以展开为多个股票池实验臂，除 universe 外模型、因子、seed、日期、执行算法和费用保持一致。
-- WSL 与 `rdagent-node1` 使用同一 release identity、同一 sidecar content hash，但解析各自绝对 POSIX 路径。
+- WSL 与 `rdagent-node1` 使用同一 release identity、同一 run-local sidecar content hash，但解析各自 candidate 绝对 POSIX 路径。
 - 每个任务创建时把解析结果持久化；重试、恢复、重放和历史读取继续使用原 binding，不跟随活动 profile 漂移。
 - 训练和回测数据面保持零数据库访问；数据库继续只记录任务、状态、结果和控制面元数据。
-- 缺少 profile、节点部署、sidecar、hash、日期覆盖或选中窗口物理数据时返回稳定 reason code，不回落旧路径或默认池。
+- 缺少 profile、节点 candidate、控制端 sidecar、hash、日期覆盖或选中窗口物理数据时返回稳定 reason code，不回落旧路径或默认池。
 
 ### 2.2 Non-Goals / 非目标与边界
 
@@ -168,7 +168,7 @@ source/target 上执行同目录临时文件、flush/fsync 和原子 replace，�
 | `qe_dataset_contract.py` | v2 历史 binding 兼容、v3 新 binding 与 universe identity | 读取活动 profile、隐式选择节点 |
 | `ExperimentConfig` / template validator | 接受语义化日期和 universe 请求 | 接受客户端绝对路径、hash 或内部 binding |
 | `ConfigComposer` | 使用已解析 binding 生成 Qlib/RD-Agent 配置 | 读取数据库、根据文件存在性猜测旧路径 |
-| `stock_pool_sync.py` | 校验和安装已钉 hash 的小型 sidecar | 修改来源 candidate、查询成分数据库 |
+| workspace payload / run-local day overlay | 携带已钉 hash 的小型 sidecar并在任务目录建立只读 provider 视图 | 修改来源 candidate、查询成分数据库 |
 | REST/UI/MCP | 展示默认值、提交语义化覆盖 | 显示或要求用户输入 JSON、文件路径、hash、内部 ID |
 
 ## 4. Contracts / API、配置、UI 与 MCP 契约
@@ -179,7 +179,7 @@ source/target 上执行同目录临时文件、flush/fsync 和原子 replace，�
 |---|---|---|
 | identity | schema version、generation、release id、cutoff、profile digest | 一次月度默认配置身份 |
 | components | daily/minute/factor/index/suspend 的相对路径和 content pins | 同一 release 组件身份，不允许混版 |
-| node bindings | `wsl2-5080`、`rdagent-node1` 的 candidate root 和 stock-pool root | 只允许已登记节点；组件路径从 root 推导 |
+| node bindings | `wsl2-5080`、`rdagent-node1` 的 candidate root | 只允许已登记节点；组件路径从 root 推导 |
 | QE defaults | train/valid/test 起止、signal end、backtest end、默认 universe | 新任务未覆盖时使用 |
 | universes | pool id、中文名、mode、primitive sidecar 文件名/hash、membership revision | UI/MCP 可选目录 |
 | coverage | 组件覆盖截止、缺口 receipt ref/digest、可用窗口摘要 | 小文件判定，不在每次请求扫描大目录 |
@@ -270,8 +270,10 @@ profile resolver 生成。
 生成 workspace 时：
 
 - `stock_universe` 直接使用 candidate 自带文件；
-- `single_index` 校验节点 primitive sidecar hash 后安装到 workspace；
-- `index_union` 校验所有 primitive sidecar，文件级合并后计算 run-local hash；
+- `single_index` 在控制端校验 primitive sidecar hash 后，将精确文本随既有 workspace payload 写入任务目录；
+- `index_union` 在控制端校验所有 primitive sidecar，文件级合并并计算 run-local hash 后随同一 payload 写入；
+- 配置组装器在任务目录建立仅含选中 instruments 的 `qe_provider_day` 视图，calendars/features/meta 只链接已绑定 candidate，
+  不写 candidate，也不依赖节点侧第二份 sidecar 部署；
 - frozen risk policy 使用 binding 指定的 instruments，不再限制为两个固定文件名；
 - qrun fresh process 再验证 binding、组件路径、sidecar hash 和覆盖 digest；
 - 任一失败停止该任务，不回落默认池或旧数据目录。
@@ -290,13 +292,17 @@ profile resolver 生成。
 - `universe_selection`
 - 已有 `data_split` 或 OOS 日期继续沿用
 
+新增 `POST /api/v1/quantevolver/evolution/universe-comparison-tasks`，把一个公共 Loop 配置和至少两个 `pool_ids`
+展开为现有 custom-evo 的独立实验臂；它不新增执行器或调度器。
+
 响应及任务详情增加：
 
 - resolved release id / generation / cutoff
 - resolved dates
 - label-horizon 对应的 outcome-observable end 与有效样本数
 - resolved universe label / mode / pool ids
-- binding digest
+
+binding digest、绝对路径和 pins 只在内部持久化与 fresh-process 校验中使用，不返回给 UI/MCP。
 
 不新增 profile 写 API。活动 profile 切换是独立、精确授权的运维动作，避免把全局默认值暴露为普通 UI 写接口。
 
@@ -316,12 +322,13 @@ QE 创建页增加一个“数据与股票池”区块：
 
 ### 4.7 MCP / Codex / Claude Code
 
-MCP 增加只读工具 `qe_dataset_profile_get`，并为创建模板/实验提供显式参数：
+MCP 增加只读工具 `qe_dataset_profile_get`、结构化单实验模板工具
+`qe_single_experiment_template_create` 和独立对比工具 `qe_universe_comparison_task_create`，参数包括：
 
 - `universe_mode`
 - `pool_ids`
 - 可选日期字段
-- 可选 `comparison_mode=union|separate_runs`
+- union 由 `universe_mode=index_union` 表达；separate-runs 由独立对比工具名显式表达，不根据数组长度猜测
 
 MCP 仍然是 loopback API 薄封装，不导入 QE scheduler、不读取节点文件、不直接拼装 internal binding。用户和 agent 不需要
 提交原始 JSON、路径、hash 或实验内部 ID。服务端回传 resolved summary，便于 agent 在真正运行前展示将使用的 release、
@@ -410,39 +417,34 @@ MDD、换手、成本、容量、相对对应指数的主动收益/IR、每日 e
 
 ### 5.4 覆盖 receipt 合同
 
-数据准备窗口最终只需交付一个紧凑、文件型 coverage receipt：
+数据准备窗口的完整签收证据继续独立保存 candidate digest、primitive sidecar hash、checked interval、缺口明细引用、
+eligible count 与 source/candidate/production writes；它不直接进入每个 QE task。
 
-- release id、cutoff、candidate digest；
-- 五个 primitive sidecar hash；
-- 每个股票池/组件的 checked interval、missing count 和精确明细引用；
-- current-cutoff eligible count；
-- source writes、candidate writes、production pointer changes；
-- receipt digest。
-
-QE 活动 profile 只引用 receipt 和 digest，不复制 142 个证券的长清单，也不在每次创建任务时重新扫描 38GB 分钟线目录。
+QE 消费的是从该证据确定性导出的紧凑 coverage projection，schema 固定为
+`qe_index_pool_coverage_receipt_v1`，顶层只含 `schema_version/release_id/cutoff/pools`；每个 pool 只含
+`available_start/available_end/gaps`，每个 gap 只含 `symbol/start/end/components(day|1min)`。profile 钉住该投影的
+SHA-256，并在 components/universes 区域分别钉 candidate 与 sidecar identity。因此 QE 不复制完整签收报告，也不在每次创建
+任务时重新扫描 38GB 分钟线目录。
 
 数据补齐不阻断 QE 源码开发和 fixture 验证；它只阻断与缺口区间相交的正式指数池训练/回测。最新截面和不相交窗口可以在
-sidecar 部署完成后进行短烟测。
+活动 profile 激活后进行短烟测。
 
 活动 profile 可以在默认 `stock_universe` 可用时上线，并把存在历史缺口的指数池标记为“按窗口判断”；不要求为启用全局
 日期默认值先补齐全部 142 个历史证券。只有请求窗口与精确缺口相交时，相关指数池实验被拒绝并返回清单引用。
 
-### 5.5 sidecar 双节点部署范围
+### 5.5 sidecar 控制端输入与双节点传输范围
 
-数据准备窗口不需要复制 2026-08-31 candidate，也不需要重新生成任何大组件，只需部署以下精确文件：
+实现审核将“每个节点再维护一份 stock-pool root”识别为不必要的第二部署面。权威输入仍是数据准备窗口已经生成的五个
+`index_pool__*.txt` primitive sidecar 与一个 compact coverage receipt；backend 在任务创建时校验普通文件属性和
+SHA-256，任意 union 在内存中确定性生成，并通过现有 QE workspace payload 只发送本次任务所需的一个 sidecar 和 receipt。
 
-- 五个 `index_pool__*.txt` primitive sidecar；
-- 一个已生成的五池 union sidecar仅用于集合烟测，任意组合仍由 QE 使用 primitive 文件在 run workspace 生成；
-- 一个新的 compact coverage receipt 及其明细引用。
+因此：
 
-建议版本化只读目标：
-
-- WSL：`/mnt/x/AIstock_dataset_candidates/core_index_membership_pit/sidecars-final-20260905`，当前文件已存在，只需回读；
-- remote：`/home/lc999/data/dataset_candidates/core_index_membership_pit/sidecars-final-20260905`，当前未部署，需要精确同步；
-- backend profile 记录上述两个 `stock_pool_root`，不要求它们位于 candidate root 内。
-
-同步只核对六个文件名、普通文件属性和 SHA-256；禁止递归复制整个 X 盘 candidate、覆盖 daily/minute/factor 组件或创建
-指向其他目录的 symlink。coverage receipt 由 backend 在任务创建时放入 workspace payload，qrun 不访问 Windows 本地路径。
+- WSL 与 remote 只需各自已有的同 release candidate root；
+- profile 的 node binding 只登记 candidate root，不登记或猜测 stock-pool root；
+- sidecar 不写入 candidate，不需要额外远端同步，也不要求重启节点 API；
+- qrun 只读取 run workspace 与节点 candidate，不访问 Windows 路径或数据库；
+- 禁止递归复制整个 X 盘 candidate、覆盖 daily/minute/factor 组件或建立跨 release fallback。
 
 ## 6. Implementation Plan / 实施方案
 
@@ -455,7 +457,7 @@ sidecar 部署完成后进行短烟测。
 3. 在 `qe_dataset_contract.py` 增加 v3 binding，保留 v2 历史读取。
 4. 扩展 `ExperimentConfig` 为语义化 `universe_selection`，定义与 legacy `stock_pool` 的冲突规则。
 5. 修改 `ConfigComposer`：默认日期来自 resolved profile，single/union 使用 binding 指定 instruments。
-6. 扩展 direct-v2 validator、risk-policy builder 和 stock-pool sync 的精确 sidecar 合同。
+6. 扩展 direct-v2 validator、risk-policy builder 和 workspace payload 的精确 sidecar 合同。
 
 ### Phase 2：所有 QE 创建入口收敛
 
@@ -468,17 +470,20 @@ sidecar 部署完成后进行短烟测。
 ### Phase 3：REST、UI 与 MCP
 
 1. 增加只读 profile summary API。
-2. 创建页增加日期与人类可读股票池控件，并支持 union/separate-runs 的显式区别。
+2. 创建页增加日期与人类可读股票池控件，并支持 union/separate-runs 的显式区别；separate-runs 复用 custom-evo，
+   服务端生成 comparison group identity 和各 arm label，不新增调度器或 DDL。
 3. MCP 增加 profile read 和结构化创建参数，继续薄转发 loopback API。
 4. 任务详情和结果页展示 resolved release/date/universe，不展示内部路径和完整 binding。
+5. 公开创建入口拒绝客户端注入 server-owned binding、路径、hash、sidecar content 或 coverage receipt；
+   已持久化任务的编辑/重跑在服务端复用原 binding，不重新读取活动 profile。
 
 ### Phase 4：上线前验证与激活
 
 1. fixture profile 覆盖 WSL/remote 路径、v2/v3、日期覆盖、single/union、缺口和 tamper 负向测试。
 2. 源码合入后，由用户重启 backend-main，再做只读 identity/business smoke。
-3. 数据准备窗口把五个 primitive sidecar 与 coverage receipt 部署到 WSL/remote 的版本化只读目录。
-4. 经用户对精确 profile 文件授权后，原子写入活动 profile；不修改 candidate 大组件。
-5. 分别在 WSL 和远端运行一个短 single-index smoke；随后才启动同策略多池对比。
+3. 经用户对精确 profile 文件授权后，原子写入活动 profile；不修改 candidate 大组件。
+4. 分别在 WSL 和远端运行一个短 single-index smoke；workspace payload 携带本次所需 sidecar。
+5. 短 smoke 通过后才启动同策略多池对比。
 
 源码预计 runtime impact 为 `backend + frontend + client/MCP`：backend-main 重启、frontend activation 与 MCP 客户端/进程
 重新加载必须分别报告；它们互不推导授权。计算节点只消费新 workspace payload，若不修改节点 API/release，本功能不要求
@@ -492,14 +497,14 @@ sidecar 部署完成后进行短烟测。
   - schema、digest、日期、两个节点根路径和组件派生；
   - profile 未启用时兼容模式；启用后缺失/非法不回落；
   - 原子替换后只影响新任务，已解析 binding 不漂移。
-- `backend/tests/scripts/test_qe_active_dataset_profile.py`
+- `backend/tests/quantevolver/test_qe_active_dataset_profile.py`
   - validate 零写入；activate 只替换精确 target；digest/schema 不符不改变旧文件；
   - 路径必须为普通文件且位于仓库外，拒绝 symlink/junction 和目标漂移。
-- `backend/tests/quantevolver/test_qe_dataset_contract.py`
+- `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py`
   - v2 历史 binding 保持可读；
   - v3 stock-universe/single/union identity；
   - benchmark 独立、node/release/component 混版拒绝。
-- `backend/tests/quantevolver/test_qe_universe_selection.py`
+- `backend/tests/quantevolver/test_qe_active_dataset_profile.py`
   - pool id 规范化、union order-invariant、重叠区间合并；
   - primitive/union hash tamper、缺 sidecar和覆盖缺口拒绝；
   - 无数据库驱动导入或 SQL fallback。
@@ -511,22 +516,21 @@ sidecar 部署完成后进行短烟测。
   - 显式日期覆盖和越界拒绝；
   - WSL/remote 生成配置只使用对应 node root；
   - 配置中无 `/home/lc999/data/qlib_bin`、旧 minute/factor path 或 `/mnt/x` 泄漏到远端。
-- `backend/tests/quantevolver/test_stock_pool_sync.py`
-  - 精确文件名、普通文件、hash、目录边界和 run-local union；
+- `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py`
+  - 精确文件名、普通文件、hash、run-local day provider 与 fresh-process v3 校验；
   - 不修改来源 candidate。
-- `backend/tests/quantevolver/test_qe_template_dataset_defaults.py`
+- `backend/tests/qe_templates/test_template_validator.py`
   - UI/MCP template 省略日期时使用活动 profile；
   - retry/rerun 使用原 binding；
   - legacy stock_pool 与新 selection 冲突可见。
-- `backend/tests/multi_alpha/test_active_dataset_universe_defaults.py`
+- `backend/tests/unified_engine/test_multi_alpha_command_generation.py`
   - OOS default、prediction coverage intersection 和 separate-runs 参数不变性。
 
 ### 7.3 API、UI 与 MCP 测试
 
-- `backend/tests/test_qe_dataset_profile_api.py`：摘要无绝对路径/内部 hash，错误结构稳定。
-- `backend/tests/test_qe_mcp_backend.py`：MCP profile read、结构化日期/pool 参数和 loopback 薄封装。
-- `frontend/src/app/quantevolver/__tests__/dataset-universe-controls.test.tsx`：默认值、日期覆盖、单选、多选并集、分别对比、
-  禁止 JSON/ID 输入和错误展示。
+- `backend/tests/quantevolver/test_qe_active_dataset_profile.py`：摘要无绝对路径/内部 hash，错误结构稳定。
+- `backend/tests/test_aistock_qe_mcp_servers.py`：MCP profile read、结构化日期/pool 参数和 loopback 薄封装。
+- 前端 typecheck/CI 与创建页契约检查：默认值、日期覆盖、单选、多选并集、分别对比、禁止 JSON/ID 输入和错误展示。
 - 浏览器验收只覆盖用户可见创建流，不启动正式训练；长任务与真实全量回归交由后续实验任务。
 
 ### 7.4 静态与流程验证
@@ -554,16 +558,15 @@ sidecar 部署完成后进行短烟测。
 1. 合入本详细设计；
 2. 实现并验证 QE feature source PR；
 3. 用户合入并重启 backend-main，验证源码身份；
-4. 数据准备窗口部署 primitive sidecar 和 coverage receipt，保持 candidate 大组件只读；
-5. 用户授权精确活动 profile 文件，执行一次原子切换；
-6. WSL/remote 短 smoke；
-7. 开始同策略多股票池实验。
+4. 用户授权精确活动 profile 文件，执行一次原子切换；
+5. WSL/remote 短 smoke，验证 workspace payload 的 sidecar 与绑定 hash；
+6. 开始同策略多股票池实验。
 
 ### 8.2 回滚
 
 - profile 切换失败：原子操作前不改变当前文件；失败返回错误，不生成半文件。
 - 新 profile 业务异常：将活动文件原子切回上一份已验证 profile；已运行任务继续使用原 binding。
-- 源码异常：revert feature merge commit，用户重启 backend-main；数据和 sidecar 保持只读不删除。
+- 源码异常：revert feature merge commit，用户重启 backend-main；数据和控制端 sidecar 保持只读不删除。
 - 不通过修改历史实验、覆盖 candidate、恢复旧 `/home/lc999/data/...` 或改写数据库实现回滚。
 
 ## 9. Production Gates / 生产边界
@@ -573,7 +576,7 @@ sidecar 部署完成后进行短烟测。
 | DEV DB DDL/DML | `noop` | `noop`，本功能不需要数据库 schema |
 | Production DB DDL/DML | `noop` | `noop` |
 | 大数据组件写入 | `noop` | `forbidden` |
-| sidecar/coverage 部署 | `noop` | 数据准备窗口按精确文件执行 |
+| sidecar/coverage 节点部署 | `noop` | `noop`；由既有 workspace payload 传输本次所需小文件 |
 | source merge | 未执行 | 用户单独确认 |
 | backend restart | `backend_restart_owner=false` | 源码合入后由用户执行 |
 | frontend activation | `noop` | 用户单独执行或确认既有发布流程 |
@@ -589,7 +592,7 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 
 | 风险 | 处理 | 禁止做法 |
 |---|---|---|
-| profile 与节点实际部署不一致 | node-specific binding + fresh-process hash 校验 | 回落旧路径 |
+| profile 与节点 candidate 不一致 | node-specific binding + fresh-process hash 校验 | 回落旧路径 |
 | 月更中任务语义变化 | 创建时 resolve once 并持久化 binding | worker 每轮读取 active profile |
 | 硬编码日期仍残留 | QE 创建入口 inventory 测试 | 逐页面继续改常量 |
 | 多选语义混淆 | union 与 separate-runs 独立字段/控件 | 根据数组长度猜语义 |
@@ -615,7 +618,7 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | F-009 | benchmark 与 universe 独立，指数代码不进入选股 instruments |
 | F-010 | v2 binding 继续复现历史任务，v3 binding 完整记录 universe、coverage 和组件身份 |
 | F-011 | WSL/remote 使用同 release/hash 和各自 node root，禁止跨节点路径泄漏 |
-| F-012 | direct validator、risk-policy builder 和 stock-pool sync 共同支持安全 sidecar |
+| F-012 | direct validator、risk-policy builder 和 workspace payload 共同支持安全 run-local sidecar |
 | F-013 | 单次、custom、strategy、template 和 multi-alpha 创建入口使用同一默认解析器 |
 | F-014 | UI 只提供人类可读日期及股票池控件，不出现 JSON、路径、hash 或内部 ID 输入 |
 | F-015 | MCP 保持 loopback 薄封装并提供结构化日期、pool 和 comparison 参数 |
@@ -626,7 +629,7 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | F-020 | 活动 profile 引用紧凑 coverage receipt，不在每次任务创建时扫描大数据目录 |
 | F-021 | QE 训练/回测数据面只读文件，不访问业务数据表 |
 | F-022 | 不新增配置数据库、daemon、watcher、heartbeat、事件表或人工审批门禁 |
-| F-023 | 源码、sidecar 部署、profile 切换、重启和实验启动保持独立状态与授权 |
+| F-023 | 源码、profile 切换、重启和实验启动保持独立状态与授权；节点 sidecar 部署为 noop |
 | F-024 | 回滚只切回已验证 profile 或 revert 源码，不覆盖 candidate 或改写历史任务 |
 | F-025 | 实施逐项满足 DESIGN-COMPLIANCE-001，并以最终 HEAD 的测试和证据验收 |
 | F-026 | signal、execution/backtest 与 label outcome 可观测截止分离并在结果中真实报告 |
@@ -636,31 +639,31 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | `qe_active_dataset_profile.py`；§§3.1,4.1 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-002 | profile reader + `scripts/qe_active_dataset_profile.py`；§§3.1,3.2 | `backend/tests/scripts/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-003 | resolver + persisted binding；§3.2 | `backend/tests/quantevolver/test_qe_template_dataset_defaults.py` | design_review_pass | none |
+| F-002 | profile reader + `scripts/qe_active_dataset_profile.py`；§§3.1,3.2 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | implementation_review_pass | none |
+| F-003 | resolver + persisted binding；§3.2 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py`; `backend/tests/unified_engine/test_backtest_executor.py` | implementation_review_pass | none |
 | F-004 | compatibility mode；§3.3 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
 | F-005 | date resolver；§§4.1,4.2 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-006 | REST request validation；§4.2 | `backend/tests/test_qe_dataset_profile_api.py` | design_review_pass | none |
-| F-007 | `UniverseSelection`；§4.3 | `backend/tests/quantevolver/test_qe_universe_selection.py` | design_review_pass | none |
-| F-008 | file-only union builder；§§4.3,4.4 | `backend/tests/quantevolver/test_qe_universe_selection.py` | design_review_pass | none |
-| F-009 | selection/benchmark pins；§4.4 | `backend/tests/quantevolver/test_qe_dataset_contract.py` | design_review_pass | none |
-| F-010 | `qe_dataset_contract.py` v2/v3；§4.4 | `backend/tests/quantevolver/test_qe_dataset_contract.py` | design_review_pass | none |
-| F-011 | node-specific resolver；§§3.4,4.1 | `backend/tests/unified_engine/test_qe_config_truth.py` | design_review_pass | none |
-| F-012 | validator/risk-policy/stock-pool sync；§4.4 | `backend/tests/quantevolver/test_stock_pool_sync.py` | design_review_pass | none |
-| F-013 | ExperimentConfig/template/evolution/combine adapters；§6 | `backend/tests/quantevolver/test_qe_template_dataset_defaults.py`; `backend/tests/multi_alpha/test_active_dataset_universe_defaults.py` | design_review_pass | none |
-| F-014 | QE create UI controls；§4.6 | `frontend/tests/quantevolver/dataset_universe_controls.test.tsx` | design_review_pass | none |
-| F-015 | MCP wrapper；§4.7 | `backend/tests/test_qe_mcp_backend.py` | design_review_pass | none |
-| F-016 | comparison expander；§4.8 | `backend/tests/multi_alpha/test_active_dataset_universe_defaults.py` | design_review_pass | none |
-| F-017 | explicit comparison mode；§§4.6,4.8 | `frontend/tests/quantevolver/dataset_universe_controls.test.tsx` | design_review_pass | none |
-| F-018 | coverage resolver；§§5.1,5.4 | `backend/tests/quantevolver/test_qe_universe_selection.py` | design_review_pass | none |
+| F-006 | REST request validation；§4.2 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | implementation_review_pass | none |
+| F-007 | `UniverseSelection`；§4.3 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | implementation_review_pass | none |
+| F-008 | file-only union builder；§§4.3,4.4 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | implementation_review_pass | none |
+| F-009 | selection/benchmark pins；§4.4 | `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` | implementation_review_pass | none |
+| F-010 | `qe_dataset_contract.py` v2/v3；§4.4 | `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` | implementation_review_pass | none |
+| F-011 | node-specific resolver；§§3.4,4.1 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py`; `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` | implementation_review_pass | none |
+| F-012 | validator/risk-policy/workspace payload；§§4.4,5.5 | `backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` | implementation_review_pass | none |
+| F-013 | ExperimentConfig/template/evolution/combine adapters；§6 | `backend/tests/qe_templates/test_template_validator.py`; `backend/tests/unified_engine/test_multi_alpha_command_generation.py` | implementation_review_pass | none |
+| F-014 | QE create UI controls；§4.6 | `backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py`; frontend typecheck/CI | implementation_review_pass | none |
+| F-015 | MCP wrapper；§4.7 | `backend/tests/test_aistock_qe_mcp_servers.py` | implementation_review_pass | none |
+| F-016 | custom-evo comparison expander；§4.8 | `backend/tests/quantevolver/test_qe_universe_comparison.py` | implementation_review_pass | none |
+| F-017 | explicit comparison mode；§§4.6,4.8 | `backend/tests/quantevolver/test_qe_universe_comparison.py`; frontend typecheck/CI | design_review_pass | none |
+| F-018 | coverage resolver；§§5.1,5.4 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | implementation_review_pass | none |
 | F-019 | exact data handoff；§5.2 | `artifact: X:/AIstock_dataset_candidates/core_index_membership_pit/production-final-full-validate-20260905.json` | design_review_pass | none |
 | F-020 | compact coverage reference；§5.4 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-021 | qrun DB poison/static isolation；§§2.1,4.4 | `backend/tests/quantevolver/test_qe_universe_selection.py` | design_review_pass | none |
+| F-021 | qrun DB poison/static isolation；§§2.1,4.4 | existing `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py`; static review of new stdlib-only resolver | design_review_pass | none |
 | F-022 | §§2.2,3.2,9 | `python -m nox -s l0` | design_review_pass | none |
 | F-023 | §§8,9 | `python -m nox -s validation_module_registry_l0` | design_review_pass | none |
 | F-024 | §8.2 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
 | F-025 | §§7,13 | `python -m nox -s validation_module_registry_l0`; `python -m nox -s l0` | design_review_pass | none |
-| F-026 | §§4.1,4.2,4.5,4.8 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py`; `backend/tests/multi_alpha/test_active_dataset_universe_defaults.py` | design_review_pass | none |
+| F-026 | §§4.1,4.2,4.5,4.8 | `backend/tests/quantevolver/test_qe_active_dataset_profile.py`; `backend/tests/unified_engine/test_multi_alpha_command_generation.py` | implementation_review_pass | none |
 
 ## 13. DESIGN-COMPLIANCE-001 逐项审核
 
@@ -682,5 +685,12 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | Review-4 | 日期与指标口径 | cutoff、最新信号日、分钟执行终点和 h20/h40 outcome 可观测终点若共用一个字段，会再次把未成熟标签当成最新结果 | 增加由 release 日历和 label horizon 推导的 `outcome_observable_end`；最新信号继续保留，评价只使用共同成熟窗口 | resolved |
 | Review-5 | F2 完整性与仓库门禁 | 复核必需章节、26 项设计矩阵、可执行证据、文档格式、ownership 和新增 guardrail | F2 validator PASS（26 items/26 rows/0 warnings）；`validation_module_registry_l0` 8 passed；`l0` 0 finding；`git diff --check` clean | pass |
 | Review-6 | 最新主线语义复核 | 同步 `origin/main@983739db3` 后 BUG-1381 已让因子 analytics 接受 direct-v2 universe key，但日期常量、实验 binding 和指数 sidecar 消费仍未统一 | 保留纯因子统计的后续 adapter 边界；确认本设计只收敛真实 QE 训练/预测/回测入口，与 BUG-1381 无文本或语义冲突 | pass |
+| Review-7 | 实现期最小化与双节点一致性 | 原设计要求每个节点维护 `stock_pool_root`，形成与 active profile 平行的第二部署面；初版实现尚未落地 separate-runs | 改为控制端校验 primitive、既有 workspace payload 携带单个 run sidecar、节点只登记 candidate root；增加复用 custom-evo 的比较展开器、group identity 和 UI/MCP 结构化入口 | resolved |
+| Review-8 | mixed-release 内部旁路 | 内部直接调用 composer 时可能只继承活动日期却继续使用 legacy 数据根 | 活动 profile 启用后，无 run-scoped binding 的 composer/regenerate 调用 typed fail closed；legacy 日期只留在未激活兼容路径 | resolved |
+| Review-9 | 公开输入边界与错误语义 | REST `custom_params` 可携带内部 binding；profile 输入错误可能退化成无结构 500 | 活动 profile 下拒绝 server-owned 字段；按请求错误与服务配置错误分别返回稳定 reason code | resolved |
+| Review-10 | 已创建任务不漂移 | custom-evo 编辑/重跑可能在月更后重新读取当前 profile，且 editable response 可能泄露 binding | 编辑/重跑复用原 binding 且不读 profile；追加要求 generation/release/cutoff 一致；公开配置只显示语义 selection 与安全摘要 | resolved |
+| Review-11 | 身份追溯账实一致 | 初版只持久化 generation/release/cutoff，缺设计要求的 profile digest 与 resolved timestamp | 将 digest 与 UTC resolved time 写入 server-owned summary，REST/UI/MCP 继续过滤 hash/path | resolved |
+| Review-12 | coverage 合同最小化 | §5.4 把数据准备完整签收证据与 QE 高频消费投影写成同一个文件，和严格 parser 不一致 | 分为独立完整证据与 hash-pinned 最小 projection；精确定义四个顶层字段和 pool/gap 字段 | resolved |
 
-设计通过只表示可以进入源码实现；不得表述为源码完成、sidecar 已部署、活动 profile 已切换、后端已生效或实验已运行。
+当前文档随实现 PR 继续接受最终 HEAD 验证；在 PR 全部门禁完成前不得表述为源码可合入，在用户后续授权前不得表述为
+活动 profile 已切换、后端/前端/MCP 已生效或实验已运行。

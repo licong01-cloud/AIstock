@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Play, RotateCcw, Trash2, X } from "lucide-react";
 import {
   MultiAlphaCreateRequest,
@@ -194,6 +194,39 @@ export default function MultiAlphaCreateComposer({ apiBase, onClose, onSubmitted
   const [results, setResults] = useState<MultiAlphaCreateResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [datasetLabel, setDatasetLabel] = useState("兼容默认");
+  const [datasetProfileError, setDatasetProfileError] = useState<string | null>(null);
+  const [datasetProfileReady, setDatasetProfileReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`${apiBase}/quantevolver/dataset-profile`)
+      .then(async response => {
+        const payload = await response.json();
+        if (!response.ok || !payload?.ok || !payload?.data?.defaults) {
+          throw new Error(payload?.detail?.reason_code || payload?.detail?.message || "QE数据集配置不可用");
+        }
+        return payload;
+      })
+      .then(payload => {
+        if (cancelled) return;
+        setDatasetProfileError(null);
+        setDatasetProfileReady(true);
+        setDatasetLabel(`${payload.data.release_id || "兼容默认"}（截止 ${payload.data.cutoff}）`);
+        setDraft(current => ({
+          ...current,
+          oos_start: payload.data.defaults.test_start || current.oos_start,
+          oos_end: payload.data.defaults.backtest_end || current.oos_end,
+        }));
+      })
+      .catch(caught => {
+        if (!cancelled) {
+          setDatasetProfileReady(false);
+          setDatasetProfileError(caught instanceof Error ? caught.message : "QE数据集配置不可用");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [apiBase]);
 
   const preview = useMemo(() => {
     try {
@@ -217,6 +250,14 @@ export default function MultiAlphaCreateComposer({ apiBase, onClose, onSubmitted
 
   const submitRows = async (rows: Array<{ scenario: MultiAlphaScenarioDraft; payload: MultiAlphaCreateRequest }>) => {
     if (!rows.length) return;
+    if (!datasetProfileReady) {
+      setError("QE数据集配置尚未完成读取");
+      return;
+    }
+    if (datasetProfileError) {
+      setError(`QE数据集配置不可用：${datasetProfileError}`);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     const next: MultiAlphaCreateResult[] = [];
@@ -248,6 +289,7 @@ export default function MultiAlphaCreateComposer({ apiBase, onClose, onSubmitted
         <div style={{ padding: 18, display: "grid", gap: 16 }}>
           <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14 }}>
             <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>任务、窗口与融合</h3>
+            <div style={{ marginBottom: 10, color: "#1d4ed8", fontSize: 12, fontWeight: 700 }}>活动数据集：{datasetProfileReady ? datasetLabel : "正在读取…"}</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10 }}>
               <label style={labelStyle}>已有 task_id（可空）<input style={inputStyle} value={draft.task_id} onChange={(e) => setDraft({ ...draft, task_id: e.target.value })} /></label>
               <label style={labelStyle}>OOS 开始<input type="date" style={inputStyle} value={draft.oos_start} onChange={(e) => setDraft({ ...draft, oos_start: e.target.value })} /></label>
@@ -297,7 +339,7 @@ export default function MultiAlphaCreateComposer({ apiBase, onClose, onSubmitted
             <label style={labelStyle}>backtest_config 高级 JSON（结构化场景字段最终覆盖）<textarea style={{ ...inputStyle, minHeight: 80, fontFamily: "monospace" }} value={draft.backtest_advanced_json} onChange={(e) => setDraft({ ...draft, backtest_advanced_json: e.target.value })} />{advancedConflictKeys.length > 0 && <span style={{ color: "#92400e", fontWeight: 600 }}>以下高级键将被上方可见场景字段覆盖：{advancedConflictKeys.join(", ")}</span>}</label>
           </section>
 
-          {(error || preview.error) && <div style={{ padding: 10, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 12 }}>{error || preview.error}</div>}
+          {(datasetProfileError || error || preview.error) && <div style={{ padding: 10, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 12 }}>{datasetProfileError ? `QE数据集配置不可用：${datasetProfileError}` : error || preview.error}</div>}
 
           <details style={{ background: "#0f172a", color: "#dbeafe", borderRadius: 8, padding: 10 }}><summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700 }}>完整 payload preview（{preview.rows.length} 个场景）</summary><pre style={{ whiteSpace: "pre-wrap", fontSize: 10, maxHeight: 260, overflow: "auto" }}>{JSON.stringify(preview.rows, null, 2)}</pre></details>
 
@@ -305,7 +347,7 @@ export default function MultiAlphaCreateComposer({ apiBase, onClose, onSubmitted
 
           <div style={{ position: "sticky", bottom: 0, display: "flex", justifyContent: "flex-end", gap: 8, padding: 10, background: "rgba(248,250,252,.95)", borderTop: "1px solid #e2e8f0" }}>
             {results.some((item) => item.status === "failed") && <button disabled={submitting} onClick={retryFailed} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}><RotateCcw size={13} /> 仅重试失败场景</button>}
-            <button disabled={submitting || Boolean(preview.error)} onClick={() => void submitRows(preview.rows)} style={{ ...inputStyle, width: "auto", background: "#2563eb", color: "#fff", borderColor: "#2563eb", cursor: submitting ? "wait" : "pointer" }}><Play size={13} /> {submitting ? "逐场景提交中…" : `创建 ${preview.rows.length} 个场景 run`}</button>
+            <button disabled={submitting || !datasetProfileReady || Boolean(preview.error) || Boolean(datasetProfileError)} onClick={() => void submitRows(preview.rows)} style={{ ...inputStyle, width: "auto", background: "#2563eb", color: "#fff", borderColor: "#2563eb", cursor: submitting ? "wait" : "pointer" }}><Play size={13} /> {submitting ? "逐场景提交中…" : `创建 ${preview.rows.length} 个场景 run`}</button>
           </div>
         </div>
       </div>

@@ -330,9 +330,9 @@ def test_custom_evo_update_pending_config_uses_put_path_without_scheduling(monke
 
     assert result["status"] == "success"
     assert result["operation"] == "update_pending_config"
-    assert [call[0] for call in dummy.calls] == ["update"]
-    assert dummy.calls[0][1]["task_name"] == "edited pending"
-    assert dummy.calls[0][1]["loops_config"][0]["node_id"] == "node-a"
+    assert [call[0] for call in dummy.calls] == ["config", "update"]
+    assert dummy.calls[1][1]["task_name"] == "edited pending"
+    assert dummy.calls[1][1]["loops_config"][0]["node_id"] == "node-a"
 
 
 def test_custom_evo_start_rejects_already_started_task(monkeypatch):

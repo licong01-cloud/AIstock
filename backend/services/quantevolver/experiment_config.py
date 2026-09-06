@@ -23,6 +23,7 @@ from .qe_dataset_contract import (
     QEFormalDatasetRequest,
     require_qe_formal_dataset_request,
 )
+from .qe_active_dataset_profile import UniverseSelection
 
 ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20, 30, 40, 60, 120, 180)
 DEFAULT_LABEL_HORIZON = 1
@@ -390,6 +391,7 @@ class ExperimentConfig(BaseModel):
     label_type: str | None = None
     label_horizon: int | None = None
     stock_pool: str | None = None
+    universe_selection: dict[str, Any] | None = None
     sector_blacklist: list[str] | None = None
 
     # ── HMM sector filter ─────────────────────────────────────────────────────
@@ -471,6 +473,14 @@ class ExperimentConfig(BaseModel):
             self.canonical_pit_dataset = require_qe_formal_dataset_request(
                 self.canonical_pit_dataset
             )
+        if self.universe_selection is not None:
+            self.universe_selection = UniverseSelection.from_value(
+                self.universe_selection
+            ).as_dict()
+            if self.stock_pool:
+                raise ValueError(
+                    "stock_pool and universe_selection cannot be supplied together for new QE work"
+                )
         for source_name, source in (
             ("model_params_base", self.model_params_base),
             ("strategy_params", self.strategy_params),

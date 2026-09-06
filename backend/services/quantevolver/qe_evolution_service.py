@@ -5161,11 +5161,46 @@ class AutoEvolutionScheduler:
         # 5. 创建 base_experiment 记录
         base_exp_id = f"{new_task_id}_base"
         metrics = source_loop.get("metrics_json") or {}
+        from .qe_active_dataset_profile import (
+            load_active_qe_profile,
+            resolve_and_apply_active_qe_dataset,
+        )
         if isinstance(metrics, str):
             metrics = json.loads(metrics)
 
         # node_id: 入参优先，否则继承源任务
-        effective_node_id = node_id if node_id is not None else source_task.get("node_id")
+        effective_node_id = (
+            node_id
+            if node_id is not None
+            else source_task.get("node_id") or resolve_default_qe_node_id()
+        )
+        active_profile = load_active_qe_profile()
+        if active_profile is None and any(
+            loop_cfg.get("universe_selection") is not None for loop_cfg in loops_config
+        ):
+            raise ValueError(
+                "reason_code=qe_active_dataset_profile_missing: "
+                "universe_selection requires an activated QE dataset profile"
+            )
+        if active_profile is not None:
+            for idx, loop_cfg in enumerate(loops_config, start=1):
+                if loop_cfg.get("stock_pool") and loop_cfg.get("universe_selection") is not None:
+                    raise ValueError(
+                        f"strategy_fork loop {idx}: stock_pool and universe_selection cannot be supplied together"
+                    )
+                resolved_split, resolved_params, resolved_summary = resolve_and_apply_active_qe_dataset(
+                    node_id=str(effective_node_id),
+                    data_split=base_data_split,
+                    universe_selection=loop_cfg.get("universe_selection"),
+                    custom_params=loop_cfg.get("custom_params"),
+                    label_horizon=source_label_horizon,
+                    profile=active_profile,
+                )
+                resolved_params.setdefault("execution_node_id", str(effective_node_id))
+                loop_cfg["data_split"] = resolved_split
+                loop_cfg["custom_params"] = resolved_params
+                loop_cfg["stock_pool"] = resolved_params.get("stock_pool")
+                loop_cfg["resolved_dataset"] = resolved_summary
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""

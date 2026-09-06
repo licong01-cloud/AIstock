@@ -9,13 +9,17 @@ from typing import Any
 
 from backend.services.quantevolver.experiment_config import QE_RUNTIME_METADATA_KEYS
 from backend.services.quantevolver.seed_contract import ensure_template_fixed_seeds
+from backend.services.quantevolver.qe_active_dataset_profile import (
+    UniverseSelection,
+    get_qe_default_data_split,
+)
 
 QE_STOCK_POOL_DATE_OUT_OF_WINDOW = "QE_STOCK_POOL_DATE_OUT_OF_WINDOW"
 _FILTERED_POOL_DATE_RE = re.compile(r"filtered_pool[_-](\d{8})")
 
 # Keep this local instead of importing ConfigComposer so the template validator
 # stays side-effect-free and safe for the thin MCP server preflight.
-_QE_DEFAULT_DATA_SPLIT = {
+_LEGACY_QE_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
     "train_end": "2022-12-31",
     "valid_start": "2023-01-01",
@@ -56,7 +60,8 @@ def _stock_pool_filtered_date(stock_pool: Any) -> datetime | None:
 def _effective_test_end(data_split: Any) -> datetime:
     split = dict(data_split) if isinstance(data_split, Mapping) else {}
     return _parse_date(
-        split.get("test_end") or _QE_DEFAULT_DATA_SPLIT["test_end"],
+        split.get("test_end")
+        or get_qe_default_data_split(legacy_default=_LEGACY_QE_DEFAULT_DATA_SPLIT)["test_end"],
         context="data_split.test_end",
     )
 
@@ -104,6 +109,16 @@ def validate_template_payload(template_kind: str, config_json: Mapping[str, Any]
         config = normalize_template_config(template_kind, config)
     except ValueError as exc:
         errors.append(str(exc))
+    try:
+        if config.get("universe_selection") is not None:
+            UniverseSelection.from_value(config.get("universe_selection"))
+            if config.get("stock_pool") or (
+                isinstance(config.get("custom_params"), Mapping)
+                and config["custom_params"].get("stock_pool")
+            ):
+                errors.append("stock_pool and universe_selection cannot be supplied together")
+    except (ValueError, RuntimeError) as exc:
+        errors.append(str(exc))
     errors.extend(validate_qe_historical_stock_pool_window(config, context="template"))
     if template_kind == "single_experiment":
         if config.get("alpha_mode") == "multi":
@@ -125,6 +140,15 @@ def validate_template_payload(template_kind: str, config_json: Mapping[str, Any]
                     errors.append(f"Loop {idx} requires factor_keys")
                 if not loop.get("model_id"):
                     errors.append(f"Loop {idx} requires model_id")
+                try:
+                    if loop.get("universe_selection") is not None:
+                        UniverseSelection.from_value(loop.get("universe_selection"))
+                        if loop.get("stock_pool"):
+                            errors.append(
+                                f"Loop {idx}: stock_pool and universe_selection cannot be supplied together"
+                            )
+                except (ValueError, RuntimeError) as exc:
+                    errors.append(f"Loop {idx}: {exc}")
                 strategy_params = loop.get("strategy_params")
                 if isinstance(strategy_params, Mapping):
                     reserved = sorted(set(strategy_params).intersection(QE_RUNTIME_METADATA_KEYS))
