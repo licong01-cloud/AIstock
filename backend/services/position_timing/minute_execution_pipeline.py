@@ -31,6 +31,7 @@ from .contracts import (
     PositionTimingCardSetV1,
     PositionTimingCardV1,
     TimingAction,
+    TriggerOperator,
     TriggerSide,
     canonical_json_bytes,
     canonical_sha256,
@@ -44,7 +45,8 @@ RECEIPT_SCHEMA = "position_timing_l4b1_receipt_v1"
 REGISTRY_SCHEMA = "position_timing_l4b1_registry_record_v1"
 BENCHMARK_ID = "AT_OPEN_RAW_V1"
 CHALLENGER_ID = "OPENING_30M_VWAP_RAW_V1"
-DIRECTION_ORDER = ("BUY", "SELL")
+LEGACY_DIRECTION_ORDER = ("BUY", "SELL")
+ACTIVE_DIRECTION_ORDER = ("SELL",)
 PRIMARY_HORIZON = 20
 WINDOW_TIMES = tuple(f"09:{minute:02d}:00" for minute in range(30, 60))
 BOOTSTRAP_REPETITIONS = 5_000
@@ -52,7 +54,7 @@ BOOTSTRAP_SEED = 20_260_906
 BOOTSTRAP_BLOCK_DAYS = 5
 MIN_PAIRED_CARDS = 30
 MIN_PAIRED_TRADE_DATES = 20
-FAMILYWISE_HYPOTHESIS_COUNT = 2
+FAMILYWISE_HYPOTHESIS_COUNT = 1
 ALPHA = 0.05
 LIMIT_TOLERANCE = 1e-4
 REQUIRED_MINUTE_FIELDS = (
@@ -124,6 +126,9 @@ class ProspectiveCardItemV1(FrozenModel):
         "NON_ACTION",
         "NOT_AT_OPEN",
         "ZERO_QUANTITY",
+        "DIRECTION_OUT_OF_SCOPE",
+        "ACTION_OUT_OF_SCOPE",
+        "ACTION_CONTRACT_OUT_OF_SCOPE",
         "COST_POLICY_INCOMPATIBLE",
         "MINUTE_COVERAGE_BEFORE_START",
         "MINUTE_COVERAGE_PENDING",
@@ -156,7 +161,7 @@ class FrozenL4b1RequestV1(FrozenModel):
     challenger_id: Literal["OPENING_30M_VWAP_RAW_V1"] = CHALLENGER_ID
     primary_horizon_trading_days: Literal[20] = PRIMARY_HORIZON
     parent_order_count: Literal[1] = 1
-    familywise_hypothesis_count: Literal[2] = FAMILYWISE_HYPOTHESIS_COUNT
+    familywise_hypothesis_count: Literal[1, 2] = FAMILYWISE_HYPOTHESIS_COUNT
     bootstrap_repetitions: Literal[5000] = BOOTSTRAP_REPETITIONS
     bootstrap_seed: Literal[20260906] = BOOTSTRAP_SEED
     bootstrap_block_observed_trade_dates: Literal[5] = BOOTSTRAP_BLOCK_DAYS
@@ -197,6 +202,18 @@ class FrozenL4b1RequestV1(FrozenModel):
         }
         if not feature_roles.issubset(self.source_refs):
             raise ValueError("L4b-1 minute feature refs are incomplete")
+        supported_directions = set(_directions_for_family(self.familywise_hypothesis_count))
+        if any(
+            item.population_status == "ELIGIBLE" and item.side not in supported_directions
+            for item in self.population_items
+        ):
+            raise ValueError("L4b-1 eligible population contains an unregistered direction")
+        supported_actions = set(_actions_for_family(self.familywise_hypothesis_count))
+        if any(
+            item.population_status == "ELIGIBLE" and item.action not in supported_actions
+            for item in self.population_items
+        ):
+            raise ValueError("L4b-1 eligible population contains an unregistered action")
         card_set_roles = {item.card_set_ref_role for item in self.population_items}
         if not card_set_roles.issubset(self.source_refs):
             raise ValueError("L4b-1 card-set refs are incomplete")
@@ -307,10 +324,10 @@ class L4b1ReceiptV1(FrozenModel):
         "NEGATIVE",
         "INCONCLUSIVE",
     ]
-    direction_summaries: tuple[DirectionSummaryV1, DirectionSummaryV1]
+    direction_summaries: tuple[DirectionSummaryV1, ...]
     selected_sides: tuple[Literal["BUY", "SELL"], ...]
     coverage_counts: dict[str, int]
-    familywise_hypothesis_count: Literal[2] = FAMILYWISE_HYPOTHESIS_COUNT
+    familywise_hypothesis_count: Literal[1, 2] = FAMILYWISE_HYPOTHESIS_COUNT
     runtime_policy_written: Literal[False] = False
     card_or_event_written: Literal[False] = False
     order_written: Literal[False] = False
@@ -323,7 +340,9 @@ class L4b1ReceiptV1(FrozenModel):
     def validate_identity(self) -> "L4b1ReceiptV1":
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("L4b-1 receipt created_at must be timezone-aware")
-        if tuple(item.side for item in self.direction_summaries) != DIRECTION_ORDER:
+        if tuple(item.side for item in self.direction_summaries) != _directions_for_family(
+            self.familywise_hypothesis_count
+        ):
             raise ValueError("L4b-1 direction order drift")
         supported = tuple(item.side for item in self.direction_summaries if item.effect_evidence == "SUPPORTED")
         if self.selected_sides != supported:
@@ -423,6 +442,9 @@ def prepare_l4b1_request(
                 coverage_start=coverage_start,
                 coverage_end=coverage_end,
                 instrument_spans=instrument_spans,
+                included_directions=ACTIVE_DIRECTION_ORDER,
+                included_actions=(TimingAction.EXIT.value,),
+                require_risk_exit_contract=True,
             )
             items.append(item)
             if item.population_status == "ELIGIBLE":
@@ -496,7 +518,10 @@ def run_l4b1_audit(request_path: str | Path) -> dict[str, Any]:
         for item in request.population_items
         if item.population_status == "ELIGIBLE"
     )
-    summaries = tuple(_summarize_direction(side, request=request, results=results) for side in DIRECTION_ORDER)
+    summaries = tuple(
+        _summarize_direction(side, request=request, results=results)
+        for side in _directions_for_family(request.familywise_hypothesis_count)
+    )
     receipt = _build_receipt(request=request, results=results, summaries=summaries)
     bundle = _publish_bundle(request=request, results=results, receipt=receipt)
     appended = _append_registry(request=request, bundle_path=bundle, receipt=receipt)
@@ -527,6 +552,9 @@ def _population_item(
     coverage_start: date,
     coverage_end: date,
     instrument_spans: Mapping[str, tuple[tuple[date, date], ...]],
+    included_directions: Sequence[str],
+    included_actions: Sequence[str],
+    require_risk_exit_contract: bool,
 ) -> ProspectiveCardItemV1:
     card_hash = canonical_sha256(card)
     if event.get("card_artifact_sha256") != card_hash:
@@ -543,6 +571,12 @@ def _population_item(
         status = "ZERO_QUANTITY"
     elif card.execution_window is not ExecutionWindow.AT_OPEN:
         status = "NOT_AT_OPEN"
+    elif side_enum.value not in included_directions:
+        status = "DIRECTION_OUT_OF_SCOPE"
+    elif card.action.value not in included_actions:
+        status = "ACTION_OUT_OF_SCOPE"
+    elif require_risk_exit_contract and not _matches_risk_exit_contract(card):
+        status = "ACTION_CONTRACT_OUT_OF_SCOPE"
     elif card.cost_policy_sha256 != COST_POLICY_SHA256:
         status = "COST_POLICY_INCOMPATIBLE"
     elif card.target_trade_date < coverage_start:
@@ -725,7 +759,7 @@ def _summarize_direction(
         alpha=request.alpha,
         block_length=request.bootstrap_block_observed_trade_dates,
         repetitions=request.bootstrap_repetitions,
-        seed=request.bootstrap_seed + DIRECTION_ORDER.index(side),
+        seed=request.bootstrap_seed + LEGACY_DIRECTION_ORDER.index(side),
     )
     adjusted_alpha = request.alpha / request.familywise_hypothesis_count
     adjusted = _moving_block_interval(
@@ -733,7 +767,7 @@ def _summarize_direction(
         alpha=adjusted_alpha,
         block_length=request.bootstrap_block_observed_trade_dates,
         repetitions=request.bootstrap_repetitions,
-        seed=request.bootstrap_seed + DIRECTION_ORDER.index(side),
+        seed=request.bootstrap_seed + LEGACY_DIRECTION_ORDER.index(side),
     )
     if data_errors:
         evidence = "INCONCLUSIVE"
@@ -784,7 +818,7 @@ def _build_receipt(
     *,
     request: FrozenL4b1RequestV1,
     results: tuple[MinuteExecutionCardResultV1, ...],
-    summaries: tuple[DirectionSummaryV1, DirectionSummaryV1],
+    summaries: tuple[DirectionSummaryV1, ...],
 ) -> L4b1ReceiptV1:
     eligible_count = request.population_counts.get("ELIGIBLE", 0)
     paired_count = sum(item.paired_card_count for item in summaries)
@@ -814,7 +848,7 @@ def _build_receipt(
         "direction_summaries": summaries,
         "selected_sides": selected,
         "coverage_counts": dict(sorted(counts.items())),
-        "familywise_hypothesis_count": FAMILYWISE_HYPOTHESIS_COUNT,
+        "familywise_hypothesis_count": request.familywise_hypothesis_count,
         "runtime_policy_written": False,
         "card_or_event_written": False,
         "order_written": False,
@@ -1002,6 +1036,9 @@ def _verify_run_environment(request: FrozenL4b1RequestV1) -> None:
             coverage_start=request.minute_coverage_start,
             coverage_end=request.minute_coverage_end,
             instrument_spans=instrument_spans,
+            included_directions=_directions_for_family(request.familywise_hypothesis_count),
+            included_actions=_actions_for_family(request.familywise_hypothesis_count),
+            require_risk_exit_contract=request.familywise_hypothesis_count == 1,
         )
         if replayed != item:
             _raise(
@@ -1075,6 +1112,38 @@ def _window_indexes(calendar: Sequence[str], target: date) -> tuple[int, ...]:
     expected = {prefix + value for value in WINDOW_TIMES}
     matches = tuple(index for index, value in enumerate(calendar) if value in expected)
     return matches if tuple(calendar[index] for index in matches) == tuple(prefix + value for value in WINDOW_TIMES) else ()
+
+
+def _directions_for_family(familywise_hypothesis_count: int) -> tuple[Literal["BUY", "SELL"], ...]:
+    if familywise_hypothesis_count == 1:
+        return ACTIVE_DIRECTION_ORDER
+    if familywise_hypothesis_count == 2:
+        return LEGACY_DIRECTION_ORDER
+    raise ValueError("unsupported L4b-1 hypothesis family size")
+
+
+def _actions_for_family(familywise_hypothesis_count: int) -> tuple[str, ...]:
+    if familywise_hypothesis_count == 1:
+        return (TimingAction.EXIT.value,)
+    if familywise_hypothesis_count == 2:
+        return tuple(action.value for action in ACTION_SIDE)
+    raise ValueError("unsupported L4b-1 hypothesis family size")
+
+
+def _matches_risk_exit_contract(card: PositionTimingCardV1) -> bool:
+    if len(card.triggers) != 1:
+        return False
+    trigger = card.triggers[0]
+    return (
+        card.action is TimingAction.EXIT
+        and card.execution_window is ExecutionWindow.AT_OPEN
+        and card.requested_delta_qty < 0
+        and trigger.branch == "RISK_EXIT_AT_OPEN"
+        and trigger.side is TriggerSide.SELL
+        and trigger.operator is TriggerOperator.ALWAYS
+        and trigger.planned_delta_qty == card.requested_delta_qty
+        and trigger.conditions.get("sell_reason") == "risk_exit"
+    )
 
 
 def _read_bin_values(path: Path, indexes: Sequence[int]) -> np.ndarray:

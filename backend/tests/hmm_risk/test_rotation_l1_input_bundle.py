@@ -650,6 +650,30 @@ def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_a
     assert rows.tobytes() == expected.tobytes()
 
 
+def test_qlib_stock_reader_validates_release_range_but_materializes_only_development_window(
+    tmp_path: Path,
+) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    tail_day = subject.SOURCE_END + timedelta(days=1)
+    calendar = (subject.SOURCE_START, subject.SOURCE_END, tail_day)
+    for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        np.asarray([0.0, float(field_index), float(field_index + 1), 999_999.0], dtype="<f4").tofile(
+            feature_root / f"{field}.day.bin"
+        )
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((subject.SOURCE_START, tail_day),),
+    )
+
+    assert rows["trade_date"].tolist() == [20200730, 20260331]
+    assert 999_999.0 not in rows["close"].tolist()
+
+
 def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
     class Labels:
         shape = (8,)
@@ -1546,7 +1570,10 @@ def _direct_v2_candidate(
                     }
                 )
         pd.DataFrame(sw_rows).set_index(["datetime", "sector_code"]).to_hdf(
-            sw_l1 / "sector_data.h5", key="data", format="fixed"
+            sw_l1 / "sector_data.h5",
+            key="data",
+            format="table",
+            data_columns=["datetime", "sector_code"],
         )
         (sw_l1 / "meta.json").write_text(
             json.dumps(
@@ -1839,7 +1866,8 @@ def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
     first = subject._load_direct_v2_sw_l1_index(
         sw_root / "sector_data.h5",
         sw_root / "meta.json",
-        expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=calendar,
         calendar=calendar,
     )
     shuffled = pd.read_hdf(sw_root / "sector_data.h5").sample(frac=1.0, random_state=42)
@@ -1847,7 +1875,8 @@ def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
     second = subject._load_direct_v2_sw_l1_index(
         sw_root / "sector_data.h5",
         sw_root / "meta.json",
-        expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=calendar,
         calendar=calendar,
     )
 
@@ -1887,7 +1916,8 @@ def test_direct_v2_sw_l1_readback_fails_closed_on_invalid_panel(
         subject._load_direct_v2_sw_l1_index(
             path,
             sw_root / "meta.json",
-            expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
             calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
         )
 
@@ -1956,12 +1986,14 @@ def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_fut
 
     inventory, benchmark, benchmark_close = subject._load_direct_v2_index_context(
         path,
-        expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
         calendar=(subject.SOURCE_START, subject.SOURCE_END),
     )
 
     assert inventory["code_count"] == 12
-    assert inventory["date_max"] == subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()
+    assert inventory["date_max"] == subject.SOURCE_END.isoformat()
+    assert inventory["release_cutoff"] == subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()
     assert set(benchmark) == {subject.SOURCE_START, subject.SOURCE_END}
     assert set(benchmark_close) == {subject.SOURCE_START, subject.SOURCE_END}
     assert benchmark[subject.SOURCE_START] == pytest.approx((100.0 + 2) / (100.0 + 2 - 0.001) - 1.0)
@@ -1971,7 +2003,8 @@ def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_fut
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
         subject._load_direct_v2_index_context(
             path,
-            expected_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
             calendar=(subject.SOURCE_START, subject.SOURCE_END),
         )
     assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
@@ -2474,3 +2507,81 @@ def test_moneyflow_contributor_eligibility_rejects_provider_alias_drift() -> Non
             suspension_keys=frozenset(),
         )
     assert exc_info.value.reason_code == subject.REASON_AUTHORITY_AMBIGUOUS
+
+
+def test_g2a_l1_daily_inputs_preserve_coverage_failure_without_zero_fill() -> None:
+    day = date(2026, 3, 30)
+    rows = [
+        {
+            "trade_date": day,
+            "l1_code": "801010.SI",
+            "is_suspended": False,
+            "g2a_above_ma20": True if index < 4 else None,
+            "moneyflow_fact_status": "available" if index < 4 else "provider_absence",
+            "net_mf_amount_cny": 10.0 if index < 4 else None,
+            "amount_cny": 100.0 if index < 4 else None,
+        }
+        for index in range(10)
+    ]
+    output: list[dict[str, object]] = []
+
+    subject._append_g2a_l1_daily_inputs(rows, output=output)
+
+    assert len(output) == 1
+    assert output[0]["pit_breadth_above_ma20"] is None
+    assert output[0]["moneyflow_net_amount_cny"] is None
+    assert output[0]["moneyflow_traded_amount_cny"] is None
+    assert output[0]["breadth_reason_code"] == "hmm_risk_rotation_feature_contract_invalid"
+    assert output[0]["moneyflow_reason_code"] == "hmm_risk_rotation_feature_contract_invalid"
+
+
+def test_l2_aggregation_does_not_mutate_l1_identity_used_by_g2a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "trade_date": date(2026, 3, 30),
+        "l1_code": "801010.SI",
+        "l1_name": "L1",
+        "l2_code": "801011.SI",
+        "l2_name": "L2",
+    }
+    observed: list[tuple[str, str]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        observed.append((level, str(rows[0]["l1_code"])))
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._append_day_level_aggregates(
+        [row],
+        l1_aggregates=[],
+        l2_aggregates=[],
+        unavailable={},
+        contributor_eligibility={},
+    )
+
+    assert observed == [("L1", "801010.SI"), ("L2", "801011.SI")]
+    assert row["l1_code"] == "801010.SI"
+
+
+def test_g2a_sw_l1_taxonomy_codes_are_mapped_to_canonical_published_codes() -> None:
+    taxonomy = tuple(f"{index:02d}0000" for index in range(1, 32))
+    canonical = tuple(f"801{index:03d}.SI" for index in range(1, 32))
+    mapping = dict(zip(taxonomy, canonical, strict=True))
+    day = date(2026, 3, 31)
+
+    result = subject._published_l1_sector_close(
+        {(day, code): float(index) for index, code in enumerate(taxonomy, start=1)},
+        mapping,
+        canonical_codes=canonical,
+    )
+
+    assert set(code for _day, code in result) == set(canonical)
+    drifted = dict(mapping)
+    drifted[taxonomy[-1]] = canonical[0]
+    with pytest.raises(subject.RotationL1InputBundleError) as caught:
+        subject._published_l1_sector_close(
+            {(day, code): 1.0 for code in taxonomy},
+            drifted,
+            canonical_codes=canonical,
+        )
+    assert caught.value.reason_code == subject.REASON_AUTHORITY_AMBIGUOUS
