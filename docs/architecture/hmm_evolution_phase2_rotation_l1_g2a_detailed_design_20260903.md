@@ -493,7 +493,7 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已在独立实现分支完成；39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`、`backend/tests/hmm_risk/test_rotation_l1_input_bundle.py`；真实direct-v2 development bundle Windows/WSL readback；F2 validator | SOURCE_IMPLEMENTED_LOCAL_REVIEW_COMPLETE_PENDING_PR | 正式39-fit development实验只能在源码合入后的独立validation worktree执行；F-013产品链仍未实施 |
+| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已在独立实现分支完成；39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`、`backend/tests/hmm_risk/test_rotation_l1_input_bundle.py`；真实direct-v2 development bundle Windows/WSL readback；F2 validator | SOURCE_IMPLEMENTED_LOCAL_REVIEW_COMPLETE_APPROVED_BY_USER_PENDING_PR | 正式39-fit development实验只能在源码合入后的独立validation worktree执行；F-013产品链仍未实施 |
 | F-012 | 本设计§1.2、§8.3；现有isolation guard | 目标`backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | APPROVED_BY_USER_DESIGN_READY_PENDING_SOURCE_EVIDENCE | 用户已批准advisory-only业务语义；本次没有源码、数据库或runtime变更 |
 | F-013 | 本设计D6；目标prediction repository、两个read API和真实`/hmm-risk` L1热力图 | 目标`backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts` | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | research gate通过后允许真实OOF闭合最终工程链；不得使用mock/in-sample，也不得把`AVAILABLE_EXPERIMENTAL`冒充rotation capability或advisory AVAILABLE |
 
