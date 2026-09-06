@@ -571,6 +571,10 @@ rules:
       - backend/tests/quantevolver/test_factor_emit_hook.py
       - backend/tests/quantevolver/test_canonical_pit_dataset_binding.py
       - backend/tests/quantevolver/test_stock_pool_sync.py
+      - backend/tests/quantevolver/test_official_factor_batch_compute.py
+      - backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py
+      - backend/tests/test_correlation_compute_independence.py
+      - backend/tests/test_factor_st_pit_metrics_cache.py
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py

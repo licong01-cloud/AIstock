@@ -7,6 +7,7 @@ QE experiment orchestration change.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -21,6 +22,7 @@ from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
+from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from .correlation_engine import CorrelationEngine, CorrelationResult
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -51,6 +53,19 @@ _MATRIX_TIMEOUT_SEC = 3600  # 60 分钟 (首次加载 448 因子 ~8min + GEMM ~1
 def get_correlation_factor_cache_dir() -> Path:
     """Return the offline research/backtest factor cache root used by correlation."""
     return CORRELATION_FACTOR_VALUE_CACHE_DIR
+
+
+def _official_cache_universe_key() -> str:
+    """Resolve correlation authority from the promoted official cache metadata."""
+
+    meta_path = CORRELATION_FACTOR_VALUE_CACHE_DIR / "_meta.json"
+    if not meta_path.is_file():
+        return OFFICIAL_FACTOR_UNIVERSE_KEY
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    universe_key = str(meta.get("universe_key") or "")
+    if universe_key == CANONICAL_PIT_UNIVERSE_KEY:
+        return universe_key
+    return OFFICIAL_FACTOR_UNIVERSE_KEY
 
 
 def get_correlation_factor_value_pipeline():
@@ -420,13 +435,14 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     data_date is scheduler metadata only; correlation never selects non-official caches.
     """
     assert_wsl_runtime("correlation_compute_local")
-    universe_metadata: dict[str, Any] = {"universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY}
+    cache_universe_key = _official_cache_universe_key()
+    universe_metadata: dict[str, Any] = {"universe_key": cache_universe_key}
     if as_of_date:
         # Correlation reuses the offline research cache; its universe metadata must match the ST PIT state.
         universe_metadata = FactorUniverseMaskService().metadata(
             start_date="2018-08-01",
             end_date=as_of_date,
-            universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
+            universe_key=cache_universe_key,
         )
 
     global _latest_result
@@ -691,7 +707,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 universe_metadata = FactorUniverseMaskService().metadata(
                     start_date="2018-08-01",
                     end_date=_aod_value,
-                    universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
+                    universe_key=cache_universe_key,
                 )
 
             # ── Bug E 修复: 调用方 as_of_date 必须与 meta 中实际值对齐 ──

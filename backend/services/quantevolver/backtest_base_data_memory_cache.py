@@ -1,7 +1,6 @@
 """Read-once base-data cache for official offline factor computation."""
 from __future__ import annotations
 
-import hashlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -31,7 +30,6 @@ class BaseDataEntry:
     size_mb: float
     rows: int
     columns: int
-    sha256_16: str
 
 
 @dataclass
@@ -87,7 +85,6 @@ class BacktestBaseDataMemoryCache:
                 size_mb=round(path.stat().st_size / 1024 / 1024, 3),
                 rows=original_rows,
                 columns=original_columns,
-                sha256_16=_file_sha256_16(path),
             )
         if not cache.entries:
             raise RuntimeError(f"no allowed base data files found under {root}")
@@ -121,7 +118,6 @@ class BacktestBaseDataMemoryCache:
                     "rows": entry.rows,
                     "columns": entry.columns,
                     "elapsed_sec": entry.elapsed_sec,
-                    "sha256_16": entry.sha256_16,
                     "read_count": self.read_counts.get(name, 0),
                 }
                 for name, entry in self.entries.items()
@@ -145,14 +141,6 @@ class BacktestBaseDataMemoryCache:
         except Exception:
             return df.copy(deep=False)
         return df.copy(deep=False)
-
-
-def _file_sha256_16(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
 
 
 def _copy_slice_releasing_parent(df: pd.DataFrame, mask: Any) -> pd.DataFrame:
