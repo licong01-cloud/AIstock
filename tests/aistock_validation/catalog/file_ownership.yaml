@@ -386,6 +386,7 @@ rules:
       - scripts/aistock_module_ownership_scan.py
       - scripts/aistock_issue_workflow.py
       - scripts/aistock_feature_workflow.py
+      - scripts/cross_tool_review_dispatch.py
       - scripts/issue_flow.py
       - scripts/code_intelligence_adapter.py
       - scripts/ci_failure_issue_summary.py

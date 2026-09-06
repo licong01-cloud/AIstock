@@ -139,6 +139,10 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert discussion_doc.ownership_status == "mapped"
     assert discussion_doc.primary_module == "docs"
 
+    retired_dispatcher = catalog.match_path("scripts/cross_tool_review_dispatch.py")
+    assert retired_dispatcher.ownership_status == "mapped"
+    assert retired_dispatcher.primary_module == "validation.guardrails"
+
     assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
     assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")
     assert registry.get_module("watchlist").test_plans_required == ("l0", "watchlist_backend")
