@@ -1,14 +1,26 @@
 {
   "actual": "MemPalace cross-tool coordination is retired, and active standards and client routes no longer require it, but the May-2026 cross_tool_review_dispatch script, its dedicated tests, and current-path protocol documents remain discoverable as active assets. Retire only the dead dispatcher/test and clearly archive historical protocol material without changing the unrelated AIstock MCP validation server or historical BUG evidence.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260906_BUG-1379-retired-mempalace-cross-tool-dispatcher-remains-in-active-repository-pat.json"
+    "tests/aistock_validation/bugs/20260906_BUG-1379-retired-mempalace-cross-tool-dispatcher-remains-in-active-repository-pat.json",
+    "scripts/cross_tool_review_dispatch.py",
+    "backend/tests/test_cross_tool_review_dispatch.py",
+    "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+    "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+    "docs/process/cross_tool_review_protocol_20260510.md",
+    "docs/process/dual_party_verify_20260510.md",
+    "docs/discussion/cross_tool_channel_protocol_20260510.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/test_validation_module_ownership.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1379",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Replace the retired MemPalace-only dispatcher with a fail-closed tombstone and remove its dedicated functional test from active code paths.",
+    "Mark the five primary legacy cross-tool protocol documents as RETIRED while preserving their historical content and paths.",
+    "Confirm current AIstock standards, client routes, and unrelated AIstock MCP validation behavior are unchanged.",
+    "Run the direct retirement contract smoke and validation_module_registry_l0.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-06T05:52:20.226542Z",
@@ -22,7 +34,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The retired MemPalace dispatcher cannot dispatch and fails closed with a migration message, its dedicated functional test is absent, legacy protocols are visibly historical, and current AIstock MCP validation behavior remains unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +47,31 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/cross_tool_review_dispatch.py",
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_validation_module_ownership.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/cross_tool_review_dispatch.py",
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_validation_module_ownership.py"
+    ]
   },
   "first_seen_at": "2026-09-06T05:52:20.226542Z",
   "fix_branch": null,
@@ -54,7 +88,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -c \"from pathlib import Path; print(Path('scripts/cross_tool_review_dispatch.py').exists(), Path('backend/tests/test_cross_tool_review_dispatch.py').exists())\"",
   "required_verification": [
     "l0",
     "validation_center_backend"

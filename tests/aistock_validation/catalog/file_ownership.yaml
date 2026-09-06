@@ -1573,6 +1573,16 @@ rules:
     layer: docs
     risk_level: medium
     ownership_reason: Operations documents describe runtime and maintenance procedures.
+  - rule_id: docs_process_and_discussion
+    priority: 40
+    include:
+      - docs/process/**
+      - docs/discussion/**
+    primary_module: docs
+    impact_modules: [validation.module_quality]
+    layer: docs
+    risk_level: low
+    ownership_reason: Process and discussion documents are historical or procedural documentation unless a higher-priority module-specific rule applies.
   - rule_id: debug_tools
     priority: 50
     include:
