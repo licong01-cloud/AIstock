@@ -12,6 +12,8 @@
     "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
     "backend/tests/test_correlation_compute_independence.py",
     "backend/tests/test_factor_st_pit_metrics_cache.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260906_BUG-1381-2026-06-30-direct-v2.json"
   ],
   "assigned_agent": null,
