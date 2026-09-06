@@ -2,11 +2,11 @@
 
 > 日期：2026-09-04
 >
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_002_AUDIT_COMPLETED_PT_NEXT_003_AUDIT_COMPLETED_INSUFFICIENT_DATA`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
-> 收口状态：BUG-1365 已验证，源码与 close-sync 任务分支/工作树已清理
+> 收口状态：首发运行态已验证；`PT-NEXT-002` 离线 L2 audit 已完成且无 selected/runtime model；`PT-NEXT-003` 首份双方向 L4b-1 audit 已降为历史，risk-exit SELL-only 正式 audit 已完成且因 0 eligible card 未选择执行窗口
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
@@ -52,7 +52,27 @@
 - 业务 smoke 使用 `/api/v1/position-timing/intents` 的 target-owned collection 语义契约，确认 468 个条目。该契约缺口由 BUG-1378 的源码 PR `#4341` 修复并由 close-sync PR `#4342` 固化；它只增加精确端点映射与测试，不改变产品运行时，也不要求再次重启。
 - BUG-1365 close-sync PR `#4311` 已合入 `main`（merge commit `a87e239e2a0ffaeae28bc87dec96741d4476144b`）；Issue `#4301` 已关闭，canonical BUG 状态为 `verified`、`post_restart_effective_gate=passed`、`runtime_identity_match=true`。
 - 最终只读业务读回为 468 个候选、2 个有效持仓、2 张目标交易日 2026-09-07 的 `HOLD` 卡；10 个 horizon 仍为 pending，2026-09-06 非交易日 alert 为 `NO_VALID_CARD_TODAY`。四个 BUG-1365/BUG-1378 源码与 close-sync 工作树、对应本地/远端分支及 BUG-id reservation 均已按精确清单清理。
-- 下一项仍是 `PT-NEXT-002 / WAIT_FOR_PROSPECTIVE_DATA`；这只是研究顺序，不阻塞已经可用的 L1/L1a，也不新增样本量、MDE 或人工审批门禁。
+- 下一项 `PT-NEXT-003` 已由用户启动并完成 SELL-only 正式审计；它只实现一分钟 candidate 上的 prospective action-card 执行窗口反事实，不反向阻塞已经可用的 L1/L1a。首份双方向审计已因可达性错误降为历史，当前权威凭证只注册可达的 risk-exit SELL 单假设。
+
+## 0.4 2026-09-06 `PT-NEXT-002` 离线 L2 可学性审计
+
+- 本任务在首发运行面之外唯一新增文件为 `backend/services/position_timing/learnability_pipeline.py`，复用首发 contracts/policy 与 Advisory registry 的纯实现，但使用 timing-owned request、bundle 和 registry 路径；没有新增 router、页面、worker、scheduler、数据库、final fit、运行时模型或订单路径。既有 evidence API/页面只补一个 hash-bound 总体审计引用，使阴性/不可分辨结果可见而不进入个股卡片。
+- 正式 request `ptl2req_163c90896899e65cf3183e5e.json` 绑定代码提交 `e26881abb7366f1726b2365a398d0d04786c6eb7`、canonical-v2 QE/HMM candidate、Python/数值包/线程池、22 项 feature order、Ridge/GBDT 完整参数、CPCV、费用与 exit policy identity。request-era prospective outcome 为 0、全局 N0 历史记录为 36，二者只作报告字段，不是开跑门禁。
+- 第一份 request 所含 `selection_rank/selection_score` 只有 2024～2026 的 immutable coverage，无法覆盖 2018～2026 人口；pipeline 在任何完整 hypothesis/receipt 生成前以 typed error 停止。删除这两项不可用特征是一次数据契约修订：没有读取局部收益、没有缩短人口、没有替换特征搜索。随后发现 pandas frame attrs 携带全量 calendar 导致 replay 重复深拷贝；修复只消除复制，不改变数学结果或冻结 request 语义。
+- 正式 materialization 得到 96 cohorts、388,035 episodes、7,351,727 review rows、386,737 paired-ready episodes。Ridge point `-45.3852 bps`、family-wise adjusted CI `[-86.6868,-7.7560]`，分类 `NEGATIVE + ADEQUATE`；GBDT point `-35.0801 bps`、adjusted CI `[-82.3353,10.4406]`，分类 `INCONCLUSIVE + ADEQUATE`。study 为 `INCONCLUSIVE`，`selected_model_id=null`，L3 不实现。
+- immutable bundle 为 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/l2_learnability_bundles/eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51`；独立 inspect 返回 `BUNDLE_VALID`，exact retry 返回同一 bundle/receipt，两条 timing registry append 均为 duplicate no-op。全局 N0 registry 前后 SHA-256 均为 `53ca1338ee5f725be38eeb217b06ebc33d99a6a75904ea1efc4c8607fbd5e067`。
+- 该结果是本次两个冻结函数族/政策的研究终态，不是 L1/L1a 发布门禁，也不证明不存在其他信号。不得在同一 family 追加搜索；未来若研究 OPEN/ADD entry objective，必须另立设计、request 和 trial family。
+- 收口验证为 position-timing 88 tests、相邻 Advisory CPCV/registry/control 16 tests、集中 `position_timing_first_release` nox、F2 validator 27/27、validation catalog integrity 与 L0 全部通过；目标 Playwright 同时验证 L2 总体 `INCONCLUSIVE`、Ridge `NEGATIVE/ADEQUATE` 和“无入选模型”只出现在研究证据区。
+
+## 0.5 2026-09-06 `PT-NEXT-003` L4b-1 离线执行窗口审计（SELL-only 正式审计完成）
+
+- 复用最新 PASS 的 2026-08-31 minute candidate，只读消费 Qlib Bin 与真实 `CARD_ISSUED`/immutable card；不重建或激活数据集。
+- 只比较 `OPENING_30M_VWAP_RAW_V1` 与 `AT_OPEN_RAW_V1`，固定 card side、quantity、一个 parent order 和 20 日 horizon。可达性修订后首个 family 只保留现行 L1 可生成的 risk-exit SELL 单假设；买入/普通卖出均为 ON_PRICE_TRIGGER，不事后选择 branch 或数量。
+- 本项复杂度预算是一份 offline service/CLI 文件、一份直接测试和两份既有设计文档更新；无 router、页面、worker、scheduler、数据库、依赖、模型、运行 policy 或订单路径。
+- 当前生产只有两张 HOLD 卡，修订后的正式结果为 `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS`，SELL 为 `INSUFFICIENT_DATA/UNDERPOWERED`，没有 selected side。这是诚实的研究结果，不是源码失败、人工审批或 L1/L1a 门禁；首份双方向 receipt 仅保留为历史。
+- `minute_execution_pipeline.py` 与 12 项直接测试已经落地；`AIstock` 环境下全模块 100 项、集中 `position_timing_backend` 以及含 TypeScript/lint/build/Playwright 的 `position_timing_first_release` 均通过。正式 request `ptl4b1req_f55a3338e602c2dd42a32c17` 绑定干净代码提交 `03e3db5ec53aa433bfbc3c114a3c3215d3cd3ed6`，没有绑定未提交实现。
+- 历史 immutable bundle `78ee08b9d712c3b62517dc740ce6f2fac3ad39ec19670d5c7ee8c72c6e1f0816` 继续可 inspect，但不再作为当前 contract 的结果。当前权威 bundle 为 `450f8c82300c4c86199097c9e10eb8b61113b50e068c0c7b27cde8ce00acb7f4`，receipt SHA-256 为 `6e7f7c876ae02c844a4eaed268ea31596447f3fc623d7adc0ba9b905def13b6d`；inspect 与 exact retry 通过，专用 registry 共两行且 retry 不追加。
+- 全局 N0 registry/current_route、生产 cards/events 的前后 hashes 完全一致；runtime policy/card/event/order 均未写。后续只在新 minute candidate 已覆盖真实 risk-exit `EXIT/SELL/AT_OPEN` card 时重跑同一入口，不另建平台或开发阶段。
 
 ## 1. 执行结论
 
@@ -225,7 +245,7 @@ card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync �
 
 ## 6. 实现块二：提醒与 prospective outcome 闭环
 
-设计依据：蓝图 §5.2.1、§5.11～§5.13、§6、§9.3 与 F-012～F-021、F-023～F-027；其中 F-019～F-021 在首发只验证冻结 contract 和“非门禁”语义，不实现 L2 pipeline。
+设计依据：蓝图 §5.2.1、§5.11～§5.13、§6、§9.3 与 F-012～F-021、F-023～F-027；其中 F-019～F-021 在首发只验证冻结 contract 和“非门禁”语义，当时不实现 L2 pipeline。后续完成状态见 §0.4，不反向改变首发边界。
 
 ### 6.0 分析范围管理
 
@@ -253,7 +273,7 @@ card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync �
 
 ### 6.3 首发代码完成条件
 
-实现块二结束时，蓝图 §5.13 的 8 个 API、唯一页面、scope/current state、三类 artifact/event、全部 typed failure 和无订单边界必须一起可验证。此时才形成首发候选；L2 未实现不是缺口，因为蓝图已经把它定义为后续独立工作。
+实现块二结束时，蓝图 §5.13 的 8 个 API、唯一页面、scope/current state、三类 artifact/event、全部 typed failure 和无订单边界必须一起可验证。此时才形成首发候选；L2 在首发时未实现不是缺口，因为蓝图把它定义为后续独立工作。该后续工作现已按 §0.4 完成，但不改变这一定义。
 
 反模式保护：不得把 alert event 当成交或 user-seen 证据，不得用日线触价反推运行时 system eligibility，不得因 outcome 失败推进成功水位，不得为了定时物化引入 scheduler/worker。
 
@@ -263,7 +283,7 @@ card 与 policy snapshot 使用完整 artifact SHA 命名、临时文件 fsync �
 
 | 能力组 | 覆盖重点 | 权威测试 |
 |---|---|---|
-| 卡片正确性 | discovery/analysis universe、scope、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、L2 contract-only 冻结值 | 块一：`backend/tests/position_timing/test_api.py`、`test_artifact_store.py`、`test_card_service.py`、`test_cost_policy.py`、`test_l2_population.py`、`test_pit_clock.py`、`test_policy_snapshot.py`、`test_tradability.py`、`test_universe.py`；块二直接在这些文件补 scope 与 outcome/alert 测试，不新增 scope 专用测试套件 |
+| 卡片正确性 | discovery/analysis universe、scope、PIT、guard snapshot、方向性可交易性、lot、逐腿成本、typed 降级、首发时的 L2 contract 冻结值 | 块一：`backend/tests/position_timing/test_api.py`、`test_artifact_store.py`、`test_card_service.py`、`test_cost_policy.py`、`test_l2_population.py`、`test_pit_clock.py`、`test_policy_snapshot.py`、`test_tradability.py`、`test_universe.py`；块二直接在这些文件补 scope 与 outcome/alert 测试，不新增 scope 专用测试套件；后续 L2 专项矩阵见蓝图 §10.3 |
 | 证据完整性 | immutable/append-only、并发幂等、两只时钟、五 horizons、公司行动、coverage state | `test_artifact_store.py`、`test_outcome_materialization.py` |
 | 盘中提醒 | batch quote、5 分钟/30 秒、GET 零写、claim、already-alerted、多标签页、禁用分钟 fetch | `test_alerts.py` |
 | 隔离与用户结果 | N0/既有表/订单零写、零业务反向依赖、页面卡片/状态/toast/无交易按钮 | `test_isolation.py`、`frontend/tests/position-timing/position-timing.spec.ts` |
@@ -323,22 +343,22 @@ production_dependency_gate = noop
 
 ## 9. 明确不进入首发的事项
 
-- L2 Ridge/GBDT learnability pipeline、L3 model-assisted 卡和任何模型搜索。
+- L2 Ridge/GBDT learnability pipeline 当时不进入首发；它后来仅以 §0.4 的离线任务完成。L3 model-assisted 卡和任何追加模型搜索仍未进入实现。
 - 基于分钟 K 线生成新方向、新仓位或新风险信号。
-- L4b-1 分钟执行窗口研究与 L4b-2 日内新方向。
+- L4b-1 分钟执行窗口研究与 L4b-2 日内新方向当时均未进入首发；L4b-1 后续只以 §0.5 的离线任务实现，L4b-2 仍未进入。
 - SSE、WebSocket、共享 poller、后台 worker、scheduler、队列或新数据库表。
 - SmartMonitor engine/task/trade、Paper v2 position、MiniQMT position/order、外部通知服务。
 - actual user execution event、券商成交回报接入与自动化下单。
 - 第二套真实或虚拟持仓池、组合编辑器、scope 标签/分组/审批/批量工作流；普通待分析股票继续复用 confirmed watchlist。
 - 以 MDE、sealed holdout、最低金额、成本敏感性、HMM/Selection availability 或样本数作为首发批准门槛。
 
-首发上线并开始积累 prospective outcome 后，再用独立任务决定 L2；L2 的阴性、功效不足或延后不得反向削弱已经可用的 L1/L1a 人工建议产品。
+首发上线后已用独立任务完成 L2；其 `INCONCLUSIVE` study 和无 selected model 不得反向削弱已经可用的 L1/L1a 人工建议产品。
 
 ## 10. 最终完成定义
 
 只有在以下事实同时成立后，才可以报告“首发源码完成”：
 
-- F2 蓝图 F-001～F-027 的首发适用项均回填真实实现和验证证据；F-019/F-020 分别标明首发已验证的 contract 与 `PIPELINE_DEFERRED_BY_APPROVED_SCOPE`，F-021 验证非门禁语义，F-022 标明 `SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE`，不得把后移部分伪造成 implementation evidence。
+- F2 蓝图 F-001～F-027 的首发适用项均回填真实实现和验证证据；在首发收口时，F-019/F-020 曾如实标明 contract-only 与 pipeline 后移，F-021 验证非门禁语义，F-022 曾标明 `SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE`。§0.4 完成后，F-018～F-021 已更新为真实 L2 evidence；§0.5 又只把 F-022 更新为 L4b-1 离线 pipeline/evidence，仍不得把 L3、L4b-2 或运行时分钟 policy 伪造成 implementation evidence。
 - 8 个 API、一个页面、scope 当前态、三类 artifact/event、逐腿成本、typed errors、隔离性和无订单边界均已验证。
 - 集中本地验证和当前 PR HEAD 的四项仓库稳定检查通过。
 - `production_ddl_gate=noop`、`production_dependency_gate=noop` 有明确记录。
@@ -350,7 +370,7 @@ production_dependency_gate = noop
 | 顺序 | task_id | 状态 | 一次性交付边界 |
 |---:|---|---|---|
 | 1 | `PT-NEXT-001` | `RUNTIME_VERIFIED` | 已在同一个块二任务中完成 F-027、L1a 与 prospective outcome，并通过 §0.3 的重启后收据；只增加批准的 `alerts.py`，未拆新阶段、审批或发布平台 |
-| 2 | `PT-NEXT-002` | `WAIT_FOR_PROSPECTIVE_DATA` | 按冻结契约执行一次 L2 Ridge+GBDT learnability audit；结果不阻塞 L1/L1a |
-| 3 | `PT-NEXT-003` | `DEFERRED` | 独立评估 L4b-1 分钟执行窗口；L4b-2 仍在范围外 |
+| 2 | `PT-NEXT-002` | `AUDIT_COMPLETED_INCONCLUSIVE` | 已按冻结契约完成一次 L2 Ridge+GBDT learnability audit；Ridge `NEGATIVE`、GBDT/study `INCONCLUSIVE`、selected 0，无 runtime model，结果不阻塞 L1/L1a |
+| 3 | `PT-NEXT-003` | `AUDIT_COMPLETED_INSUFFICIENT_DATA` | L4b-1 pipeline 与 risk-exit SELL-only 正式 request/bundle/receipt、inspect/exact-retry/隔离 readback 已完成；当前 0 eligible card、selected side 为空，后续按同一入口数据驱动重跑；L4b-2 仍在范围外 |
 
-首发任务 `PT-NEXT-001` 已完成并通过运行态验收；后续若继续研究则从 `PT-NEXT-002` 开始，但 prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a。
+`PT-NEXT-001` 已完成并通过运行态验收，`PT-NEXT-002` 与 `PT-NEXT-003` 均已完成各自当前冻结契约下的首轮离线审计；`PT-NEXT-003` 的历史双方向审计不再是研究权威，当前 SELL-only 凭证为 `EVID-L4B1-FORMAL`。现有证据仍不支持 L3 或静态分钟窗口进入运行卡片。prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a；L4b-1 后续重跑是数据到位后的同入口操作，不新增阶段。

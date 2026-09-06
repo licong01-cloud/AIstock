@@ -18,11 +18,16 @@ def test_position_timing_has_no_order_scheduler_or_shared_registry_write_path() 
         "portfolio_scheduler",
         "smart_monitor",
         "miniqmt_execution_runtime",
-        "AdvisoryResearchTrialRegistryV1",
         "generate_current_route(",
     )
     for token in forbidden:
         assert token not in text
+
+    pipeline = (package / "learnability_pipeline.py").read_text(encoding="utf-8")
+    assert "AdvisoryResearchTrialRegistryV1(expected_registry).append_batch" in pipeline
+    assert '"research_registry" / "timing_trial_registry_v1.jsonl"' in pipeline
+    assert "AdvisoryResearchTrialRegistryV1(historical_registry).append" not in pipeline
+    assert "generate_current_route(" not in pipeline
 
 
 def test_existing_business_modules_do_not_reverse_import_position_timing() -> None:

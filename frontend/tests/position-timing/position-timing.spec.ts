@@ -104,7 +104,16 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
       await route.fulfill({ json: {
         product_evidence_tier: "RULE_BASED_RISK_MANAGEMENT",
         event_counts: { CARD_ISSUED: 1, OUTCOME_EVALUATED: 0 },
-        l2_runtime_status: "PIPELINE_DEFERRED_BY_APPROVED_SCOPE",
+        l2_runtime_status: "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL",
+        l2_formal_audit: {
+          effect_evidence: "INCONCLUSIVE",
+          selected_model_id: null,
+          runtime_model_written: false,
+          hypotheses: [
+            { model_id: "SKLEARN_RIDGE_V1", effect_evidence: "NEGATIVE", power_status: "ADEQUATE" },
+            { model_id: "LIGHTGBM_GBDT_V1", effect_evidence: "INCONCLUSIVE", power_status: "ADEQUATE" },
+          ],
+        },
         hmm_runtime_role: "CONTEXT_ONLY",
         selection_runtime_role: "CONTEXT_ONLY",
         cost_disclosure: { min_commission_scope_verification: "BROKER_UNVERIFIED", thresholds_cny: { "1.00": 58824, "0.50": 117648, "0.25": 235295 } },
@@ -147,6 +156,9 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
   await expect.poll(() => claimWrites.length).toBe(1);
   await expect(page.getByText(/已到达冻结卖出条件/)).toBeVisible();
   await expect(page.getByTestId("timing-alert-list")).toContainText("提醒发送权已授予");
+  await expect(page.getByText("L2 审计结论")).toBeVisible();
+  await expect(page.getByText(/RIDGE_V1: NEGATIVE\/ADEQUATE/)).toBeVisible();
+  await expect(page.getByText("入选模型 无", { exact: false })).toBeVisible();
 
   await page.getByLabel("600000.SH 纳入择时分析").click();
   await expect.poll(() => scopeWrites.length).toBe(1);

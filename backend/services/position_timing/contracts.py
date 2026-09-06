@@ -654,8 +654,8 @@ class L2ResearchContractV1(StrictModel):
     schema_version: Literal["position_timing_l2_research_contract_v1"] = (
         "position_timing_l2_research_contract_v1"
     )
-    implementation_status: Literal["PIPELINE_DEFERRED_BY_APPROVED_SCOPE"] = (
-        "PIPELINE_DEFERRED_BY_APPROVED_SCOPE"
+    implementation_status: Literal["OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL"] = (
+        "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL"
     )
     population_id: Literal["POSITION_TIMING_L2_POPULATION_V1"] = "POSITION_TIMING_L2_POPULATION_V1"
     objective: Literal["HELD_POSITION_EXIT_REDUCE_VERSUS_HOLD"] = (
@@ -767,12 +767,17 @@ def outcome_event_idempotency_key(card_id: str, horizon_trading_days: int) -> st
 POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
     population_spec={
         "cohort_stride_global_trading_days": 20,
+        "cohort_anchor": "FIRST_GLOBAL_TRADING_DAY_ON_OR_AFTER_2018_08_01",
         "entry_fill": "E_PLUS_1_RAW_OPEN",
         "baseline_terminal": "HOLDING_SESSION_20_RAW_CLOSE",
         "review_holding_sessions": list(range(1, 20)),
         "target_action_date": "REVIEW_DATE_PLUS_1_TRADING_DAY",
         "terminal_exit_max_defer_trading_days": 5,
         "selection_top20_filter": False,
+        "selection_features": "EXCLUDED_FROM_V1_INCOMPLETE_TEMPORAL_COVERAGE",
+        "market_regime": "CSI300_TRAILING20_CLOSE_RETURN_SIGN_AT_REVIEW_CLOSE_V1",
+        "corporate_action_valuation": "RAW_PRICE_TIMES_ADJ_FACTOR_RATIO_V1",
+        "policy_value_basis": "LEGAL_ENTRY_QUANTITY_TIMES_ENTRY_RAW_OPEN",
         "unavailable_rows": "RETAIN_TYPED_STATUS",
         "episode_identity_fields": [
             "population_identity",
@@ -791,8 +796,6 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "missing_policy": "TYPED_UNAVAILABLE_NO_FIXED_NOTIONAL_FALLBACK",
     },
     feature_order=(
-        "selection_rank",
-        "selection_score",
         "holding_trading_days_elapsed",
         "holding_fraction_of_time_stop",
         "unrealized_close_return_bps",
@@ -823,6 +826,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "paths": 28,
         "oof_predictions_per_row": 7,
         "oof_aggregation": "ARITHMETIC_MEAN",
+        "path_policy_aggregation": "MEDIAN_EXPOSURE_ACROSS_SEVEN_VALIDATION_PATHS",
         "grouping": ["episode_id", "entry_decision_date"],
         "final_refit": False,
         "parameter_search": False,
@@ -843,6 +847,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "bootstrap_seed_base": 20260903,
         "model_offsets": [0, 1],
         "confidence_level": 0.95,
+        "target_power": 0.8,
         "nominal_alpha": 0.05,
         "familywise_method": "BONFERRONI",
         "familywise_hypothesis_count": 2,
@@ -852,6 +857,7 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
         "otherwise": "INCONCLUSIVE",
         "underpowered": "MDE_DIV_ORACLE_GT_0.25",
         "mde_is_admission_gate": False,
+        "cost_parent_order_scenarios": [1, 2, 3],
     },
     registry_spec={
         "path": "research_registry/timing_trial_registry_v1.jsonl",
@@ -911,6 +917,37 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
 )
 
 
+_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1: dict[str, Any] = {
+    "schema_version": "position_timing_l2_formal_audit_reference_v1",
+    "status": "FORMAL_AUDIT_COMPLETED",
+    "objective": "HELD_POSITION_EXIT_REDUCE_VERSUS_HOLD",
+    "request_sha256": "163c90896899e65cf3183e5e37997fa4278c77da65ff552407357519e4afb861",
+    "bundle_id": "eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51",
+    "receipt_sha256": "d3bf07fd5c950feaa6fa52cd8851d16cdb1012cf8d7591b5660139e8881f2539",
+    "receipt_file_sha256": "13be7b94f593422ef3d5c4977395bb0b680ca276773926a45ce61c158225cfa8",
+    "effect_evidence": "INCONCLUSIVE",
+    "selected_model_id": None,
+    "runtime_model_written": False,
+    "hypotheses": [
+        {
+            "model_id": "SKLEARN_RIDGE_V1",
+            "effect_evidence": "NEGATIVE",
+            "power_status": "ADEQUATE",
+        },
+        {
+            "model_id": "LIGHTGBM_GBDT_V1",
+            "effect_evidence": "INCONCLUSIVE",
+            "power_status": "ADEQUATE",
+        },
+    ],
+    "interpretation": "RESEARCH_LEVEL_NOT_STOCK_CONFIDENCE",
+}
+POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1: dict[str, Any] = {
+    **_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1,
+    "reference_sha256": canonical_sha256(_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1),
+}
+
+
 __all__ = [
     "CardIssuedEventV1",
     "AlertEmissionAuthorizedEventV1",
@@ -927,6 +964,7 @@ __all__ = [
     "OutcomeEvaluatedEventV1",
     "ParentOrderCostScenarioV1",
     "POSITION_SOURCE",
+    "POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1",
     "POSITION_TIMING_L2_RESEARCH_CONTRACT_V1",
     "PositionTimingCardSetV1",
     "PositionTimingCardV1",
