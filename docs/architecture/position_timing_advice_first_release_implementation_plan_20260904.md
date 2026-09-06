@@ -2,11 +2,11 @@
 
 > 日期：2026-09-04
 >
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_002_AUDIT_COMPLETED_PT_NEXT_003_PIPELINE_LOCAL_VERIFIED`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_002_AUDIT_COMPLETED_PT_NEXT_003_AUDIT_COMPLETED_INSUFFICIENT_DATA`
 >
 > F2 设计权威：`docs/architecture/position_timing_advice_f2_redesign_20260903.md`
 >
-> 收口状态：首发运行态已验证；`PT-NEXT-002` 离线 L2 audit 已完成且无 selected/runtime model；`PT-NEXT-003` 正在实现独立 L4b-1 离线执行窗口审计
+> 收口状态：首发运行态已验证；`PT-NEXT-002` 离线 L2 audit 已完成且无 selected/runtime model；`PT-NEXT-003` 首轮 L4b-1 audit 已完成且因无 eligible action-card 未选择执行窗口
 >
 > 目标：用两个连续实现块和一次上线收口，交付完整的 L1 日频行动卡、L1a 盘中到价提醒与 prospective outcome 闭环；两个实现块可以增量源码合入，但都不单独代表首发上线。
 
@@ -52,7 +52,7 @@
 - 业务 smoke 使用 `/api/v1/position-timing/intents` 的 target-owned collection 语义契约，确认 468 个条目。该契约缺口由 BUG-1378 的源码 PR `#4341` 修复并由 close-sync PR `#4342` 固化；它只增加精确端点映射与测试，不改变产品运行时，也不要求再次重启。
 - BUG-1365 close-sync PR `#4311` 已合入 `main`（merge commit `a87e239e2a0ffaeae28bc87dec96741d4476144b`）；Issue `#4301` 已关闭，canonical BUG 状态为 `verified`、`post_restart_effective_gate=passed`、`runtime_identity_match=true`。
 - 最终只读业务读回为 468 个候选、2 个有效持仓、2 张目标交易日 2026-09-07 的 `HOLD` 卡；10 个 horizon 仍为 pending，2026-09-06 非交易日 alert 为 `NO_VALID_CARD_TODAY`。四个 BUG-1365/BUG-1378 源码与 close-sync 工作树、对应本地/远端分支及 BUG-id reservation 均已按精确清单清理。
-- 下一项 `PT-NEXT-003` 已由用户启动；它只实现一分钟 candidate 上的 prospective action-card 执行窗口反事实，不反向阻塞已经可用的 L1/L1a。
+- 下一项 `PT-NEXT-003` 已由用户启动并完成首轮正式审计；它只实现一分钟 candidate 上的 prospective action-card 执行窗口反事实，不反向阻塞已经可用的 L1/L1a。
 
 ## 0.4 2026-09-06 `PT-NEXT-002` 离线 L2 可学性审计
 
@@ -64,13 +64,15 @@
 - 该结果是本次两个冻结函数族/政策的研究终态，不是 L1/L1a 发布门禁，也不证明不存在其他信号。不得在同一 family 追加搜索；未来若研究 OPEN/ADD entry objective，必须另立设计、request 和 trial family。
 - 收口验证为 position-timing 88 tests、相邻 Advisory CPCV/registry/control 16 tests、集中 `position_timing_first_release` nox、F2 validator 27/27、validation catalog integrity 与 L0 全部通过；目标 Playwright 同时验证 L2 总体 `INCONCLUSIVE`、Ridge `NEGATIVE/ADEQUATE` 和“无入选模型”只出现在研究证据区。
 
-## 0.5 2026-09-06 `PT-NEXT-003` L4b-1 离线执行窗口审计（管线本地验证完成）
+## 0.5 2026-09-06 `PT-NEXT-003` L4b-1 离线执行窗口审计（首轮完成）
 
 - 复用最新 PASS 的 2026-08-31 minute candidate，只读消费 Qlib Bin 与真实 `CARD_ISSUED`/immutable card；不重建或激活数据集。
 - 只比较 `OPENING_30M_VWAP_RAW_V1` 与 `AT_OPEN_RAW_V1`，固定 card side、quantity、一个 parent order 和 20 日 horizon；BUY/SELL 为两个预注册方向假设，不搜索其他窗口或模型。
 - 本项复杂度预算是一份 offline service/CLI 文件、一份直接测试和两份既有设计文档更新；无 router、页面、worker、scheduler、数据库、依赖、模型、运行 policy 或订单路径。
-- 当前生产只有两张 HOLD 卡且 target date 超过 minute cutoff，首轮正式结果预期可以是 `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS`；这是诚实的研究结果，不是源码失败、人工审批或 L1/L1a 门禁。
-- `minute_execution_pipeline.py` 与 11 项直接测试已经落地；`AIstock` 环境下全模块 99 项与集中 `position_timing_backend` 均通过。正式 audit 在代码提交并恢复干净 worktree 后执行，避免 request 绑定未提交实现。
+- 当前生产只有两张 HOLD 卡，首轮正式结果为 `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS`；BUY/SELL 均为 `INSUFFICIENT_DATA/UNDERPOWERED`，没有 selected side。这是诚实的研究结果，不是源码失败、人工审批或 L1/L1a 门禁。
+- `minute_execution_pipeline.py` 与 11 项直接测试已经落地；`AIstock` 环境下全模块 99 项与集中 `position_timing_backend` 均通过。正式 request 绑定干净代码提交 `e00e624797ae627c7d425a376377938a46e43b68`，没有绑定未提交实现。
+- immutable bundle 为 `research/l4b1_execution_window_bundles/78ee08b9d712c3b62517dc740ce6f2fac3ad39ec19670d5c7ee8c72c6e1f0816`，receipt SHA-256 为 `02250741104c8ced608a26453a9aa01f31e2af07882cf30d9894bd60734ef406`；inspect 与 exact retry 通过，专用 registry 仅一行且 retry 不追加。
+- 全局 N0 registry/current_route、生产 cards/events 的前后 hashes 完全一致；runtime policy/card/event/order 均未写。后续只在新 minute candidate 已覆盖真实 AT_OPEN action-card 时重跑同一入口，不另建平台或开发阶段。
 
 ## 1. 执行结论
 
@@ -369,6 +371,6 @@ production_dependency_gate = noop
 |---:|---|---|---|
 | 1 | `PT-NEXT-001` | `RUNTIME_VERIFIED` | 已在同一个块二任务中完成 F-027、L1a 与 prospective outcome，并通过 §0.3 的重启后收据；只增加批准的 `alerts.py`，未拆新阶段、审批或发布平台 |
 | 2 | `PT-NEXT-002` | `AUDIT_COMPLETED_INCONCLUSIVE` | 已按冻结契约完成一次 L2 Ridge+GBDT learnability audit；Ridge `NEGATIVE`、GBDT/study `INCONCLUSIVE`、selected 0，无 runtime model，结果不阻塞 L1/L1a |
-| 3 | `PT-NEXT-003` | `IN_PROGRESS` | 一个 offline 文件内完成 L4b-1 prospective action-card 分钟执行窗口审计；L4b-2 仍在范围外 |
+| 3 | `PT-NEXT-003` | `AUDIT_COMPLETED_INSUFFICIENT_DATA` | L4b-1 pipeline、正式 request/bundle/receipt 与隔离 readback 已完成；当前 0 eligible action-card、selected side 为空，后续按同一入口数据驱动重跑；L4b-2 仍在范围外 |
 
-`PT-NEXT-001` 已完成并通过运行态验收，`PT-NEXT-002` 已完成离线审计，`PT-NEXT-003` 已启动且只改变 research surface。prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a。
+`PT-NEXT-001` 已完成并通过运行态验收，`PT-NEXT-002` 与 `PT-NEXT-003` 均已完成各自首轮离线审计；当前没有证据支持 L3 或静态分钟窗口进入运行卡片。prospective 样本量、MDE、HMM/Selection 可用性、最低金额或人工审批均不反向阻塞已实现的 L1/L1a；L4b-1 后续重跑是数据到位后的同入口操作，不新增阶段。
