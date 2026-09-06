@@ -226,7 +226,7 @@
     "fresh_process_evidence": [
       "WSL Ubuntu rdagent-gpu Python 3.10 imported the task-worktree factor services and completed the canonical-v2 DEV smoke against the 2026-08-31 direct-v2 candidate",
       "WSL Ubuntu rdagent-gpu Python 3.10 task-worktree import and DEV canonical-v2 metric/correlation smoke -> passed",
-      "WSL Ubuntu rdagent-gpu Python 3.10 fresh process classified and excluded one current-window all-NaN factor while preserving the remaining finite correlation matrix"
+      "WSL Ubuntu rdagent-gpu Python 3.10 fresh process -> passed: classified current-window all-NaN factor and preserved remaining finite matrix"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
