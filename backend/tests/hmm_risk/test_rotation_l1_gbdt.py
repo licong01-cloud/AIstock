@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import sys
 
 import numpy as np
 import pandas as pd
@@ -83,6 +84,7 @@ def _battery_report(*, selected_horizon: int = 10, power_status: str = "INSUFFIC
         "fit_count": 15,
         "ridge_fit_count": 10,
         "market_fit_count": 5,
+        "fit_progress": {"planned": 15, "started": 15, "completed": 15, "failed": 0, "active_fit": None},
         "market_context_receipts": market_receipts,
         "horizons": horizons,
         "selection": {
@@ -261,6 +263,13 @@ def test_ridge_battery_uses_both_horizons_without_tail_or_model_write() -> None:
     assert report["tail_accessed"] is False
     assert report["model_write_performed"] is False
     assert report["producer_commit"] == "e" * 40
+    assert report["fit_progress"] == {
+        "planned": 15,
+        "started": 15,
+        "completed": 15,
+        "failed": 0,
+        "active_fit": None,
+    }
     assert all(
         report["horizons"][str(horizon)]["forward_power"]["status"] in {"INSUFFICIENT", "SUFFICIENT", "UNAVAILABLE"}
         for horizon in subject.HORIZONS
@@ -305,6 +314,52 @@ def test_cli_child_failure_persists_typed_receipt(tmp_path) -> None:
     assert failure["reason_code"] == subject.REASON_INPUT
     assert failure["fit_success_claimed"] is False
     assert failure["tail_accessed"] is False
+    body = {key: value for key, value in failure.items() if key != "failure_sha256"}
+    assert failure["failure_sha256"] == subject.canonical_sha256(body)
+
+
+def test_parent_fit_progress_aggregates_success_failure_and_not_started(tmp_path) -> None:
+    cli._write_once(tmp_path / "battery.json", _battery_report())
+    child_error = subject.RotationL1G2AError(
+        subject.REASON_LEAF,
+        "leaf failed",
+        stage="leaf_date_coverage",
+        evidence={
+            "fit_progress": {
+                "planned": 12,
+                "started": 2,
+                "completed": 2,
+                "failed": 0,
+                "active_fit": None,
+            }
+        },
+    )
+    cli._write_once(
+        tmp_path / "fresh_process_1.failure.json",
+        cli._failure(child_error, stage="model-child"),
+    )
+
+    progress = cli._parent_fit_progress(tmp_path)
+
+    assert progress["planned"] == 39
+    assert progress["started"] == 17
+    assert progress["completed"] == 17
+    assert progress["failed"] == 0
+    assert [item["status"] for item in progress["components"]] == ["complete", "failed", "not_started"]
+    assert [item["readback_valid"] for item in progress["components"]] == [True, True, True]
+
+
+def test_parent_rejects_tampered_child_failure_receipt(tmp_path) -> None:
+    path = tmp_path / "fresh_process_1.failure.json"
+    failure = cli._failure(RuntimeError("original"), stage="fresh_process")
+    failure["message"] = "tampered"
+    cli._write_once(path, failure)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        cli._run_child([sys.executable, "-c", "raise SystemExit(2)"], path)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert caught.value.stage == "fresh_process_readback"
 
 
 class _FakeBooster:
@@ -351,6 +406,13 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
         runtime_validator=_test_runtime,
     )
     assert first["reproducibility_payload"]["fit_count"] == 12
+    assert first["reproducibility_payload"]["fit_progress"] == {
+        "planned": 12,
+        "started": 12,
+        "completed": 12,
+        "failed": 0,
+        "active_fit": None,
+    }
     assert first["reproducibility_payload"]["profile"]["n_estimators"] == 240
     assert first["reproducibility_payload_sha256"] == second["reproducibility_payload_sha256"]
     acceptance = subject.close_processes(first, second)
@@ -376,6 +438,38 @@ def test_gbdt_process_fails_closed_on_leaf_date_collapse() -> None:
             runtime_validator=_test_runtime,
         )
     assert caught.value.reason_code == subject.REASON_LEAF
+    assert caught.value.stage == "leaf_date_coverage"
+    assert caught.value.evidence["fit_identity"] == "process-1:fold-1:gbdt"
+    assert caught.value.evidence["fit_progress"] == {
+        "planned": 12,
+        "started": 2,
+        "completed": 2,
+        "failed": 0,
+        "active_fit": None,
+    }
+
+
+def test_gbdt_fit_failure_records_active_fit_and_failed_count() -> None:
+    class FitFailed(_FakeEstimator):
+        def fit(self, features: pd.DataFrame, target: pd.Series) -> "_FakeEstimator":
+            raise ValueError("fit failed")
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.run_gbdt_process(
+            _bundle(),
+            battery_report=_battery_report(),
+            process_index=1,
+            estimator_factory=FitFailed,
+            runtime_validator=_test_runtime,
+        )
+    assert caught.value.reason_code == subject.REASON_FIT
+    assert caught.value.evidence["fit_progress"] == {
+        "planned": 12,
+        "started": 2,
+        "completed": 1,
+        "failed": 1,
+        "active_fit": "process-1:fold-1:gbdt",
+    }
 
 
 def test_state_projection_keeps_boundary_tie_neutral_without_index_fallback() -> None:

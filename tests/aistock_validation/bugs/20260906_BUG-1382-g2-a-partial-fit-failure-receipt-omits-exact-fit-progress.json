@@ -1,6 +1,9 @@
 {
   "actual": "The merged G2-A v1.2 executor correctly stops on a leaf-date contract failure, but fresh-process and parent failure receipts omit planned/started/completed/failed fit counts and the active fold/stage. This violates the approved 39-fit partial-execution audit contract and prevents exact readback of the failed formal experiment. Preserve the 20-day leaf threshold and all model contracts; add typed progress tracking only. No tail, database, runtime, dependency, or process-control changes.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_gbdt.py",
+    "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+    "scripts/hmm_risk/run_rotation_l1_g2a.py",
     "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
   ],
   "assigned_agent": null,
@@ -21,11 +24,18 @@
       "timestamp": "2026-09-06T08:00:40.763832Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v12_development_39fit_a7609c41_20260906/fresh_process_1.failure.json"
+  ],
+  "expected": "Every battery/model/parent success or failure receipt records exact planned, started, completed and failed fit counts plus the active fit or failure stage; parent readback rejects tampered child receipts. The 20-day leaf threshold and all model contracts remain unchanged.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+      "scripts/hmm_risk/run_rotation_l1_g2a.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +45,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+      "scripts/hmm_risk/run_rotation_l1_g2a.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+      "scripts/hmm_risk/run_rotation_l1_g2a.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
+    ]
   },
   "first_seen_at": "2026-09-06T08:00:40.763845Z",
   "fix_branch": null,
@@ -54,7 +74,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_rotation_l1_gbdt.py::test_gbdt_process_fails_closed_on_leaf_date_collapse -q -p no:cacheprovider",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
@@ -187,5 +207,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }

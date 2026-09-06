@@ -31,7 +31,9 @@ if str(ROOT) not in sys.path:
 from backend.services.dataset_release.cas_store import canonical_json_bytes  # noqa: E402
 from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
     REASON_INPUT,
+    REASON_REPRODUCIBILITY,
     RotationL1G2AError,
+    canonical_sha256,
     close_processes,
     read_input_bundle,
     run_gbdt_process,
@@ -62,24 +64,99 @@ def _write_once(path: Path, value: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
-def _failure(error: BaseException, *, stage: str) -> dict[str, Any]:
+def _failure(
+    error: BaseException,
+    *,
+    stage: str,
+    fit_progress: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     reason = str(getattr(error, "reason_code", REASON_INPUT))
     raw_evidence = getattr(error, "evidence", None)
     if not isinstance(raw_evidence, dict):
         raw_evidence = getattr(error, "context", None)
     evidence = raw_evidence if isinstance(raw_evidence, dict) else {"exception_type": type(error).__name__}
-    return {
+    body = {
         "schema_version": "hmm_risk_rotation_l1_g2a_failure_v1",
         "status": "failed",
-        "stage": stage,
+        "stage": str(getattr(error, "stage", stage)),
         "reason_code": reason,
         "message": str(error),
         "evidence": evidence,
+        "fit_progress": fit_progress or evidence.get("fit_progress"),
         "fit_success_claimed": False,
         "tail_accessed": False,
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    return {**body, "failure_sha256": canonical_sha256(body)}
+
+
+def _parent_fit_progress(output: Path) -> dict[str, Any]:
+    components: list[dict[str, Any]] = []
+    for name in ("battery", "fresh_process_1", "fresh_process_2"):
+        success_path = output / f"{name}.json"
+        failure_path = output / f"{name}.failure.json"
+        progress: Any = None
+        status = "not_started"
+        if success_path.exists():
+            payload = _load_object(success_path)
+            progress = (
+                payload.get("fit_progress")
+                if name == "battery"
+                else (payload.get("reproducibility_payload") or {}).get("fit_progress")
+            )
+            status = "complete"
+        elif failure_path.exists():
+            payload = _load_object(failure_path)
+            progress = payload.get("fit_progress")
+            status = "failed"
+        expected_planned = 15 if name == "battery" else 12
+        if status == "not_started":
+            progress = {
+                "planned": expected_planned,
+                "started": 0,
+                "completed": 0,
+                "failed": 0,
+                "active_fit": None,
+            }
+            readback_valid = True
+        else:
+            readback_valid = isinstance(progress, dict) and set(progress) == {
+                "planned",
+                "started",
+                "completed",
+                "failed",
+                "active_fit",
+            }
+        if readback_valid:
+            readback_valid = (
+                progress["planned"] == expected_planned
+                and all(
+                    isinstance(progress[field], int) and progress[field] >= 0
+                    for field in ("started", "completed", "failed")
+                )
+                and progress["started"] <= progress["planned"]
+                and progress["completed"] + progress["failed"] <= progress["started"]
+                and (progress["active_fit"] is None or isinstance(progress["active_fit"], str))
+            )
+        if not readback_valid:
+            progress = {
+                "planned": expected_planned,
+                "started": 0,
+                "completed": 0,
+                "failed": 0,
+                "active_fit": None,
+            }
+        components.append({"component": name, "status": status, "readback_valid": readback_valid, **progress})
+    body = {
+        "planned": 39,
+        "started": sum(int(item["started"]) for item in components),
+        "completed": sum(int(item["completed"]) for item in components),
+        "failed": sum(int(item["failed"]) for item in components),
+        "active_fit": next((item["active_fit"] for item in components if item["active_fit"]), None),
+        "components": components,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def _ensure_external_new_directory(path: Path) -> Path:
@@ -167,6 +244,17 @@ def _run_child(command: list[str], failure_path: Path) -> None:
     if completed.returncode != 0:
         if failure_path.exists():
             failure = _load_object(failure_path)
+            failure_body = {key: value for key, value in failure.items() if key != "failure_sha256"}
+            if (
+                failure.get("schema_version") != "hmm_risk_rotation_l1_g2a_failure_v1"
+                or failure.get("status") != "failed"
+                or failure.get("failure_sha256") != canonical_sha256(failure_body)
+            ):
+                raise RotationL1G2AError(
+                    REASON_REPRODUCIBILITY,
+                    "fresh-process failure receipt identity differs",
+                    stage="fresh_process_readback",
+                )
             error = RotationL1G2AError(
                 str(failure.get("reason_code") or REASON_INPUT),
                 str(failure.get("message") or "fresh process failed"),
@@ -210,7 +298,10 @@ def _run_parent(args: argparse.Namespace) -> int:
     except Exception as exc:
         parent_failure = output / "parent.failure.json"
         if not parent_failure.exists():
-            _write_once(parent_failure, _failure(exc, stage="parent"))
+            _write_once(
+                parent_failure,
+                _failure(exc, stage="parent", fit_progress=_parent_fit_progress(output)),
+            )
         print(json.dumps({"status": "failed", "failure": str(parent_failure)}, sort_keys=True), file=sys.stderr)
         return 2
     print(
