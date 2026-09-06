@@ -33,7 +33,6 @@ import pandas as pd
 import psutil
 import tables
 
-from backend.qlib_exporter.authoritative_bin_exporter import read_qlib_bin
 from backend.services.canonical_pit_dataset_consumer import FormalDatasetUsage
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 from backend.services.dataset_release.copy_on_write import CopyOnWriteError, tree_merkle
@@ -735,19 +734,25 @@ def _read_qlib_stock_rows(
     active_spans: Sequence[tuple[date, date]],
 ) -> np.ndarray:
     feature_root = qlib_root / "features" / _qlib_code_directory(symbol)
-    arrays: dict[str, tuple[int, np.ndarray]] = {}
+    inventories: dict[str, tuple[Path, int, int]] = {}
     for field in QLIB_STOCK_FIELDS:
+        path = feature_root / f"{field}.day.bin"
         try:
-            start, raw = read_qlib_bin(feature_root / f"{field}.day.bin")
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                raw_start = np.frombuffer(handle.read(4), dtype="<f4")
         except (FileNotFoundError, ValueError, OSError) as exc:
             raise _fail(
                 REASON_SOURCE_COMPONENT_MISSING, f"Qlib stock feature is unavailable: {symbol}/{field}"
             ) from exc
-        if raw.dtype != np.dtype("<f4") or len(raw) < 2:
+        if size < 8 or size % 4 or len(raw_start) != 1 or not math.isfinite(float(raw_start[0])):
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"Qlib stock feature dtype/shape differs: {symbol}/{field}")
-        arrays[field] = (start, raw[1:])
-    starts = {value[0] for value in arrays.values()}
-    lengths = {len(value[1]) for value in arrays.values()}
+        start_value = float(raw_start[0])
+        if start_value % 1:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"Qlib stock feature start index differs: {symbol}/{field}")
+        inventories[field] = (path, int(start_value), size // 4 - 1)
+    starts = {value[1] for value in inventories.values()}
+    lengths = {value[2] for value in inventories.values()}
     if len(starts) != 1 or len(lengths) != 1:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"Qlib stock fields are not row aligned: {symbol}")
     start_index = next(iter(starts))
@@ -776,7 +781,12 @@ def _read_qlib_stock_rows(
     )
     result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
     for field in QLIB_STOCK_FIELDS:
-        result[field] = arrays[field][1][local_positions]
+        path, _field_start, field_length = inventories[field]
+        mapped = np.memmap(path, dtype="<f4", mode="r", offset=4, shape=(field_length,))
+        try:
+            result[field] = np.asarray(mapped[local_positions], dtype="<f4")
+        finally:
+            del mapped
     return result
 
 
@@ -1164,11 +1174,61 @@ def _require_direct_component_state(
 def _load_direct_v2_index_context(
     path: Path,
     *,
-    expected_cutoff: date,
+    expected_release_cutoff: date,
+    release_calendar: Sequence[date],
     calendar: Sequence[date],
 ) -> tuple[dict[str, Any], dict[date, float], dict[date, float]]:
+    expected_days = tuple(calendar)
+    full_days = tuple(release_calendar)
+    if not expected_days or not full_days or expected_days[0] not in full_days or expected_days[-1] not in full_days:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 index read window escapes release calendar")
     try:
-        frame = pd.read_hdf(path)
+        import tables
+
+        with tables.open_file(path, mode="r") as handle:
+            group = handle.root.data
+            value_blocks: dict[tuple[str, ...], Any] = {}
+            for name, node in group._v_children.items():
+                if not name.startswith("block") or not name.endswith("_items"):
+                    continue
+                fields = tuple(bytes(value).decode("ascii") for value in node.read())
+                value_blocks[fields] = group._v_children[name.replace("_items", "_values")]
+            numeric_columns = ("open", "high", "low", "close", "volume", "amount")
+            object_columns = ("trade_date", "ts_code")
+            if numeric_columns not in value_blocks or object_columns not in value_blocks:
+                raise ValueError("index fixed blocks differ")
+            object_rows = value_blocks[object_columns][0]
+            normalized_object_rows = [
+                (_as_date(row[0], "index.trade_date"), str(row[1]).upper()) for row in object_rows
+            ]
+            full_codes = tuple(sorted({row[1] for row in normalized_object_rows}))
+            full_max_by_code = {
+                code: max(day for day, observed in normalized_object_rows if observed == code) for code in full_codes
+            }
+            if full_codes != DIRECT_V2_INDEX_CODES or set(full_max_by_code.values()) != {expected_release_cutoff}:
+                raise ValueError("index release identity differs")
+            earlier_days = sorted({row[0] for row in normalized_object_rows if row[0] < expected_days[0]})
+            read_start = earlier_days[-1] if earlier_days else expected_days[0]
+            positions = [
+                index for index, row in enumerate(normalized_object_rows) if read_start <= row[0] <= expected_days[-1]
+            ]
+            records: list[dict[str, Any]] = []
+            start = 0
+            while start < len(positions):
+                end = start + 1
+                while end < len(positions) and positions[end] == positions[end - 1] + 1:
+                    end += 1
+                numeric_rows = value_blocks[numeric_columns].read(positions[start], positions[end - 1] + 1)
+                for position, values in zip(positions[start:end], numeric_rows, strict=True):
+                    records.append(
+                        {
+                            "trade_date": normalized_object_rows[position][0],
+                            "ts_code": normalized_object_rows[position][1],
+                            **dict(zip(numeric_columns, values, strict=True)),
+                        }
+                    )
+                start = end
+        frame = pd.DataFrame.from_records(records)
     except Exception as exc:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 index context cannot be read") from exc
     expected_columns = ("trade_date", "ts_code", "open", "high", "low", "close", "volume", "amount")
@@ -1198,12 +1258,6 @@ def _load_direct_v2_index_context(
     observed_codes = tuple(sorted(codes.unique()))
     if observed_codes != DIRECT_V2_INDEX_CODES:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 index code contract differs")
-    max_by_code = {
-        code: max(day for day, observed in zip(dates, codes, strict=True) if observed == code)
-        for code in observed_codes
-    }
-    if set(max_by_code.values()) != {expected_cutoff}:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 index code cutoff coverage differs")
     normalized = numeric.copy()
     normalized["trade_date"] = list(dates)
     normalized["ts_code"] = list(codes)
@@ -1216,9 +1270,6 @@ def _load_direct_v2_index_context(
     benchmark_frame["return"] = benchmark_frame["close"].pct_change(fill_method=None)
     return_by_day = dict(zip(benchmark_frame["trade_date"], benchmark_frame["return"], strict=True))
     close_by_day = dict(zip(benchmark_frame["trade_date"], benchmark_frame["close"], strict=True))
-    expected_days = tuple(calendar)
-    if not expected_days:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 CSI300 expected calendar is empty")
     benchmark: dict[date, float] = {}
     benchmark_close: dict[date, float] = {}
     for day in expected_days:
@@ -1237,10 +1288,11 @@ def _load_direct_v2_index_context(
     inventory = {
         "columns": list(expected_columns),
         "dtype": {column: str(numeric[column].dtype) for column in numeric_columns},
-        "date_min": min(dates).isoformat(),
-        "date_max": max(dates).isoformat(),
+        "date_min": expected_days[0].isoformat(),
+        "date_max": expected_days[-1].isoformat(),
+        "release_cutoff": expected_release_cutoff.isoformat(),
         "code_count": len(observed_codes),
-        "row_count": len(frame),
+        "row_count": int(sum(day in set(expected_days) for day in dates)),
         "codes": list(observed_codes),
         "non_finite_count": {
             column: int((~np.isfinite(numeric[column].to_numpy(dtype=np.float64))).sum()) for column in numeric_columns
@@ -1253,14 +1305,32 @@ def _load_direct_v2_sw_l1_index(
     path: Path,
     meta_path: Path,
     *,
-    expected_cutoff: date,
+    expected_release_cutoff: date,
+    release_calendar: Sequence[date],
     calendar: Sequence[date],
 ) -> tuple[dict[str, Any], dict[tuple[date, str], float], dict[str, str]]:
     """Read the published SW2021 L1 close panel without filling or aggregation."""
 
     meta = _read_json_object(meta_path, reason=REASON_SOURCE_SCHEMA_INVALID)
+    expected_days = tuple(calendar)
+    full_days = tuple(release_calendar)
+    if not expected_days or not full_days or expected_days[0] not in full_days or expected_days[-1] not in full_days:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 SW L1 read window escapes release calendar")
     try:
-        frame = pd.read_hdf(path)
+        if expected_days == full_days:
+            frame = pd.read_hdf(path)
+        else:
+            with pd.HDFStore(path, mode="r") as store:
+                key = store.keys()[0]
+                if not store.get_storer(key).is_table:
+                    raise ValueError("bounded SW L1 read requires table layout")
+            frame = pd.read_hdf(
+                path,
+                where=[
+                    f"datetime >= Timestamp('{expected_days[0].isoformat()}')",
+                    f"datetime <= Timestamp('{expected_days[-1].isoformat()}')",
+                ],
+            )
     except Exception as exc:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 index cannot be read") from exc
     if (
@@ -1305,9 +1375,6 @@ def _load_direct_v2_sw_l1_index(
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "direct-v2 SW L1 sector/index identity is not one-to-one")
     index_code_by_sector = dict(sorted(mapping_pairs))
 
-    expected_days = tuple(calendar)
-    if not expected_days:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 SW L1 expected calendar is empty")
     observed_days = tuple(sorted(set(dates)))
     day_counts: dict[date, int] = defaultdict(int)
     for day in dates:
@@ -1325,10 +1392,10 @@ def _load_direct_v2_sw_l1_index(
         "source_identity": DIRECT_V2_SW_L1_SOURCE_IDENTITY,
         "columns": ["index_code", "close"],
         "start": expected_days[0].isoformat(),
-        "end": expected_cutoff.isoformat(),
+        "end": expected_release_cutoff.isoformat(),
         "sector_count": 31,
-        "open_days": len(expected_days),
-        "rows": len(expected_days) * 31,
+        "open_days": len(full_days),
+        "rows": len(full_days) * 31,
         "source_freeze": False,
         "full_history_content_hash": False,
     }
@@ -1345,6 +1412,7 @@ def _load_direct_v2_sw_l1_index(
         "columns": ["index_code", "close"],
         "date_min": observed_days[0].isoformat(),
         "date_max": observed_days[-1].isoformat(),
+        "release_cutoff": expected_release_cutoff.isoformat(),
         "sector_count": len(unique_sectors),
         "index_count": len(unique_indices),
         "open_days": len(observed_days),
@@ -1364,6 +1432,7 @@ def load_rotation_l1_direct_v2_source_assets(
     *,
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
+    data_window_end: date | None = None,
 ) -> dict[str, Any]:
     """Bind one explicit qe_hmm_full_v2 candidate without legacy-path fallback."""
 
@@ -1386,6 +1455,9 @@ def load_rotation_l1_direct_v2_source_assets(
         raise
     if release_cutoff < DIRECT_V2_MINIMUM_CUTOFF:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 candidate cutoff predates the G2-A minimum")
+    read_end = release_cutoff if data_window_end is None else data_window_end
+    if not SOURCE_START <= read_end <= release_cutoff:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 data read window is outside the selected release")
     consumed_components = {
         "daily_bin": "daily_bin_candidate",
         "factor_h5_static": "factor_h5_static_candidate_v2",
@@ -1553,10 +1625,12 @@ def load_rotation_l1_direct_v2_source_assets(
             or _as_date(inventory["date_max"], f"{component}.date_max") < release_cutoff
         ):
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"direct-v2 {component} release coverage differs")
-    release_calendar = tuple(day for day in calendar if SOURCE_START <= day <= release_cutoff)
+    source_release_calendar = tuple(day for day in calendar if SOURCE_START <= day <= release_cutoff)
+    release_calendar = tuple(day for day in source_release_calendar if day <= read_end)
     index_inventory, benchmark, benchmark_close = _load_direct_v2_index_context(
         resolved["index_context"],
-        expected_cutoff=release_cutoff,
+        expected_release_cutoff=release_cutoff,
+        release_calendar=calendar,
         calendar=release_calendar,
     )
     metadata_hashes = {
@@ -1581,7 +1655,8 @@ def load_rotation_l1_direct_v2_source_assets(
         sw_l1_inventory, sector_index_close, sector_index_code_by_sector = _load_direct_v2_sw_l1_index(
             resolved["sw_l1_index"],
             resolved["sw_l1_meta"],
-            expected_cutoff=release_cutoff,
+            expected_release_cutoff=release_cutoff,
+            release_calendar=source_release_calendar,
             calendar=release_calendar,
         )
         metadata_hashes["sw_l1_meta"] = _sha256_file(resolved["sw_l1_meta"])
@@ -1636,6 +1711,7 @@ def load_rotation_l1_direct_v2_source_assets(
         "release_identity": release_identity,
         "release_cutoff": release_cutoff,
         "source_window_end": SOURCE_END,
+        "data_window_end": read_end,
         "universe_key": DIRECT_V2_UNIVERSE_KEY,
         "universe_rule_version": daily_meta["rule_version"],
         "source_revision": source_revision,
@@ -1654,6 +1730,7 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     *,
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
+    data_window_end: date = SOURCE_END,
 ) -> dict[str, Any]:
     """Bind the G2-A v1.2 source; legacy v2 candidates are not eligible."""
 
@@ -1661,6 +1738,7 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
         candidate_root,
         security_identity_manifest=security_identity_manifest,
         provider_absence_manifest=provider_absence_manifest,
+        data_window_end=data_window_end,
     )
     identity = assets.get("release_identity")
     if (
@@ -2120,10 +2198,7 @@ def _append_day_level_aggregates(
             contributor_eligibility=contributor_eligibility,
         )
     for code in sorted(l2_groups):
-        rows = l2_groups[code]
-        for row in rows:
-            row["l1_code"] = row["l2_code"]
-            row["l1_name"] = row["l2_name"]
+        rows = [{**row, "l1_code": row["l2_code"], "l1_name": row["l2_name"]} for row in l2_groups[code]]
         _append_feature_domain_aggregate(
             rows,
             level="L2",
@@ -2131,6 +2206,60 @@ def _append_day_level_aggregates(
             unavailable=unavailable,
             contributor_eligibility=contributor_eligibility,
         )
+
+
+def _append_g2a_l1_daily_inputs(
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    output: list[dict[str, Any]],
+) -> None:
+    """Aggregate only the two stock-derived G2-A inputs for one source day."""
+
+    groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in day_rows:
+        groups[str(row["l1_code"])].append(row)
+    for sector_code in sorted(groups):
+        rows = groups[sector_code]
+        expected = [row for row in rows if row.get("is_suspended") is False]
+        breadth_complete = [row for row in expected if isinstance(row.get("g2a_above_ma20"), bool)]
+        moneyflow_complete = [
+            row
+            for row in expected
+            if row.get("moneyflow_fact_status") == "available"
+            and row.get("net_mf_amount_cny") is not None
+            and row.get("amount_cny") is not None
+            and math.isfinite(float(row["net_mf_amount_cny"]))
+            and math.isfinite(float(row["amount_cny"]))
+            and float(row["amount_cny"]) >= 0
+        ]
+        breadth_covered = len(breadth_complete) >= 5 and 10 * len(breadth_complete) >= 9 * len(expected)
+        moneyflow_covered = len(moneyflow_complete) >= 5 and 10 * len(moneyflow_complete) >= 9 * len(expected)
+        traded_amount = math.fsum(float(row["amount_cny"]) for row in moneyflow_complete) if moneyflow_covered else None
+        if traded_amount is not None and (not math.isfinite(traded_amount) or traded_amount <= 0):
+            moneyflow_covered = False
+            traded_amount = None
+        net_amount = (
+            math.fsum(float(row["net_mf_amount_cny"]) for row in moneyflow_complete) if moneyflow_covered else None
+        )
+        body = {
+            "source_date": rows[0]["trade_date"],
+            "sector_code": sector_code,
+            "expected_non_suspended_count": len(expected),
+            "breadth_valid_count": len(breadth_complete),
+            "breadth_coverage": len(breadth_complete) / len(expected) if expected else 0.0,
+            "pit_breadth_above_ma20": (
+                math.fsum(1.0 for row in breadth_complete if row["g2a_above_ma20"]) / len(breadth_complete)
+                if breadth_covered
+                else None
+            ),
+            "breadth_reason_code": None if breadth_covered else "hmm_risk_rotation_feature_contract_invalid",
+            "moneyflow_valid_count": len(moneyflow_complete),
+            "moneyflow_coverage": len(moneyflow_complete) / len(expected) if expected else 0.0,
+            "moneyflow_net_amount_cny": net_amount,
+            "moneyflow_traded_amount_cny": traded_amount,
+            "moneyflow_reason_code": None if moneyflow_covered else "hmm_risk_rotation_feature_contract_invalid",
+        }
+        output.append(body)
 
 
 def _build_train_only_contributor_eligibility(
@@ -2206,8 +2335,10 @@ def _build_stock_fact_aggregates(
     suspension_keys: frozenset[tuple[date, str]],
     contributor_eligibility: Mapping[str, bool],
     resource_started: float | None = None,
+    g2a_l1_daily_output: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
+    g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
     active_span_start: dict[str, date] = {}
     circ_state: dict[str, tuple[date, float | None, str, str | None]] = {}
     l1_aggregates: list[Any] = []
@@ -2284,10 +2415,26 @@ def _build_stock_fact_aggregates(
                 basic_row = basic.get((day, daily_resolution.source_ts_code))
                 flow_row = moneyflow.get((day, flow_resolution.source_ts_code))
                 qlib_missing = _qlib_row_is_fully_missing(raw)
+                qlib = None if qlib_missing else _raw_qlib_values(raw)
+                g2a_above_ma20 = None
+                if not suspended and qlib is not None:
+                    previous_g2a = g2a_history[symbol]
+                    expected_history_dates = (
+                        tuple(calendar[max(0, calendar_position[day] - 19) : calendar_position[day]])
+                        if calendar_position[day] >= 19
+                        else ()
+                    )
+                    actual_history_dates = tuple(item[0] for item in previous_g2a)
+                    if len(expected_history_dates) == 19 and actual_history_dates[-19:] == expected_history_dates:
+                        closes = [item[1] for item in list(previous_g2a)[-19:]] + [qlib["close"]]
+                        if all(math.isfinite(value) and value > 0 for value in closes):
+                            g2a_above_ma20 = bool(qlib["close"] > math.fsum(closes) / 20.0)
                 projection = adapter.resolve(symbol, day)
                 if projection.status != "resolved":
                     if not suspended and not qlib_missing:
-                        history[symbol].append(_raw_qlib_values(raw)["close"])
+                        assert qlib is not None
+                        history[symbol].append(qlib["close"])
+                        g2a_history[symbol].append((day, qlib["close"]))
                     _advance_interval(
                         status_active,
                         status_done,
@@ -2325,6 +2472,7 @@ def _build_stock_fact_aggregates(
                             "l2_name": projection.l2_name,
                             "is_suspended": True,
                             "moneyflow_fact_status": "not_applicable_suspended",
+                            "g2a_above_ma20": None,
                         }
                     )
                     continue
@@ -2448,10 +2596,11 @@ def _build_stock_fact_aggregates(
                             "moneyflow_provider_absence": (
                                 None if provider_evidence is None else provider_evidence.evidence()
                             ),
+                            "g2a_above_ma20": None,
                         }
                     )
                     continue
-                qlib = _raw_qlib_values(raw)
+                assert qlib is not None
                 row = {
                     "trade_date": day,
                     "symbol": symbol,
@@ -2490,9 +2639,11 @@ def _build_stock_fact_aggregates(
                     "moneyflow_fact_status": moneyflow_status,
                     "moneyflow_source_identity": flow_resolution.evidence(),
                     "moneyflow_provider_absence": None if provider_evidence is None else provider_evidence.evidence(),
+                    "g2a_above_ma20": g2a_above_ma20,
                 }
                 day_rows.append(row)
                 prices.append(qlib["close"])
+                g2a_history[symbol].append((day, qlib["close"]))
             advance_circ_state(through=day)
             _append_day_level_aggregates(
                 day_rows,
@@ -2501,6 +2652,8 @@ def _build_stock_fact_aggregates(
                 unavailable=unavailable,
                 contributor_eligibility=contributor_eligibility,
             )
+            if g2a_l1_daily_output is not None:
+                _append_g2a_l1_daily_inputs(day_rows, output=g2a_l1_daily_output)
         advance_circ_state()
     interval_evidence = {
         "industry": [
@@ -2634,6 +2787,29 @@ def _receipt_from_body(body: Mapping[str, Any]) -> dict[str, Any]:
     return {**dict(body), "receipt_sha256": canonical_sha256(body)}
 
 
+def _published_l1_sector_close(
+    sector_close: Mapping[tuple[date, str], float],
+    code_by_taxonomy: Mapping[str, str],
+    *,
+    canonical_codes: Sequence[str],
+) -> dict[tuple[date, str], float]:
+    mapping = {str(key): str(value) for key, value in code_by_taxonomy.items()}
+    if (
+        len(mapping) != 31
+        or len(set(mapping.values())) != 31
+        or set(mapping.values()) != set(canonical_codes)
+        or any(taxonomy_code not in mapping for _day, taxonomy_code in sector_close)
+    ):
+        raise _fail(REASON_AUTHORITY_AMBIGUOUS, "G2-A SW L1 taxonomy/index projection differs")
+    output: dict[tuple[date, str], float] = {}
+    for (day, taxonomy_code), value in sector_close.items():
+        key = (day, mapping[taxonomy_code])
+        if key in output:
+            raise _fail(REASON_DUPLICATE_KEY, "G2-A published SW L1 close identity is duplicated")
+        output[key] = float(value)
+    return output
+
+
 def build_rotation_l1_inputs_from_assets(
     *,
     dataset_release_manifest: Path | None = None,
@@ -2643,6 +2819,7 @@ def build_rotation_l1_inputs_from_assets(
     industry_authority: Mapping[str, Any],
     forbidden_roots: Sequence[Path],
     work_parent: Path,
+    g2a_contract: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Build the existing RW1 in-memory input interface from frozen assets only."""
 
@@ -2652,10 +2829,14 @@ def build_rotation_l1_inputs_from_assets(
     if direct_v2_candidate_root is not None:
         if security_identity_manifest is None or provider_absence_manifest is None:
             raise _fail(REASON_MANIFEST_INVALID, "direct-v2 source requires explicit security/provider authority")
-        assets = load_rotation_l1_direct_v2_source_assets(
+        loader = (
+            load_rotation_l1_g2a_direct_v2_source_assets if g2a_contract else load_rotation_l1_direct_v2_source_assets
+        )
+        assets = loader(
             direct_v2_candidate_root,
             security_identity_manifest=security_identity_manifest,
             provider_absence_manifest=provider_absence_manifest,
+            **({"data_window_end": SOURCE_END} if g2a_contract else {}),
         )
     else:
         if security_identity_manifest is not None or provider_absence_manifest is not None:
@@ -2709,6 +2890,7 @@ def build_rotation_l1_inputs_from_assets(
     )
     work_parent = Path(work_parent).resolve()
     work_parent.mkdir(parents=True, exist_ok=True)
+    g2a_l1_daily: list[dict[str, Any]] | None = [] if g2a_contract else None
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-source-", dir=work_parent) as raw_temporary:
         month_paths = _spool_qlib_months(
             qlib_root,
@@ -2736,6 +2918,7 @@ def build_rotation_l1_inputs_from_assets(
             suspension_keys=suspension_keys,
             contributor_eligibility=contributor_eligibility,
             resource_started=started,
+            g2a_l1_daily_output=g2a_l1_daily,
         )
         observed_l1 = {(item.trade_date, item.l1_code) for item in l1_aggregates}
         observed_l2 = {(item.trade_date, item.l1_code) for item in l2_aggregates}
@@ -2853,6 +3036,62 @@ def build_rotation_l1_inputs_from_assets(
         },
         "source_build_resource_receipts": resource_receipts,
     }
+    if g2a_contract:
+        if (
+            g2a_l1_daily is None
+            or assets.get("sector_index_close") is None
+            or assets.get("sector_index_code_by_sector") is None
+            or assets.get("benchmark_close") is None
+        ):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "G2-A direct-v2 components are incomplete")
+        from backend.services.hmm_risk.rotation_l1_gbdt import (
+            CONTINUOUS_FEATURES,
+            INPUT_SCHEMA_VERSION,
+            build_materialised_panel,
+        )
+
+        published_sector_close = _published_l1_sector_close(
+            assets["sector_index_close"],
+            assets["sector_index_code_by_sector"],
+            canonical_codes=l1_codes,
+        )
+        g2a_panel = build_materialised_panel(
+            calendar=calendar,
+            sector_close=published_sector_close,
+            benchmark_close=assets["benchmark_close"],
+            stock_daily_inputs=g2a_l1_daily,
+        )
+        feature_contract = {
+            "feature_names": list(CONTINUOUS_FEATURES),
+            "source_end": SOURCE_END.isoformat(),
+            "as_of_policy": "decision_t_reads_through_t_minus_1",
+            "target_horizons": [5, 10],
+            "stock_feature_coverage": "count>=5 and 10*valid>=9*expected_non_suspended",
+        }
+        tail_dates_by_horizon = {
+            str(horizon): [
+                day
+                for index, day in enumerate(calendar_all)
+                if HOLDOUT_START <= day <= assets["release_cutoff"] and index + horizon < len(calendar_all)
+            ]
+            for horizon in (5, 10)
+        }
+        inputs["g2a_bundle"] = {
+            "schema_version": INPUT_SCHEMA_VERSION,
+            "panel": g2a_panel,
+            "benchmark_close": {day: float(assets["benchmark_close"][day]) for day in calendar},
+            "identity": {
+                "source_sha256": canonical_sha256(source_identity),
+                "mapping_sha256": canonical_sha256(mapping_manifest),
+                "feature_contract_sha256": canonical_sha256(feature_contract),
+                "development_end": SOURCE_END.isoformat(),
+                "source_cutoff": assets["release_cutoff"].isoformat(),
+                "tail_mature_decision_counts": {horizon: len(days) for horizon, days in tail_dates_by_horizon.items()},
+                "tail_mature_date_sha256": canonical_sha256(
+                    {horizon: [day.isoformat() for day in days] for horizon, days in tail_dates_by_horizon.items()}
+                ),
+            },
+        }
     inputs["source_build_resource_receipts"].append(
         _resource_checkpoint(
             started,
