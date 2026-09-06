@@ -131,6 +131,14 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert process_doc.ownership_status == "mapped"
     assert process_doc.primary_module == "docs.standards"
 
+    legacy_process_doc = catalog.match_path("docs/process/cross_tool_review_protocol_20260510.md")
+    assert legacy_process_doc.ownership_status == "mapped"
+    assert legacy_process_doc.primary_module == "docs"
+
+    discussion_doc = catalog.match_path("docs/discussion/cross_tool_channel_protocol_20260510.md")
+    assert discussion_doc.ownership_status == "mapped"
+    assert discussion_doc.primary_module == "docs"
+
     assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
     assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")
     assert registry.get_module("watchlist").test_plans_required == ("l0", "watchlist_backend")

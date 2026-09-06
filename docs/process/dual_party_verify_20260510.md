@@ -1,5 +1,7 @@
 # Dual-Party Verify Protocol (2026-05-10)
 
+> **RETIRED (2026-09-06):** This legacy cross-tool verification protocol is no longer an active gate. Use the sole AIstock development standard, current PR checks, validation receipts, and task-specific workflow lane. This document remains only as historical evidence.
+
 How a bug record in `tests/aistock_validation/bugs/` transitions from
 `status: fixed` to `status: verified` without the fixer being able to verify
 their own work.
