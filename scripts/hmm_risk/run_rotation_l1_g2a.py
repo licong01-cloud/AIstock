@@ -1,4 +1,4 @@
-"""Build and execute the approved G2-A v1.2 development contract.
+"""Build and execute the approved G2-A v1.3 development contract.
 
 The parent mode launches the 15-fit battery and both 12-fit model processes as
 fresh Python processes.  This CLI never reads the sealed tail, a database, or a
@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 
 from backend.services.dataset_release.cas_store import canonical_json_bytes  # noqa: E402
 from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
+    CONTRACT_VERSION,
     REASON_INPUT,
     REASON_REPRODUCIBILITY,
     RotationL1G2AError,
@@ -77,6 +78,7 @@ def _failure(
     evidence = raw_evidence if isinstance(raw_evidence, dict) else {"exception_type": type(error).__name__}
     body = {
         "schema_version": "hmm_risk_rotation_l1_g2a_failure_v1",
+        "contract_version": CONTRACT_VERSION,
         "status": "failed",
         "stage": str(getattr(error, "stage", stage)),
         "reason_code": reason,
@@ -247,6 +249,7 @@ def _run_child(command: list[str], failure_path: Path) -> None:
             failure_body = {key: value for key, value in failure.items() if key != "failure_sha256"}
             if (
                 failure.get("schema_version") != "hmm_risk_rotation_l1_g2a_failure_v1"
+                or failure.get("contract_version") != CONTRACT_VERSION
                 or failure.get("status") != "failed"
                 or failure.get("failure_sha256") != canonical_sha256(failure_body)
             ):
