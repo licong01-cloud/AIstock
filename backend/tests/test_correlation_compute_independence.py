@@ -538,3 +538,50 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
     ]
     assert persisted_metadata[0]["num_pair_valid_factors"] == 2
     assert persisted_metadata[0]["no_valid_pair_factors"] == ["quality_structure_composite"]
+
+
+def test_correlation_engine_excludes_all_nan_factor_without_aborting_matrix(tmp_path) -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = ["2026-08-28", "2026-08-31"]
+    instruments = [f"{code:06d}.SZ" for code in range(1, 41)]
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(dates), instruments],
+        names=["datetime", "instrument"],
+    )
+    panel = pd.DataFrame(
+        {
+            "factor_a": list(range(40)) + list(range(1, 41)),
+            "quality_structure_composite": [np.nan] * 80,
+            "factor_b": list(reversed(range(40))) + list(reversed(range(1, 41))),
+        },
+        index=index,
+    )
+
+    class FakeLoader:
+        def get_date_range(self):
+            return dates[0], dates[-1]
+
+        def get_trading_dates(self, _start_date, _end_date):
+            return dates
+
+        def load_factor_panel(self, factor_names, **_kwargs):
+            return panel.loc[:, factor_names]
+
+    result = CorrelationEngine(
+        FakeLoader(),
+        window=2,
+        half_life=1,
+        min_stocks=30,
+        min_days=2,
+        winsorize_quantile=0.0,
+        hdf5_dir=str(tmp_path),
+    ).compute_full_matrix(
+        ["factor_a", "quality_structure_composite", "factor_b"],
+        as_of_date=dates[-1],
+        save_hdf5=False,
+    )
+
+    assert result.factor_names == ["factor_a", "factor_b"]
+    assert result.matrix.shape == (2, 2)
+    assert np.isfinite(result.matrix[0, 1])
