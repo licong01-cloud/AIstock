@@ -1525,6 +1525,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/bug_registry_metadata_check.py"],
         root=isolated_workflow_root,
     )
+    retired_cross_tool_dispatcher = workflow._classify_runtime_impact(
+        ["scripts/cross_tool_review_dispatch.py"],
+        root=isolated_workflow_root,
+    )
     backend_test = workflow._classify_runtime_impact(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
@@ -1641,6 +1645,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert allocator_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
+    assert retired_cross_tool_dispatcher["runtime_impact"] == "none"
+    assert retired_cross_tool_dispatcher["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
     assert score_weighted_asset["runtime_impact"] == "backend"
     assert score_weighted_asset["target_ids"] == ["backend-main"]
