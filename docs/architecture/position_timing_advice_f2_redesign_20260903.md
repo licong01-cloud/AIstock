@@ -1,15 +1,15 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.0
-> 日期：2026-09-03
+> 版本：v2.1
+> 日期：2026-09-06
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_L2_AUDIT_COMPLETED`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > decision use：`HUMAN_TRADING_ADVICE`
 > 对照蓝图：`F:/Dev/AIstock_worktrees/stock-timing-strategy-blueprint-20260831/docs/architecture/stock_timing_strategy_system_blueprint_f2_20260831.md`
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
-`DESIGN_VERIFIED` 只表示对应设计条款已经闭合。实现块一由 PR `#4277` 合入；包含 L1a、prospective outcome 与轻量分析范围管理的完整首发源码由 PR `#4287` 合入（merge commit `a8922fb82d4163ab4194c2efdde2ae584e5100a4`）。2026-09-06 的 backend-main 重启后收据已验证 BUG-1365 修复所在 merge commit `19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc` 为运行进程身份的祖先，业务探针与身份摘要均通过，close-sync PR `#4311` 已合入。该状态不授权自动交易、数据库变更或后续 L2/L4 研究，也不得把尚未成熟的 prospective 结果表述为模型有效性证据。
+`DESIGN_VERIFIED` 只表示对应设计条款已经闭合。实现块一由 PR `#4277` 合入；包含 L1a、prospective outcome 与轻量分析范围管理的完整首发源码由 PR `#4287` 合入（merge commit `a8922fb82d4163ab4194c2efdde2ae584e5100a4`）。2026-09-06 的 backend-main 重启后收据已验证 BUG-1365 修复所在 merge commit `19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc` 为运行进程身份的祖先，业务探针与身份摘要均通过，close-sync PR `#4311` 已合入。首发之后的 `PT-NEXT-002` 已完成一次冻结的离线 L2 可学性审计；结果为 `INCONCLUSIVE`、`selected_model_id=null`，不产生运行时模型，也不改变 L1/L1a。该状态不授权自动交易、数据库变更或 L4 研究，也不得把尚未成熟的 prospective 结果表述为个股模型有效性证据。
 
 ## 1. Background / 背景与结论
 
@@ -26,7 +26,7 @@
 1. N2 exit hindsight oracle 显示较大的事后动作空间，但冻结 Ridge 政策没有捕获正值下界，且审计功效不足。这支持先交付规则型风险与执行纪律，并积累 prospective outcome，而不是先建复杂模型平台。
 2. N2 entry 中 `FIXED_5_CASH` 与零不可分辨，`DYNAMIC_Q90_CASH` 显著为负。它们是研究臂，不是可直接搬入运行时的 guard。
 3. N3 分钟信息集的 `selected_trial_count=0` 只否定该次 `ALPHA_RANKING` 横截面增量，不回答特定股票、同方向同规模下的执行时点问题。
-4. 因此产品边界冻结为：第一批交付 L1 规则行动卡与 L1a 实时报价提醒；L2 数据契约同批冻结但训练管线后移；第二阶段分钟执行研究另行启动。
+4. 因此产品边界冻结为：第一批交付 L1 规则行动卡与 L1a 实时报价提醒；L2 数据契约同批冻结、训练管线后移为独立离线任务。该 L2 任务现已完成且未选出模型；第二阶段分钟执行研究仍另行启动。
 
 ### 1.3 证据语义目录
 
@@ -40,7 +40,8 @@
 | `EVID-ENTRY-Q90` | `DYNAMIC_Q90_CASH` 才把通用 `FROZEN_DYNAMIC` 实例化为 `max(0, entry_gap_q90) × 10000 bps` 并采用 `CASH`；其 lift `-23.5491 bps`，CI `[-32.6066, -5.7124]`。该结果不得外推到所有 frozen-dynamic 定义 | `backend/services/advisory_model_first/entry_exit_formal_pipeline.py:401`；`F:/Dev/AIstock_model_artifacts/advisory_n2_entry_exit_formal_v1_20260902/action_audit_bundles/5c5946a7adfb1e41c5287d5781f240fa290d690c63be0679edb5b00960556f2c/entry_summary.json` |
 | `EVID-ENTRY-FIXED5` | `FIXED_5_CASH` lift `2.4587 bps`，CI `[-0.7481, 7.3808]`；只能得出与零不可分辨，不能假定它机械增加或推迟一轮交易 | 同上 `entry_summary.json` |
 | `EVID-N3-MINUTE` | candidate RankIC `0.090195`，parent/comparator `0.122839`；Top5 成本后净超额 `128.3145` 对 `443.6526 bps`；family-wise 四项均未通过，`selected_trial_count=0`，objective 为 `ALPHA_RANKING` | `F:/Dev/AIstock_model_artifacts/advisory_n3_minute_information_set_formal_v1_20260903/minute_information_set_bundles/0076a3a6c1e0fa40f6a29a73ab35c4015ae27431fb68989ce13fbb79e56a89f9/model_summary.json`、`learnability_receipt.json`、`request.json` |
-| `EVID-N0-CONTROL` | 当前全局 N0 registry 为 25 条，其中 10 条 `CANDIDATE_MODEL`；route 绑定 `trial_registry_sha256`。既有 N1/N2 delivery 在 append 后立即重建 route，故择时不得写该控制面 | `backend/services/advisory_model_first/research_control.py:97`、`:876`；`backend/services/advisory_model_first/entry_exit_formal_pipeline.py:1032`；`backend/services/advisory_model_first/exit_learnability_pipeline.py:1442`；`F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830/trial_registry.jsonl`、`current_route.md` |
+| `EVID-N0-CONTROL` | 全局 N0 registry 是只读历史背景；L2 正式 request 冻结时为 36 条，route 绑定 `trial_registry_sha256`。既有 N1/N2 delivery 在 append 后重建 route，故择时不得写该控制面 | `backend/services/advisory_model_first/research_control.py:97`、`:876`；`backend/services/advisory_model_first/entry_exit_formal_pipeline.py:1032`；`backend/services/advisory_model_first/exit_learnability_pipeline.py:1442`；`F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830/trial_registry.jsonl`、`current_route.md` |
+| `EVID-L2-FORMAL` | 96 cohorts、388,035 episodes、7,351,727 review rows；Ridge 为 `NEGATIVE`（`-45.3852 bps`，adjusted CI `[-86.6868,-7.7560]`），GBDT 为 `INCONCLUSIVE`（`-35.0801 bps`，adjusted CI `[-82.3353,10.4406]`），两者 power 均 `ADEQUATE`；study `INCONCLUSIVE`、无 selected model | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/l2_learnability_bundles/eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51/learnability_receipt.json`、`source_identity_receipt.json`、`manifest.json` |
 | `EVID-TDX-CONTRACT` | 批量报价上限 50，最大陈旧度 5 分钟，最大未来偏斜 30 秒 | `backend/services/simulation_data/contracts.py:47` |
 | `EVID-TDX-MINUTE` | 当前 `fetch_minute_kline_tdx` 调用无日期/count 参数的 `/api/kline-all/tdx`，取得端点完整响应后在客户端筛 `trade_date`；第一阶段不得调用 | `backend/data_service/tdx_adapter.py:191` |
 | `EVID-GUARD-DEFAULTS` | 当前 `PriceGuardPolicy` 与 `ExitGuardPolicy` 的 `rule_v1/rule_default` 默认值 | `backend/services/trading_core/price_guard.py:77`、`:81`、`:102`、`:112`；`backend/services/trading_core/exit_guard.py:28`、`:38`、`:42`、`:46`、`:50` |
@@ -53,7 +54,7 @@
 ### 1.4 数据可行性结论
 
 - **L1/L1a 可实现**：持仓、自选、PIT 日线、复权因子、交易日、ST/停牌/涨跌停、board-lot 与 TDX quote 均已有本地 authority 或纯实现，不需要新表或荐股模块先成熟。
-- **L2 工程上可实现、效果仍未知**：历史日频/QE 导出足以构造冻结 synthetic episode；第一批事件补足 deployment sizing 与 outcome。现有 exit receipt 只说明复杂模型不应先于数据证据，不等于 L2 必然有效。
+- **L2 已完成一次正式离线审计、未得到可用模型**：canonical-v2 日频/QE 候选足以构造完整 synthetic episode；正式结果为 Ridge `NEGATIVE`、GBDT `INCONCLUSIVE`、study `INCONCLUSIVE`，没有 selected model。该结论不削弱 L1/L1a，也不支持 L3。
 - **分钟执行研究在现有覆盖内可实现**：当前快照支持 2024-01-02 至 2026-06-30 的离线 L4b-1；研究近期卡片前需补齐其后的分钟数据。第一阶段盘中提醒只用 quote，不受该缺口影响。
 - **盘中新方向尚无依据**：现有 N3 不能回答个股执行择时，也不能支持 L4b-2；后者保持范围外。
 
@@ -66,12 +67,12 @@
 3. L1a：前端打开期间的分钟级批量报价轮询与到价提示；只消费 L1 冻结方向、规模和触发价。
 4. timing-owned 不可变卡片 artifact 与 append-only 事件：`CARD_ISSUED`、`ALERT_EMISSION_AUTHORIZED`、`OUTCOME_EVALUATED`。
 5. outcome 物化与证据页面，持续积累 candidate 对 do-nothing 的 prospective 配对结果。
-6. L2 的人口、抽样、字段、模型、政策与统计分类契约；不实现 L2 训练管线。
+6. 首发当时只冻结 L2 的人口、抽样、字段、模型、政策与统计分类契约；后续 `PT-NEXT-002` 已在不改变首发运行面的独立离线入口中完成。
 
 ### 2.2 后续范围
 
-- L2：在第一批 outcome 数据积累后单独实现一次预注册 Ridge + GBDT 可学性审计。
-- L3：只有 L2 `effect_evidence=SUPPORTED` 的模型可让相应卡片标为 `MODEL_ASSISTED`。
+- L2：`PT-NEXT-002` 已完成一次预注册 Ridge + GBDT 可学性审计；结果见 `EVID-L2-FORMAL`，不再追加同 family 搜索。
+- L3：本轮没有 `SUPPORTED` 模型，故不实现；只有未来独立设计产生适用 objective 的 `SUPPORTED` 模型时，才可让相应卡片标为 `MODEL_ASSISTED`。
 - L4b-1：第二阶段单独研究同方向、同规模、同 horizon 下的分钟执行窗口。
 - L4b-2：第二阶段盘中新方向；只有独立证据证明逐腿成本后正下界时才进入设计与实现。
 
@@ -126,7 +127,7 @@ frontend/tests/position-timing/
 
 仅允许两处现有 composition root 做薄接线：`backend/main.py` 注册 router（统一 `/api/v1` 前缀），`frontend/src/lib/navigation/nav-groups.ts` 增加页面入口。新路由的 `layout.tsx` 只导入既有 `paper-v2.css`，不复制样式或承载业务逻辑。两处既有接线文件不得包含择时业务逻辑；除 composition root 外，任何既有业务模块不得 import `position_timing`。
 
-L2 后续最多新增 `backend/services/position_timing/learnability_pipeline.py`，不放进 `advisory_model_first`，也不复用其全局 registry 路径。
+L2 后续唯一新增文件是 `backend/services/position_timing/learnability_pipeline.py`：它是显式 CLI 调用的离线 request/materialize/CPCV/inference/bundle 入口，不注册 router、worker 或 scheduler，不保存 final-fit/runtime model。它不放进 `advisory_model_first`；只复用 `AdvisoryResearchTrialRegistryV1` 的纯 append/identity 实现，并写择时自有 registry 路径，绝不复用全局 registry/current route。既有 evidence API/页面只增加一个绑定正式 request/bundle/receipt hash 的总体结论引用，不读取或加载模型。
 
 ### 4.3 数据和基础设施复用
 
@@ -522,9 +523,9 @@ paired path 只评价卡片动作造成的边际数量，不重算未受动作�
 
 ## 6. L2/L3 研究契约
 
-### 6.1 为什么 L2 后移但契约现在冻结
+### 6.1 为什么 L2 在首发后独立实现
 
-首批先交付 L1/L1a 并积累真实 deployment outcome；若事件字段以后才补，会永久失去早期样本。因此第一批实现日志和评价，冻结 L2 population/sampling/model/inference spec，但不实现训练管线、不让 L2 阻塞产品。
+首批先交付 L1/L1a 并开始积累真实 deployment outcome；若事件字段以后才补，会永久失去早期样本。因此第一批实现日志和评价并冻结 L2 population/sampling/model/inference spec。`PT-NEXT-002` 随后只增加一个离线 pipeline 并完成正式 audit；prospective outcome 为 0 如实写入 context，但不作为开跑门禁，也不让 L2 结果阻塞产品。
 
 ### 6.2 L2 population 与 baseline
 
@@ -532,19 +533,19 @@ paired path 只评价卡片动作造成的边际数量，不重算未受动作�
 
 首个 L2 audit 的 objective 固定为 held-position `EXIT/REDUCE versus HOLD`，不宣称验证 watchlist 的入场 alpha。第一批仍保存 OPEN/ADD outcome，以便未来另立 entry objective，而不得把两种 estimand 混成一个 trial。
 
-- 研究范围：`2018-08-01..2026-06-30` 内具备冻结日频 source identity 的 SH/SZ A 股。
+- 研究范围：`2018-08-01..2026-06-30` 内具备冻结日频 source identity 的 SH/SZ A 股。正式 source 绑定 `20260831-qe_hmm_full_v2-direct-20260905-candidate` 的 canonical-v2 daily/calendar/PIT/suspend/CSI300 文件及逐文件 hash；父 candidate 自身没有 full-history content hash，故不得把 derived bundle 的 content hash 反向宣称成父 candidate 已全量 hash。
 - episode 的起点 `entry_decision_date=E`：从起始交易日起，每第 20 个全局交易日取一个 cohort；每个 cohort 纳入 E 时点 PIT active、E+1 有可判定入场状态的全部 canonical symbols。
-- 不因当前是否属于 Selection Top20 而筛选；ST 作为属性保留，停牌/缺失按 typed status 保留。
+- 不因当前是否属于 Selection Top20 而筛选。正式 canonical-v2 entry universe 明确 `exclude_st=true/st_pit=true`，故 v1 synthetic episode 的 `st_flag=false`；prospective ST deployment cell 必须显式 unsupported，不得伪造历史 ST 样本。L1 仍按方向处理 ST，二者不得混同；停牌/缺失按 typed status 保留。
 - episode baseline：E 决策、E+1 raw open 建立合成满仓，持有至第 20 个 holding session 的 raw close；terminal 不可用最多顺延 5 个交易日。
 - review row：从第 1 至第 19 个 holding session 收盘逐日形成 `review_decision_date=R`，只用 R 收盘时已知特征；候选 `target_action_date` 固定为 R+1。监督 row label 是在 R+1 raw open 卖出该 episode 的完整合法初始数量、相对继续持有同一数量至 baseline terminal 的逐腿成本后增量 bps。
-- policy path：`MONOTONE_EXPOSURE_V1` 把 OOF 预测映射为目标 exposure，实际目标固定为 `min(previous_effective_exposure, mapped_exposure)`，因此只能 HOLD/REDUCE/EXIT、不能重新加仓。每次 reduction 是独立父订单并逐腿收费；剩余数量在 terminal 统一卖出。R+1 不可卖时该次动作过期并留在原 exposure，下一 review row 重新决策，不顺延旧动作。
+- policy path：`MONOTONE_EXPOSURE_V1` 把 OOF 预测映射为目标 exposure，实际目标固定为 `min(previous_effective_exposure, mapped_exposure)`，因此只能 HOLD/REDUCE/EXIT、不能重新加仓。每次 reduction 先按 symbol 的卖出交易单位向下得到合法实际数量；全量退出才允许最终零股规则。每次实际 reduction 是独立父订单并逐腿收费；剩余实际数量在 terminal 统一卖出。R+1 不可卖时该次动作过期并留在原 exposure，下一 review row 重新决策，不顺延旧动作。
 - 两条路径共享的 E+1 合成买入腿在 lift 中相消；study 只比较未来卖出路径。所有 raw fill、公司行动与 terminal valuation 继续服从 §5.6，不因使用合成 episode 改回 raw-price return。
 - `episode_id = hash(population_identity, canonical_symbol, entry_decision_date, entry_trade_date)`，且 `(canonical_symbol, entry_decision_date)` 唯一；sampling identity、calendar hash、universe hash、预计与实际 episode count 写 receipt。
-- 预计量级约 25 万至 45 万 episode；精确数量是运行结果，不是开跑门禁。
+- 正式结果为 96 cohorts、预期与实际均 388,035 episodes、7,351,727 review rows，其中 386,737 episodes 可做 paired policy evaluation；精确数量是运行结果，不是开跑门禁。
 
 最低佣金依赖名义金额，故 L2 不得用“1 元归一化仓位”计算成本。`L2_DEPLOYMENT_NOTIONAL_ASSIGNMENT_V1` 在 request 冻结：从 study cutoff 前 held-position `CARD_ISSUED` 的正 `planned_full_notional_cny` 构造按 `(card_id, value)` 排序的 deployment notional 序列及 hash；以 `{episode_id, distribution_sha256}` 的 canonical JSON hash 对序列长度取模，为每个 synthetic episode 确定性分配一个 full notional，再按 E+1 raw open 与板块规则得到合法初始数量。无可用 notional 序列、合法数量为零或 source/hash 不闭合时保留 typed unavailable，不以任意固定金额代替；这不影响 L1/L1a。该赋值不看 outcome，不新增 hypothesis。
 
-这不是“消除分布偏移”，而是以合成入场人口替换 Selection Top20 入场偏差。正式报告同时给 synthetic population 未加权结果，以及只按 prospective `CARD_ISSUED` 中 `pre_action_qty > 0` 的 held-position 卡片所形成的 source role、action side、holding-age bucket、regime、ST 状态 deployment-population 加权结果；不支撑的 cell 显式 unavailable。
+这不是“消除分布偏移”，而是以合成入场人口替换 Selection Top20 入场偏差。正式报告同时给 synthetic population 未加权结果，以及只按 prospective `CARD_ISSUED` 中 `pre_action_qty > 0` 的 held-position 卡片所形成的 source role、action side、holding-age bucket、regime、ST 状态 deployment-population 加权结果；不支撑的 cell 显式 unavailable。本次两个真实卡片都属于 `HOLDING|NONE|UNKNOWN|UNKNOWN|0`，deployment-weighted 值因此接近 0 且只能标 `DIAGNOSTIC_ONLY`，不是模型效果证据。
 
 `CARD_ISSUED` 因而必须冻结 `pre_action_qty`、`planned_full_notional_cny`、每个 trigger branch 的 planned delta、reference raw price、持有期、来源角色、sizing/board-lot/cost-policy hash，保证后续 weighting、名义金额赋值和同方向同规模执行反事实可计算。
 
@@ -555,13 +556,13 @@ paired path 只评价卡片动作造成的边际数量，不重算未受动作�
 1. `SKLEARN_RIDGE_V1`：`scikit-learn=1.8.0`、`alpha=100`、`fit_intercept=true`、`solver=svd`。
 2. `LIGHTGBM_GBDT_V1`：`lightgbm=4.6.0`、`boosting_type=gbdt`、`objective=regression_l2`、`n_estimators=300`、`learning_rate=0.03`、`num_leaves=15`、`max_depth=4`、`min_child_samples=100`、`subsample=1.0`、`subsample_freq=0`、`colsample_bytree=1.0`、`reg_alpha=0`、`reg_lambda=1`、`random_state=20260903`、`n_jobs=1`、`deterministic=true`、`force_col_wise=true`、early stopping disabled。
 
-两模型都必须在 request 中序列化并 hash 完整 estimator `get_params(deep=false)`、预处理规格、feature order、target、package version 与随机性设置；上列显式参数是稳定语义摘要，不允许未记录的库默认值改变 trial identity。Ridge 数字列使用训练折 median 后 `StandardScaler`，GBDT 使用训练折 median 但不缩放；预编码类别固定为 `DOWN/UP_OR_FLAT/UNKNOWN`，未知值只进入 `UNKNOWN`，不由验证折扩展 vocabulary。
+两模型都必须在 request 中序列化并 hash 完整 estimator `get_params(deep=false)`、预处理规格、feature order、target、package version 与随机性设置；request 另冻结 Python、NumPy、Pandas、PyArrow、SciPy、Qlib、threadpoolctl 和已加载 BLAS/OpenMP pool 身份。上列显式参数是稳定语义摘要，不允许未记录的库默认值改变 trial identity。Ridge 数字列使用训练折 median 后 `StandardScaler`，GBDT 使用训练折 median 但不缩放；预编码类别固定为 `DOWN/UP_OR_FLAT/UNKNOWN`，未知值只进入 `UNKNOWN`，不由验证折扩展 vocabulary。
 
-监督目标固定为每个 review row 的 `full_exit_incremental_net_value_bps`；study estimand 才是完整 monotone policy path 相对 do-nothing baseline 的 primary-horizon `net_lift_bps`。数字特征均在训练折内 median impute；`market_regime` 固定 one-hot 为 `DOWN/UP_OR_FLAT/UNKNOWN`；两模型使用以下同一有序 feature vector，不加入 HMM：
+监督目标固定为每个 review row 的 `full_exit_incremental_net_value_bps`；study estimand 才是完整 monotone policy path 相对 do-nothing baseline 的 primary-horizon `net_lift_bps`。数字特征均在训练折内 median impute；`market_regime` 固定 one-hot 为 `DOWN/UP_OR_FLAT/UNKNOWN`；两模型使用以下同一有序 feature vector，不加入 HMM 或 Selection score：
+
+首次正式 request 曾按旧稿包含 `selection_rank/selection_score`，但唯一不可变排名导出只覆盖 `2024-07-04..2026-03-09`，使一个时间训练折两列必然全缺失并以 `POSITION_TIMING_L2_FEATURE_UNAVAILABLE` 在任何完整 hypothesis/receipt 产生前停止。仓库不存在覆盖 2018～2026 的同语义排名导出，因此 v1 一次性删除这两列并重新冻结 request；这是数据可用性修订，不读取局部收益、不缩短人口，也不允许据此追加替代特征搜索。
 
 ```text
-selection_rank
-selection_score
 holding_trading_days_elapsed
 holding_fraction_of_time_stop
 unrealized_close_return_bps
@@ -586,9 +587,11 @@ market_regime_up_or_flat
 market_regime_unknown
 ```
 
+四个 guard-relative 特征必须从 request 绑定的 exit snapshot 派生而非写死第二套参数：`holding_fraction_of_time_stop = holding_session / max_holding_days`，`distance_to_stop = unrealized_return + max_loss_bps`，`distance_to_take_profit = take_profit_bps - unrealized_return`，`distance_to_trailing_stop = drawdown_from_peak + trailing_stop_bps`。snapshot 中相应 rule 即使 disabled，数值仍只作为上下文特征；不得据此开启运行时 guard。
+
 每折同时输出 feature availability report；某数字列在训练折全缺失、固定类别无法编码或 feature order/hash 漂移时，该 L2 bundle typed failed，不删除列、不以零填充、不切换模型。该失败不影响 L1/L1a。
 
-交叉验证冻结为 8 blocks、2 validation blocks、20-trading-day embargo、28 paths、每行 7 个 OOF；block 以 `entry_decision_date` 分配，同一 episode 的全部 review rows 必须留在同一折，同一 entry date 的所有股票不得拆分。七个 OOF 预测取算术均值；无 final refit、无参数搜索。
+交叉验证冻结为 8 blocks、2 validation blocks、20-trading-day embargo、28 paths、每行 7 个 OOF；block 以 `entry_decision_date` 分配，同一 episode 的全部 review rows 必须留在同一折，同一 entry date 的所有股票不得拆分。七个 raw OOF 预测取算术均值并写诊断；每个 path 必须先用自身训练预测的正值分位点映射四档 exposure，最终政策 exposure 取七个 path exposure 的中位数（第 4 顺序统计量）。这保留“某 path 无正训练预测则该 path 全 HOLD”的语义，且结果仍只在 `{0,0.25,0.50,1.00}`；无 final refit、无参数搜索。
 
 唯一 selected-eligible 政策 `MONOTONE_EXPOSURE_V1`：
 
@@ -616,17 +619,21 @@ L2 冻结 `economic_threshold_bps=0.0`，因为 estimand 已扣完逐腿成本�
 - nominal interval 为正而 adjusted interval 跨零时为 `INCONCLUSIVE`，reason `MULTIPLICITY_ADJUSTMENT_ERASED_NOMINAL_SIGNAL`。
 - `power_status=UNDERPOWERED` 当 `mde_bps / oracle_mean_lift_bps > 0.25`，否则 `ADEQUATE`。MDE 是跑后报告义务，不是运行准入。
 
-receipt 同时报 nominal per-model interval、两个假设的 family-wise adjusted interval、MDE/oracle、逐腿成本情景与 `COST_ASSUMPTION_SENSITIVE`。新增第二个假设会扩大 simultaneous interval，这个功效代价如实报告，不触发回落分支。
+receipt 同时报 nominal per-model interval、两个假设的 family-wise adjusted interval、MDE/oracle、逐腿成本情景与 `COST_ASSUMPTION_SENSITIVE`。2/3 父订单情景必须复用与卡片相同的合法数量拆分；无法按要求拆分的 episode 不伪造等分金额，而是进入 partial/unavailable coverage。只有与 base 完全同 population 的可用情景才可触发 `COST_ASSUMPTION_SENSITIVE`。新增第二个假设会扩大 simultaneous interval，这个功效代价如实报告，不触发回落分支。
 
-本次 simultaneous family 固定 `familywise_hypothesis_count=2`。全局 N0 的 25 条历史记录另以 `historical_registry_context_count` 只读披露，提醒解释者已有搜索历史；由于 objective、population 与 trial family 不同，不把它们伪装成这次两个预注册假设，也不从历史记录回选候选。
+本次 simultaneous family 固定 `familywise_hypothesis_count=2`。全局 N0 的 request-era 实际历史记录数以 `historical_registry_context_count` 只读披露（本次为 36），提醒解释者已有搜索历史；由于 objective、population 与 trial family 不同，不把它们伪装成这次两个预注册假设，也不从历史记录回选候选。
 
 trial 只写 `position_timing_advice_v1/research_registry/timing_trial_registry_v1.jsonl`。全局 N0 registry/current_route 只读历史计数，绝不写入或重算。
 
 实现复用 `AdvisoryResearchTrialRegistryV1` 的 append/identity 机制，但路径独立、不得调用 `generate_current_route`。为兼容现有 record schema，两条模型 trial record 均冻结 `objective_contract=RISK_MANAGED_ADVISORY`、`study_type=LEARNABILITY_AUDIT`；产品 objective 仍为 `POSITION_TIMING_ADVICE_V1` 并单独写 study receipt。每个模型的 `SUPPORTED/NEGATIVE/INCONCLUSIVE` 分别映射 `result_class=CONTROL_READY/NEGATIVE/EXPLORATORY`；前两者 `decision_use=DIRECTION_GATE`，后者 `NAVIGATION_ONLY`。这里的 `DIRECTION_GATE` 只控制该模型能否进入 L3 标签，不阻塞 L1/L1a、L2 运行、PR 或发布，也不调用全局 route。
 
+正式 `EVID-L2-FORMAL` 的结论是：Ridge `NEGATIVE + ADEQUATE`，GBDT `INCONCLUSIVE + ADEQUATE`，study `INCONCLUSIVE`，`selected_model_id=null`。Ridge/GBDT 的 base point 分别为 `-45.3852/-35.0801 bps`；两模型 `mde/oracle` 分别约 `7.17%/8.09%`。该结论只表示两个冻结函数族和政策没有得到正的 family-wise 下界；不证明不存在其他信号，也不允许在同一 family 追加搜索。bundle inspect 与 exact retry 均通过，retry 对两条自有 registry 记录为 duplicate no-op；全局 N0 registry SHA-256 前后均为 `53ca1338ee5f725be38eeb217b06ebc33d99a6a75904ea1efc4c8607fbd5e067`。
+
 ### 6.5 L3
 
 只有 `effect_evidence=SUPPORTED` 的模型/政策可让对应 evidence block 与适用卡片进入 `MODEL_ASSISTED`。首个 L2 objective 只覆盖 held-position EXIT/REDUCE-versus-HOLD，因此即使 SUPPORTED 也不得把 watchlist `OPEN/ADD` 卡改称 model-assisted。`NEGATIVE/INCONCLUSIVE` 或任意 `power_status` 均不影响 L1/L1a 继续运行；结论与 reason 在页面证据区可见，卡片保持 `RULE_BASED_RISK_MANAGEMENT`。
+
+本次正式 audit 没有 `SUPPORTED` hypothesis，故 L3 保持未实现，页面/API 也不加载任何 L2 模型。evidence API 仅返回 `POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1` 的 hash-bound 总体状态，页面证据区显示 study `INCONCLUSIVE`、Ridge `NEGATIVE`、GBDT `INCONCLUSIVE` 与“无入选/运行模型”；这些字段不得进入个股卡片。该结果不是等待人工批准的门禁，而是本轮研究的终态。
 
 若两个模型都 `SUPPORTED`，固定优先 Ridge；只有 Ridge 非 `SUPPORTED` 且 GBDT `SUPPORTED` 时选择 GBDT，不按历史点估计、Sharpe 或区间宽度事后回选。每个模型 record 固定 `planned/generated/evaluated_trial_count=1`；只有上述唯一被选模型的 `selected_trial_count=1`，其余为 0，study-level selected 数等于两条 record 之和且最多为 1。
 
@@ -704,18 +711,18 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 4. 实现五 horizon `OUTCOME_EVALUATED`、coverage watermark 与基率聚合。
 5. 完成隔离、并发、PIT、费用、scope 与 UI 结果验证。
 
-第一批结束的用户可见结果是：日频明确卡、盘中到点提示、失败原因、成本和持续累积的结果证据。L2 未实现不降低这一定义。
+第一批结束的用户可见结果是：日频明确卡、盘中到点提示、失败原因、成本和持续累积的结果证据。L2 当时未实现不降低这一定义；后续离线 audit 也不改变首发定义。
 
 2026-09-05 的首发源码实现保持一个 namespace、一个页面和一个 artifact root：F-027 scope、8 个 API、`ALERT_EMISSION_AUTHORIZED`、五 horizon `OUTCOME_EVALUATED`、四态 evidence 与集中 `position_timing_first_release` 验证均已落地。块二唯一新增服务文件为 `alerts.py`；outcome 仍在既有 `service.py`，没有新增数据库、worker、scheduler、SSE、通知平台或订单接口。该状态表示首发源码已实现并完成本地验证，不表示生产进程已经加载。
 
-2026-09-06 的运行态收口已完成：backend-main 健康、运行身份通过 `origin_main_descendant` 证明、`/api/v1/position-timing/intents` 的 target-owned collection 语义探针识别 468 个条目，canonical BUG-1365 状态为 `verified`。实时读回仍是 2 个持仓进入分析范围、2 张目标日 2026-09-07 的 `HOLD` 卡；非交易日返回 `NO_VALID_CARD_TODAY`，没有虚构触价或送达。L2 仍按既定顺序等待 prospective 数据，不构成 L1/L1a 门禁。
+2026-09-06 的运行态收口已完成：backend-main 健康、运行身份通过 `origin_main_descendant` 证明、`/api/v1/position-timing/intents` 的 target-owned collection 语义探针识别 468 个条目，canonical BUG-1365 状态为 `verified`。实时读回仍是 2 个持仓进入分析范围、2 张目标日 2026-09-07 的 `HOLD` 卡；非交易日返回 `NO_VALID_CARD_TODAY`，没有虚构触价或送达。随后 L2 audit 在 prospective outcome 为 0 的情况下按报告义务而非门禁执行，结果不构成 L1/L1a 门禁。
 
-### 9.4 后续 C：L2/L3
+### 9.4 已完成：后续 C 的 L2 audit；L3 不进入实现
 
-- outcome 样本积累后，按冻结 spec 实现两个模型、一个政策、两个假设。
-- 无搜索运行一次并写 timing-owned immutable bundle/registry。
-- 只把 `SUPPORTED` 接入 L3；其余结果保留在证据区。
-- held-position audit 完成后，才可基于已保存的 OPEN/ADD outcome 另立 entry objective；它使用独立 request、trial family 与结论，不得与 exit 两个假设合并或事后追加到同一 family。
+- `backend/services/position_timing/learnability_pipeline.py` 已按冻结 spec 实现两个模型、一个政策、两个假设，没有 router、worker、scheduler、final refit 或 runtime model；既有 evidence API/页面只展示 hash-bound 总体审计引用。
+- 首个 request 因 2018～2026 人口与 2024～2026 Selection ranking 覆盖矛盾，在生成任何完整结果前 typed fail；删除两项不可用 Selection 特征后重新冻结，正式 audit 无搜索运行一次并写 timing-owned immutable bundle/registry。
+- 正式结果为 Ridge `NEGATIVE`、GBDT `INCONCLUSIVE`、study `INCONCLUSIVE`、selected 0；因此 L3 不实现，L1/L1a 继续保持规则卡。
+- 若未来要基于已保存的 OPEN/ADD outcome 研究 entry objective，必须使用独立设计、request、trial family 与结论；不得与本次 exit 两个假设合并或事后追加到同一 family。
 
 ### 9.5 后续 D：第二阶段
 
@@ -748,13 +755,15 @@ git diff --check
 
 分析范围管理不新增测试文件或独立验证 lane，直接补入既有矩阵：`test_universe.py` 验证 discovery/analysis 集合与持仓强制纳入，`test_artifact_store.py` 验证 scope 原子更新/hash，`test_api.py` 验证唯一新增接口和三个 GET 零写，`test_card_service.py` 验证 scope snapshot 进入 card-set identity，前端既有 spec 验证复选框与“下一卡片生效”。
 
-### 10.3 L2 后续 gate
+### 10.3 已完成的 L2 audit 验证
 
-- `backend/tests/position_timing/test_l2_population.py`（episode/review identity、确定性 notional assignment、board-lot 与 deployment weighting）
-- `backend/tests/position_timing/test_l2_model_specs.py`
-- `backend/tests/position_timing/test_l2_cpcv_identity.py`
-- `backend/tests/position_timing/test_l2_inference.py`
-- immutable receipt readback，验证两个 hypothesis、threshold 0、nominal/family-wise、effect/power 正交分类、cost sensitivity、own registry 零 N0 写入。
+- `backend/tests/position_timing/test_l2_population.py`：source/episode/review identity、确定性 notional assignment、合法 board-lot、deployment weighting 与历史覆盖 fail-closed。
+- `backend/tests/position_timing/test_l2_model_specs.py`：冻结 feature order、Ridge/GBDT 完整参数、环境身份与无 final fit/runtime model。
+- `backend/tests/position_timing/test_l2_cpcv_identity.py`：8-block/2-validation、20 日 embargo、28 paths、每行 7 个 OOF 与 path-local exposure mapping。
+- `backend/tests/position_timing/test_l2_inference.py`：threshold 0、nominal/family-wise、effect/power 正交分类、合法父订单成本敏感性与 own-registry/N0 隔离。
+- 正式 request 为 `research/l2_requests/ptl2req_163c90896899e65cf3183e5e.json`，绑定代码提交 `e26881abb7366f1726b2365a398d0d04786c6eb7`；immutable bundle 为 `research/l2_learnability_bundles/eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51`。独立 `inspect` 返回 `BUNDLE_VALID`，exact retry 返回同一 bundle/receipt 且两条 registry append 均为 duplicate no-op。
+- 验证是审计证据，不是新 gate：study `INCONCLUSIVE` 直接结束本次 family，L1/L1a 继续运行，L3 不实现。
+- 当前本地结果为 position-timing 88 tests、相邻 Advisory CPCV/registry/control 16 tests、集中 `position_timing_first_release` nox（含 TypeScript、lint、production build、Playwright）和 F2 validator 27/27 全部通过；validation catalog integrity 0 finding，L0 无 blocking finding。仓库既有 frontend hook/autoprefixer、Browserslist、npm audit 提示不来自本次业务路径，也不被改写成新增发布门禁。
 
 ## 11. Risks / 风险与失败模式
 
@@ -777,7 +786,7 @@ git diff --check
 | 复权数据暂未成熟 | 不阻塞只使用 raw 的块一 card；实现块二 outcome 到期评价时才 fail closed 为 `UNAVAILABLE_AT_HORIZON` |
 | 文件 artifact 并发冲突 | content address、file lock、fsync、atomic replace；冲突 fail closed |
 | 规则卡被误读成 alpha | 卡片固定 `RULE_BASED_RISK_MANAGEMENT`；研究统计只在证据区 |
-| L2 双模型仍无正下界或功效不足 | 如实 `NEGATIVE/INCONCLUSIVE` 与 `UNDERPOWERED`；L1/L1a 不受影响，不追加搜索 |
+| L2 双模型没有正下界 | 正式结果如实记录 Ridge `NEGATIVE + ADEQUATE`、GBDT `INCONCLUSIVE + ADEQUATE`、study `INCONCLUSIVE`；L1/L1a 不受影响，不追加同 family 搜索 |
 | 合成 L2 population 与用户人口仍偏移 | 同时报 synthetic 与 prospective deployment-weighted；不用“消除偏移”措辞 |
 | 分钟快照截至 2026-06-30 | 第二阶段先扩展数据；不影响第一阶段 |
 | `kline-all` 放大请求 | 第一阶段零调用；第二阶段需要时才设计增量/缓存 |
@@ -792,13 +801,13 @@ git diff --check
 - `runtime_activation=noop`。
 - `backend_restart=noop`。
 - `frontend_activation=noop`。
-- DB、artifact、registry 和运行进程均不修改。
+- 蓝图初次合入当时 DB、artifact、registry 和运行进程均未修改；该历史事实不得用于否认后续首发 artifact 或本次 timing-owned L2 research bundle/registry 的已授权写入。
 
 文档回滚通过后续 PR revert；不删除任何 artifact 或历史证据。
 
-### 12.2 当前首发源码与未来运行激活
+### 12.2 当前首发运行面与离线 L2 边界
 
-块一已由 PR `#4277` 合入；块二在同一设计边界内完成 scope、提醒和 outcome 源码，并通过集中本地验证。源码合入不自动加载到既有生产进程；本任务没有控制生产 8001/3000 进程，也没有写生产 artifact。完整首发保持零 DDL、零新依赖；若后续偏离为数据库表，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。运行激活与页面/API readback 继续作为独立状态报告。
+块一已由 PR `#4277` 合入，块二及运行态收口见 §9.3。`PT-NEXT-002` 只在显式 CLI 下写 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/` 与自有 `research_registry/`，没有修改生产 card/event artifact、数据库、全局 N0 registry/current route 或 8001/3000 进程，也没有把模型接入 API/页面。完整方案保持零 DDL、零新依赖；若后续偏离为数据库表或运行模型，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。源码合入、离线研究 evidence 与运行激活继续作为独立状态报告。
 
 ## 13. Design Acceptance Index / 设计验收索引
 
@@ -823,7 +832,7 @@ git diff --check
 | F-015 | PT-018, PT-019 | HARD | L1a 只用 batch quote，分钟级 poll；stale/future/unavailable 显式且禁止弹窗 |
 | F-016 | PT-019 | HARD | alert claim artifact exact-once；UI at-most-once 仅 advisory，already-alerted 仍可见 |
 | F-017 | PT-002, PT-016 | SCOPE | HMM/Selection 只作可缺失 context，不阻塞整卡或决定 universe |
-| F-018 | PT-008, PT-010 | SCOPE | 第一批冻结 L2 population/sampling/outcome 字段，训练管线后移 |
+| F-018 | PT-008, PT-010 | SCOPE | 第一批冻结 L2 population/sampling/outcome 字段；后续一次性离线 audit 必须遵守同一 identity |
 | F-019 | PT-009, PT-010, PT-011 | SCOPE | Ridge+GBDT、一个 monotone policy、两个 hypotheses，无搜索、own registry |
 | F-020 | PT-009, PT-010 | SCOPE | threshold 0、effect/power 正交、nominal/family-wise 与 cost-sensitive 标签 |
 | F-021 | PT-009, PT-012, PT-017 | ADVISORY | MDE 报告、sealed 可选、小额标注均非批准门禁 |
@@ -836,7 +845,7 @@ git diff --check
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
-`DESIGN_VERIFIED` 只证明设计条款已经闭合；`FIRST_RELEASE_*_VERIFIED` 表示首发适用范围已有直接代码和测试。源码验证仍不表示生产进程已加载。带 `APPROVED_BY_USER` 的 gap 只记录明确后移的 L2/第二阶段研究，不是新增门禁。
+`DESIGN_VERIFIED` 只证明设计条款已经闭合；`FIRST_RELEASE_*_VERIFIED` 表示首发适用范围已有直接代码和测试；`L2_*_VERIFIED` 只表示离线审计实现及其 evidence 闭合，不表示存在可部署模型。源码验证仍不表示生产进程已加载。带 `APPROVED_BY_USER` 的 gap 只记录明确后移的第二阶段研究，不是新增门禁。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -844,7 +853,7 @@ git diff --check
 | F-002 | `backend/services/position_timing/`、own artifact root、composition wiring | `backend/tests/position_timing/test_isolation.py` | BLOCK_ONE_VERIFIED | none |
 | F-003 | `backend/services/position_timing/service.py` universe adapter | `backend/tests/position_timing/test_universe.py` | BLOCK_ONE_VERIFIED | none |
 | F-004 | `PositionTimingCardV1` decision clock 与 PIT checks | `backend/tests/position_timing/test_pit_clock.py`；`backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
-| F-005 | service read adapters；§4.3 reuse table | `backend/tests/position_timing/test_api.py`；2026-09-04 DEV 468-target readback | BLOCK_ONE_RUNTIME_REUSE_VERIFIED_APPROVED_BY_USER | canonical v2 QE/L2 dataset binding remains in approved later L2 scope |
+| F-005 | service read adapters；`learnability_pipeline.py` canonical-v2 candidate loader；§4.3 reuse table | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_l2_population.py`；`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/l2_learnability_bundles/eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51/source_identity_receipt.json` | L2_SOURCE_BINDING_VERIFIED | none |
 | F-006 | `backend/services/position_timing/policy.py` 与 `service.py` L1 mapping | `backend/tests/position_timing/test_card_service.py`（含 confirmed delist 买卖方向） | BLOCK_ONE_VERIFIED | none |
 | F-007 | shared limit/suspend/board-lot adapters、冻结方向分支与 target-day quote recheck | `backend/tests/position_timing/test_tradability.py`；`test_card_service.py`；`test_alerts.py`；`test_outcome_materialization.py` | FIRST_RELEASE_VERIFIED | none |
 | F-008 | timing-owned guard snapshot artifact/hash/provenance | `backend/tests/position_timing/test_policy_snapshot.py` | BLOCK_ONE_VERIFIED | none |
@@ -857,22 +866,22 @@ git diff --check
 | F-015 | `position_timing/alerts.py`、GET poll 与 TDX batch constants | `backend/tests/position_timing/test_alerts.py`（50 只、5 分钟/30 秒、漂移与 typed failure） | FIRST_RELEASE_VERIFIED | none |
 | F-016 | atomic claim 与 `ALERT_EMISSION_AUTHORIZED` append | `backend/tests/position_timing/test_alerts.py`；`test_api.py`；`test_artifact_store.py` | FIRST_RELEASE_VERIFIED | none |
 | F-017 | card context fields and typed field-level unavailability | `backend/tests/position_timing/test_card_service.py` | BLOCK_ONE_VERIFIED | none |
-| F-018 | L2 population/sampling/outcome schema in `contracts.py` | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED | none |
-| F-019 | frozen Ridge/GBDT/monotone policy spec；runtime pipeline absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
-| F-020 | frozen threshold/effect/power/inference spec；runtime receipt absent | `backend/tests/position_timing/test_l2_population.py` | CONTRACT_VERIFIED_APPROVED_BY_USER | PIPELINE_DEFERRED_BY_APPROVED_SCOPE |
-| F-021 | frozen non-gating semantics | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_cost_policy.py` | CONTRACT_VERIFIED | none |
+| F-018 | `contracts.py` population/sampling schema；`learnability_pipeline.py` materializer | `backend/tests/position_timing/test_l2_population.py`；formal `learnability_receipt.json` 96 cohorts/388,035 episodes/7,351,727 review rows | L2_POPULATION_VERIFIED | none |
+| F-019 | frozen Ridge/GBDT/monotone policy offline pipeline；no final fit/runtime model | `backend/tests/position_timing/test_l2_model_specs.py`；`backend/tests/position_timing/test_l2_cpcv_identity.py`；formal `manifest.json` and CLI inspect receipt | L2_PIPELINE_VERIFIED_NO_RUNTIME_MODEL | none |
+| F-020 | threshold/effect/power/inference implementation、immutable receipt 与 hash-bound evidence summary | `backend/tests/position_timing/test_l2_inference.py`；`backend/tests/position_timing/test_api.py`；formal `learnability_receipt.json`；frontend target spec | L2_INFERENCE_AND_VISIBILITY_VERIFIED | none |
+| F-021 | frozen non-gating semantics；own registry delivery | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_l2_inference.py`；formal `learnability_receipt.json` and unchanged N0 SHA-256 | L2_NON_GATING_VERIFIED | none |
 | F-022 | §7 objective separation and minute snapshot binding | `backend/tests/position_timing/test_l2_population.py` | DESIGN_VERIFIED_APPROVED_BY_USER | SECOND_STAGE_DEFERRED_BY_APPROVED_SCOPE |
-| F-023 | 8 API、one page、only one new `alerts.py`、no SSE/worker/model imports | `test_api.py`；`test_isolation.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_SCOPE_VERIFIED | none |
+| F-023 | 首发 8 API/one page/only one new `alerts.py`；后续唯一新文件为 offline `learnability_pipeline.py`，复用既有 evidence surface 且无 SSE/worker/runtime-model imports | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_isolation.py`；`backend/tests/position_timing/test_l2_model_specs.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_SCOPE_AND_L2_ISOLATION_VERIFIED | none |
 | F-024 | card/scope/quote/claim/outcome typed reason and coverage states | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_alerts.py`；`backend/tests/position_timing/test_outcome_materialization.py` | FIRST_RELEASE_TYPED_FAILURES_VERIFIED | none |
-| F-025 | immutable card identities；outcome raw/adjustment/terminal-limit/cost/card hashes | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；`backend/tests/position_timing/test_outcome_materialization.py`；2026-09-04 DEV card readback | FIRST_RELEASE_IDENTITY_VERIFIED | none |
-| F-026 | module-owned concentrated nox/catalog/L0/F2 routing and isolation | `python -m nox -s position_timing_first_release`；validation catalog integrity；F2 validator；`backend/tests/position_timing/test_isolation.py` | FIRST_RELEASE_LOCAL_GATE_VERIFIED | PRODUCTION_RUNTIME_ACTIVATION_SEPARATE_APPROVED_BY_USER |
+| F-025 | immutable card identities；outcome identities；L2 request/dataset/derived/contract/code/receipt identities | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；formal `source_identity_receipt.json`/`manifest.json`；exact retry readback | FIRST_RELEASE_AND_L2_IDENTITY_VERIFIED | none |
+| F-026 | module-owned concentrated nox/catalog/F2 routing、L2 target tests and isolation | `python -m nox -s position_timing_first_release`；`backend/tests/position_timing/`；`backend/tests/position_timing/test_isolation.py`；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_advice_f2_redesign_20260903.md --tier F2` | FIRST_RELEASE_AND_L2_LOCAL_GATE_VERIFIED | PRODUCTION_RUNTIME_ACTIVATION_SEPARATE_APPROVED_BY_USER |
 | F-027 | `PositionTimingAnalysisScopeV1`、单一 PUT、既有页面复选框与 card-set scope identities | `backend/tests/position_timing/test_universe.py`；`backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-1. **禁止简化交付**：首发适用的 L1、scope、L1a、prospective outcome、8 API、一个页面与集中验证均已实现；明确保留 L2/L3、分钟新信号和外部通知为批准的后续范围，不以 mock-only 结果冒充 DEV/生产运行成功。
-2. **禁止静默错误**：PIT、source/hash、scope、报价 freshness/future-skew、position/intent drift、方向性不可交易、outcome pending/missing/unavailable 均为 typed 状态；GET 不追加事件，失败扫描不推进成功水位。
-3. **禁止改变业务逻辑**：唯一 `LEGACY_PORTFOLIO` authority、持仓强制覆盖、自选显式 opt-in、共享 guard 纯实现、逐腿成本、T+1 卡片单日有效和 outcome 最多五日终值顺延保持分离；HMM/Selection 不决定方向或 universe。
-4. **禁止私增门禁审批**：没有引入样本/MDE、最低金额、HMM/Selection、券商核验或人工审批阻断；scope opt-in 是用户分析选择，不是质量准入。L2 与第二阶段后移不阻塞 L1/L1a。
+1. **禁止简化交付**：首发适用的 L1、scope、L1a、prospective outcome、8 API、一个页面与集中验证均已实现；后续 L2 也按冻结 population、两模型、CPCV、推断、成本与 registry 契约完整执行，没有用缩小人口、单模型或 mock-only receipt 冒充完成。L3、分钟新信号和外部通知仍保持批准的后续/范围外边界。
+2. **禁止静默错误**：PIT、source/hash、scope、报价 freshness/future-skew、position/intent drift、方向性不可交易、outcome pending/missing/unavailable 和 L2 feature/source/identity 缺口均为 typed 状态；首个 ranking 覆盖失败没有降级填零，GET 不追加事件，失败扫描不推进成功水位。
+3. **禁止改变业务逻辑**：唯一 `LEGACY_PORTFOLIO` authority、持仓强制覆盖、自选显式 opt-in、共享 guard 纯实现、逐腿成本、T+1 卡片单日有效和 outcome 最多五日终值顺延保持分离；HMM/Selection 不决定 L1 方向或 universe，L2 不导出 runtime model/weight/order。
+4. **禁止私增门禁审批**：没有引入样本/MDE、最低金额、HMM/Selection、券商核验或人工审批阻断；scope opt-in 是用户分析选择，不是质量准入。L2 已在 prospective outcome 为 0 时直接执行并如实结束；其 `INCONCLUSIVE` 结果不阻塞 L1/L1a，第二阶段后移也不构成首发门禁。
 
-结论：蓝图仍是唯一 position-timing 设计基线；首发源码已实现并通过集中本地验证。块一合入证据仍为 PR `#4277`；当前块二源码合入与生产运行激活分别报告。`production_ddl_gate=noop`、`production_dependency_gate=noop`，尚未执行生产进程加载与运行态 readback，因此当前只能声明“首发源码候选完成”，不能声明“生产已上线”。
+结论：蓝图仍是唯一 position-timing 设计基线；首发已经合入并完成既有运行态验收，`PT-NEXT-002` 离线审计实现与 immutable evidence 也已完成，且没有产生可部署模型。当前任务只合入离线研究源码、测试和文档，不控制生产进程、不改生产 card/event artifact。`production_ddl_gate=noop`、`production_dependency_gate=noop`；L4b-1/第二阶段仍是下一独立任务。

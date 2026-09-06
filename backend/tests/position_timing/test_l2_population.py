@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from backend.services.position_timing.contracts import POSITION_TIMING_L2_RESEARCH_CONTRACT_V1
+from backend.services.position_timing.contracts import (
+    POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1,
+    POSITION_TIMING_L2_RESEARCH_CONTRACT_V1,
+    canonical_sha256,
+)
 from backend.services.position_timing.learnability_pipeline import (
     POPULATION_END,
     PositionTimingL2Error,
@@ -25,6 +29,16 @@ def test_l2_contract_is_frozen_without_pipeline_imports() -> None:
     assert "selection" not in " ".join(contract.feature_order).lower()
     assert contract.population_spec["selection_features"].startswith("EXCLUDED_FROM_V1")
     assert "action_side" in contract.required_card_issued_fields
+
+
+def test_l2_formal_audit_reference_is_hash_bound_and_never_a_runtime_model() -> None:
+    reference = dict(POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1)
+    reference_sha256 = reference.pop("reference_sha256")
+    assert reference_sha256 == canonical_sha256(reference)
+    assert reference["effect_evidence"] == "INCONCLUSIVE"
+    assert reference["selected_model_id"] is None
+    assert reference["runtime_model_written"] is False
+    assert [item["effect_evidence"] for item in reference["hypotheses"]] == ["NEGATIVE", "INCONCLUSIVE"]
 
 
 def test_l2_directional_status_blocks_only_the_supplied_directional_limit() -> None:
@@ -77,4 +91,27 @@ def test_l2_candidate_validation_returns_typed_failure_for_bad_dates() -> None:
     suspend = {"universe_key": "aistock_equity_pit_canonical_v2"}
     with pytest.raises(PositionTimingL2Error) as exc_info:
         _validate_candidate_source(state=state, daily_meta=daily, suspend_meta=suspend)
+    assert exc_info.value.reason_code == "POSITION_TIMING_L2_SOURCE_IDENTITY_MISMATCH"
+
+
+def test_l2_candidate_validation_typed_fails_for_malformed_component_shape() -> None:
+    state = {
+        "schema_version": "qe_direct_monthly_state_v3",
+        "status": "CANDIDATE_READY",
+        "cutoff": POPULATION_END.isoformat(),
+        "components": ["not", "a", "mapping"],
+        "production_writes": 0,
+        "production_pointer_changes": 0,
+    }
+    daily = {
+        "universe_key": "aistock_equity_pit_canonical_v2",
+        "rule_version": "shsz_a_252td_st_delist_asof_v2",
+        "survivorship_bias": "canonical_lifecycle_pit",
+        "st_pit": True,
+        "exclude_st": True,
+        "start": "2018-08-01",
+        "end": POPULATION_END.isoformat(),
+    }
+    with pytest.raises(PositionTimingL2Error) as exc_info:
+        _validate_candidate_source(state=state, daily_meta=daily, suspend_meta=daily)
     assert exc_info.value.reason_code == "POSITION_TIMING_L2_SOURCE_IDENTITY_MISMATCH"

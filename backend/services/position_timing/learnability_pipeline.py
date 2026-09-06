@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, NoReturn, Sequence
 
 import numpy as np
 import pandas as pd
@@ -2367,7 +2367,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _validate_candidate_source(
     *, state: Mapping[str, Any], daily_meta: Mapping[str, Any], suspend_meta: Mapping[str, Any]
 ) -> None:
-    components = state.get("components") or {}
+    components_value = state.get("components")
+    components = components_value if isinstance(components_value, Mapping) else {}
     required_components = ("daily_bin", "suspend_d", "index_context")
     try:
         candidate_cutoff = date.fromisoformat(str(state.get("cutoff")))
@@ -2386,7 +2387,10 @@ def _validate_candidate_source(
         state.get("schema_version") == "qe_direct_monthly_state_v3"
         and state.get("status") == "CANDIDATE_READY"
         and candidate_cutoff >= POPULATION_END
-        and all((components.get(name) or {}).get("status") == "PASS" for name in required_components)
+        and all(
+            isinstance(components.get(name), Mapping) and components[name].get("status") == "PASS"
+            for name in required_components
+        )
         and production_writes == 0
         and production_pointer_changes == 0
         and daily_meta.get("universe_key") == "aistock_equity_pit_canonical_v2"
@@ -2421,12 +2425,28 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _repository_commit(root: Path) -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _raise(
+            "L2 repository commit identity is unavailable",
+            "POSITION_TIMING_L2_SOURCE_UNAVAILABLE",
+            repository_root=root.as_posix(),
+            error_type=type(exc).__name__,
+        )
     return result.stdout.strip()
 
 
 def _repository_dirty(root: Path) -> list[str]:
-    result = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _raise(
+            "L2 repository worktree identity is unavailable",
+            "POSITION_TIMING_L2_SOURCE_UNAVAILABLE",
+            repository_root=root.as_posix(),
+            error_type=type(exc).__name__,
+        )
     return [line[3:] for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -2465,7 +2485,7 @@ def _write_immutable(path: Path, content: bytes) -> None:
             temp.unlink()
 
 
-def _raise(message: str, reason_code: str, **context: Any) -> None:
+def _raise(message: str, reason_code: str, **context: Any) -> NoReturn:
     raise PositionTimingL2Error(message, reason_code=reason_code, context=context)
 
 

@@ -50,4 +50,3 @@ def test_l2_cpcv_identity_is_deterministic() -> None:
         [path["validation_blocks"] for path in first],
         [path["validation_blocks"] for path in second],
     )
-

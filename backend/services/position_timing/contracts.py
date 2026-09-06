@@ -917,6 +917,37 @@ POSITION_TIMING_L2_RESEARCH_CONTRACT_V1 = L2ResearchContractV1(
 )
 
 
+_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1: dict[str, Any] = {
+    "schema_version": "position_timing_l2_formal_audit_reference_v1",
+    "status": "FORMAL_AUDIT_COMPLETED",
+    "objective": "HELD_POSITION_EXIT_REDUCE_VERSUS_HOLD",
+    "request_sha256": "163c90896899e65cf3183e5e37997fa4278c77da65ff552407357519e4afb861",
+    "bundle_id": "eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51",
+    "receipt_sha256": "d3bf07fd5c950feaa6fa52cd8851d16cdb1012cf8d7591b5660139e8881f2539",
+    "receipt_file_sha256": "13be7b94f593422ef3d5c4977395bb0b680ca276773926a45ce61c158225cfa8",
+    "effect_evidence": "INCONCLUSIVE",
+    "selected_model_id": None,
+    "runtime_model_written": False,
+    "hypotheses": [
+        {
+            "model_id": "SKLEARN_RIDGE_V1",
+            "effect_evidence": "NEGATIVE",
+            "power_status": "ADEQUATE",
+        },
+        {
+            "model_id": "LIGHTGBM_GBDT_V1",
+            "effect_evidence": "INCONCLUSIVE",
+            "power_status": "ADEQUATE",
+        },
+    ],
+    "interpretation": "RESEARCH_LEVEL_NOT_STOCK_CONFIDENCE",
+}
+POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1: dict[str, Any] = {
+    **_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1,
+    "reference_sha256": canonical_sha256(_POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_PAYLOAD_V1),
+}
+
+
 __all__ = [
     "CardIssuedEventV1",
     "AlertEmissionAuthorizedEventV1",
@@ -933,6 +964,7 @@ __all__ = [
     "OutcomeEvaluatedEventV1",
     "ParentOrderCostScenarioV1",
     "POSITION_SOURCE",
+    "POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1",
     "POSITION_TIMING_L2_RESEARCH_CONTRACT_V1",
     "PositionTimingCardSetV1",
     "PositionTimingCardV1",
