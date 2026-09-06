@@ -1522,17 +1522,34 @@ def evaluate_l2_policy(
         )
     )
     frame = rows.iloc[order].reset_index(drop=True)
+    # CPCV needs the full trading calendar in ``rows.attrs``.  Policy replay
+    # does not: pandas propagates and deep-copies attrs on every ``iloc``
+    # slice, which turns one linear offline pass into hours of metadata copy.
+    frame.attrs = {}
     exposures = crossfit.target_exposures[order]
     episode_values = frame["episode_ordinal"].to_numpy(dtype=np.int64)
+    cohort_values = frame["cohort_ordinal"].to_numpy(dtype=np.int64)
+    symbols = frame["canonical_symbol"].astype(str).to_numpy()
+    entry_dates = pd.to_datetime(frame["entry_decision_date"]).to_numpy(dtype="datetime64[D]")
+    holding_sessions = frame["holding_session"].to_numpy(dtype=np.int16)
+    initial_quantities = frame["initial_quantity"].to_numpy(dtype=np.int64)
+    st_flags = frame["st_flag"].astype(bool).to_numpy()
+    action_statuses = frame["action_status_code"].to_numpy(dtype=np.int8)
+    action_full_grosses = frame["action_full_gross_notional_cny"].to_numpy(dtype=float)
+    terminal_grosses = frame["terminal_full_gross_notional_cny"].to_numpy(dtype=float)
+    entry_grosses = frame["entry_gross_notional_cny"].to_numpy(dtype=float)
+    target_available = frame["target_available"].astype(bool).to_numpy()
+    target_values = pd.to_numeric(frame["full_exit_incremental_net_value_bps"], errors="coerce").to_numpy(dtype=float)
+    regimes_down = frame["market_regime_down"].to_numpy(dtype=float)
+    regimes_up = frame["market_regime_up_or_flat"].to_numpy(dtype=float)
     starts = np.r_[0, np.flatnonzero(episode_values[1:] != episode_values[:-1]) + 1]
     ends = np.r_[starts[1:], len(frame)]
     records: list[dict[str, Any]] = []
     for start, end in zip(starts, ends, strict=True):
-        group = frame.iloc[start:end]
-        entry_gross = float(group["entry_gross_notional_cny"].iloc[0])
-        terminal_gross = float(group["terminal_full_gross_notional_cny"].iloc[0])
-        initial_quantity = int(group["initial_quantity"].iloc[0])
-        symbol = str(group["canonical_symbol"].iloc[0])
+        entry_gross = float(entry_grosses[start])
+        terminal_gross = float(terminal_grosses[start])
+        initial_quantity = int(initial_quantities[start])
+        symbol = str(symbols[start])
         if (
             not np.isfinite(entry_gross)
             or entry_gross <= 0
@@ -1545,9 +1562,9 @@ def evaluate_l2_policy(
         effective_quantity = initial_quantity
         first_action_session: int | None = None
         first_action_regime = "UNKNOWN"
-        for local_index, item in enumerate(group.itertuples(index=False)):
-            mapped = float(exposures[start + local_index])
-            if not np.isfinite(mapped) or int(item.action_status_code) != 0:
+        for row_index in range(start, end):
+            mapped = float(exposures[row_index])
+            if not np.isfinite(mapped) or int(action_statuses[row_index]) != 0:
                 continue
             desired_remaining = int(math.floor(initial_quantity * mapped + 1e-9))
             desired_sell = effective_quantity - desired_remaining
@@ -1565,17 +1582,17 @@ def evaluate_l2_policy(
                 )
             if sell_quantity <= 0:
                 continue
-            full_gross = float(item.action_full_gross_notional_cny)
+            full_gross = float(action_full_grosses[row_index])
             unit_gross = full_gross / initial_quantity
             if not np.isfinite(unit_gross) or unit_gross <= 0:
                 continue
             action_legs.append((sell_quantity, unit_gross, full_exit))
             effective_quantity -= sell_quantity
             if first_action_session is None:
-                first_action_session = int(item.holding_session)
-                if float(item.market_regime_down) == 1.0:
+                first_action_session = int(holding_sessions[row_index])
+                if float(regimes_down[row_index]) == 1.0:
                     first_action_regime = "DOWN"
-                elif float(item.market_regime_up_or_flat) == 1.0:
+                elif float(regimes_up[row_index]) == 1.0:
                     first_action_regime = "UP_OR_FLAT"
 
         scenario_lifts: dict[int, float] = {}
@@ -1626,23 +1643,23 @@ def evaluate_l2_policy(
                 if available and baseline_cost is not None
                 else math.nan
             )
-        available_targets = pd.to_numeric(
-            group.loc[group["target_available"].astype(bool), "full_exit_incremental_net_value_bps"],
-            errors="coerce",
-        ).dropna()
-        oracle = max(0.0, float(available_targets.max())) if len(available_targets) else 0.0
+        episode_targets = target_values[start:end]
+        episode_target_available = target_available[start:end] & np.isfinite(episode_targets)
+        oracle = (
+            max(0.0, float(episode_targets[episode_target_available].max())) if episode_target_available.any() else 0.0
+        )
         records.append(
             {
-                "episode_ordinal": int(group["episode_ordinal"].iloc[0]),
-                "cohort_ordinal": int(group["cohort_ordinal"].iloc[0]),
-                "entry_decision_date": pd.Timestamp(group["entry_decision_date"].iloc[0]).normalize(),
+                "episode_ordinal": int(episode_values[start]),
+                "cohort_ordinal": int(cohort_values[start]),
+                "entry_decision_date": pd.Timestamp(entry_dates[start]).normalize(),
                 "oracle_lift_bps": oracle,
                 "action_side": "SELL" if first_action_session is not None else "NONE",
                 "policy_action_sell_quantity": initial_quantity - effective_quantity,
                 "policy_terminal_sell_quantity": effective_quantity,
                 "holding_age_bucket": _holding_age_bucket(first_action_session),
                 "market_regime": first_action_regime,
-                "st_flag": bool(group["st_flag"].iloc[0]),
+                "st_flag": bool(st_flags[start]),
                 **{f"policy_lift_parent_orders_{scenario}_bps": value for scenario, value in scenario_lifts.items()},
                 **{f"parent_orders_{scenario}_available": value for scenario, value in scenario_available.items()},
             }
