@@ -191,8 +191,8 @@
   },
   "first_seen_at": "2026-09-06T05:59:12.082424Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "983739db3c413ebf78acebdf04f68879673a133e",
+  "fixed_at": "2026-09-06T08:04:27Z",
   "github_issue_number": 4350,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4350",
   "last_seen_at": "2026-09-06T05:59:12.082424Z",
@@ -200,6 +200,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4352",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -226,6 +227,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -237,7 +239,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1381",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b8460bd7be70ca31",
+    "recorded_at": "2026-09-06T08:20:36.855595Z",
+    "runtime_contract_digest": "53782ee66f4457c1301b26c10ed9816dce172ec5e87db17adb6e876059732073",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "174ec75b3041e58495506a8a039c7fb0e527e5f0",
+    "source_merge_commit": "983739db3c413ebf78acebdf04f68879673a133e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4352",
+    "validation_evidence": [
+      "validation-receipt: id=7032f49a72abc504 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_factor_st_pit_metrics_cache.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/test_factor_metrics_h20_contract.py -q` result=`91 passed, 1 skipped`",
+      "validation-receipt: id=83a501b3519b25d1 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`158 passed`",
+      "validation-receipt: id=46017d37e98ed4db commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+      "validation-receipt: id=8f55055bbadf4f82 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 tests and ownership scan clean`",
+      "validation-receipt: id=c07eae233e5c1756 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking findings 0`",
+      "gh pr checks 4352 -> CI verdict passed; CodeQL verdict passed"
+    ],
+    "validation_evidence_digest": "40ce17f7b68575d5999537bd5ac8e36a3e5664c1776e2af9d342de004e05b438"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -246,6 +274,14 @@
     "fingerprint": "e2bdc24ac4dd52cd87a7cc0f",
     "source_event_id": "FE-20260906-e2bdc24ac4dd"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7032f49a72abc504 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_factor_st_pit_metrics_cache.py backend/tests/test_correlation_compute_independence.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/test_factor_metrics_h20_contract.py -q` result=`91 passed, 1 skipped`",
+    "validation-receipt: id=83a501b3519b25d1 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`158 passed`",
+    "validation-receipt: id=46017d37e98ed4db commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+    "validation-receipt: id=8f55055bbadf4f82 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 tests and ownership scan clean`",
+    "validation-receipt: id=c07eae233e5c1756 commit=c6743a1da47ed3ee0bc044145703ed94314e538f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking findings 0`",
+    "gh pr checks 4352 -> CI verdict passed; CodeQL verdict passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
