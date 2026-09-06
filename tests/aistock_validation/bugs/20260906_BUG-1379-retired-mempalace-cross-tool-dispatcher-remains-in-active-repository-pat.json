@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1379",
-  "closed_at": null,
+  "closed_at": "2026-09-06T08:56:37Z",
   "closure_requirements": [
     "Remove the retired MemPalace-only dispatcher and its dedicated test from active code paths.",
     "Mark the five primary legacy cross-tool protocol documents as RETIRED while preserving their historical content and paths.",
@@ -112,8 +112,8 @@
   },
   "first_seen_at": "2026-09-06T05:52:20.226542Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f6f6e012a4afb701f77f9a3ef18bacf38d3a2045",
+  "fixed_at": "2026-09-06T08:56:37Z",
   "github_issue_number": 4349,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4349",
   "last_seen_at": "2026-09-06T05:52:20.226542Z",
@@ -121,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4356",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,6 +139,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -147,7 +149,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1379",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7918af9bd226c8b2",
+    "recorded_at": "2026-09-06T09:00:05.258884Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aa001d53dba5f9eb9008933fb7f15087d4db7e37",
+    "source_merge_commit": "f6f6e012a4afb701f77f9a3ef18bacf38d3a2045",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4356",
+    "validation_evidence": [
+      "rtk nox -s guardrail_changed_files -> passed; findings=1 blocking=0 mapped=3 unmapped=0 ambiguous=0",
+      "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped"
+    ],
+    "validation_evidence_digest": "b4980f3592dedf6f663f0fa1a3eefcfecc4b002ac8ca619367fbf8d9c7957265"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -156,6 +180,10 @@
     "fingerprint": "f35a2ebc42fe9004e4790246",
     "source_event_id": "FE-20260906-f35a2ebc42fe"
   },
+  "validation_evidence": [
+    "rtk nox -s guardrail_changed_files -> passed; findings=1 blocking=0 mapped=3 unmapped=0 ambiguous=0",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
