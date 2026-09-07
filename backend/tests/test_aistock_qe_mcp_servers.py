@@ -219,6 +219,7 @@ def test_qe_template_create_rejects_future_stock_pool_before_http(experiment_mcp
             "custom_evo",
             "future pool",
             {
+                "data_split": {"test_end": "2026-04-28"},
                 "loops": [
                     {
                         "factor_keys": ["alpha_factor||catalog"],
