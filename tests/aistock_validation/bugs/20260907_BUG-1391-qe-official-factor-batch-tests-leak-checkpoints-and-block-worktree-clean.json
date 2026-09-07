@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1391",
-  "closed_at": null,
+  "closed_at": "2026-09-07T11:29:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -82,8 +82,8 @@
   },
   "first_seen_at": "2026-09-07T11:18:18.508288Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1824b6c4b8ca016db5999b7946a8c4ccfec92498",
+  "fixed_at": "2026-09-07T11:29:56Z",
   "github_issue_number": 4399,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4399",
   "last_seen_at": "2026-09-07T11:18:18.508288Z",
@@ -91,6 +91,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4400",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -108,6 +109,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -117,7 +119,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1391",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cf9690d0a4ce06a6",
+    "recorded_at": "2026-09-07T11:31:23.254671Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "64df3c32fd1150fbed9c85e8be3c19021a8d7d46",
+    "source_merge_commit": "1824b6c4b8ca016db5999b7946a8c4ccfec92498",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4400",
+    "validation_evidence": [
+      "validation-receipt: id=a26869082f285ea6 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_aborts_remaining_batches_after_resource_gate_failure backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_drains_success_frames_incrementally backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_reuses_worker_precomputed_metrics backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_records_explicit_metric_precompute_fallback -q` result=`4 passed; source checkpoint inventory 0 before and 0 after`",
+      "validation-receipt: id=e18985b4e26310bb commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q -p no:cacheprovider` result=`32 passed, 1 skipped; source checkpoint inventory 0 before and 0 after`",
+      "validation-receipt: id=7476cacd2dbe91e6 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+      "validation-receipt: id=9ce74e9ffad72fc2 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`292 passed, 1 skipped; source checkpoint inventory 0 before and 0 after`"
+    ],
+    "validation_evidence_digest": "833cb60f570e2c42590a872dce3ee633ebe6dd5c8c20a8a2d6c5d9361fed12be"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -126,6 +152,12 @@
     "fingerprint": "3bb1a976e379f2065731ee92",
     "source_event_id": "FE-20260907-3bb1a976e379"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a26869082f285ea6 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_aborts_remaining_batches_after_resource_gate_failure backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_drains_success_frames_incrementally backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_reuses_worker_precomputed_metrics backend/tests/quantevolver/test_official_factor_batch_compute.py::test_compute_records_explicit_metric_precompute_fallback -q` result=`4 passed; source checkpoint inventory 0 before and 0 after`",
+    "validation-receipt: id=e18985b4e26310bb commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q -p no:cacheprovider` result=`32 passed, 1 skipped; source checkpoint inventory 0 before and 0 after`",
+    "validation-receipt: id=7476cacd2dbe91e6 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=9ce74e9ffad72fc2 commit=64df3c32fd1150fbed9c85e8be3c19021a8d7d46 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`292 passed, 1 skipped; source checkpoint inventory 0 before and 0 after`"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
