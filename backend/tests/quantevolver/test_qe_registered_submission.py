@@ -14,6 +14,10 @@ from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     RDAGENT_DEFAULT_DATA_SPLIT,
 )
+from backend.services.quantevolver.experiment_config import (
+    QE_RUNTIME_METADATA_KEYS,
+    split_qe_runtime_metadata,
+)
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
@@ -66,6 +70,28 @@ def test_registered_control_metadata_never_reaches_strategy_kwargs() -> None:
         "qe_pending_created_by",
     ):
         assert metadata_key not in yaml_text
+
+
+def test_registered_control_metadata_uses_canonical_runtime_metadata_contract() -> None:
+    registered_keys = {
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    }
+    params = {
+        "topk": 20,
+        "qe_mcp_provenance": {"created_by_name": "Codex"},
+        "qe_factor_sources": {"alpha_a": "official"},
+        "qe_pending_task_source": "mcp",
+        "qe_pending_created_by": "Codex",
+    }
+
+    executable, metadata = split_qe_runtime_metadata(params)
+
+    assert registered_keys <= QE_RUNTIME_METADATA_KEYS
+    assert executable == {"topk": 20}
+    assert set(metadata) == registered_keys
 
 
 def test_registered_control_metadata_remains_in_persisted_custom_params(monkeypatch) -> None:
