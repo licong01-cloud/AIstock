@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import pytest
 
 from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
+from backend.services.quantevolver import node_execution as node_execution_module
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     RDAGENT_DEFAULT_DATA_SPLIT,
@@ -19,6 +21,7 @@ from backend.services.quantevolver.experiment_config import (
     split_qe_runtime_metadata,
 )
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
+from backend.services.quantevolver.node_execution import QENodePreflightError, preflight_qe_node
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
     PlannedQELoop,
@@ -27,6 +30,71 @@ from backend.services.quantevolver.qe_run_registry import (
     attach_qe_run_registration,
     build_qe_run_registration,
 )
+
+
+class _WorkspaceConfigClient:
+    def __init__(self, workspace_base: str):
+        self.workspace_base = workspace_base
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return None
+
+    async def get_workspace_config(self):
+        return {"workspace_base": self.workspace_base}
+
+
+def _preflight_registered_node(monkeypatch, *, configured_root: str, api_root: str):
+    node = {
+        "node_id": "wsl2-5080",
+        "api_base_url": "http://127.0.0.1:9000",
+        "status": "online",
+        "workspace_base": configured_root,
+        "factor_data_dir": "/mnt/x/factors",
+        "qlib_data_path": "/mnt/x/day",
+        "qlib_minute_path": "/mnt/x/minute",
+        "qlib_rdagent_root": "/mnt/f/Dev/RD-Agent-main",
+    }
+    monkeypatch.setattr(node_execution_module, "get_compute_node", lambda _node_id: dict(node))
+    monkeypatch.setattr(
+        node_execution_module.QEWorkspaceClient,
+        "for_node",
+        staticmethod(lambda _node_id: _WorkspaceConfigClient(api_root)),
+    )
+    return asyncio.run(preflight_qe_node("wsl2-5080"))
+
+
+@pytest.mark.parametrize(
+    "api_root",
+    ["", ".", "relative/qe_workspace", "/", "//host/qe_workspace", "/mnt/f/qe/../other", r"C:\qe"],
+)
+def test_registered_submission_preflight_rejects_noncanonical_api_workspace_root(monkeypatch, api_root):
+    with pytest.raises(QENodePreflightError) as exc_info:
+        _preflight_registered_node(monkeypatch, configured_root="/mnt/f/qe_workspace", api_root=api_root)
+    assert exc_info.value.error_code == "QE_NODE_WORKSPACE_ROOT_INVALID"
+
+
+def test_registered_submission_preflight_rejects_db_api_workspace_mismatch(monkeypatch):
+    with pytest.raises(QENodePreflightError) as exc_info:
+        _preflight_registered_node(
+            monkeypatch,
+            configured_root="/mnt/f/qe_workspace",
+            api_root="/tmp/other-qe-workspace",
+        )
+    assert exc_info.value.error_code == "QE_NODE_WORKSPACE_ROOT_MISMATCH"
+    assert exc_info.value.context["configured_workspace_base"] == "/mnt/f/qe_workspace"
+    assert exc_info.value.context["api_workspace_base"] == "/tmp/other-qe-workspace"
+
+
+def test_registered_submission_preflight_normalizes_matching_trailing_slash(monkeypatch):
+    node = _preflight_registered_node(
+        monkeypatch,
+        configured_root="/mnt/f/qe_workspace",
+        api_root="/mnt/f/qe_workspace/",
+    )
+    assert node["workspace_config"]["workspace_base"] == "/mnt/f/qe_workspace"
 
 
 def test_registered_control_metadata_never_reaches_strategy_kwargs() -> None:
