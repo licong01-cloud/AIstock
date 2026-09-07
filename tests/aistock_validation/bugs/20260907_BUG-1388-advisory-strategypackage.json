@@ -1,8 +1,8 @@
 {
-  "actual": "strategy_package_wsl_inference_failed input_rows=4919 kept_rows=0",
+  "actual": "2026-08-31/2026-09-04 market.daily_basic分别5545/5548行，turnover_rate_f与free_share非空数均0，导致两个Program推理无可评分行。供应端重查两日已返回有限值。ingest_tushare_daily_basic对非空但整列缺失快照仍upsert并success_days+=1；failed_days>0时main仍退出0。",
   "allowed_write_scope": [
-    "backend/inference_engine.py",
-    "backend/tests/test_inference_strict_scoring_alignment.py",
+    "scripts/ingest_tushare_daily_basic.py",
+    "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
     "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
   ],
   "assigned_agent": null,
@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-07T06:35:31.435182Z",
-  "description": "strategy_package_wsl_inference_failed input_rows=4919 kept_rows=0",
+  "description": "2026-08-31/2026-09-04 market.daily_basic分别5545/5548行，turnover_rate_f与free_share非空数均0，导致两个Program推理无可评分行。供应端重查两日已返回有限值。ingest_tushare_daily_basic对非空但整列缺失快照仍upsert并success_days+=1；failed_days>0时main仍退出0。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,63 +25,75 @@
   ],
   "evidence_uris": [
     "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md#16-当前下一步",
-    "GET /api/v1/advisory/forward-runs/advfwd_3e1ee1734cc84393b798daedf10a84cc"
+    "GET /api/v1/advisory/forward-runs/advfwd_3e1ee1734cc84393b798daedf10a84cc",
+    "只读SQL 2026-08-24..2026-09-04 daily_basic按日期字段计数",
+    "Tushare只读重查：20260831 5545/5545，20260904 5548/5548（turnover_rate_f/free_share）；首次20260904投影查询空响应，未当成完整证据",
+    "https://tushare.pro/document/2?doc_id=32"
   ],
-  "expected": "训练与在线推理输入语义一致；合法数据可评分发布，正常缺失按模型合同处理，系统缺源显式失败。",
+  "expected": "同步显式请求完整字段；整日自由流通关键字段均不可用时不得写入并宣称成功，失败返回非零退出码；个股正常缺失和既有有限值保留。不修改因子/推理策略，不伪造回填数据。生产缺失字段补写另待DEV验证及具体DML授权。",
   "file_scope_contract": {
+    "schema_version": "aistock_submit_bug_file_scope_v1",
     "added_files": [],
     "changed_files": [
-      "backend/inference_engine.py",
-      "backend/tests/test_inference_strict_scoring_alignment.py"
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
     ],
-    "changed_files_source": "planned_intake",
+    "planned_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ],
+    "scope_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ],
+    "changed_files_source": "root_cause_scope_correction",
     "ownership": {
       "changed_files": [
-        "backend/inference_engine.py",
-        "backend/tests/test_inference_strict_scoring_alignment.py"
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
       ],
       "impacted_modules": [
-        "advisory.historical_range",
-        "tests.backend"
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
       ],
       "matched_rules": [
         {
-          "file": "backend/inference_engine.py",
+          "file": "scripts/ingest_tushare_daily_basic.py",
           "impact_modules": [
-            "tests.backend"
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
           ],
-          "primary_module": "advisory.historical_range",
+          "primary_module": "local_data",
           "risk_level": "high",
-          "rule_id": "advisory_historical_range_foundation"
+          "rule_id": "local_data_daily_basic_operator"
         },
         {
-          "file": "backend/tests/test_inference_strict_scoring_alignment.py",
+          "file": "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
           "impact_modules": [
-            "tests.backend"
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
           ],
-          "primary_module": "advisory.historical_range",
+          "primary_module": "local_data",
           "risk_level": "high",
-          "rule_id": "advisory_historical_range_foundation"
+          "rule_id": "local_data_daily_basic_operator"
         }
       ],
       "risk_levels": [
         "high"
       ],
       "suggested_scope": [
-        "backend/inference_engine.py",
-        "backend/tests/test_inference_strict_scoring_alignment.py"
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
       ],
       "unmatched_files": []
-    },
-    "planned_files": [
-      "backend/inference_engine.py",
-      "backend/tests/test_inference_strict_scoring_alignment.py"
-    ],
-    "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": [
-      "backend/inference_engine.py",
-      "backend/tests/test_inference_strict_scoring_alignment.py"
-    ]
+    }
   },
   "first_seen_at": "2026-09-07T06:35:31.435182Z",
   "fix_branch": null,
@@ -90,39 +102,37 @@
   "github_issue_number": 4377,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4377",
   "last_seen_at": "2026-09-07T06:35:31.435182Z",
-  "module": "advisory_historical_range",
+  "module": "local_data",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "不修改backend/inference_engine.py或冻结因子/策略包资产；正常缺失不删行或零填充。",
+    "不执行DEV/production DDL/DML，不重启后端或控制实验；数据修复另行授权。"
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ingest_tushare_daily_basic.py -q",
   "required_verification": [
     "l0",
-    "advisory_historical_range_backend"
+    "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "backend_restart_owner": "user",
+    "runtime_impact": "none",
+    "backend_restart_required": false,
+    "persistence_basis": "git_tracked_source",
+    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": true
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "advisory_historical_range"
+    "local_data"
   ],
   "title": "Advisory每日发布因StrategyPackage推理特征全缺而阻塞",
   "trigger_condition": {
@@ -133,10 +143,10 @@
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "advisory_historical_range"
+        "local_data"
       ],
       "plans": [
-        "advisory_historical_range_backend"
+        "data_sync_autonomy_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -190,10 +200,10 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "advisory_historical_range"
+          "local_data"
         ],
         "plans": [
-          "advisory_historical_range_backend"
+          "data_sync_autonomy_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
