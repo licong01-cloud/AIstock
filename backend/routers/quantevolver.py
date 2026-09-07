@@ -227,6 +227,9 @@ class GenerateConfigRequest(BaseModel):
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
     parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
+    created_by_type: Optional[str] = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型: ui/mcp/scheduler/agent")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 
 class SingleExperimentPendingCreateRequest(GenerateConfigRequest):
@@ -3100,6 +3103,16 @@ def generate_config(req: GenerateConfigRequest):
             req,
             source="quantevolver.config.generate",
         )
+        provenance = dict(custom_params.get("qe_mcp_provenance") or {})
+        provenance.update(
+            {
+                "created_by_type": req.created_by_type or "ui",
+                "purpose": req.purpose,
+            }
+        )
+        if req.created_by_name:
+            provenance["created_by_name"] = req.created_by_name
+        custom_params["qe_mcp_provenance"] = provenance
 
         from ..services.quantevolver.qe_active_dataset_profile import (
             load_active_qe_profile,
@@ -3195,6 +3208,13 @@ def generate_config(req: GenerateConfigRequest):
                 available_nodes=available_nodes,
                 active_dataset_profile=active_profile,
                 universe_selection=req.universe_selection,
+                registration_context={
+                    "source_type": req.created_by_type or "ui",
+                    "created_by_name": req.created_by_name,
+                    "purpose": req.purpose,
+                },
+                parent_multi_alpha_id=req.parent_multi_alpha_id,
+                parent_custom_params=custom_params,
             )
             engine_result = engine.run()
 
@@ -3202,41 +3222,6 @@ def generate_config(req: GenerateConfigRequest):
                 raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
 
             parent_exp_id = engine_result.get("parent_experiment_id")
-
-            # 汇总所有组的因子名（用于实验记录的 factor_names 字段）
-            all_factor_names = []
-            for ag in exp_cfg.multi_alpha_config.alpha_groups:
-                all_factor_names.extend(ag.factor_names)
-
-            # 创建 parent 实验记录 + 设置 alpha_mode（INSERT 而非 UPDATE，因为之前从未创建）
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO qe_experiments
-                            (experiment_id, experiment_name, status,
-                             factor_names, model_id, strategy_id,
-                             data_split, custom_params,
-                             alpha_mode, multi_alpha_config,
-                             parent_multi_alpha_id, created_at)
-                        VALUES (%s, %s, 'created', %s, %s, %s, %s, %s,
-                                'multi', %s::jsonb, %s, NOW())
-                        ON CONFLICT (experiment_id) DO UPDATE SET
-                            alpha_mode = 'multi',
-                            multi_alpha_config = EXCLUDED.multi_alpha_config,
-                            parent_multi_alpha_id = EXCLUDED.parent_multi_alpha_id,
-                            factor_names = EXCLUDED.factor_names
-                    """, (
-                        parent_exp_id,
-                        parent_exp_id,
-                        json.dumps(all_factor_names),
-                        exp_cfg.multi_alpha_config.alpha_groups[0].model_id if exp_cfg.multi_alpha_config.alpha_groups else None,
-                        req.strategy_id,
-                        json.dumps(req.data_split) if req.data_split else None,
-                        json.dumps(custom_params) if custom_params else None,
-                        json.dumps(req.multi_alpha_config),
-                        req.parent_multi_alpha_id,
-                    ))
-                conn.commit()
 
             # 生成前端需要的展示信息
             group_configs = engine_result.get("group_configs", [])
@@ -3388,6 +3373,7 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
         "created_by_name": req.created_by_name,
         "source_context_json": req.source_context_json,
         "provenance": req.provenance,
+        "purpose": req.purpose,
     }
     custom_params["qe_mcp_provenance"] = {
         key: value for key, value in provenance.items() if value not in (None, "", {})
@@ -6907,10 +6893,18 @@ async def _run_multi_alpha_experiment(
         experiment_config=exp_cfg,
         composer=cc,
         available_nodes=available_nodes,
+        registration_context=dict(_cp.get("_qe_run_registration") or {}),
+        parent_multi_alpha_id=exp_record.get("parent_multi_alpha_id"),
+        parent_custom_params=_cp,
     )
     engine_result = engine.run()
     if not engine_result.get("ok"):
         raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
+    from ..services.quantevolver.qe_run_registry import QERunRegistry
+
+    QERunRegistry(connection_factory=get_conn).mark_dispatched(
+        experiment_id=experiment_id
+    )
 
     all_experiment_files = engine_result.get("experiment_files", {})
     group_configs = engine_result.get("group_configs", [])
@@ -7308,6 +7302,12 @@ async def _run_experiment_unified(
             require_fixed_seed=True,
             submission_source_kind="qe_experiment",
             submission_source_execution_id=experiment_id,
+        )
+
+        from ..services.quantevolver.qe_run_registry import QERunRegistry
+
+        QERunRegistry(connection_factory=get_conn).mark_dispatched(
+            experiment_id=experiment_id
         )
 
         client = QEWorkspaceClient.for_node(effective_node_id)

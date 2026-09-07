@@ -69,6 +69,13 @@ def _require_detail(detail: str) -> None:
         raise ValueError("detail must be summary or full")
 
 
+def _require_purpose(purpose: str) -> str:
+    normalized = str(purpose or "research").strip().lower()
+    if normalized not in {"research", "validation"}:
+        raise ValueError("purpose must be research or validation")
+    return normalized
+
+
 def _require_positive_loop_index(loop_index: int) -> int:
     parsed = int(loop_index)
     if parsed < 1:
@@ -432,11 +439,12 @@ def register(registry: "ModuleRegistry") -> None:
         return _validate_experiment_config(template_kind, config_json or {}, include_normalized=include_normalized)
 
     @registry.mcp.tool(name="qe_single_experiment_create_pending")
-    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None) -> Any:
+    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None, purpose: str = "research") -> Any:
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         normalized_config["created_by_type"] = "mcp"
         normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
         normalized_config["source_context_json"] = source_context_json
+        normalized_config["purpose"] = _require_purpose(purpose)
         return client.post("/quantevolver/experiments/pending", normalized_config)
 
     @registry.mcp.tool(name="qe_single_experiment_get_config")
@@ -506,7 +514,7 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
-    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
+    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False, purpose: str = "research") -> Any:
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
             {
@@ -532,6 +540,9 @@ def register(registry: "ModuleRegistry") -> None:
                 "clone_from_task_id": clone_from_task_id,
                 "phase_pipeline_enabled": bool(normalized_config.get("phase_pipeline_enabled", False)),
                 "resource_telemetry_enabled": bool(normalized_config.get("resource_telemetry_enabled", False)),
+                "created_by_type": "mcp",
+                "created_by_name": "mcp_gateway",
+                "purpose": _require_purpose(purpose),
             },
         )
 

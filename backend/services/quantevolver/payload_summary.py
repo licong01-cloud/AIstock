@@ -621,6 +621,7 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
         "experiment_id",
         "experiment_name",
         "status",
+        "canonical_status",
         "model_id",
         "strategy_id",
         "qe_task_id",
@@ -645,8 +646,14 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
     item.update(metrics)
     if metrics:
         item["metrics_summary"] = metrics
+    custom_params = _mapping(row.get("custom_params"))
+    registration = _mapping(custom_params.get("_qe_run_registration"))
+    if registration:
+        item["registration_summary"] = registration
+    if row.get("progress_summary"):
+        item["progress_summary"] = row.get("progress_summary")
     if include_config_summary:
-        config_summary = compact_config_summary(row.get("custom_params"))
+        config_summary = compact_config_summary(custom_params)
         if config_summary:
             item["custom_params_summary"] = config_summary
     status = str(row.get("status") or "").lower()

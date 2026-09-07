@@ -91,6 +91,8 @@ def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, e
 
 
 def _patch_non_qe_dependencies(monkeypatch):
+    from backend.services.quantevolver import qe_active_dataset_profile
+
     def fake_resolve_custom_loop_nodes(loops_config, request_node_id):
         default_node = request_node_id or "local-node"
         resolved = []
@@ -125,6 +127,7 @@ def _patch_non_qe_dependencies(monkeypatch):
     monkeypatch.setattr(qe, "normalize_node_parallelism", fake_normalize_node_parallelism)
     monkeypatch.setattr(qe, "preflight_qe_nodes", fake_preflight_qe_nodes)
     monkeypatch.setattr(qe, "_sync_stock_pool_to_remote", lambda stock_pool, node: None)
+    monkeypatch.setattr(qe_active_dataset_profile, "load_active_qe_profile", lambda: None)
 
 
 def test_custom_evo_loop_config_preserves_model_params_from_http_payload():

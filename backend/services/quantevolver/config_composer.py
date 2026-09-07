@@ -66,6 +66,11 @@ from .qe_active_dataset_profile import (
 )
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
+from .qe_run_registry import (
+    QE_RUN_REGISTRATION_PARAM,
+    QERunRegistry,
+    attach_qe_run_registration,
+)
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
@@ -2831,7 +2836,7 @@ class ConfigComposer:
                                ic, icir, rank_ic, rank_icir,
                                annualized_return, max_drawdown, information_ratio,
                                annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
-                               created_at, updated_at,
+                               created_at, updated_at, custom_params,
                                alpha_mode, parent_multi_alpha_id
                         FROM qe_experiments
                         ORDER BY created_at DESC
@@ -2840,7 +2845,11 @@ class ConfigComposer:
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        items = rows if full_detail else [compact_experiment_row(row) for row in rows]
+        projected_rows = QERunRegistry(connection_factory=get_conn).project_history(rows)
+        items = projected_rows if full_detail else [
+            compact_experiment_row(row, include_config_summary=True)
+            for row in projected_rows
+        ]
         return {"ok": True, "total": total, "items": items, "detail": "full" if full_detail else "summary"}
 
     @staticmethod
@@ -2920,7 +2929,7 @@ class ConfigComposer:
                            e.ic, e.icir, e.rank_ic, e.rank_icir,
                            e.annualized_return, e.max_drawdown, e.information_ratio,
                            e.annualized_return_no_cost, e.max_drawdown_no_cost, e.information_ratio_no_cost,
-                           e.created_at, e.updated_at,
+                           e.created_at, e.updated_at, e.custom_params,
                            e.alpha_mode, e.parent_multi_alpha_id,
                            et.base_experiment_id AS _evolution_base_experiment_id,
                            et.task_type AS _evolution_task_type
@@ -2959,8 +2968,12 @@ class ConfigComposer:
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         normalized = self._normalize_history_parent_ids(rows, set(parent_ids))
+        normalized = QERunRegistry(connection_factory=get_conn).project_history(normalized)
         if detail != "full":
-            normalized = [compact_experiment_row(row) for row in normalized]
+            normalized = [
+                compact_experiment_row(row, include_config_summary=True)
+                for row in normalized
+            ]
         # Preserve parent page order, then place child loops under each parent.
         order = {experiment_id: idx for idx, experiment_id in enumerate(parent_ids)}
         normalized.sort(
@@ -3011,8 +3024,19 @@ class ConfigComposer:
                     experiment["custom_params"] = enrich_blacklist_snapshot_for_display(custom_params)
                 except Exception as e:
                     raise RuntimeError(f"行业黑名单快照解析失败: {e}") from e
+                experiment = QERunRegistry(connection_factory=get_conn).project_history(
+                    [experiment]
+                )[0]
                 if not full_detail:
-                    experiment["metrics_summary"] = compact_experiment_row(experiment).get("metrics_summary", {})
+                    compact = compact_experiment_row(
+                        experiment,
+                        include_config_summary=True,
+                    )
+                    experiment["metrics_summary"] = compact.get("metrics_summary", {})
+                    if compact.get("registration_summary"):
+                        experiment["registration_summary"] = compact["registration_summary"]
+                    if compact.get("custom_params_summary"):
+                        experiment["custom_params_summary"] = compact["custom_params_summary"]
                     experiment["result_metrics_available"] = True
                 return {"ok": True, "experiment": experiment, "detail": "full" if full_detail else "summary"}
 
@@ -6745,35 +6769,30 @@ model_cls = {nn_class_name}
                                 data_split: Dict, custom_params: Optional[Dict],
                                 evolution_goal: Optional[str] = None,
                                 llm_hypothesis: Optional[Dict] = None) -> None:
-        """保存实验记录到数据库。"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO qe_experiments
-                        (experiment_id, experiment_name, status,
-                         factor_names, model_id, strategy_id,
-                         data_split, custom_params, workspace_path,
-                         evolution_goal, llm_hypothesis, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (experiment_id) DO UPDATE SET
-                        experiment_name = EXCLUDED.experiment_name,
-                        factor_names = EXCLUDED.factor_names,
-                        model_id = EXCLUDED.model_id,
-                        strategy_id = EXCLUDED.strategy_id,
-                        data_split = EXCLUDED.data_split,
-                        custom_params = EXCLUDED.custom_params,
-                        evolution_goal = EXCLUDED.evolution_goal,
-                        llm_hypothesis = EXCLUDED.llm_hypothesis
-                """, (
-                    experiment_id, experiment_name, "created",
-                    json.dumps(factor_names),
-                    model_id, strategy_id,
-                    json.dumps(data_split),
-                    json.dumps(custom_params) if custom_params else None,
-                    exp_dir,
-                    evolution_goal,
-                    json.dumps(llm_hypothesis) if llm_hypothesis else None,
-                ))
+        """Reserve a canonical single-run identity before it can be dispatched."""
+        params = dict(custom_params or {})
+        if QE_RUN_REGISTRATION_PARAM not in params:
+            params = attach_qe_run_registration(
+                params,
+                run_kind="single",
+                node_id=params.get("execution_node_id"),
+                model_id=model_id,
+                factor_names=factor_names,
+                strategy_id=strategy_id,
+                data_split=data_split,
+            )
+        QERunRegistry(connection_factory=get_conn).reserve_single(
+            experiment_id=experiment_id,
+            experiment_name=experiment_name,
+            workspace_path=exp_dir,
+            factor_names=factor_names,
+            model_id=model_id,
+            strategy_id=strategy_id,
+            data_split=data_split,
+            custom_params=params,
+            evolution_goal=evolution_goal,
+            llm_hypothesis=llm_hypothesis,
+        )
 
     def _get_experiment_record(self, experiment_id: str) -> Optional[Dict]:
         """获取实验记录。"""

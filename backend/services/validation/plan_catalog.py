@@ -47,6 +47,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_qe_mcp_backend": "qe_mcp_backend",
     "nox_qe_read_backend": "qe_read_backend",
     "nox_qe_read_l3": "qe_read_l3",
+    "nox_qe_experiment_registry_ui": "qe_experiment_registry_ui",
     "nox_research_pipeline_backend": "research_pipeline_backend",
     "nox_research_mcp_contract": "research_mcp_contract",
     "nox_mcp_gateway_manifest_quality": "mcp_gateway_manifest_quality",

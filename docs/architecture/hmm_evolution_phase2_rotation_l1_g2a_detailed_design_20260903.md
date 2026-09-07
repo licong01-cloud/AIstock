@@ -1,18 +1,20 @@
 # HMM Evolution Phase 2 G2-A `rotation_L1` 端到端详细设计
 
 > **设计层级**：F2
-> **版本**：v1.3
-> **日期**：2026-09-04
+> **文档版本**：v1.3.1（交付架构澄清；模型合同继续为`hmm_risk_rotation_l1_g2a_v1_3`）
+> **日期**：2026-09-07
 > **状态**：`DESIGN_READY_USER_APPROVED_SOURCE_MERGED_PENDING_FORMAL_39FIT`
-> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.44
+> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.45
 > **终极目标**：在同一个G2-A闭环内交付真实日度L1板块轮动预测、最小repository/read API和真实`/hmm-risk` L1热力图，而不是只交付模型、fit、artifact、receipt或market regime页面。
-> **2026-09-04批准边界**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
+> **历史2026-09-04批准边界（叶20日规则已被下述v1.3取代）**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
 > **历史v1.2批准边界**：用户曾一次性批准§10.1的504日rolling、特征完整性、Ridge/horizon规则、LightGBM 4.6.0 profile、coverage、state projection与最小DB/API设计合同；当时未授权源码、39 fits、tail读取、DDL或runtime activation。其后源码与development实验分别获得授权，实际终态见§19.4～§19.5。
 > **2026-09-06 MARKET-CONTEXT-A批准边界**：每个decision date `t`仅使用同release CSI300截至`t-1`的`daily_return`与`volatility_3d=population_std(ddof=0)`；每fold在固定504日target-free train上执行train-only z-score，复用K=2 jump、`lambda=4.0`、`seed=42`。semantic score固定为standardized center `daily_return-volatility_3d`，较高state映射`risk_on`、较低state映射`risk_off`。5D/10D共享同一fold-local fit；缺数、非有限、state tie或因果递推失败均fail closed，不补默认状态、不重新拟合、不读取target。39-fit总预算及其余v1.2合同不变。
 > **2026-09-06 LEAF-DISTRIBUTION-C批准边界**：G2-A v1.2保持`STRUCTURAL_ACCEPTANCE_FAILED`且不得回写；v1.3保持`min_child_samples=310`，每叶distinct decision dates硬底线为`ceil(310/31)=10`，全部实际叶中低于20日的比例必须`<=1%`。任一叶低于10日或低于20日的比例超过1%均typed fail closed；不得把20直接改成18、不得据此调参或续跑v1.2。其余G2-A合同和39-fit预算全部不变。
 > **2026-09-07源码合入状态**：v1.3源码与readback测试已通过PR #4375合入main（merge commit `901218454df7b21a811c47c7a9b161337e1033c7`）。正式v1.3受控实验尚未启动（`0/39` fits）；未读取tail，未生成model/product，未执行DDL/DML、runtime activation或服务控制；严格产品进度仍为`11/17=64.71%`，CAPABILITY_AVAILABLE、FULL_READY和真实API/UI均为0。
 
 ---
+
+> **2026-09-07交付修订边界**：本次随父蓝图把无标签单日推理纳入同一G2-A，明确离线计算不能宣告真实surface可用；不改变§10.1数值、v1.3模型身份、39-fit预算或tail访问条件。源码`close_processes`的提前surface AVAILABLE仍是待修缺口，产品链尚未实现；文档批准不意味着这些工作已完成。
 
 ## 0. 背景、权威、现状与批准边界
 
@@ -37,7 +39,8 @@
 - 一个冻结参数的浅层GBDT candidate；
 - rolling walk-forward、purge/embargo与全新未消费评估尾部；
 - 独立coverage与typed availability，不使用performance-based abstention；
-- `research_product_gate`通过后的真实OOF prediction、最小repository/read API与L1热力图；
+- 真实OOF prediction、最小repository/read API与L1热力图共同完成`research_product_gate`，不是只凭离线fit标记通过；
+- 在原能力条件允许时，使用同一冻结模型、显式as-of输入完成单日无标签推理与上述同一产品链；
 - typed failure、紧凑receipt、writer/readback及advisory-only隔离。
 
 ### 1.2 Non-goals
@@ -56,50 +59,37 @@
 - 状态使用五个正交字段，禁止互相推导：`research_surface_status=NOT_AVAILABLE|AVAILABLE_EXPERIMENTAL`、`rotation_l1_capability_status=NOT_AVAILABLE|RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED|ADVISORY_PREDICTION_AVAILABLE`、`forward_power_status=UNAVAILABLE|INSUFFICIENT|SUFFICIENT`、`forward_confirmation=NOT_STARTED|PENDING_INSUFFICIENT_POWER|PENDING_INCONCLUSIVE|PASSED|FAILED`、`advisory_status=NOT_AVAILABLE|AVAILABLE`。
 - `research_surface_status=AVAILABLE_EXPERIMENTAL`只证明真实因果OOF预测、repository/API/UI与writer/readback工程链闭合；若development效果未达到binding MBE，`rotation_l1_capability_status`必须仍为`NOT_AVAILABLE`，不得把工程闭环冒充预测能力。
 - 只有development效果达到binding MBE，才允许`rotation_l1_capability_status=RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`；只有forward confirmation通过，才允许`rotation_l1_capability_status=ADVISORY_PREDICTION_AVAILABLE`且`advisory_status=AVAILABLE`。
-- `INSUFFICIENT_STATISTICAL_POWER`是forward evaluation conclusion/reason，不是模型失败。它不阻止唯一GBDT candidate或真实research surface，但禁止advisory升级。
+- `INSUFFICIENT_STATISTICAL_POWER`是forward evaluation conclusion/reason，不是模型失败。它不阻止唯一GBDT candidate或真实research surface，也不替代实际tail判断；未取得实际forward PASSED不能升级advisory，实际tail通过时按§7.1/§8.2处理，不由规划MDE再次否决。
 - `INSUFFICIENT_DATA_CONTRACT`表示输入、标签、日历或PIT不满足执行合同；不是模型失败。
 - 顶层`CAPABILITY_AVAILABLE`只能由至少一个明确命名、达到其批准capability状态的component推导；`AVAILABLE_EXPERIMENTAL`、battery、market context、模型文件或API壳均不能推导它。
+- 离线child/parent只可报告计算前提和效果状态；没有repository/API/UI真实验证时，`research_surface_status`必须保持`NOT_AVAILABLE`，`research_product_gate`不得预先标记passed。模型能力评价可独立完成，但不等于产品已发布；UI失败也不反向篡改已完成模型效果。
+- OOF与新日预测都必须携带实际`trade_date/as_of_date`和模型身份；历史OOF的model_hash为对应fold模型，新日推理为冻结full-development模型，禁止混用。
 
 ## 2. Architecture（架构）与端到端数据流
 
+共享因果feature构造连接两种输入，不能让正式推理依赖未来outcome：
+
 ```text
-versioned H5/Bin + C-013 PIT/identity + calendar
-                │
-                ▼
-minimal immutable rotation input bundle
-                │
-      ┌─────────┴─────────┐
-      ▼                   ▼
-development battery   causal market context
-      │                   │
-      └──── horizon ──────┘
-                │
-                ▼
-single rolling GBDT candidate
-                │
-                ▼
-      research_product_gate
-         │ pass              │ fail
-         ▼                   ▼
-real causal OOF          typed NOT_AVAILABLE
-repository/API/UI
-AVAILABLE_EXPERIMENTAL
-         │
-         ▼
-      tail_access_gate
-         │ pass              │ fail
-         ▼                   ▼
-single sealed-tail       keep experimental surface;
-evaluation              no capability / no tail read
-         │
-         ▼
-forward passed/inconclusive/failed
-         │ passed only
-         ▼
-advisory product bundle + same real L1 heatmap state upgrade
+显式versioned direct-v2 + PIT/calendar
+                  │
+       ┌──────────┴─────────┐
+       ▼                    ▼
+development/授权tail     显式as-of过去数据（无target）
+       │                    │
+battery + GBDT v1.3      冻结模型因果递推/predict（0fit）
+       │                    │ 能力条件允许
+       ├─ 有效OOF ──────────┤
+       │                    ▼
+       │            同一writer/repository/API/UI
+       │                    │
+       │              research surface真实验收
+       ▼
+tail_access_gate（计算/coverage/复现 + development MBE）
+       │
+       └─ 单次授权tail评价 → forward/capability状态
 ```
 
-所有箭头均携带source/model/config/hash。每个分支失败只停止其被授权的下游：research gate失败停止全部产品写入；tail gate失败禁止读取tail但不回滚已闭合的experimental surface；forward失败禁止advisory升级和新增日度预测，但保留不可变历史OOF研究回读。Battery与market context没有独立产品出口，旧模型没有fallback箭头。
+统计评价与产品工程共享同一模型身份，但不把UI部署作为读取tail的前置，也不把tail显著性作为开发research页面的前置。两者各自失败只阻断其下游：计算/因果失败不能写预测；writer/API/UI失败不能标记surface可用；tail gate失败不读tail但可保留有效OOF研究页；forward failed停止新增预测但不删除历史OOF。Battery与market context没有独立产品出口，旧模型没有fallback箭头。
 
 ## 3. D1：产品目标、target与输出（USER_APPROVED）
 
@@ -163,7 +153,7 @@ v1.2必须使用新schema `hmm_risk_rotation_l1_g2a_input_bundle_v1`，不得把
 | 4 | `2025-04-01..2025-09-30`，126日 | `2023-02-23..2025-03-24` / `2025-03-25..2025-03-31` | `2023-02-16..2025-03-17` / `2025-03-18..2025-03-31` |
 | 5 | `2025-10-01..2026-03-31`，116日；首个open day为`2025-10-09` | `2023-08-28..2025-09-23` / `2025-09-24..2025-09-30` | `2023-08-21..2025-09-16` / `2025-09-17..2025-09-30` |
 
-- 每个train恰为504日；feature lookback只读取train首日前最多60个source days，不能进入target或增加训练样本。window合同必须同时满足：五fold完整、tail不参与fit/selection、D5功效计算可执行；任一日历漂移均显式失败，不缩窗或改fold。
+- 每个train恰为504日；feature lookback只读取train首日前最多60个source days，不能进入target或增加训练样本。window合同必须同时满足：五fold完整、tail不参与fit/selection、日期与maturity计数可核验；任一日历漂移均显式失败，不缩窗或改fold。D5的LRV/功效不可计算只影响forward_power_status，不能成为rolling或GBDT新增前置门。
 - target-free market context不需要purge：每fold固定使用validation首个open day之前的最后504日，依次为`2021-08-06..2023-09-01`、`2022-02-17..2024-03-14`、`2022-08-22..2024-09-18`、`2023-03-02..2025-03-31`、`2023-09-04..2025-09-30`，由5D/10D共享。tail前full-development market fit固定使用`2024-03-01..2026-03-31`；full-development GBDT的5D候选为`2024-02-23..2026-03-24`并purge`2026-03-25..2026-03-31`，10D候选为`2024-02-08..2026-03-17`并purge`2026-03-18..2026-03-31`。这些日期由已冻结1373日calendar精确回读，正式request仍须逐项hash比对。
 
 ### 4.4 尾部功效只读边界
@@ -277,8 +267,8 @@ early_stopping=forbidden
 
 唯一GBDT的development OOF输出同时进入两个用途不同、互不替代的门：
 
-1. `research_product_gate`只验证因果walk-forward OOF、禁止in-sample prediction、canonical 31-sector分母、coverage、有限score、model/input/mapping identity、fresh-process复现和writer/readback。它不含效应量或显著性阈值；通过后只允许`research_surface_status=AVAILABLE_EXPERIMENTAL`，不得推导rotation capability。
-2. `tail_access_gate`在上述工程与因果条件全部通过后，另要求`development_oof_mean_rank_ic >= binding_MBE_IC`。不增加development显著性AND门。失败时`tail_accessed=false`、`forward_confirmation=NOT_STARTED`、`rotation_l1_capability_status=NOT_AVAILABLE`，但不回滚已经真实闭合的research surface。
+1. `research_product_gate`涵盖因果walk-forward OOF、禁止in-sample prediction、canonical 31-sector分母、coverage、有限score、model/input/mapping identity、fresh-process复现，以及真实writer/readback、API/UI。它不含效应量或显著性阈值。离线parent只确认前面的计算条件，完整gate必须在§8.3产品验证后才passed并设置`research_surface_status=AVAILABLE_EXPERIMENTAL`，不得推导rotation capability。
+2. `tail_access_gate`使用同一OOF的计算、因果、coverage、score、identity与fresh-process复现结果，另要求`development_oof_mean_rank_ic >= binding_MBE_IC`；它不依赖DB/API/UI部署完成，不增加development显著性AND门。失败时`tail_accessed=false`、`forward_confirmation=NOT_STARTED`、`rotation_l1_capability_status=NOT_AVAILABLE`，但不回滚已经真实闭合的research surface。两门不得用一个预填布尔值互相代替；本修订不改变任一数值阈值。
 3. development的Rank IC与top-bottom realized spread必须同时进入receipt；符号不一致记录非阻断诊断`metric_direction_divergence_observed`，不能自动归因为代码、tie或coverage缺陷，也不得触发重训。
 
 ### 6.4 Fit上限
@@ -332,22 +322,23 @@ z_0.95         = 1.6448536269514722
 2. development-only battery与forward功效说明；
 3. horizon冻结；
 4. 两fresh-process唯一GBDT development执行；
-5. 执行`research_product_gate`；通过时以真实causal OOF prediction闭合repository/read API与L1热力图，状态最多为`AVAILABLE_EXPERIMENTAL`；
-6. 执行`tail_access_gate`；development效果未达到binding MBE时不读取tail，但不回滚research surface；通过时设置`rotation_l1_capability_status=RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`与`forward_confirmation=PENDING_INSUFFICIENT_POWER|PENDING_INCONCLUSIVE`；
-7. tail gate通过后冻结candidate/model/feature/threshold并一次性读取全新尾部outcome；
-8. 按forward passed/inconclusive/failed更新能力状态；只有passed才写advisory canonical product bundle并升级能力。
+5. 有效OOF计算条件满足后，直接完成§8.3真实repository/read API与L1热力图；产品验证完成才终态化`research_product_gate`与surface状态。产品代码可以在模型执行期间开发，不等待效果显著；
+6. 独立计算`tail_access_gate`；development未达binding MBE不读取tail；达标设置`rotation_l1_capability_status=RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`与相应pending forward状态。该统计分支不等待步骤5的部署，但不能代报步骤5完成；
+7. tail gate通过且动作授权有效时，使用冻结candidate/model/feature/threshold一次性读取全新尾部outcome；
+8. 按forward passed/inconclusive/failed更新能力状态；只有passed才写advisory canonical product bundle并升级能力；
+9. 在§8.2原有条件允许、数据与运行权限满足时，以§8.4的0-fit单日推理完成同一产品链，不另设一个推理/数据物化阶段。
 
-任何步骤失败均不得跳到后续步骤、换参数、换horizon、启用第二candidate或回退旧模型。
+失败按依赖分支停止，禁止跳过其必需条件；产品UI失败不篡改已完成实验结论，模型无有效预测也不能用mock补足页面。任何失败均不得换参数、换horizon、启用第二candidate或回退旧模型。
 
 ### 8.2 决策树
 
 - development数据、标签或因果切片不可执行：research surface与rotation capability均`NOT_AVAILABLE`，使用对应typed data reason。仅功效公式/LRV不可执行时只设置`forward_power_status=UNAVAILABLE`，不得伪装为模型失败或阻止research/tail gate执行。
-- `research_product_gate`失败：research surface与rotation capability均`NOT_AVAILABLE`；不得用mock、in-sample或静态矩阵补足。
-- research gate通过但`tail_access_gate`失败：`research_surface_status=AVAILABLE_EXPERIMENTAL`、`rotation_l1_capability_status=NOT_AVAILABLE`、`tail_accessed=false`；页面必须直接展示development OOF Rank IC、HAC区间、`BELOW_BINDING_MBE`和未开始forward confirmation。
+- `research_product_gate`的计算/因果前提失败：research surface与rotation capability均`NOT_AVAILABLE`。仅writer/API/UI未完成或失败时surface为`NOT_AVAILABLE`，能力评价维持其实际结果但不表示已发布；不得用mock、in-sample或静态矩阵补足。
+- 真实产品验证通过但`tail_access_gate`失败：`research_surface_status=AVAILABLE_EXPERIMENTAL`、`rotation_l1_capability_status=NOT_AVAILABLE`、`tail_accessed=false`；页面必须直接展示development OOF Rank IC、HAC区间、`BELOW_BINDING_MBE`和未开始forward confirmation。
 - tail gate通过后先形成`RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`；若`MBE_IC<MDE_h`则预先记录`forward_confirmation=PENDING_INSUFFICIENT_POWER`，功效充足或功效状态不可用则记录`PENDING_INCONCLUSIVE`。三者均允许一次性tail评价，且不得降低MBE或显著性标准。
 - **forward passed**：tail mean Rank IC达到0.02且one-sided HAC拒绝`mean<=0`，coverage/data/model合同均有效；升级`rotation_l1_capability_status=ADVISORY_PREDICTION_AVAILABLE`、`forward_confirmation=PASSED`、`advisory_status=AVAILABLE`。
 - **forward inconclusive**：未满足passed，且one-sided 95% HAC上置信界仍`>0`；保持`RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`。若`MBE_IC<MDE_h`则`forward_confirmation=PENDING_INSUFFICIENT_POWER`，否则为`PENDING_INCONCLUSIVE`；不调参、不换模型，可继续记录同一冻结模型的前瞻预测。
-- **forward failed**：仅当`upper_one_sided_95pct_HAC_confidence_bound <= 0`时设置`forward_confirmation=FAILED`、`rotation_l1_capability_status=NOT_AVAILABLE`、`advisory_status=NOT_AVAILABLE`并停止新增日度预测；已闭合的历史OOF研究回读仍保持`research_surface_status=AVAILABLE_EXPERIMENTAL`，但页面必须显著显示forward failed且不得继续展示为当前预测能力。该公式按实际tail成熟日期和实际HAC标准误计算，当前约`-0.067`只作规划示例、不得硬编码。数据、identity、coverage或non-finite失败使用各自typed reason，不混入effect failure。
+- **forward failed**：仅当`upper_one_sided_95pct_HAC_confidence_bound <= 0`时设置`forward_confirmation=FAILED`、`rotation_l1_capability_status=NOT_AVAILABLE`、`advisory_status=NOT_AVAILABLE`并停止新增日度预测；只有已真实闭合的历史OOF研究回读仍保持`research_surface_status=AVAILABLE_EXPERIMENTAL`，但页面必须显著显示forward failed且不得继续展示为当前预测能力。该公式按实际tail成熟日期和实际HAC标准误计算，当前约`-0.067`只作规划示例、不得硬编码。数据、identity、coverage或non-finite失败使用各自typed reason，不混入effect failure。
 
 ### 8.3 真实产品纵切
 
@@ -358,11 +349,25 @@ z_0.95         = 1.6448536269514722
 - `/hmm-risk`真实L1热力图直接消费上述API，展示score方向、状态、unavailable、development OOF Rank IC点估计与HAC区间、forward-confirmation状态和研究声明；不得使用mock、静态矩阵、旧Ridge输出或market regime冒充轮动预测。development未达到MBE时页面必须显著显示`AVAILABLE_EXPERIMENTAL / BELOW_BINDING_MBE`，不得显示为capability available；
 - 本G2-A不注册日调度、不切换生产默认导航、不启用backend；source merge、DDL、依赖、runtime activation和用户重启分别授权。
 
+### 8.4 同一G2-A内的受控单日推理（交付澄清，不新增fit）
+
+本节落实“真实日度预测”的已有目标，不增加模型方向、调度器或统计阈值：
+
+- **入口**：一次请求显式给出`trade_date=t`、canonical前一交易日`as_of_date`、冻结full-development model identity与明确versioned candidate root。该root必须通过现有正式reader；不使用latest、当前数据库或硬编码每月路径。输入截止不足as-of时明确失败，不能把2026-08-31更名为9月当前预测。
+- **label-free**：训练与推理调用同一feature公式/顺序/截面预处理/state projection。推理只读取截至as-of的lookback（最长60个return需对应61个close）及PIT/typed状态；不得调用必须构造5D/10D target的训练bundle路径。没有`t+h`标签不阻止预测，预测以后才可形成outcome评价。
+- **market连续性**：使用同一冻结market z-score、jump参数、semantic mapping与GBDT；从可核验full-development末端状态按canonical open days连续递推到as-of。已有同模型/输入身份的连续checkpoint可复用；否则从冻结起点只读重放所需CSI300过去数据，不重新fit。缺一日、identity漂移或无法证明连续性使用既有market-context/input reason，不能截取最近60日重置隐状态。
+- **许可状态**：development未达MBE仅历史OOF研究回读，不启动新增日度预测；达标且forward pending/inconclusive/PASSED按§8.2继续同一冻结模型；forward FAILED停止新增预测。未授权sealed tail不得借“推理”读取其feature/outcome；本节不新增或代替tail动作授权。
+- **写入与展示**：使用§9同一最小表、writer/API/UI和31-sector分母；无新registry、队列或调度。历史OOF的fold模型与新日full-development模型身份保持独立；新日结果不得标为历史OOF效果证明或已forward确认。页面可回读最新“已有结果”，但必须显示其实际日期，不能把旧结果伪装为请求日。
+- **幂等与revision**：相同model/date/input/mapping和数值内容重试只回读，不新增revision；同一唯一键出现不同payload显式冲突，不覆盖。数据修订须按既有revision/supersedes合同显式写新版本，不能借revision换模型或参数。
+- **验收**：在已有模型条件允许时，用一份没有未来outcome的真实输入完成一个明确交易日的31-sector生成、原子写入、两个API与浏览器回读，并断言fit调用数为0。输入不够新或执行授权缺失时报告具体pending；工程开发可继续，但不假报真实单日能力已可用。
+
+首次仅人工受控执行；自动日任务属于后置G2-C，不是本节前提。该功能的代码开发、直接测试、BUG修复与复审连续归属G2-A，不再拆出“单日推理阶段”。
+
 ## 9. API/DB/UI Contracts（契约）与最小持久化
 
 旧`sector_state_timeline.state_probabilities NOT NULL`面向HMM三态概率，不能承载非概率GBDT score。禁止填造概率。已批准的唯一设计合同是单独的`hmm_risk.rotation_l1_prediction`最小表；不修改旧概率列语义，也不建设通用prediction store。schema设计已随D1～D6获用户批准，DDL实施仍须另行授权并先在DEV验证。
 
-最小字段：`prediction_id`、`product_bundle_id NULL`、`trade_date/as_of_date`、`sector_level`固定L1、`sector_code/name`、`rotation_score NULL`、`forecast_state NULL`、`feature_contributions JSONB NULL`、`availability`、`reason_code NULL`、`research_surface_status`、`rotation_l1_capability_status`、`forward_power_status`、`forward_confirmation`、`advisory_status`、`validation_basis`、`development_oof_rank_ic`、`development_oof_rank_ic_hac_lower/upper`、`model_hash`、`input_hash`、`mapping_snapshot_hash`、`revision`、`supersedes_prediction_id NULL`、`created_at`。同一model/date/sector/revision唯一；不可原地覆盖，读取current取最大revision。research-only OOF行允许`product_bundle_id=NULL`但必须有完整model/input/mapping identity。`availability=available`时`rotation_score/forecast_state/model_hash/input_hash/mapping_snapshot_hash`必须非空且score有限；`availability=unavailable`时`rotation_score/forecast_state/feature_contributions`必须为空且`reason_code`非空。contributions仅在model/writer重构校验整体通过时写入；上述约束须在已批准schema的未来DDL与repository校验中同时实现，禁止只靠UI解释。
+最小字段：`prediction_id`、`product_bundle_id NULL`、`trade_date/as_of_date`、`sector_level`固定L1、`sector_code/name`、`rotation_score NULL`、`forecast_state NULL`、`feature_contributions JSONB NULL`、`availability`、`reason_code NULL`、`research_surface_status`、`rotation_l1_capability_status`、`forward_power_status`、`forward_confirmation`、`advisory_status`、`validation_basis`、`development_oof_rank_ic`、`development_oof_rank_ic_hac_lower/upper`、`model_hash`、`input_hash`、`mapping_snapshot_hash`、`revision`、`supersedes_prediction_id NULL`、`created_at`。同一model/date/sector/revision唯一；不可原地覆盖，读取current必须先显式绑定所选model identity，再取该model/date/sector最大revision；禁止跨模型以revision大小猜测current。research-only OOF行允许`product_bundle_id=NULL`但必须有完整model/input/mapping identity。`availability=available`时`rotation_score/forecast_state/model_hash/input_hash/mapping_snapshot_hash`必须非空且score有限；`availability=unavailable`时`rotation_score/forecast_state/feature_contributions`必须为空且`reason_code`非空。contributions仅在model/writer重构校验整体通过时写入；上述约束须在已批准schema的未来DDL与repository校验中同时实现，禁止只靠UI解释。
 
 v1.2最小schema设计合同冻结为：`prediction_id UUID PRIMARY KEY`；`product_bundle_id TEXT NULL`；`trade_date DATE NOT NULL`、`as_of_date DATE NOT NULL CHECK(as_of_date<trade_date)`；`sector_level TEXT NOT NULL CHECK(sector_level='L1')`；`sector_code TEXT NOT NULL`、`sector_name TEXT NOT NULL`；三个score/state/contribution字段按上段条件为空或非空；五个状态字段与`availability/validation_basis/reason_code`均为受CHECK约束的TEXT；三个OOF metric字段为`DOUBLE PRECISION NULL`；三个identity hash为`CHAR(64) NOT NULL`；`tail_accessed BOOLEAN NOT NULL`；`revision INTEGER NOT NULL CHECK(revision>=1)`；`supersedes_prediction_id UUID NULL REFERENCES ...`；`created_at TIMESTAMPTZ NOT NULL DEFAULT now()`。唯一键固定为`(model_hash,trade_date,sector_code,revision)`，另建`(trade_date,sector_code,revision DESC)`读取索引，不增加通用registry、写队列或materialized view。
 
@@ -373,9 +378,11 @@ v1.2最小schema设计合同冻结为：`prediction_id UUID PRIMARY KEY`；`prod
 - `research_surface_status='AVAILABLE_EXPERIMENTAL'`不得单独推导capability或advisory；tail gate未通过的OOF行固定`tail_accessed=false`；
 - repository写入后以同一transaction回读数量、字段、identity与canonical row hash；任一不一致整体回滚并使用typed writer/readback reason。
 
+行内五轴状态记录生成时的评价快照，不代表当前部署健康；首次写入、尚未完成真实API/UI验收时surface快照必须NOT_AVAILABLE。API顶层当前surface依据同一产品identity的真实writer/readback、API/UI验收与当前服务读取状态确定，不能只复制离线receipt或行内旧状态。UI验收不要求预先将行标记AVAILABLE，也不为变更展示状态批量回写历史OOF行；历史行与当前顶层评价的日期/身份必须分别明确，避免“先假报可用才能验收”的循环。
+
 两个read API只读取该repository：overview固定返回五轴顶层状态、model/as-of、31-sector coverage、development OOF metric/区间与未实现能力；rotation-l1固定返回请求日期的31个canonical sector行及上述lineage。不存在日期返回typed 404，不返回空200；存在但全部unavailable仍返回31行与逐行reason，不伪造服务失败。
 
-持久化只允许：一个development bundle、一个独立sealed tail bundle、一个compact battery receipt、两个fresh-process child receipts、一个final acceptance/failure receipt、通过时一个model/product bundle和真实产品预测。禁止保存逐树大JSON、复制完整历史输入或迁移旧artifact。两个输入bundle只是为防止tail泄漏而分离的同一G2-A输入合同，不构成两个产品阶段。
+持久化只允许：一个development bundle、一个独立sealed tail bundle、一个compact battery receipt、两个fresh-process child receipts、一个final acceptance/failure receipt、合同允许的model/product及真实产品预测。OOF必须保留重现其预测所必需的fold模型身份，新增推理使用完整冻结full-development模型；这不是多候选或额外fit。§8.4只保存必要输入身份和连续market状态，不再复制完整历史面板。禁止保存逐树大JSON、复制完整历史输入或迁移旧artifact。两个输入bundle只是为防止tail泄漏而分离的同一G2-A输入合同，不构成两个产品阶段。
 
 ## 10. Typed reason codes
 
@@ -429,13 +436,13 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 
 ## 11. Implementation Plan（实施方案）与文件方向
 
-本设计合入且用户另行授权源码实施后，同一Feature范围可连续修改：
+v1.3模型源码已经合入；下一轮仍使用同一G2-A交付范围，修复真实缺口并补齐产品，不重开模型选型。按具体源码授权可连续修改：
 
-- `backend/services/hmm_risk/rotation_l1_gbdt.py`：feature/battery/model/metric纯计算；
-- `backend/services/hmm_risk/rotation_l1_product.py`：model/product writer与prediction生成；
+- `backend/services/hmm_risk/rotation_l1_gbdt.py`：现有feature/battery/model/metric；修复`close_processes`提前宣告surface AVAILABLE，与真实产品验证分离；
+- 目标最小prediction service/repository：model/product writer、OOF回读与§8.4 label-free单日prediction，复用现有正式reader和feature构造；
 - `backend/services/hmm_risk/repository.py`或最小专用repository：持久化/readback；
 - `backend/routers/hmm_risk.py`：两个read endpoints；
-- `scripts/hmm_risk/prepare_rotation_l1_g2a.py`：薄离线CLI，不查询隐式DB；
+- 现有`scripts/hmm_risk/run_rotation_l1_g2a.py`及相邻已登记入口：薄离线CLI，不查询隐式DB；新增单日模式也不隐式执行训练；
 - `frontend/src/app/hmm-risk/**`：真实L1热力图纵切；
 - 对应backend/frontend直接测试、nox/ownership登记及本设计状态回填。
 
@@ -454,16 +461,18 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 - t-1/PIT、5D/10D target、purge与tail outcome边界；
 - battery禁读tail、低线性基线不淘汰GBDT、Ridge选择horizon且GBDT不得事后重选；
 - MBE/MDE分离、HAC非有限/非正、功效不足只改变confirmation状态；
-- 10列feature顺序/hash、按日rank、typed NaN和无neutral/前值fallback；
-- 单一GBDT参数、无early stopping/grid/第二seed、两fresh-process hash、`min_child_samples=310`与每叶至少20个distinct dates；
-- research gate与tail gate互斥正反例、Rank IC binding、spread非阻断及符号分歧诊断；
+- 固定9列feature顺序/hash（不是用满10列上限）、按日rank、typed NaN和无neutral/前值fallback；
+- 单一GBDT参数、无early stopping/grid/第二seed、两fresh-process hash、`min_child_samples=310`、每叶至少10日与低于20日叶比例`<=1%`；
+- research gate与tail gate独立正反例（不是互斥门）、Rank IC binding、spread非阻断及符号分歧诊断；
 - forward passed/inconclusive/failed、95% HAC上界公式及禁止硬编码样例阈值；
 - failure stage/reason、不把experimental surface写成capability/advisory AVAILABLE；
 - 通过后31-sector真实prediction与model/input hash回读。
 
 ### 12.3 必须测试的产品合同
 
-- repository revision/dedupe/readback；
+- repository revision/dedupe/readback、相同请求不新增版本、同键不同hash冲突、跨模型current禁止混用；
+- 两child/hash成功但没有writer/API/UI时surface仍NOT_AVAILABLE；真实产品验证后才能AVAILABLE_EXPERIMENTAL；
+- 单日无未来标签仍可推理、fit=0、连续market状态、lookback不足/日期缺口/输入漂移typed失败；历史OOF与新日模型/日期明确区分；
 - overview/rotation-l1 API真实OOF数据、31分母、五轴状态、typed unavailable及非概率score；
 - 前端真实API L1热力图、loading/error/empty/unavailable、OOF IC/HAC区间、forward状态和可访问文本；
 - Selection/Paper/QMT/QE与现有HMM gate无写入；
@@ -474,12 +483,13 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 - **统计功效不足**：新尾部时间样本可能不足以检测产品MBE；按D5返回功效不足reason，不降MBE、不伪造模型失败。
 - **非线性过拟合**：31-sector日截面与重叠标签使有效独立单位更接近日期数；以浅树、强正则、single profile、rolling和untouched tail约束。
 - **horizon选择偏差**：只允许预注册5D/10D规则；tail outcome不可参与选择，其他horizon不可临时加入。
-- **feature mining**：10列顺序和公式在battery前冻结；禁止全库搜索、结果后删改和PCA。
+- **feature mining**：9列顺序和公式在battery前冻结，第10列不是运行时扩展槽位；禁止全库搜索、结果后删改和PCA。
 - **engineering surface冒充能力**：research gate不含效果阈值，只能形成`AVAILABLE_EXPERIMENTAL`；capability与advisory升级分别受development MBE和forward合同约束。
-- **叶节点日期集中**：保留容量导向`min_child_samples=310`，训练后以10日硬底线和“低于20日叶比例不超过1%”识别结构退化；单个异常叶不再否决整个ensemble，任何合同失败仍不得触发调参重训。
+- **叶节点日期集中**：保留容量导向`min_child_samples=310`，训练后以10日硬底线和“低于20日叶比例不超过1%”识别结构退化；10～19日叶在1%预算内不否决ensemble，但任一叶低于10日仍立即失败，不能概括为“单叶永不否决”。任何合同失败仍不得触发调参重训。
 - **依赖/数值漂移**：LightGBM wheel/build、线程和版本进入identity；未授权安装或版本不符即停止。
 - **假产品进度**：market context、battery、模型文件、API壳或静态页面都不能标记能力；必须完成真实端到端读回。
-- **schema错配**：旧HMM概率字段不能填造GBDT概率；最小新表或兼容扩展必须在DDL前明确二选一。
+- **schema错配**：旧HMM概率字段不能填造GBDT概率；§9已批准独立最小新表，不再保留未决二选一。
+- **训练/推理耦合**：推理不能要求未来label或重新prepare全历史；共享feature代码、显式as-of和冻结market递推，运行态授权仍独立。
 
 ## 14. Design Acceptance Index
 
@@ -488,21 +498,21 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 - **F-011 / G2A-D3**：≤10项feature、development battery、共享market context、Ridge-only 5D/10D选择及独立forward功效说明。
 - **F-011 / G2A-D4**：唯一浅层GBDT、全部参数、确定性、fresh-process、叶节点日期低位门、research/tail双门与依赖identity。
 - **F-011 / G2A-D5**：Rank IC 0.02为唯一binding MBE；spread、稳定性和coverage独立展示；forward三分支不混淆低功效与失败。
-- **F-013 / G2A-D6**：真实OOF prediction/repository/API/UI可先闭合experimental surface；capability/advisory状态不得越级。
+- **F-013 / G2A-D6**：真实OOF prediction/repository/API/UI可先闭合experimental surface；条件允许的单日无标签推理同一闭环完成；capability/advisory状态不得越级。
 - **F-012 / G2A-ISO**：advisory-only、无Selection/Paper/QMT/QE副作用。
 
 ## 15. Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.2；v1.3叶分布合同源码与readback测试已通过PR #4375合入main；新39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；HMM module 743 passed、coverage 76.99%；两份F2 validator PASS；真实direct-v2 development bundle Windows/WSL readback；merge commit `901218454df7b21a811c47c7a9b161337e1033c7` | APPROVED_BY_USER_SOURCE_MERGED | 用户已批准v1.3叶分布合同；v1.2保持结构失败，v1.3正式实验仍为0/39 fits，只能在main合入版本的独立validation worktree从头执行；F-013产品链仍未实施 |
+| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.2；v1.3叶分布合同源码与readback测试已通过PR #4375合入main；新39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；HMM module 743 passed、coverage 76.99%；两份F2 validator PASS；真实direct-v2 development bundle Windows/WSL readback；merge commit `901218454df7b21a811c47c7a9b161337e1033c7` | APPROVED_BY_USER_SOURCE_MERGED | 用户已批准v1.3叶分布合同；v1.2保持结构失败，v1.3正式实验仍为0/39 fits，只能在main合入版本的独立validation worktree从头执行；F-013产品链仍未实施；`close_processes`提前宣告surface的源码缺口待下一轮修复，本次未改代码 |
 | F-012 | 本设计§1.2、§8.3；现有isolation guard | 目标`backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | APPROVED_BY_USER_DESIGN_READY_PENDING_SOURCE_EVIDENCE | 用户已批准advisory-only业务语义；本次没有源码、数据库或runtime变更 |
-| F-013 | 本设计D6；目标prediction repository、两个read API和真实`/hmm-risk` L1热力图 | 目标`backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts` | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | research gate通过后允许真实OOF闭合最终工程链；不得使用mock/in-sample，也不得把`AVAILABLE_EXPERIMENTAL`冒充rotation capability或advisory AVAILABLE |
+| F-013 | 本设计D6/§8.4；目标prediction repository、两个read API、真实`/hmm-risk` L1热力图与label-free单日推理 | 目标`backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts` | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | 必须由真实OOF产品验证终态化research gate；产品链/单日推理均未完成；不得使用mock/in-sample，也不得把`AVAILABLE_EXPERIMENTAL`冒充rotation capability或advisory AVAILABLE |
 
 ## 16. Rollout / Rollback（发布与回滚）
 
 - 文档批准、源码合入、依赖安装、DEV DDL、实验、产品写入、runtime activation和用户重启分别报告，互不推导。
-- research gate失败时不部署research surface；research gate通过但tail gate失败时只允许真实OOF experimental surface，能力仍NOT_AVAILABLE。功效不足只限制advisory升级，不回滚已闭合的真实research工程链。
+- 计算前提失败时不能用伪预测部署surface；仅writer/API/UI失败不改变实际模型评价，但surface保持NOT_AVAILABLE。真实产品验证通过而tail gate失败时只允许历史OOF experimental surface，能力仍NOT_AVAILABLE。功效不足只影响forward状态，不回滚真实研究工程链；实际forward PASSED才允许advisory。
 - research surface或advisory纵切在writer/API/UI任一环节失败时，对应状态不得AVAILABLE；回滚本次source/DDL时不删除历史prediction或修改旧实验。
 - runtime启用后回滚只停用新route/product identity，不回退Selection/QE/Paper配置，不删除模型或预测审计行。
 - 本设计不授权任何发布、回滚、清理或进程控制动作。
@@ -528,9 +538,9 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 7. **禁止业务逻辑迁移**：其他三能力、advisory-only、旧终态、现有QE/Paper/Selection/HMM gate均不改变。
 8. **禁止未经确认的门禁和审批**：只使用§10.1已批准数值；任何后续合同变化须重新获批，不新增runtime人工确认或自动研究淘汰流程。
 9. **反过度工程**：一个F2、一个candidate、一个产品纵切；不建平台、不迁移历史artifact、不拆小阶段。
-10. **审核完整性**：三轮审核分别覆盖蓝图状态/矩阵、统计功效/因果隔离、模型/schema/API/UI及反过度工程；任何后续精确值变化都必须重新执行本清单与F2 validator。
+10. **审核完整性**：本次多轮审核覆盖蓝图状态/矩阵、统计功效/因果隔离、模型/schema/API/UI及反过度工程；发现阻断必须修订，无阻断可结束。未来精确合同变化仍须审批和F2；不能把凑审核轮数变成新门禁。
 
-当前审核状态：`THREE_PASS_REVIEW_COMPLETE_DESIGN_READY_USER_APPROVED_SOURCE_IMPLEMENTATION_REVIEWED`。
+当前文档交付修订审核见§19.7；§19.6是已合入叶合同源码的历史审核，不覆盖尚未实施的产品链或新发现的closure状态缺口。
 
 ## 19. v1.2 批准与复审结论
 
@@ -579,3 +589,11 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 - RED→GREEN覆盖单个18日叶在1%预算内通过、超过1%失败、任一叶低于10日失败、旧leaf/failure receipt即使重新哈希仍拒绝；完整HMM module为743 passed、coverage 76.99%，L0 blocking=0，两份F2 validator均PASS。
 - 三轮审核确认没有修改LightGBM参数、MARKET-CONTEXT-A、horizon、feature、MBE/MDE、research/tail双门、fit预算或tail边界；未执行fit、数据写入、DDL/DML、依赖安装或进程控制。
 - PR #4375已将v1.3源码与readback测试合入main（merge commit `901218454df7b21a811c47c7a9b161337e1033c7`）。该source merge不等于正式实验、tail授权、model/product完成、DDL实施或runtime生效；截至2026-09-07正式v1.3实验仍为`0/39` fits。
+
+### 19.7 2026-09-07交付架构一致性修订
+
+- 父蓝图v2.45；本文文档v1.3.1，模型identity继续v1.3。§10.1数值、39fit预算、9feature、MARKET-CONTEXT-A与叶10日/1%合同完全不变。
+- 修正测试清单残留的10列和全局20日minimum、schema二选一、错误CLI路径与“双门互斥”措辞。
+- 明确surface只能由真实writer/API/UI验证；现有离线closure尚未修复，不能用本次F2通过掩盖。统计tail条件不依赖UI部署，UI失败也不伪造模型失败。
+- 将已有日度预测目标落实为共享feature、冻结模型、无未来label、显式as-of及连续market递推的0-fit单日路径，与OOF产品链同一任务，不建调度或新数据平台。
+- 三轮正式审核分别覆盖产品/状态、数值/因果、实施/授权一致性，已修订发现的文档缺口，复审无剩余阻断。直接比较确认§10.1全部精确值、target、feature公式、预处理/horizon、GBDT profile、复现、fit预算、MBE/MDE/forward及五fold日期表与本次基线一致。两份F2 validator与diff检查通过；文档通过不代表源码、39fits、tail、产品或运行已完成。本次无训练、数据库、依赖或进程操作。

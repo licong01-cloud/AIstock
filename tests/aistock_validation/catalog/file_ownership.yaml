@@ -140,6 +140,9 @@ rules:
       - backend/services/quantevolver/qe_active_dataset_profile.py
       - backend/tests/quantevolver/test_qe_active_dataset_profile.py
       - backend/tests/quantevolver/test_qe_active_dataset_profile_api.py
+      - backend/tests/quantevolver/test_qe_experiment_history_contract.py
+      - backend/tests/quantevolver/test_qe_reconciliation_coordinator.py
+      - backend/tests/quantevolver/test_qe_registered_submission.py
       - backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py
       - backend/tests/quantevolver/test_qe_universe_comparison.py
       - backend/tests/test_aistock_qe_mcp_servers.py

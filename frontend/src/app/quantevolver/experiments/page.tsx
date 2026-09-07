@@ -22,7 +22,9 @@ type Experiment = {
   experiment_id: string;
   experiment_name: string;
   status: string;
+  canonical_status?: string;
   factor_names?: string[];
+  factor_count?: number;
   model_id?: string;
   strategy_id?: string;
   workspace_path?: string;
@@ -62,6 +64,24 @@ type Experiment = {
   tail_handling_config?: any;
   strategy_package_manifest?: any;
   seed?: number | string | null;
+  registration_summary?: {
+    run_kind?: string;
+    source_type?: string;
+    purpose?: string;
+    node_id?: string;
+    dataset_release_id?: string;
+    dataset_cutoff?: string;
+    universe_mode?: string;
+    universe_pool_ids?: string[];
+    execution_algo?: string;
+  };
+  progress_summary?: {
+    kind?: string;
+    total?: number;
+    current?: number;
+    status?: string;
+    counts?: Record<string, number>;
+  };
 };
 
 function parseCustomParams(exp: Experiment): Record<string, any> {
@@ -105,10 +125,17 @@ const MODEL_NAMES: Record<string, string> = {
 };
 
 const STATUS_MAP: Record<string, { label: string; color: string; border: string }> = {
+  planned:     { label: "已规划", color: "#64748b", border: "4px solid #64748b" },
   created:     { label: "已创建", color: "#3b82f6", border: "4px solid #3b82f6" },
+  pending:     { label: "排队中", color: "#0ea5e9", border: "4px solid #0ea5e9" },
+  queued:      { label: "排队中", color: "#0ea5e9", border: "4px solid #0ea5e9" },
   running:     { label: "运行中", color: "#f59e0b", border: "4px solid #f59e0b" },
+  finalizing:  { label: "收尾中", color: "#d97706", border: "4px solid #d97706" },
+  reconciling: { label: "核对中", color: "#6366f1", border: "4px solid #6366f1" },
   completed:   { label: "已完成", color: "#10b981", border: "4px solid #10b981" },
   failed:      { label: "失败",   color: "#ef4444", border: "4px solid #ef4444" },
+  cancelled:   { label: "已取消", color: "#64748b", border: "4px solid #64748b" },
+  canceled:    { label: "已取消", color: "#64748b", border: "4px solid #64748b" },
   interrupted: { label: "已中断", color: "#8b5cf6", border: "4px solid #8b5cf6" },
   timeout:     { label: "超时",   color: "#f97316", border: "4px solid #f97316" },
 };
@@ -269,7 +296,7 @@ export default function ExperimentsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loopsExpandedIds, setLoopsExpandedIds] = useState<Set<string>>(new Set());
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(5); // 秒
+  const [refreshInterval, setRefreshInterval] = useState(30); // 秒，状态 fallback 不短于 30 秒
   const [actionId, setActionId] = useState<string | null>(null);
   const [actionType, setActionType] = useState<string>("");
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -335,6 +362,7 @@ export default function ExperimentsPage() {
   }
 
   function refreshRunningStatuses(items: Experiment[], reload: () => void) {
+    if (document.visibilityState !== "visible") return;
     const runningIds = items
       .filter((exp: Experiment) => exp.status === "running")
       .map((exp: Experiment) => exp.experiment_id)
@@ -413,24 +441,21 @@ export default function ExperimentsPage() {
     setLoading(false);
   }
 
-  useEffect(() => { loadAllExperiments(); }, []);
-
-  // 页面加载后自动连接第一个 running 实验的日志流
   useEffect(() => {
-    if (!logsExpId && experiments.length > 0) {
-      const runningExp = experiments.find(e => e.status === "running");
-      if (runningExp) {
-        setLogsExpId(runningExp.experiment_id);
-        setExpandedId(runningExp.experiment_id);
-        sse.openLogs(runningExp.experiment_id);
-      }
-    }
-  }, [experiments]);
+    const loadWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadAllExperiments();
+    };
+    loadWhenVisible();
+    document.addEventListener("visibilitychange", loadWhenVisible);
+    return () => document.removeEventListener("visibilitychange", loadWhenVisible);
+  }, []);
 
   // 自动刷新：仅在用户开启时按设定间隔刷新
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(() => loadAllExperiments(), refreshInterval * 1000);
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") loadAllExperiments();
+    }, Math.max(30, refreshInterval) * 1000);
     return () => clearInterval(timer);
   }, [autoRefresh, refreshInterval]);
 
@@ -907,14 +932,14 @@ export default function ExperimentsPage() {
           </label>
           {autoRefresh && (
             <select
+              data-testid="qe-refresh-interval"
               value={refreshInterval}
               onChange={e => setRefreshInterval(Number(e.target.value))}
               style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151" }}
             >
-              <option value={2}>2秒</option>
-              <option value={5}>5秒</option>
-              <option value={10}>10秒</option>
               <option value={30}>30秒</option>
+              <option value={60}>60秒</option>
+              <option value={120}>120秒</option>
             </select>
           )}
           {autoRefresh && (
@@ -978,7 +1003,8 @@ export default function ExperimentsPage() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 16 }}>
         {groupedExperiments.map(exp => {
           const expanded = expandedId === exp.experiment_id;
-          const sm = STATUS_MAP[exp.status] || { label: exp.status, color: "#6b7280", border: "4px solid #e5e7eb" };
+          const displayStatus = exp.canonical_status || exp.status;
+          const sm = STATUS_MAP[displayStatus] || { label: displayStatus, color: "#6b7280", border: "4px solid #e5e7eb" };
           const metrics = getMetrics(exp);
           const hasMetrics = Object.keys(metrics).length > 0;
           const isActioning = actionId === exp.experiment_id;
@@ -1057,9 +1083,25 @@ export default function ExperimentsPage() {
 
                 {/* 描述信息 / 标签 */}
                 <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280", lineHeight: 1.5, background: "#f9fafb", padding: "6px 10px", borderRadius: 6 }}>
-                  <div><strong>因子数量:</strong> {exp.factor_names?.length || 0}</div>
+                  <div><strong>因子数量:</strong> {exp.factor_count ?? exp.factor_names?.length ?? 0}</div>
                   <div><strong>模型:</strong> {MODEL_NAMES[exp.model_id || ""] || exp.model_id || "默认"}</div>
                   <div><strong>策略:</strong> {exp.strategy_id || "默认"}</div>
+                  {exp.registration_summary && (
+                    <div>
+                      <strong>登记:</strong> {exp.registration_summary.source_type || "-"}
+                      {" / "}{exp.registration_summary.purpose || "research"}
+                      {" / 节点 "}{exp.registration_summary.node_id || "-"}
+                    </div>
+                  )}
+                  {exp.registration_summary?.dataset_release_id && (
+                    <div><strong>数据:</strong> {exp.registration_summary.dataset_release_id}（截止 {exp.registration_summary.dataset_cutoff || "-"}）</div>
+                  )}
+                  {exp.progress_summary && (
+                    <div>
+                      <strong>进度:</strong> {exp.progress_summary.current ?? 0}/{exp.progress_summary.total ?? 0}
+                      {" "}{Object.entries(exp.progress_summary.counts || {}).map(([key, value]) => `${key}:${value}`).join(" · ")}
+                    </div>
+                  )}
                 </div>
 
                 {/* 指标 */}
@@ -1356,7 +1398,8 @@ export default function ExperimentsPage() {
                     {loopsOpen && (
                       <div style={{ borderLeft: "2px solid #e5e7eb", paddingLeft: 12, marginTop: 4 }}>
                         {exp.childLoops.map(child => {
-                          const childSm = STATUS_MAP[child.status] || { label: child.status, color: "#6b7280", border: "4px solid #e5e7eb" };
+                          const childDisplayStatus = child.canonical_status || child.status;
+                          const childSm = STATUS_MAP[childDisplayStatus] || { label: childDisplayStatus, color: "#6b7280", border: "4px solid #e5e7eb" };
                           const childMetrics = getMetrics(child);
                           const childExpanded = expandedId === child.experiment_id;
                           const childArchiveStatus = loopArchiveStatus(child, exp.qe_task_id);

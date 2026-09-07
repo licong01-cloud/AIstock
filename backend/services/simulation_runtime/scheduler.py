@@ -204,6 +204,8 @@ _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "local_sim_projection_terminal_failure",
     "local_sim_projection_readback_terminal_failure",
     "localsim_historical_legacy_plan_terminalization_v1",
+    "localsim_historical_failed_retryable_active_recovery_v1",
+    "localsim_historical_failed_terminal_active_recovery_v1",
 )
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
@@ -7187,27 +7189,90 @@ class SimulationLifecycleScheduler:
             as_of_time=recovery_as_of,
             context=context,
         )
-        driven = self._run_local_sim_binding_single_flight(
-            binding=binding,
-            trade_date=run.trade_date,
-            context={
-                "stage": f"STALE_LOCALSIM_FAILED_{evidence_suffix.upper()}_ACTIVE_RECOVERY",
-                "run_id": run.run_id,
-                "binding_id": binding.binding_id,
-                "trade_date": run.trade_date.isoformat(),
-                "scheduler_trade_date": scheduler_trade_date.isoformat(),
-            },
-            func=lambda: self._drive_existing_local_sim(
-                binding=binding,
-                run=run,
-                plan=plan,
-                runtime_release=runtime_release,
-                trade_date=run.trade_date,
-                data_source=recovery_data_source,
+        paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
+        persisted_orders = tuple(paper_repository.list_orders_for_run(run.run_id))
+        historical_residual = self._local_sim_historical_residual_payload(
+            run=run,
+            orders=persisted_orders,
+        )
+        if historical_residual is None:
+            raise DataUnavailableError(
+                "Historical failed LocalSim active generation has no matching persisted residual order",
+                context={
+                    "reason_code": f"{reason_prefix}_RESIDUAL_MISSING",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
+        active_intent_ids = {state.intent_id for state in states if not state.is_terminal}
+        classifications = {
+            str(item["intent_id"]): str(item["classification"])
+            for item in historical_residual["residual_orders"]
+            if str(item["intent_id"]) in active_intent_ids
+        }
+        broker = context.local_broker
+        configure = getattr(broker, "configure_execution_runtime", None)
+        terminalize = getattr(broker, "terminalize_historical_residuals", None)
+        exporter = getattr(broker, "export_execution_snapshot", None)
+        if not callable(configure) or not callable(terminalize) or not callable(exporter):
+            raise RuntimeConfigInvalidError(
+                "LocalSim broker cannot terminalize a historical durable residual generation",
+                context={
+                    "reason_code": f"{reason_prefix}_TERMINALIZATION_UNSUPPORTED",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
+        configure(run_id=run.run_id, binding_id=binding.binding_id)
+        handles = tuple(
+            terminalize(
+                plan_id=plan.plan_id,
+                orders=persisted_orders,
+                states=states,
+                residual_classifications=classifications,
                 as_of_time=recovery_as_of,
-                context=context,
+            )
+        )
+        raw_snapshot = exporter(handles=handles)
+        snapshot = LocalSimExecutionSnapshot(
+            orders=tuple(raw_snapshot.get("orders") or ()),
+            fills=tuple(raw_snapshot.get("fills") or ()),
+            events=tuple(raw_snapshot.get("events") or ()),
+            cash_entries=tuple(raw_snapshot.get("cash_entries") or ()),
+            positions=dict(raw_snapshot.get("positions") or {}),
+            account=raw_snapshot.get("account"),
+            handle_statuses=tuple(raw_snapshot.get("handle_statuses") or ()),
+        )
+        execution = SimulationExecutionResult(
+            run=run,
+            execution_plan=plan,
+            broker_backend=binding.broker_backend,
+            status="SUBMITTED",
+            intent_count=len(plan.intents),
+            broker_result=LocalSimPlanSubmitResult(
+                order_intents=tuple(LocalSimExecutionBridge().build_order_intents(plan)),
+                handles=handles,
+                execution_snapshot=snapshot,
             ),
         )
+        local_persistence = self._persist_local_sim_execution_result(
+            binding=binding,
+            run=run,
+            execution=execution,
+            context=context,
+        )
+        if local_persistence is None or not bool(local_persistence.payload.get("terminal")):
+            raise DataUnavailableError(
+                "Historical failed LocalSim residual generation did not persist as terminal",
+                context={
+                    "reason_code": f"{reason_prefix}_PERSISTENCE_INCOMPLETE",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
         latest = self.repository.get_simulation_daily_run(run.run_id)
         latest_states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         self._validate_local_sim_post_close_state_closure(latest)
@@ -7276,7 +7341,12 @@ class SimulationLifecycleScheduler:
             ),
             "parent_resubmitted": False,
             "predecessor_projection_replayed": False,
-            "durable_minute_loop_advanced": True,
+            "durable_minute_loop_advanced": False,
+            "historical_realtime_market_data_requested": False,
+            "broker_execution_replayed": False,
+            "residual_order_count": historical_residual["residual_order_count"],
+            "capital_residual_count": historical_residual["capital_residual_count"],
+            "schedule_residual_count": historical_residual["schedule_residual_count"],
             "recovery_as_of": recovery_as_of.isoformat(),
             "verified_at": (
                 self._scheduler_time(as_of_time) if as_of_time is not None else self._scheduler_now()
@@ -7301,7 +7371,7 @@ class SimulationLifecycleScheduler:
             "reason_code": recovery_evidence["reason_code"],
             f"historical_failed_{evidence_suffix}_active_recovery": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
-            "driven_status": driven.status,
+            "driven_status": "HISTORICAL_RESIDUAL_TERMINALIZED",
         }
 
     def _terminalize_historical_localsim_legacy_plan_run(
