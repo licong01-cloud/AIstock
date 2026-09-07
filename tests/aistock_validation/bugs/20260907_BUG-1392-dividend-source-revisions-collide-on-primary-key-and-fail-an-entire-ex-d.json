@@ -126,8 +126,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh task-worktree Python process imported backend.services.tushare_sync_engine and replayed 22 Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control.",
-      "fresh task-worktree Python process imported backend.services.tushare_sync_engine and replayed 22 Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control"
+      "fresh task-worktree Python process at d1092572af0d5427723997088e38fef083e381e7 imported backend.services.tushare_sync_engine and replayed 22 Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
