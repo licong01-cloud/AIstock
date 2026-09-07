@@ -31,7 +31,7 @@ def _minute_candidate(root: Path) -> Path:
         "2026-08-31 09:30:00\n2026-08-31 09:31:00\n", encoding="utf-8"
     )
     (root / "instruments" / "all.txt").write_text(
-        "000001.SZ\t2026-08-31\t2026-08-31\n", encoding="utf-8"
+        "000001.SZ\t2026-08-31 09:30:00\t2026-08-31 15:00:00\n", encoding="utf-8"
     )
     values = {
         "open": 10,

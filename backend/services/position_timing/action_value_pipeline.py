@@ -435,7 +435,10 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
                 planned_trial_count=1,
                 generated_trial_count=1,
                 evaluated_trial_count=1,
-                selected_trial_count=int(joint_supported),
+                # The two records are baseline comparisons for one frozen policy.
+                # Anchor the joint selection on exactly one canonical comparison so
+                # registry consumers never count one policy twice.
+                selected_trial_count=int(joint_supported and baseline == "BUY_AND_HOLD"),
                 consumed_windows=(
                     ConsumedWindowV1(
                         window_id="POSITION_TIMING_ACTION_VALUE_V2_FORWARD",

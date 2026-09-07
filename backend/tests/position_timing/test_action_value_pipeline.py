@@ -39,6 +39,18 @@ def _receipt() -> dict:
     return payload
 
 
+def _supported_receipt() -> dict:
+    payload = _receipt()
+    payload["continuous_policy"]["comparisons"] = {
+        "BUY_AND_HOLD": {"effect_evidence": "SUPPORTED"},
+        "FROZEN_L1_V1": {"effect_evidence": "SUPPORTED"},
+    }
+    payload["effect_evidence"] = "SUPPORTED"
+    payload.pop("receipt_sha256")
+    payload["receipt_sha256"] = canonical_sha256(payload)
+    return payload
+
+
 def _request(root: Path, historical: Path) -> dict:
     return {
         "request_sha256": "1" * 64,
@@ -83,6 +95,36 @@ def test_delivery_retry_repairs_own_pointer_without_mutating_global_registry(tmp
     records = [json.loads(line) for line in registry_bytes.splitlines()]
     assert {row["study_type"] for row in records} == {"LEARNABILITY_AUDIT"}
     assert sum(row["selected_trial_count"] for row in records) == 0
+
+
+def test_joint_supported_policy_is_selected_only_once(tmp_path: Path) -> None:
+    root = tmp_path / "timing"
+    historical = tmp_path / "global-n0.jsonl"
+    historical.write_text('{"historical":true}\n', encoding="utf-8")
+    request = _request(root, historical)
+    receipt = _supported_receipt()
+    bundle = root / "research" / "action_value_v2" / "bundles" / request["request_sha256"]
+    PositionTimingArtifactStore._publish_immutable(
+        bundle / "receipt.json", canonical_json_bytes(receipt) + b"\n"
+    )
+
+    _deliver_completed_bundle(
+        request=request,
+        bundle=bundle,
+        receipt=receipt,
+        global_before=file_reference(historical),
+    )
+
+    records = [
+        json.loads(line)
+        for line in (root / "research_registry" / "timing_trial_registry_v1.jsonl")
+        .read_bytes()
+        .splitlines()
+    ]
+    assert len(records) == 2
+    assert sum(row["selected_trial_count"] for row in records) == 1
+    selected = next(row for row in records if row["selected_trial_count"] == 1)
+    assert selected["unique_variable"] == "BUY_AND_HOLD"
 
 
 def test_bundle_manifest_detects_corruption_and_unsupported_cannot_publish(tmp_path: Path) -> None:

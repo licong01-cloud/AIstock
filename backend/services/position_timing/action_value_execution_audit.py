@@ -249,7 +249,7 @@ def _instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
             raise ActionValueError("EXECUTION_AUDIT_MINUTE_INSTRUMENTS_INVALID")
         try:
             result.setdefault(parts[0].upper(), []).append(
-                (date.fromisoformat(parts[1]), date.fromisoformat(parts[2]))
+                (date.fromisoformat(parts[1][:10]), date.fromisoformat(parts[2][:10]))
             )
         except ValueError as exc:
             raise ActionValueError("EXECUTION_AUDIT_MINUTE_INSTRUMENTS_INVALID") from exc
