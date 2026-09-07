@@ -34,12 +34,18 @@
   ],
   "expected": "Current active direct-v2 binding v3 resolves the pinned minute quote catalog and runs without old path fallback.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1401-qe-minute-runner-rejects-active-direct-v2-binding-v3.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
       "scripts/qrun_limit_minute.py",
-      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"
+      "tests/aistock_validation/bugs/20260907_BUG-1401-qe-minute-runner-rejects-active-direct-v2-binding-v3.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/qrun_limit_minute.py",
@@ -125,15 +131,20 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry -q -> 2 passed in a fresh Python process"
+      "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry -q -> 2 passed in a fresh Python process",
+      "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry -q -> passed (2 passed)"
     ],
     "health_ref": "http://127.0.0.1:8001/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
