@@ -15713,12 +15713,20 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     assert local_binding is not None
     paper_repo = InMemoryPaperTradingV2Repository()
     portfolio_id = "portfolio_localsim_historical_failed_terminal_active"
+    initial_position = PositionLot(
+        portfolio_id=portfolio_id,
+        symbol="000003.SZ",
+        quantity=1000,
+        available_quantity=0,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
     first_context = _local_sim_realtime_context_with_real_broker(
         portfolio_id=portfolio_id,
         release=release,
         paper_repository=paper_repo,
-        cash=100_000,
-        positions={},
+        cash=0,
+        positions={initial_position.symbol: initial_position},
     )
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
@@ -15741,7 +15749,11 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     )
     run_id = first.results[0].run.run_id
     initial_states = tuple(repo.list_local_sim_execution_states(run_id))
-    initial_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    initial_orders = tuple(paper_repo.list_orders_for_run(run_id))
+    initial_order_ids = {order.order_id for order in initial_orders}
+    initial_fills = deepcopy(paper_repo.list_fills_for_run(run_id))
+    initial_order_events = deepcopy(paper_repo.list_order_events(portfolio_id, run_id=run_id))
+    initial_cash_ledger = deepcopy(paper_repo.list_cash_ledger(portfolio_id))
     assert initial_states and any(not state.is_terminal for state in initial_states)
     valid_outbox = deepcopy(first.results[0].run.run_payload_json["local_sim_projection_outbox_v1"])
 
@@ -15757,12 +15769,14 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     )
     first_broker = first_context.local_broker
     assert first_broker is not None
+    recovery_market_provider = FakeLocalSimMarketDataProvider()
     recovery_context = _local_sim_realtime_context_with_real_broker(
         portfolio_id=portfolio_id,
         release=release,
         paper_repository=paper_repo,
         cash=float(first_broker.query_account().cash),
         positions=first_broker.query_positions(),
+        market_data_provider=recovery_market_provider,
     )
     restarted = SimulationLifecycleScheduler(
         repository=repo,
@@ -15812,9 +15826,32 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     assert recovery["previous_status"] == failed_status.value
     assert recovery["parent_resubmitted"] is False
     assert recovery["predecessor_projection_replayed"] is False
-    assert recovery["durable_minute_loop_advanced"] is True
+    assert recovery["durable_minute_loop_advanced"] is False
+    assert recovery["historical_realtime_market_data_requested"] is False
+    assert recovery["broker_execution_replayed"] is False
+    assert recovery["residual_order_count"] >= 1
+    assert recovery["capital_residual_count"] >= 1
     assert recovery["predecessor_state_count"] == len(initial_states)
     assert recovery["terminal_state_count"] == len(recovered_states)
+    assert recovery_market_provider.calls == []
+    assert tuple(paper_repo.list_orders_for_run(run_id)) == initial_orders
+    assert paper_repo.list_fills_for_run(run_id) == initial_fills
+    assert paper_repo.list_order_events(portfolio_id, run_id=run_id) == initial_order_events
+    assert paper_repo.list_cash_ledger(portfolio_id) == initial_cash_ledger
+    assert recovery_context.local_broker is not None
+    assert recovery_context.local_broker.query_account().cash == first_broker.query_account().cash
+    assert recovery_context.local_broker.query_positions() == first_broker.query_positions()
+    assert all(
+        state.runtime_status.value == "EXPIRED_WITH_RESIDUAL"
+        for state in recovered_states
+        if state.remaining_quantity > 0
+    )
+    assert all(
+        state.residual_classification
+        in {"CAPITAL_RESIDUAL", "SCHEDULE_RESIDUAL_AT_HISTORICAL_CLOSE"}
+        for state in recovered_states
+        if state.remaining_quantity > 0
+    )
     assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
     result = next(item for item in next_day.stale_run_results if item.get("run_id") == run_id)
     assert result[f"historical_failed_{evidence_suffix}_active_recovery"] is True
