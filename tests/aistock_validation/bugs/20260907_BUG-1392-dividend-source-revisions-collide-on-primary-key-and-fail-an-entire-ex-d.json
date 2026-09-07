@@ -14,17 +14,25 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-07T10:06:30.451267Z",
-  "description": "Duplicate source revisions reach INSERT ON CONFLICT in one VALUES batch, PostgreSQL reports cardinality violation, and the entire ex-date batch fails as a generic provider_or_persistence_error.",
+  "description": "Tushare dividend can return several revisions for one database identity. The BY_DATE path previously sent all revisions to one INSERT ON CONFLICT statement, causing PostgreSQL cardinality violations and whole-date failure. The fix remains inside the existing sync engine: normalize dividend identity fields, select the latest observable implementation/base-date revision, deterministically collapse equivalent latest revisions, and reject irreconcilable latest-rank economics before database mutation as source_version_conflict. It adds no monitor, scheduler, table, DDL, or new alert channel.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260907-40abc74fc6ca",
       "timestamp": "2026-09-07T10:06:30.451250Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "Codex",
+      "note": "DESIGN-COMPLIANCE-001: complete BUG scope delivered without POC/placeholder; errors remain typed and visible; behavior changes only dividend pre-write source revision handling; no new approval, monitor, scheduler, DDL, or release gate added.",
+      "timestamp": "2026-09-07T10:33:59.732950Z"
     }
   ],
   "evidence_uris": [
-    "bulk job 674e3066-4ad0-467a-80a3-5b7bebe056a4: 22 dividend dates failed on duplicate primary keys; manual canonical repair removed 24 equivalent source revisions"
+    "bulk job 674e3066-4ad0-467a-80a3-5b7bebe056a4: 22 dividend dates failed on duplicate primary keys; manual canonical repair removed 24 equivalent source revisions",
+    "read-only Tushare replay of the same 22 ex-dates: 614 raw rows, 590 canonical rows, 24 revisions removed, 0 irreconcilable conflicts",
+    "existing DEV 127.0.0.1:5433/aistock_dev rollback smoke on 2024-06-27: 92 raw rows, 91 canonical rows, 91 inserted in transaction, 0 duplicate keys, rollback restored original state"
   ],
   "expected": "Known equivalent source revisions are canonicalized deterministically before replace-date write; conflicting economics are rejected before DB mutation and recorded as source_version_conflict through existing audit/retry/alert paths.",
   "file_scope_contract": {
@@ -114,11 +122,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh task-worktree Python process imported backend.services.tushare_sync_engine and replayed 22 Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control.",
+      "fresh task-worktree Python process imported backend.services.tushare_sync_engine and replayed 22 Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
