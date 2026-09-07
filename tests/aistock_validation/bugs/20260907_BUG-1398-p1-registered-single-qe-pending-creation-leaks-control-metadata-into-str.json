@@ -145,8 +145,8 @@
   },
   "first_seen_at": "2026-09-07T12:57:39.972750Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "782cdeed33a91af5d5bd9ed92ea0621d5c7bf908",
+  "fixed_at": "2026-09-07T14:03:44Z",
   "github_issue_number": 4407,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4407",
   "last_seen_at": "2026-09-07T12:57:39.972750Z",
@@ -154,6 +154,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4412",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -185,6 +186,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -196,7 +198,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1398",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6487a626e7f7e1df",
+    "recorded_at": "2026-09-07T14:06:51.719711Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5b6d68bd548b7d1a2793e02aa7fec87702bd022b",
+    "source_merge_commit": "782cdeed33a91af5d5bd9ed92ea0621d5c7bf908",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4412",
+    "validation_evidence": [
+      "PR #4412 head 5b6d68bd5: CI verdict and Issue Auto Link passed; workflow finish ready_for_pr with 7 validation evidence entries"
+    ],
+    "validation_evidence_digest": "df4d14ad55b445c406ad952f534dfcf1f7bd034ec36acb60056089f5969595a9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -205,6 +228,9 @@
     "fingerprint": "0c4144cba1673448243735b3",
     "source_event_id": "FE-20260907-0c4144cba167"
   },
+  "validation_evidence": [
+    "PR #4412 head 5b6d68bd5: CI verdict and Issue Auto Link passed; workflow finish ready_for_pr with 7 validation evidence entries"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
