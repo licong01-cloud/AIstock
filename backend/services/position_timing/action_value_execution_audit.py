@@ -108,7 +108,7 @@ def audit_minute_execution(
             "target_trade_date": target.isoformat(),
             "planned_delta_qty": int(row["planned_delta_qty"]),
             "daily_proxy_status": row["fill_status"],
-            "daily_proxy_price_raw": row["fill_price_raw"],
+            "daily_proxy_price_raw": _optional_finite_float(row["fill_price_raw"]),
         }
         if not coverage_start <= target <= coverage_end:
             results.append({**base, "status": "MINUTE_COVERAGE_OUTSIDE_RANGE"})
@@ -219,11 +219,11 @@ def _evaluate_plan(row: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> 
             break
     minute_status = "FILLED" if minute_fill is not None else "NO_FILL"
     daily_status = str(row["fill_status"])
-    daily_price = row.get("fill_price_raw")
+    daily_price = _optional_finite_float(row.get("fill_price_raw"))
     minute_price = float(minute_fill.price) if minute_fill is not None else None
     price_difference = None
-    if minute_price is not None and daily_price is not None and float(daily_price) > 0:
-        price_difference = (minute_price / float(daily_price) - 1) * 10000
+    if minute_price is not None and daily_price is not None and daily_price > 0:
+        price_difference = (minute_price / daily_price - 1) * 10000
     return {
         "status": "PAIRED",
         "minute_replay_status": minute_status,
@@ -263,6 +263,13 @@ def _decimal(value: Any):
     if not parsed.is_finite():
         raise ActionValueError("EXECUTION_AUDIT_NONFINITE_VALUE")
     return parsed
+
+
+def _optional_finite_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    parsed = float(value)
+    return parsed if np.isfinite(parsed) else None
 
 
 __all__ = ["audit_minute_execution"]

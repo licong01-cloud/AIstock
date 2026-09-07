@@ -90,3 +90,32 @@ def test_minute_audit_checks_same_frozen_plan_without_creating_signal(tmp_path: 
     assert result["execution_audit_sha256"] == canonical_sha256(
         {key: value for key, value in result.items() if key != "execution_audit_sha256"}
     )
+
+
+def test_minute_audit_serializes_unfilled_daily_nan_as_typed_null(tmp_path: Path) -> None:
+    minute = _minute_candidate(tmp_path / "minute")
+    rows = pd.DataFrame(
+        [
+            {
+                "sleeve_id": "s1",
+                "symbol": "000001.SZ",
+                "target_trade_date": "2026-08-31",
+                "baseline": "BUY_AND_HOLD",
+                "planned_delta_qty": 100,
+                "plan_reference_raw": 10,
+                "plan_risk_exit": False,
+                "pre_quantity": 0,
+                "pre_sellable_qty": 0,
+                "fill_status": "NO_FILL",
+                "fill_price_raw": np.nan,
+            }
+        ]
+    )
+
+    result = audit_minute_execution(rows, minute_root=minute)
+
+    assert result["results"][0]["daily_proxy_price_raw"] is None
+    assert result["results"][0]["minute_minus_daily_price_bps"] is None
+    assert result["execution_audit_sha256"] == canonical_sha256(
+        {key: value for key, value in result.items() if key != "execution_audit_sha256"}
+    )
