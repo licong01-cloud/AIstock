@@ -487,6 +487,7 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-18 | UI/GET 负载与状态语义 | 初稿仍可能在隐藏页面首次加载，且数据库原始状态未统一投影 | 隐藏页不发起初始加载/SSE/轮询；可见页 fallback 不短于 30 秒；仅在响应层映射 canonical status | resolved |
 | Review-19 | PR CI 分类与测试可达性 | 新增 QE Backend/MCP/Playwright 测试虽已本地执行，但未全部挂入现有 catalog/nox 计划，CI fail closed | 精确映射三个 QE 测试到 `qe_read_backend`、MCP 合同到 `qe_data_contract_backend`，并新增单一 mocked UI 目标；不使用宽泛通配或跳过 | resolved |
 | Review-20 | 已激活数据集下的测试隔离 | 两个既有 QE 测试会读取本机活动 profile，导致测试结果依赖工作站状态 | 仅在对应单元测试 fixture 中显式隔离 active profile；生产 fail-closed 路径不改动 | resolved |
+| Review-21 | Playwright 状态切换竞态 | UI 合同测试在把 mock 状态切为 `completed` 后才点击只对 `running` 展示的“查看日志”，可能按正确产品行为隐藏按钮并等待至全局超时 | 先在 `running` 状态显式打开日志并验证只读取一次，再切换终态供后续轮询；不放宽产品按钮或自动日志读取语义 | resolved |
 
 ## 14. Delivery Batch A 实施状态
 
