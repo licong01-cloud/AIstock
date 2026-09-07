@@ -31,15 +31,24 @@
   ],
   "expected": "The scheduled daily_basic ingestion requests the declared field contract, rejects a partition whose LocalSIM-required fields do not meet deterministic finite-value coverage, and leaves or marks it retryable so data freshness recovery can repair the exact date before LocalSIM inference. StrategyPackage strict inference remains fail-closed and LocalSIM does not create orders until a valid selection exists.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/ingest_tushare_daily_basic.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1387-localsim-daily-selection-accepts-incomplete-daily-basic-partition-and-re.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/audit_backed_data_health.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "scripts/ingest_tushare_daily_basic.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1387-localsim-daily-selection-accepts-incomplete-daily-basic-partition-and-re.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_daily_basic.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_daily_basic.py",
@@ -165,11 +174,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "fresh pytest process imported the ingestion, audit-health, and scheduler code and completed the direct matrix: 83 passed, 1 skipped",
+      "fresh pytest process imported ingestion, audit health, and scheduler code; direct matrix passed 83 tests with 1 skipped"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

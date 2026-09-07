@@ -45,6 +45,64 @@ class _Connection:
         return _Cursor()
 
 
+def _complete_row(trade_date: dt.date, code: str, *, turnover_rate_f: object = 1.0) -> dict[str, object]:
+    return {
+        "trade_date": trade_date,
+        "ts_code": code,
+        "turnover_rate_f": turnover_rate_f,
+    }
+
+
+def test_fetch_declares_full_provider_field_contract() -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Provider:
+        def daily_basic(self, **kwargs: object) -> pd.DataFrame:
+            calls.append(dict(kwargs))
+            return pd.DataFrame()
+
+    ingestion._fetch_daily_basic_for_date(_Provider(), dt.date(2026, 9, 4))
+
+    assert calls[0]["fields"] == ",".join(ingestion.DAILY_BASIC_PROVIDER_FIELDS)
+
+
+def test_required_turnover_coverage_fails_closed_before_upsert(monkeypatch: Any) -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [_complete_row(trade_date, f"{index:06d}.SZ", turnover_rate_f=None) for index in range(100)]
+    upserts: list[object] = []
+    monkeypatch.setattr(ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(ingestion, "_fetch_daily_basic_for_date", lambda *_args: rows)
+    monkeypatch.setattr(ingestion, "_upsert_daily_basic", lambda *_args: upserts.append(object()) or len(rows))
+    monkeypatch.setattr(ingestion, "_update_job_progress", lambda *_args: None)
+    monkeypatch.setattr(ingestion, "_log", lambda *_args: None)
+
+    stats = ingestion.run_ingestion(
+        _Connection(),
+        object(),
+        "incremental",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        0,
+    )
+
+    assert stats["failed_days"] == 1
+    assert stats["success_days"] == 0
+    assert upserts == []
+
+
+def test_required_turnover_coverage_allows_bounded_symbol_gaps() -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_row(trade_date, f"{index:06d}.SZ", turnover_rate_f=None if index < 5 else 1.0)
+        for index in range(100)
+    ]
+
+    receipt = ingestion._validate_required_field_coverage(rows, trade_date)
+
+    assert receipt["required_field_coverage"]["turnover_rate_f"]["finite_count"] == 95
+
+
 def test_parse_ymd_only_swallows_expected_date_errors() -> None:
     class _UnexpectedStringFailure:
         def __str__(self) -> str:
