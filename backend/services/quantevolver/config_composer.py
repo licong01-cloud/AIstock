@@ -30,7 +30,12 @@ from ..strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
 )
 from .callback_urls import build_aistock_callback_base_url
-from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
+from .experiment_config import (
+    QE_RUNTIME_METADATA_KEYS,
+    apply_qe_seed_to_model_params,
+    ensure_qe_risk_policy,
+    normalize_label_horizon,
+)
 from .qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
@@ -4018,7 +4023,7 @@ class ConfigComposer:
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
         _EFFICIENT_GATS_HP_KEYS = _GATS_HP_KEYS | set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
-        _NON_STRATEGY_PARAMS = {
+        _NON_STRATEGY_PARAMS = set(QE_RUNTIME_METADATA_KEYS) | {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数

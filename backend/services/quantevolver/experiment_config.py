@@ -55,6 +55,13 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
         "archive_policy",
         "archive_reason",
         "archive_allow_override",
+        # Registered single-run provenance belongs to the control plane.  It
+        # must remain persisted for UI/history readback, but Qlib strategy
+        # constructors must never receive it as executable kwargs.
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
         "random_seed",
         "seed",
         "loop_seed",
