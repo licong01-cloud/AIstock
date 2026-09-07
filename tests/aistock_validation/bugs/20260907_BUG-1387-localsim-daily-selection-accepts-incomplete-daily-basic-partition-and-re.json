@@ -153,8 +153,8 @@
   },
   "first_seen_at": "2026-09-07T06:35:45.749702Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e8cef63f8f0243dbf7b5dde956bec73aaebeb46b",
+  "fixed_at": "2026-09-07T07:29:12Z",
   "github_issue_number": 4378,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4378",
   "last_seen_at": "2026-09-07T06:35:45.749702Z",
@@ -162,6 +162,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4380",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -187,6 +188,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -198,7 +200,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1387",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f7abe1aec15064ab",
+    "recorded_at": "2026-09-07T07:30:54.092829Z",
+    "runtime_contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f7266ea74b1ff2f8f478073915956925e8df870e",
+    "source_merge_commit": "e8cef63f8f0243dbf7b5dde956bec73aaebeb46b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4380",
+    "validation_evidence": [
+      "validation-receipt: id=37c661bbecb36729 commit=f7266ea74b1ff2f8f478073915956925e8df870e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/scripts/test_ingest_tushare_daily_basic.py -q` result=`passed: 83 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "1c4998b602697a3eff097f08c7a9dd28a071e264ff477c6b4c04760013e8bf2f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -207,6 +230,9 @@
     "fingerprint": "ed2bd2e1ef16f25443fbf349",
     "source_event_id": "FE-20260907-ed2bd2e1ef16"
   },
+  "validation_evidence": [
+    "validation-receipt: id=37c661bbecb36729 commit=f7266ea74b1ff2f8f478073915956925e8df870e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/scripts/test_ingest_tushare_daily_basic.py -q` result=`passed: 83 passed, 1 skipped`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
