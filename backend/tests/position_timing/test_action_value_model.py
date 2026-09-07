@@ -148,4 +148,3 @@ def test_live_training_and_publication_cannot_be_backdated(tmp_path):
     assert loaded.predict(frame, HEADS, decision_as_of=datetime.now(TZ)).shape == (2,)
     with pytest.raises(ActionValueError, match="NOT_AVAILABLE"):
         read_local_model(timing_root=tmp_path, model_sha256=model.metadata["model_sha256"], decision_as_of=started-timedelta(seconds=1))
-

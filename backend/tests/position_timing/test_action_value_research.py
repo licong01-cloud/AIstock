@@ -121,3 +121,37 @@ def test_factor_change_is_reported_not_approximated() -> None:
     )
     result = build_action_value_rows(candidate, spec)
     assert result.coverage["counts"]["corporate_action_unavailable"] > 0
+
+
+def test_continuous_replay_right_censors_unknown_corporate_action_and_cannot_support() -> None:
+    candidate = FakeCandidate(820)
+    population = build_action_value_rows(
+        candidate,
+        ActionValuePopulationSpec(
+            start=candidate.calendar[35].date(),
+            end=candidate.calendar[-25].date(),
+            symbol_limit=2,
+            review_stride=10,
+        ),
+    )
+    forward = walk_forward_action_values(
+        population.rows,
+        calendar=[day.date() for day in candidate.calendar],
+        source_sha256=canonical_sha256(population.coverage),
+        request_sha256="b" * 64,
+        source_commit="a" * 40,
+    )
+    first_model_day = pd.Timestamp(forward.models[0].metadata["available_at"]).date()
+    first = candidate.calendar.get_loc(str(first_model_day))
+    candidate._frames["000001.SZ"].iloc[
+        first + 5 :, candidate._frames["000001.SZ"].columns.get_loc("factor")
+    ] = 1.1
+    replay = replay_continuous_cohorts(
+        candidate,
+        models=forward.models,
+        symbols=candidate.symbols,
+        bootstrap_samples=40,
+    )
+    assert replay.receipt["excluded"]["corporate_action_right_censored_sleeves"] == 2
+    assert replay.receipt["coverage_can_support_policy"] is False
+    assert replay.receipt["study_effect_evidence"] == "INCONCLUSIVE"

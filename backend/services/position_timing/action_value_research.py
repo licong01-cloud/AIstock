@@ -365,10 +365,16 @@ def replay_continuous_cohorts(
         symbol: market_features(bars, benchmark) for symbol, bars in bars_by_symbol.items()
     }
     rows: list[dict[str, Any]] = []
-    excluded = {"outside_calendar": 0, "pit_or_core": 0, "corporate_action": 0, "path_unknown": 0}
+    excluded = {
+        "outside_calendar": 0,
+        "pit_or_core": 0,
+        "corporate_action": 0,
+        "corporate_action_right_censored_sleeves": 0,
+        "path_unknown": 0,
+    }
     for symbol in symbols:
         bars = bars_by_symbol[symbol]
-        path = bars.iloc[max(0, start_ordinal - 30) : end_ordinal + 2]
+        path = bars.iloc[start_ordinal : end_ordinal + 2]
         if (
             not bool(bars.iloc[start_ordinal].get("pit_active"))
             or features_by_symbol[symbol].iloc[start_ordinal].isna().any()
@@ -376,8 +382,17 @@ def replay_continuous_cohorts(
             excluded["pit_or_core"] += 2
             continue
         factors = pd.to_numeric(path["factor"], errors="coerce")
-        if factors.isna().any() or (factors <= 0).any() or factors.nunique(dropna=False) != 1:
+        if factors.isna().any() or (factors <= 0).any():
             excluded["corporate_action"] += 2
+            continue
+        changes = np.flatnonzero(factors.pct_change(fill_method=None).abs().to_numpy() > 1e-6)
+        symbol_end_ordinal = end_ordinal
+        if len(changes):
+            first_change_ordinal = start_ordinal + int(changes[0])
+            symbol_end_ordinal = min(symbol_end_ordinal, first_change_ordinal - 1)
+            excluded["corporate_action"] += 2
+            excluded["corporate_action_right_censored_sleeves"] += 2
+        if symbol_end_ordinal <= start_ordinal:
             continue
         for initial_state in ("CASH_START", "HOLDING_START"):
             try:
@@ -388,7 +403,7 @@ def replay_continuous_cohorts(
                         benchmark=benchmark,
                         calendar_dates=calendar_dates,
                         start_ordinal=start_ordinal,
-                        end_ordinal=end_ordinal,
+                        end_ordinal=symbol_end_ordinal,
                         models=ordered_models,
                         initial_state=initial_state,
                     )
@@ -432,7 +447,16 @@ def replay_continuous_cohorts(
             "effect_evidence": classify_effect(interval["lower_bps"], interval["upper_bps"]),
             "effective_trading_days": int(len(values)),
         }
-    supported = all(item["effect_evidence"] == "SUPPORTED" for item in comparisons.values())
+    unresolved_corporate_actions = excluded["corporate_action_right_censored_sleeves"] > 0
+    if unresolved_corporate_actions:
+        for comparison in comparisons.values():
+            comparison["effect_evidence_before_coverage_constraint"] = comparison["effect_evidence"]
+            comparison["effect_evidence"] = "INCONCLUSIVE"
+            comparison["coverage_reason_code"] = "UNSUPPORTED_CORPORATE_ACTION_RIGHT_CENSORING"
+    supported = (
+        not unresolved_corporate_actions
+        and all(item["effect_evidence"] == "SUPPORTED" for item in comparisons.values())
+    )
     receipt = {
         "schema_version": "position_timing_continuous_policy_receipt_v2",
         "policy_id": "DAILY_ACTION_VALUE_POLICY_V2",
@@ -449,6 +473,8 @@ def replay_continuous_cohorts(
         "excluded": excluded,
         "execution_assumption": "DAILY_SHARED_GUARD_CONSERVATIVE_V2",
         "corporate_action_policy": "FACTOR_CHANGE_WINDOW_UNAVAILABLE",
+        "censoring_policy": "RIGHT_CENSOR_AT_FIRST_UNSUPPORTED_CORPORATE_ACTION",
+        "coverage_can_support_policy": not unresolved_corporate_actions,
     }
     receipt["receipt_sha256"] = canonical_sha256(receipt)
     return ContinuousReplayResult(sleeve_days=sleeve_days, daily_comparisons=daily, receipt=receipt)

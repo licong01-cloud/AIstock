@@ -169,4 +169,3 @@ def test_invalid_fractional_quantities_negative_fee_and_stale_cost_state_rejecte
                       up_limit=D(11), down_limit=D(9), sellable=100, full_exit=True)
     exited = apply_fill(state, fill)
     assert exited.quantity == 0 and exited.holding_age is None and exited.entry_cost is None
-

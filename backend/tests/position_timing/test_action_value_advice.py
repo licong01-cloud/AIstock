@@ -77,4 +77,3 @@ def test_current_source_missing_or_future_is_not_model_success():
     args["decision_as_of"] = args["decision_as_of"].replace(hour=15)
     with pytest.raises(ActionValueError, match="DECISION_CLOCK"):
         decide_stock_day(**args, model=RecordingModel())
-

@@ -267,4 +267,3 @@ def monthly_training_windows(calendar: Sequence[date], *, initial_sessions: int 
         result.append({"cutoff": cutoff_on(days[index]), "available_at": cutoff_on(days[index + 1]),
                        "first_target_trade_date": days[index + 2]})
     return tuple(result)
-
