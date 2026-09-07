@@ -1697,11 +1697,21 @@ def _resolve_minute_instrument_path(
         ) from exc
     selection_pins = binding.get("selection_pins") or {}
     minute_pins = binding.get("minute_pins") or {}
+    binding_schema = binding.get("schema_version")
+    if binding_schema == "qe_direct_v2_dataset_binding_v2":
+        selected_market = selection_pins.get("stock_pool")
+        selection_file_valid = True
+    elif binding_schema == "qe_direct_v2_dataset_binding_v3":
+        selected_market = selection_pins.get("instrument_name")
+        selection_file_valid = selection_pins.get("instruments_file") == f"{selected_market}.txt"
+    else:
+        selected_market = None
+        selection_file_valid = False
     expected_day_sha = str(selection_pins.get("instruments_sha256") or "").lower()
     expected_minute_sha = str(minute_pins.get("instruments_sha256") or "").lower()
     if (
-        binding.get("schema_version") != "qe_direct_v2_dataset_binding_v2"
-        or selection_pins.get("stock_pool") != market
+        selected_market != market
+        or not selection_file_valid
         or len(expected_day_sha) != 64
         or len(expected_minute_sha) != 64
     ):
