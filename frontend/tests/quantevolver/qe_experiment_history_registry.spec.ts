@@ -82,6 +82,7 @@ test("registered QE run is visible before dispatch and logs require an explicit 
   await expect.poll(() => statusReads).toBeGreaterThan(0);
   expect(logReads).toBe(0);
 
+  await page.getByText(experimentId).first().click({ timeout: 30_000 });
   await page.getByRole("button", { name: "查看日志" }).click({ timeout: 30_000 });
   await expect(page.getByText("registered terminal log").first()).toBeVisible();
   expect(logReads).toBe(1);
