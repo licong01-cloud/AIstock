@@ -36,6 +36,33 @@ DB_CFG = dict(
     application_name="AIstock-ingest-daily-basic",
 )
 
+DAILY_BASIC_PROVIDER_FIELDS = (
+    "ts_code",
+    "trade_date",
+    "close",
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
+    "total_share",
+    "float_share",
+    "free_share",
+    "total_mv",
+    "circ_mv",
+)
+DAILY_BASIC_REQUIRED_FINITE_FIELDS = ("turnover_rate_f",)
+DAILY_BASIC_REQUIRED_FINITE_RATIO = 0.95
+
+
+class DailyBasicIngestionError(RuntimeError):
+    """Raised when a provider partition cannot satisfy the source contract."""
+
 
 def _load_tushare():
     import importlib
@@ -195,7 +222,12 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
     limit = 6000
     rows: List[Dict[str, Any]] = []
     while True:
-        df = pro.daily_basic(trade_date=ymd, limit=limit, offset=offset)
+        df = pro.daily_basic(
+            trade_date=ymd,
+            fields=",".join(DAILY_BASIC_PROVIDER_FIELDS),
+            limit=limit,
+            offset=offset,
+        )
         if df is None or df.empty:
             break
         for _, row in df.iterrows():
@@ -226,6 +258,35 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
         offset += limit
         time.sleep(0.05)
     return rows
+
+
+def _validate_required_field_coverage(rows: List[Dict[str, Any]], trade_date: dt.date) -> Dict[str, Any]:
+    """Reject non-empty partitions that cannot support authoritative inference.
+
+    Empty calendar dates remain valid for init ranges.  A non-empty provider
+    response, however, must prove finite coverage for every field used by the
+    LocalSIM StrategyPackage factor contract before any row is written.
+    """
+
+    if not rows:
+        return {"row_count": 0, "required_field_coverage": {}}
+    coverage: Dict[str, Dict[str, Any]] = {}
+    for field in DAILY_BASIC_REQUIRED_FINITE_FIELDS:
+        finite_count = sum(_finite_numeric_or_none(row.get(field)) is not None for row in rows)
+        ratio = finite_count / len(rows)
+        coverage[field] = {
+            "finite_count": finite_count,
+            "row_count": len(rows),
+            "ratio": ratio,
+        }
+        if ratio < DAILY_BASIC_REQUIRED_FINITE_RATIO:
+            raise DailyBasicIngestionError(
+                "daily_basic required field coverage is below contract: "
+                f"trade_date={trade_date} field={field} finite_count={finite_count} "
+                f"row_count={len(rows)} ratio={ratio:.6f} "
+                f"required={DAILY_BASIC_REQUIRED_FINITE_RATIO:.6f}"
+            )
+    return {"row_count": len(rows), "required_field_coverage": coverage}
 
 
 def _finite_numeric_or_none(value: Any) -> Any:
@@ -321,6 +382,7 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
     for d in days:
         try:
             rows = _fetch_daily_basic_for_date(pro, d)
+            _validate_required_field_coverage(rows, d)
             inserted = _upsert_daily_basic(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
@@ -419,8 +481,11 @@ def main() -> None:
 
         try:
             stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id, args.batch_sleep)
-            _finish_job(conn, job_id, "success" if stats["failed_days"] == 0 else "failed", {"stats": stats})
+            final_status = "success" if stats["failed_days"] == 0 else "failed"
+            _finish_job(conn, job_id, final_status, {"stats": stats})
             print(f"[DONE] daily_basic mode={mode} stats={stats}")
+            if final_status != "success":
+                sys.exit(1)
         except Exception as exc:  # noqa: BLE001
             _finish_job(conn, job_id, "failed", {"error": str(exc)})
             print(f"[ERROR] daily_basic failed: {exc}")

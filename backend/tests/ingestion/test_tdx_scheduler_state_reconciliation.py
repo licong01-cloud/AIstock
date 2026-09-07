@@ -9,10 +9,12 @@ from types import SimpleNamespace
 
 from dotenv import load_dotenv
 import psycopg2
+import pandas as pd
 import pytest
 
 import backend.db.init_tushare_schedules as schedule_catalog_module
 import backend.ingestion.tdx_scheduler as scheduler_module
+import scripts.ingest_tushare_daily_basic as daily_basic_ingestion
 from backend.db.init_tushare_schedules import _DEFAULT_SCHEDULES, _validate_default_schedules
 from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
@@ -28,6 +30,32 @@ BUG_1106_EXPECTED_INDEXES = {
     "ix_ingestion_jobs_recent_dataset_mode_created_at",
     "ix_ingestion_jobs_go_init_success_finished_at",
 }
+
+
+class _DailyBasicCursor:
+    def __enter__(self) -> "_DailyBasicCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _DailyBasicConnection:
+    def cursor(self) -> _DailyBasicCursor:
+        return _DailyBasicCursor()
+
+
+def _complete_daily_basic_row(
+    trade_date: dt.date,
+    code: str,
+    *,
+    turnover_rate_f: object = 1.0,
+) -> dict[str, object]:
+    return {
+        "trade_date": trade_date,
+        "ts_code": code,
+        "turnover_rate_f": turnover_rate_f,
+    }
 
 
 def _runtime_repo_root() -> Path:
@@ -1057,6 +1085,187 @@ def test_audit_checker_uses_physical_fallback_for_stale_explicit_target_date():
     assert result.status == "ok"
     assert result.max_date == dt.date(2026, 7, 13)
     assert result.source == "physical_fallback"
+
+
+def test_daily_basic_audit_without_required_field_receipt_is_not_ready():
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 4),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 4),
+            "row_count": 5548,
+            "quality_status": "ok",
+            "metadata": {"audit_from_target_table": True},
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "low_coverage"
+    assert result.is_fresh is False
+    assert result.failure_category == "required_field_coverage_unproven"
+    assert result.summary()["error_message"] == "daily_basic required-field coverage receipt is missing or invalid"
+
+
+def test_daily_basic_fetch_declares_full_provider_field_contract() -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Provider:
+        def daily_basic(self, **kwargs: object) -> pd.DataFrame:
+            calls.append(dict(kwargs))
+            return pd.DataFrame()
+
+    daily_basic_ingestion._fetch_daily_basic_for_date(_Provider(), dt.date(2026, 9, 4))
+
+    assert calls[0]["fields"] == ",".join(daily_basic_ingestion.DAILY_BASIC_PROVIDER_FIELDS)
+
+
+def test_daily_basic_required_turnover_coverage_fails_closed_before_upsert(monkeypatch: Any) -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(trade_date, f"{index:06d}.SZ", turnover_rate_f=None)
+        for index in range(100)
+    ]
+    upserts: list[object] = []
+    monkeypatch.setattr(daily_basic_ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(daily_basic_ingestion, "_fetch_daily_basic_for_date", lambda *_args: rows)
+    monkeypatch.setattr(
+        daily_basic_ingestion,
+        "_upsert_daily_basic",
+        lambda *_args: upserts.append(object()) or len(rows),
+    )
+    monkeypatch.setattr(daily_basic_ingestion, "_update_job_progress", lambda *_args: None)
+    monkeypatch.setattr(daily_basic_ingestion, "_log", lambda *_args: None)
+
+    stats = daily_basic_ingestion.run_ingestion(
+        _DailyBasicConnection(),
+        object(),
+        "incremental",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        0,
+    )
+
+    assert stats["failed_days"] == 1
+    assert stats["success_days"] == 0
+    assert upserts == []
+
+
+def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(
+            trade_date,
+            f"{index:06d}.SZ",
+            turnover_rate_f=None if index < 5 else 1.0,
+        )
+        for index in range(100)
+    ]
+
+    receipt = daily_basic_ingestion._validate_required_field_coverage(rows, trade_date)
+
+    assert receipt["required_field_coverage"]["turnover_rate_f"]["finite_count"] == 95
+
+
+def test_daily_basic_audit_with_required_field_receipt_is_ready():
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 4),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 4),
+            "row_count": 5548,
+            "quality_status": "ok",
+            "metadata": {
+                "required_field_coverage": {
+                    "schema_version": "daily_basic_required_field_coverage_v1",
+                    "field": "turnover_rate_f",
+                    "finite_count": 5540,
+                    "row_count": 5548,
+                    "ratio": 5540 / 5548,
+                    "required_ratio": 0.95,
+                }
+            },
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "ok"
+
+
+def test_low_coverage_retry_replays_exact_partition_instead_of_advancing_cursor():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    target = dt.date(2026, 9, 4)
+    scheduler._compute_auto_range = lambda _dataset: (
+        dt.date(2026, 9, 5),
+        dt.date(2026, 9, 7),
+    )
+
+    assert scheduler._retry_range_for_health_failure(
+        "daily_basic",
+        target_date=target,
+        failure_category="required_field_low_coverage",
+    ) == (target, target)
+
+
+def test_daily_basic_refresh_audit_records_required_field_low_coverage(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    trade_date = dt.date(2026, 9, 4)
+    captured = []
+
+    def fake_fetchall(sql, _params=()):
+        if "FROM market.daily_basic" in sql:
+            assert "required_turnover_rate_f_count" in sql
+            return [
+                {
+                    "trade_date": trade_date,
+                    "row_count": 5548,
+                    "data_max_at": trade_date,
+                    "required_turnover_rate_f_count": 0,
+                }
+            ]
+        if "FROM market.trading_calendar" in sql:
+            return [{"cal_date": trade_date}]
+        raise AssertionError(sql)
+
+    class _Repo:
+        def record_success(self, **kwargs):
+            captured.append(("success", kwargs))
+
+        def record_failure(self, **kwargs):
+            captured.append(("failure", kwargs))
+
+    class _Conn:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return None
+
+    scheduler._fetchall = fake_fetchall
+    monkeypatch.setattr(scheduler_module, "DataRefreshAuditRepository", _Repo)
+    monkeypatch.setattr(scheduler_module, "_get_conn", lambda _cfg: _Conn())
+
+    scheduler._record_refresh_audit_from_table_range(
+        dataset="daily_basic",
+        job_id=None,
+        start_date=trade_date,
+        end_date=trade_date,
+        data_source="script",
+    )
+
+    assert captured[0][0] == "failure"
+    assert captured[0][1]["quality_status"] == "low_coverage"
+    assert captured[0][1]["failure_category"] == "required_field_low_coverage"
+    coverage = captured[0][1]["metadata"]["required_field_coverage"]
+    assert coverage["finite_count"] == 0
+    assert coverage["row_count"] == 5548
 
 
 def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):

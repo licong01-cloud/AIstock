@@ -3332,11 +3332,19 @@ class TDXScheduler:
             floor = self._recent_trading_floor(30)
             if floor is not None and start_date < floor:
                 start_date = floor
+        quality_projection = ""
+        if dataset == "daily_basic":
+            quality_projection = """,
+                   COUNT(*) FILTER (
+                       WHERE turnover_rate_f IS NOT NULL
+                         AND turnover_rate_f::text NOT IN ('NaN', 'Infinity', '-Infinity')
+                   )::bigint AS required_turnover_rate_f_count"""
         rows = self._fetchall(
             f"""
             SELECT {date_col}::date AS trade_date,
                    COUNT(*)::bigint AS row_count,
                    MAX({date_col}) AS data_max_at
+                   {quality_projection}
             FROM {table_name}
             WHERE {date_col} >= %s
               AND {date_col} < %s
@@ -3346,6 +3354,11 @@ class TDXScheduler:
         )
         counts = {r["trade_date"]: int(r["row_count"] or 0) for r in rows}
         max_at = {r["trade_date"]: r.get("data_max_at") for r in rows}
+        daily_basic_required_counts = {
+            r["trade_date"]: int(r.get("required_turnover_rate_f_count") or 0)
+            for r in rows
+            if dataset == "daily_basic"
+        }
         target_dates = self._fetchall(
             """
             SELECT cal_date
@@ -3367,32 +3380,74 @@ class TDXScheduler:
                 data_max_at = max_at.get(trade_date)
                 if not isinstance(data_max_at, dt.datetime):
                     data_max_at = None
-                if row_count > 0:
+                row_metadata = dict(base_metadata)
+                quality_status = "ok"
+                failure_category = None
+                if dataset == "daily_basic" and row_count > 0:
+                    finite_count = daily_basic_required_counts.get(trade_date, 0)
+                    coverage_ratio = finite_count / row_count
+                    row_metadata["required_field_coverage"] = {
+                        "schema_version": "daily_basic_required_field_coverage_v1",
+                        "field": "turnover_rate_f",
+                        "finite_count": finite_count,
+                        "row_count": row_count,
+                        "ratio": coverage_ratio,
+                        "required_ratio": 0.95,
+                    }
+                    if coverage_ratio < 0.95:
+                        quality_status = "low_coverage"
+                        failure_category = "required_field_low_coverage"
+                if row_count > 0 and quality_status == "ok":
                     repo.record_success(
                         dataset=dataset,
                         trade_date=trade_date,
                         row_count=row_count,
                         job_id=str(job_id) if job_id else None,
                         data_source=data_source,
-                        metadata=base_metadata,
+                        metadata=row_metadata,
                         data_max_at=data_max_at,
                         written_rows=row_count,
-                        quality_status="ok",
+                        quality_status=quality_status,
                         conn=conn,
                     )
                 else:
+                    error_message = f"{dataset} has 0 rows in {table_name} for {trade_date}"
+                    if row_count > 0:
+                        coverage = row_metadata["required_field_coverage"]
+                        error_message = (
+                            "daily_basic required field coverage is below contract: "
+                            f"trade_date={trade_date} field=turnover_rate_f "
+                            f"finite_count={coverage['finite_count']} row_count={row_count} "
+                            f"ratio={coverage['ratio']:.6f} required=0.950000"
+                        )
                     repo.record_failure(
                         dataset=dataset,
                         trade_date=trade_date,
-                        error_message=f"{dataset} has 0 rows in {table_name} for {trade_date}",
+                        error_message=error_message,
                         job_id=str(job_id) if job_id else None,
                         data_source=data_source,
-                        metadata=base_metadata,
-                        written_rows=0,
-                        quality_status="empty_invalid",
-                        failure_category="empty_invalid",
+                        metadata=row_metadata,
+                        written_rows=row_count,
+                        quality_status=quality_status if row_count > 0 else "empty_invalid",
+                        failure_category=failure_category or "empty_invalid",
                         conn=conn,
                     )
+
+    def _retry_range_for_health_failure(
+        self,
+        dataset: str,
+        *,
+        target_date: Optional[dt.date],
+        failure_category: Optional[str],
+    ) -> Tuple[Optional[dt.date], Optional[dt.date]]:
+        """Anchor repairable same-date quality failures to their exact partition."""
+
+        if target_date is not None and failure_category in {
+            "required_field_low_coverage",
+            "required_field_coverage_unproven",
+        }:
+            return target_date, target_date
+        return self._compute_auto_range(dataset)
 
     def _run_data_freshness_check(
         self,
@@ -3784,7 +3839,11 @@ class TDXScheduler:
                             entry["retry_status"] = "skipped_duplicate_recent"
                             break
                         try:
-                            ar_start, ar_end = self._compute_auto_range(ds)
+                            ar_start, ar_end = self._retry_range_for_health_failure(
+                                ds,
+                                target_date=target_date,
+                                failure_category=entry.get("failure_category"),
+                            )
                             if ar_start is not None and ar_end is not None:
                                 retry_opts["start_date"] = ar_start.isoformat()
                                 retry_opts["end_date"] = ar_end.isoformat()
