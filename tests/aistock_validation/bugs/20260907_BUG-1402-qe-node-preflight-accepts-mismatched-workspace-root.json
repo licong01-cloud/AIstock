@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-09-07T15:16:29.668482Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d55f03e9af599d4a101a34aa52e0618618990a0b",
+  "fixed_at": "2026-09-07T17:35:16Z",
   "github_issue_number": 4419,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4419",
   "last_seen_at": "2026-09-07T15:16:29.668482Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4420",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -137,6 +138,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -148,7 +150,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1402",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b4941ea9856dbc9b",
+    "recorded_at": "2026-09-07T17:36:24.144255Z",
+    "runtime_contract_digest": "c6b36fde5f26a5350d78edee81eb150783c9b4fa9a335b58d50e3843c53cc88a",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b12c449e60f8b0edadc29182ebef08a18147be49",
+    "source_merge_commit": "d55f03e9af599d4a101a34aa52e0618618990a0b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4420",
+    "validation_evidence": [
+      "validation-receipt: id=e8e615cf2e3c5d93 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_qe_registered_submission.py -q` result=`passed (25 passed)`",
+      "validation-receipt: id=256df1c8ac70acf1 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_read_backend status=passed command=`rtk nox -s qe_read_backend` result=`passed (391 passed, 1 skipped)`",
+      "validation-receipt: id=71c6a02d5a60785e commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`rtk nox -s qe_sector_risk_overlay_backend` result=`passed (91 passed)`",
+      "validation-receipt: id=1c67a25d4724c8a9 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_mcp_backend status=passed command=`rtk nox -s qe_mcp_backend` result=`passed (49 passed)`",
+      "validation-receipt: id=56bd5a7e68fd9d01 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed (8 passed; ownership 14/14)`",
+      "validation-receipt: id=372eb9339413fc3a commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed (0 blocking; ownership 3/3)`"
+    ],
+    "validation_evidence_digest": "0f8b73c94710ac0e836aab035e0f7296b4f084fb578a86b562353c81e4342156"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -157,6 +185,14 @@
     "fingerprint": "43124a149ec420cc546c04e1",
     "source_event_id": "FE-20260907-43124a149ec4"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e8e615cf2e3c5d93 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_qe_registered_submission.py -q` result=`passed (25 passed)`",
+    "validation-receipt: id=256df1c8ac70acf1 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_read_backend status=passed command=`rtk nox -s qe_read_backend` result=`passed (391 passed, 1 skipped)`",
+    "validation-receipt: id=71c6a02d5a60785e commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`rtk nox -s qe_sector_risk_overlay_backend` result=`passed (91 passed)`",
+    "validation-receipt: id=1c67a25d4724c8a9 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=qe_mcp_backend status=passed command=`rtk nox -s qe_mcp_backend` result=`passed (49 passed)`",
+    "validation-receipt: id=56bd5a7e68fd9d01 commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed (8 passed; ownership 14/14)`",
+    "validation-receipt: id=372eb9339413fc3a commit=b12c449e60f8b0edadc29182ebef08a18147be49 kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed (0 blocking; ownership 3/3)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
