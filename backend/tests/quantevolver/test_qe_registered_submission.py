@@ -8,7 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
+from backend.services.quantevolver.config_composer import (
+    ConfigComposer,
+    RDAGENT_DEFAULT_DATA_SPLIT,
+)
+from backend.services.quantevolver.experiment_config import (
+    QE_RUNTIME_METADATA_KEYS,
+    split_qe_runtime_metadata,
+)
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
@@ -18,6 +27,105 @@ from backend.services.quantevolver.qe_run_registry import (
     attach_qe_run_registration,
     build_qe_run_registration,
 )
+
+
+def test_registered_control_metadata_never_reaches_strategy_kwargs() -> None:
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={
+            "topk": 20,
+            "qe_mcp_provenance": {"created_by_name": "Codex"},
+            "qe_factor_sources": {"alpha_a": "official"},
+            "qe_pending_task_source": "mcp",
+            "qe_pending_created_by": "Codex",
+        },
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    assert "topk: 20" in yaml_text
+    for metadata_key in (
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    ):
+        assert metadata_key not in yaml_text
+
+
+def test_registered_control_metadata_uses_canonical_runtime_metadata_contract() -> None:
+    registered_keys = {
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    }
+    params = {
+        "topk": 20,
+        "qe_mcp_provenance": {"created_by_name": "Codex"},
+        "qe_factor_sources": {"alpha_a": "official"},
+        "qe_pending_task_source": "mcp",
+        "qe_pending_created_by": "Codex",
+    }
+
+    executable, metadata = split_qe_runtime_metadata(params)
+
+    assert registered_keys <= QE_RUNTIME_METADATA_KEYS
+    assert executable == {"topk": 20}
+    assert set(metadata) == registered_keys
+
+
+def test_registered_control_metadata_remains_in_persisted_custom_params(monkeypatch) -> None:
+    captured: dict = {}
+
+    class _CaptureRegistry:
+        def __init__(self, *, connection_factory):
+            assert connection_factory is composer_module.get_conn
+
+        def reserve_single(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(composer_module, "QERunRegistry", _CaptureRegistry)
+    custom_params = {
+        "topk": 20,
+        "qe_mcp_provenance": {"created_by_name": "Codex"},
+        "qe_factor_sources": {"alpha_a": "official"},
+    }
+
+    ConfigComposer()._save_experiment_record(
+        experiment_id="qe_registered_metadata",
+        experiment_name="registered metadata",
+        exp_dir="/tmp/qe_registered_metadata",
+        factor_names=["alpha_a"],
+        model_id="lgbm",
+        strategy_id="score_weighted_topk_v2",
+        data_split={"test_end": "2026-08-31"},
+        custom_params=custom_params,
+    )
+
+    persisted = captured["custom_params"]
+    assert persisted["qe_mcp_provenance"] == {"created_by_name": "Codex"}
+    assert persisted["qe_factor_sources"] == {"alpha_a": "official"}
+    assert QE_RUN_REGISTRATION_PARAM in persisted
 
 
 class _StateCursor:
@@ -218,6 +326,72 @@ def test_registration_rejects_unknown_purpose() -> None:
         build_qe_run_registration(run_kind="single", purpose="smoke")
     with pytest.raises(QERunRegistryError, match="qe_run_source_type_invalid"):
         build_qe_run_registration(run_kind="single", source_type="unknown-runner")
+
+
+def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(composer_module, "load_active_qe_profile", lambda: None)
+    composer = ConfigComposer()
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": "DemoFactor",
+                "source": "custom",
+                "code_text": (
+                    "def calculate_DemoFactor(instruments, start_date, end_date):\n"
+                    "    return None\n"
+                ),
+            }
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {
+            "workspace_base": "/tmp/qe_workspace",
+            "qlib_data_path": "/tmp/qlib_day",
+            "qlib_minute_path": "/tmp/qlib_minute",
+            "factor_data_dir": "/tmp/factor_data",
+        },
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read")
+
+    custom_params = attach_qe_run_registration(
+        {"execution_node_id": "wsl2-5080"},
+        run_kind="custom_evolution_loop",
+        source_type="agent",
+        purpose="research",
+        task_id="qe-registration-filter",
+        loop_index=1,
+        node_id="wsl2-5080",
+        factor_names=["DemoFactor"],
+    )
+    result = composer.compose_experiment_in_memory(
+        factor_names=["DemoFactor"],
+        model_id=None,
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+        custom_params=custom_params,
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    assert QE_RUN_REGISTRATION_PARAM not in result["experiment_files"]["conf.yaml"]
 
 
 def test_single_reservation_rejects_missing_or_non_created_identity() -> None:

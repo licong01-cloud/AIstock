@@ -15482,6 +15482,187 @@ def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
     assert canonical_config.exists()
 
 
+def _write_pytest_factor_checkpoint_pair(
+    worktree: Path,
+    pytest_data_root: Path,
+    *,
+    task_id: str = "official_factor_full_1788765652371",
+) -> tuple[Path, Path]:
+    root = worktree / workflow.WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    checkpoint = root / f"{task_id}.json"
+    progress = root / f"{task_id}.progress.json"
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "schema_version": "official_factor_compute_checkpoint_v1",
+                "task_id": task_id,
+                "status": "success",
+                "resumed_from_task_id": None,
+                "created_at": "2026-09-07T07:20:52+00:00",
+                "window_train_start": "2018-08-01",
+                "window_backtest_end": "2026-04-30",
+                "factor_data_dir": str(pytest_data_root),
+                "qlib_bin_path": None,
+                "include_disabled": False,
+                "requested_factor_names": ["factor_a"],
+                "eligible_factor_names": ["factor_a"],
+                "completed_factor_names": ["factor_a"],
+                "retry_factor_names": [],
+                "failed_factors": [],
+                "db_result": {},
+                "resource_failures": [],
+                "resource_actions": [],
+                "snapshot_promotion": {"status": "promoted"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    progress.write_text(
+        json.dumps(
+            {
+                "schema_version": "official_factor_compute_progress_v1",
+                "task_id": task_id,
+                "status": "success",
+                "total_factors": 1,
+                "value_ready_count": 1,
+                "completed_count": 1,
+                "success_count": 1,
+                "failed_count": 0,
+                "active_factor_names": [],
+                "last_event": "success",
+                "updated_at": "2026-09-07T07:20:52+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return checkpoint, progress
+
+
+def _fake_ignored_artifact_git(worktree: Path):
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            root = worktree / workflow.WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT
+            existing = sorted(path.relative_to(worktree).as_posix() for path in root.glob("*") if path.is_file())
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    return fake_run
+
+
+def test_worktree_pytest_factor_checkpoint_pairs_are_content_bound_and_purged(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    checkpoint, progress = _write_pytest_factor_checkpoint_pair(
+        worktree,
+        isolated_workflow_root / "factor-data",
+    )
+    monkeypatch.setattr(workflow, "_run_command", _fake_ignored_artifact_git(worktree))
+
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    expected_paths = sorted(
+        [checkpoint.relative_to(worktree).as_posix(), progress.relative_to(worktree).as_posix()]
+    )
+    assert profile["ignored_count"] == 2
+    assert profile["transient_count"] == 2
+    assert profile["unknown_count"] == 0
+    assert profile["transient_roots"] == expected_paths
+    assert profile["content_bound_transient_manifest"]["paths"] == expected_paths
+    assert len(profile["content_bound_transient_manifest"]["sha256"]) == 64
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 2
+    assert purge["ignored_count_after"] == 0
+    assert not checkpoint.exists()
+    assert not progress.exists()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("missing_progress", "pytest_factor_checkpoint_pair_incomplete"),
+        ("extra_file", "pytest_factor_checkpoint_inventory_mismatch"),
+        ("wrong_schema", "pytest_factor_checkpoint_schema_mismatch"),
+        ("non_test_root", "pytest_factor_checkpoint_non_test_data_root"),
+        ("nonterminal", "pytest_factor_checkpoint_nonterminal_or_status_mismatch"),
+        ("oversized", "pytest_factor_checkpoint_file_too_large"),
+    ],
+)
+def test_worktree_pytest_factor_checkpoint_pairs_remain_unknown_when_not_exact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    checkpoint, progress = _write_pytest_factor_checkpoint_pair(
+        worktree,
+        isolated_workflow_root / "factor-data",
+    )
+    if mutation == "missing_progress":
+        progress.unlink()
+    elif mutation == "extra_file":
+        checkpoint.with_name("manual.json").write_text("{}", encoding="utf-8")
+    else:
+        payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+        if mutation == "wrong_schema":
+            payload["schema_version"] = "unexpected"
+        elif mutation == "non_test_root":
+            payload["factor_data_dir"] = str(Path(worktree.anchor) / "aistock-persistent-factor-data")
+        elif mutation == "nonterminal":
+            payload["status"] = "running"
+            progress_payload = json.loads(progress.read_text(encoding="utf-8"))
+            progress_payload["status"] = "running"
+            progress_payload["active_factor_names"] = ["factor_a"]
+            progress.write_text(json.dumps(progress_payload), encoding="utf-8")
+        checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+        if mutation == "oversized":
+            monkeypatch.setattr(workflow, "WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES", 1)
+    monkeypatch.setattr(workflow, "_run_command", _fake_ignored_artifact_git(worktree))
+
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["transient_count"] == 0
+    assert profile["unknown_count"] >= 1
+    assert profile["transient_roots"] == []
+    assert {item["reason"] for item in profile["unknown_samples"]} == {expected_reason}
+
+
+def test_worktree_pytest_factor_checkpoint_purge_stops_on_content_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    checkpoint, progress = _write_pytest_factor_checkpoint_pair(
+        worktree,
+        isolated_workflow_root / "factor-data",
+    )
+    monkeypatch.setattr(workflow, "_run_command", _fake_ignored_artifact_git(worktree))
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    payload["created_at"] = "2026-09-07T07:21:00+00:00"
+    checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="content-bound transient artifact manifest changed"):
+        workflow._purge_worktree_transient_artifacts(
+            worktree,
+            canonical_root=isolated_workflow_root,
+            expected_profile=profile,
+        )
+    assert checkpoint.exists()
+    assert progress.exists()
+
+
 def test_worktree_qe_live_log_ring_is_structurally_validated_and_purged(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -3399,6 +3399,20 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
 def list_experiments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    created_from: Optional[str] = Query(None, description="Created at or after this ISO date/time"),
+    created_to: Optional[str] = Query(None, description="Created on or before this ISO date"),
+    source_type: Optional[str] = Query(None, description="ui, mcp, scheduler, or agent"),
+    run_kind: Optional[str] = Query(None, description="single, custom evolution, strategy evolution, auto evolution, or multi-alpha"),
+    purpose: Optional[str] = Query(None, description="research or validation"),
+    status: Optional[str] = Query(None, description="Canonical QE status"),
+    node_id: Optional[str] = Query(None, description="Execution node business name"),
+    model: Optional[str] = Query(None, description="Model name contains"),
+    factor: Optional[str] = Query(None, description="Factor name contains"),
+    dataset_release: Optional[str] = Query(None, description="Dataset release id"),
+    universe_pool: Optional[str] = Query(None, description="Stock-pool id"),
+    execution_algo: Optional[str] = Query(None, description="Minute execution algorithm"),
+    archive_status: Optional[str] = Query(None, description="Archive/recommendation status"),
+    query: Optional[str] = Query(None, description="Experiment name, model, or factor text"),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
     include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
     detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics/custom_params 大 JSON；full 保留旧完整字段"),
@@ -3407,13 +3421,34 @@ def list_experiments(
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children, detail=detail)
-        # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
-        if alpha_mode and result.get("ok") and result.get("items"):
-            result["items"] = [
-                exp for exp in result["items"]
-                if exp.get("alpha_mode", "single") == alpha_mode
-            ]
+        filters = {
+            key: value
+            for key, value in {
+                "alpha_mode": alpha_mode,
+                "created_from": created_from,
+                "created_to": created_to,
+                "source_type": source_type,
+                "run_kind": run_kind,
+                "purpose": purpose,
+                "status": status,
+                "node_id": node_id,
+                "model": model,
+                "factor": factor,
+                "dataset_release": dataset_release,
+                "universe_pool": universe_pool,
+                "execution_algo": execution_algo,
+                "archive_status": archive_status,
+                "query": query,
+            }.items()
+            if value not in (None, "")
+        }
+        result = cc.list_experiments(
+            limit=limit,
+            offset=offset,
+            include_children=include_children,
+            detail=detail,
+            filters=filters,
+        )
         return result
     except Exception as e:
         logger.exception("获取实验列表失败")
@@ -8273,6 +8308,16 @@ async def stop_multi_alpha_experiment(experiment_id: str):
 _QE_DELETE_ACTIVE_STATUSES = {"running", "processing", "queued", "submitted"}
 
 
+def _is_registered_qe_history_row(row: Mapping[str, Any]) -> bool:
+    raw = row.get("custom_params")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+    return isinstance(raw, Mapping) and isinstance(raw.get("_qe_run_registration"), Mapping)
+
+
 def _cursor_row_to_dict(cur: Any, row: Any) -> dict[str, Any] | None:
     """Convert psycopg/fake cursor rows without requiring RealDictCursor."""
     if row is None:
@@ -8391,7 +8436,7 @@ async def delete_experiment(
 
             cur.execute(
                 """
-                SELECT task_id, status, node_id, base_experiment_id
+                SELECT task_id, status, node_id, base_experiment_id, strategy_evo_config
                 FROM qe_evolution_tasks
                 WHERE base_experiment_id = ANY(%s::text[])
                    OR task_id = ANY(%s::text[])
@@ -8450,6 +8495,13 @@ async def delete_experiment(
             multi_alpha_groups = _fetchall_dicts(cur)
 
     assert selected_exp is not None  # for type checkers
+    registered_history = _is_registered_qe_history_row(selected_exp) or any(
+        _is_registered_qe_history_row(row) for row in child_experiments
+    ) or any(
+        isinstance(row.get("strategy_evo_config"), Mapping)
+        and isinstance(row["strategy_evo_config"].get("_qe_run_registration"), Mapping)
+        for row in related_tasks
+    )
     default_node_id = resolve_default_qe_node_id()
     selected_is_child_loop = bool(selected_exp.get("parent_experiment_id") or selected_exp.get("is_evolution_loop")) and not child_experiments
 
@@ -8623,6 +8675,46 @@ async def delete_experiment(
                 "worker_cleanup_results": cleanup_results,
             },
         )
+
+    # Registered formal runs keep their Level-0 history.  For those rows this
+    # legacy route is an artifact-cleanup action, not a control-record delete.
+    if registered_history:
+        retention = {
+            "schema_version": "qe_artifact_retention_v1",
+            "status": "cleaned" if cleanup_workspace else "available",
+            "cleaned_at": datetime.now().astimezone().isoformat() if cleanup_workspace else None,
+            "cleanup_scope": "workspace_and_aistock_cache" if cleanup_workspace else "none",
+        }
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET custom_params = jsonb_set(
+                            COALESCE(custom_params, '{}'::jsonb),
+                            '{_qe_artifact_retention}',
+                            %s::jsonb,
+                            true
+                        ),
+                        updated_at = NOW()
+                    WHERE experiment_id = ANY(%s::text[])
+                    """,
+                    (json.dumps(retention), experiment_ids_to_delete),
+                )
+            conn.commit()
+        return {
+            "ok": True,
+            "experiment_id": experiment_id,
+            "history_retained": True,
+            "artifact_retention": retention,
+            "worker_workspace_cleanup_mode": "node_api_only" if cleanup_workspace else "skipped",
+            "worker_cleanup_results": cleanup_results,
+            "local_cleanup": {
+                "cleaned_dirs": cleaned_dirs,
+                "optuna_files_deleted": optuna_deleted,
+            },
+            "deleted_experiment_ids": [],
+        }
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:
