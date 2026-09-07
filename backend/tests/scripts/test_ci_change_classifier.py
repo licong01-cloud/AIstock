@@ -379,6 +379,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert score_hmm_payload["classification"] == "targeted_ci_required"
     assert score_hmm_payload["backend_required"] is True
     assert score_hmm_payload["backend_sessions"] == ["advisory_modeling_backend"]
+
+    causal_admission_payload = classifier.classify_changed_files(
+        ["scripts/advisory_causal_admission_v2_mve.py"],
+        repo_root=tmp_path,
+    )
+    assert causal_admission_payload["classification"] == "targeted_ci_required"
+    assert causal_admission_payload["backend_required"] is True
+    assert causal_admission_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert causal_admission_payload["dev_db_required"] is False
+    assert causal_admission_payload["unmapped_code_files"] == []
     assert score_hmm_payload["dev_db_required"] is False
     assert score_hmm_payload["unmapped_code_files"] == []
 

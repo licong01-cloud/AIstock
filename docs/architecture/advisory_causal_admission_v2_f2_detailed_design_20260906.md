@@ -1,13 +1,13 @@
-# Advisory 因果绝对收益准入 v2 F2 详细设计 v1.2
+# Advisory 因果绝对收益准入 v2 F2 详细设计 v1.3
 
 > 日期：2026-09-07
-> 状态：`R0_PARAMETERIZED_R1_NOT_IMPLEMENTED`
+> 状态：`R1_SOURCE_IMPLEMENTED_REVIEWED_EXPERIMENT_NOT_FORMALLY_PUBLISHED`
 > tier：`F2`
 > research stage：`N3_AUX_CAUSAL_ADMISSION_V2_1`
 > objective contract：`RISK_MANAGED_ADVISORY`
 > study type：`LEARNABILITY_AUDIT`
 > decision use：`NAVIGATION_ONLY`
-> R0 已在本版冻结 §5.7 的数值参数；它允许 R1 源码和 request 实现开始，但不表示 request、模型、经济实验或候选已产生，也不新增人工审批。
+> R0 已冻结 §5.7 的数值参数；R1 contracts/pipeline/CLI 与三组直接测试现已实现。真实冻结父源的只读集成冒烟已验证 386×20 人口、chronological fit、动作哈希和 same-policy evaluator 可执行，但尚未从 clean merged commit 生成正式 request/bundle/registry 记录，冒烟读数不得冒充正式发布结果，也不新增人工审批。
 > production gates：backend restart / DDL / DML / runtime activation / dynamic position weight / order 均为 `noop`；本阶段训练只读文件，不访问数据库、网络或 Tushare。
 
 ## 1. Background / 背景、业务目标与当前事实
@@ -189,7 +189,7 @@ R0 将经济效用、额外未计成本、风险预算和必要估计不确定�
 
 #### 5.7.2 R1 信息与模型预算
 
-R1 两个 arm 使用完全相同的 21 项特征：v1 的 12 项同包 score/rank/腿间相对量，以及 `csi300_ret_1/5/20`、`csi300_drawdown_20/60`、`market_up_ratio`、`market_limit_up_ratio`、`market_cross_section_vol` 九项 raw-market 特征。具体顺序沿用 v1 `SCORE_PLUS_RAW_MARKET_SHAPE` schema 并进入 request hash；不含 market-HMM、sector、分钟、财务事件或新 factor。
+R1 两个 arm 使用完全相同的 20 项特征：v1 的 12 项同包 score/rank/腿间相对量，以及 `csi300_ret_1/5/20`、`csi300_drawdown_20/60`、`market_up_ratio`、`market_limit_up_ratio`、`market_cross_section_vol` 八项 raw-market 特征。具体顺序沿用 v1 `SCORE_PLUS_RAW_MARKET_SHAPE` schema 并进入 request hash；不含 market-HMM、sector、分钟、财务事件或新 factor。
 
 两个 arm 的连续头均固定为 `SimpleImputer(strategy="median") + StandardScaler + Ridge(alpha=100.0, solver="lsqr", fit_intercept=True)`；概率头固定为相同 imputer/scaler 加 `LogisticRegression(C=1.0, penalty="l2", solver="lbfgs", fit_intercept=True, max_iter=1000, class_weight=None, random_state=20260907)`。R1 没有树模型、超参、seed、特征、阈值或窗口搜索。
 
@@ -244,9 +244,9 @@ artifact 必须同时绑定 package 与政策，但预测 estimand 和动作 uti
 ## 8. Implementation Plan / 实施顺序
 
 1. `COMPLETED_R0`：本版已填定 §5.7 并完成交叉审核；没有预占或运行经济 trial。
-2. 在 fresh task worktree 实现 `causal_admission_v2_contracts.py`、`causal_admission_v2_pipeline.py` 和 `scripts/advisory_causal_admission_v2_mve.py` 的 R1 最小范围，复用现有 feature/policy/delivery。
-3. 三组 direct tests：`test_causal_admission_v2_contracts.py`、`test_causal_admission_v2_pipeline.py`、`test_causal_admission_v2_delivery.py`；必要 exact ownership/CI mapping，不新增通用后台。
-4. 多轮代码审核修复通过后，执行一次 R1；有明确迹象才进入 R2 或独立确认设计。R2 仅消费就绪 source，不写假 adapter、不重复实现 `rotation_L1`。
+2. `COMPLETED_SOURCE`：fresh task worktree 已实现 `causal_admission_v2_contracts.py`、`causal_admission_v2_pipeline.py` 和 `scripts/advisory_causal_admission_v2_mve.py`，复用既有 score/raw feature、policy simulator、registry 和 content-addressed delivery；未增加通用后台。
+3. `COMPLETED_DIRECT_TESTS`：三组 direct tests 为 `test_causal_admission_v2_contracts.py`、`test_causal_admission_v2_pipeline.py`、`test_causal_admission_v2_delivery.py`，覆盖 JSON 冻结、PIT/poison、normal unavailable、动作哈希、Holm、bundle/registry/tamper/exact retry。
+4. `NEXT_AFTER_SOURCE_MERGE`：从 clean merged commit 冻结正式 request 并执行一次 R1；有明确迹象才进入 R2 或独立确认设计。R2 仅消费就绪 source，不写假 adapter、不重复实现 `rotation_L1`。
 5. 负结果保存精确边界并停止该 frontier；下一假设必须改变被诊断的瓶颈，不扩大原参数网格。
 
 ## 9. Verification Plan / 验证与审核
@@ -319,19 +319,19 @@ position_or_order_write = false
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-231 | §§1～2；历史 v1 bundle | artifact: v1 f8da2f70... frontier；§1.2 exact hashes；blueprint §1.3 | DESIGN_VERIFIED | none |
-| F-232 | §§5.1～5.2、5.7.1 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` chronological/update/maturity/poison tests | R0_PARAMETERIZED_DESIGN_READY | approved_by_user: R1 源码与实验尚未完成 |
+| F-232 | §§5.1～5.2、5.7.1；`backend/services/advisory_model_first/causal_admission_v2_contracts.py`、`backend/services/advisory_model_first/causal_admission_v2_pipeline.py` | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q` | SOURCE_VERIFIED | approved_by_user: formal request/bundle 在 source merge 后发布 |
 | F-233 | §2.2、§5.3 | PR #4343/#4353；G2-A v1.2 17/39 structural stop；target: `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py` stage-source tests | DESIGN_READY | approved_by_user: sector OOF 尚未通过验收，R1 不以此为前置 |
-| F-234 | §§5.4、5.7.2 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` bounded-arm/trial-count tests | R0_PARAMETERIZED_DESIGN_READY | approved_by_user: 固定两 Ridge arm/2 trials/32 estimator fits；源码未实现 |
-| F-235 | §§5.5～5.7 | source: score_hmm_admission_pipeline.py residual q20；target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` estimand/action/cost tests | R0_PARAMETERIZED_DESIGN_READY | approved_by_user: 统计定义和 5 bps utility 已冻结；模型效果尚未验证 |
-| F-236 | §5.6 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` no-backfill/unavailable tests | DESIGN_READY | none |
-| F-237 | §§5.7.3～5.7.5、6 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` policy/frontier/support/multiplicity tests | R0_PARAMETERIZED_DESIGN_READY | approved_by_user: MDE=44.2485 bps 预示欠功效，R1 仍仅导航 |
-| F-238 | §§5.1、6.3、7 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` identity/retry/route tests | DESIGN_READY | none |
-| F-239 | §§5.2～5.3、6.3、9 | artifact: N0 research_window_contract.json metadata；target: PIT/window tests | DESIGN_READY | none |
-| F-240 | §§3、7～12 | F2 validator；target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` false-gates | R0_PARAMETERIZED_NO_PRODUCTION_MUTATION | approved_by_user: 本次参数化不运行实验或生产操作 |
+| F-234 | §§5.4、5.7.2；frozen arm specs 与 estimator-fit 上限 | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q` | SOURCE_VERIFIED | approved_by_user: 固定两 Ridge arm/2 trials/32 estimator fits；正式 trial receipt 在 merge 后产生 |
+| F-235 | §§5.5～5.7；prediction/action/calibration readout | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q` | SOURCE_VERIFIED | approved_by_user: 统计定义和 5 bps utility 已冻结；正式经济效果在 merge 后发布 |
+| F-236 | §5.6；固定父 Top5 TAKE/SKIP 与 action contract hash | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q` | SOURCE_VERIFIED | none |
+| F-237 | §§5.7.3～5.7.5、6；same-policy evaluator、moving-block/Holm/support | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q`；真实父源只读集成冒烟 | SOURCE_VERIFIED | approved_by_user: MDE=44.2485 bps预示欠功效，R1仍仅导航；正式readout在merged commit执行 |
+| F-238 | §§5.1、6.3、7；content-addressed bundle、append-only registry、typed next-task | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py -q` | SOURCE_VERIFIED | approved_by_user: 正式registry/route在source merge后写入 |
+| F-239 | §§5.2～5.3、6.3、9；immutable data evidence 严格复验，mutable registry/route 在 R1 重绑定 | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py -q`；artifact: N0 research_window_contract.json | SOURCE_VERIFIED | approved_by_user: sealed holdout保持未读取 |
+| F-240 | §§3、7～12；`scripts/advisory_causal_admission_v2_mve.py` false gates；CI 映射到既有 `advisory_modeling_backend` | `python -m pytest backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py backend/tests/scripts/test_ci_change_classifier.py -q`；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_causal_admission_v2_f2_detailed_design_20260906.md --tier F2` | SOURCE_VERIFIED | approved_by_user: backend/DB/API/UI/runtime/DDL/restart均不变更 |
 
 ## 15. DESIGN-COMPLIANCE-001
 
-1. 不以文档合入冒充实现：R0 参数化已完成；R1 源码/实验、R2 source 与 R3 确认逐项保留缺口，本次不报告模型或收益完成。
+1. 不以源码合入冒充实验：R0 参数化与 R1 源码已完成；正式 request/bundle/registry、R2 source 与 R3 确认逐项保留缺口，本版不报告正式模型收益完成。
 2. 不静默失败：normal missing、系统缺源、无效模型、主动 SKIP 和负实验分型；无规则/常数/旧 arm 冒充模型。
 3. 不越权改变业务：新实验 revision 不改历史结论；父 Top5、policy、成本和无资金仓位边界不变。
 4. 不新增审批或平台：仅自动正确性与预注册检查，后端重启/DDL 沿用用户权限；HMM 可选，不制造人工等待。
