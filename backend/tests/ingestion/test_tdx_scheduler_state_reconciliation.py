@@ -9,10 +9,12 @@ from types import SimpleNamespace
 
 from dotenv import load_dotenv
 import psycopg2
+import pandas as pd
 import pytest
 
 import backend.db.init_tushare_schedules as schedule_catalog_module
 import backend.ingestion.tdx_scheduler as scheduler_module
+import scripts.ingest_tushare_daily_basic as daily_basic_ingestion
 from backend.db.init_tushare_schedules import _DEFAULT_SCHEDULES, _validate_default_schedules
 from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
@@ -28,6 +30,32 @@ BUG_1106_EXPECTED_INDEXES = {
     "ix_ingestion_jobs_recent_dataset_mode_created_at",
     "ix_ingestion_jobs_go_init_success_finished_at",
 }
+
+
+class _DailyBasicCursor:
+    def __enter__(self) -> "_DailyBasicCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _DailyBasicConnection:
+    def cursor(self) -> _DailyBasicCursor:
+        return _DailyBasicCursor()
+
+
+def _complete_daily_basic_row(
+    trade_date: dt.date,
+    code: str,
+    *,
+    turnover_rate_f: object = 1.0,
+) -> dict[str, object]:
+    return {
+        "trade_date": trade_date,
+        "ts_code": code,
+        "turnover_rate_f": turnover_rate_f,
+    }
 
 
 def _runtime_repo_root() -> Path:
@@ -1079,6 +1107,67 @@ def test_daily_basic_audit_without_required_field_receipt_is_not_ready():
     assert result.is_fresh is False
     assert result.failure_category == "required_field_coverage_unproven"
     assert result.summary()["error_message"] == "daily_basic required-field coverage receipt is missing or invalid"
+
+
+def test_daily_basic_fetch_declares_full_provider_field_contract() -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Provider:
+        def daily_basic(self, **kwargs: object) -> pd.DataFrame:
+            calls.append(dict(kwargs))
+            return pd.DataFrame()
+
+    daily_basic_ingestion._fetch_daily_basic_for_date(_Provider(), dt.date(2026, 9, 4))
+
+    assert calls[0]["fields"] == ",".join(daily_basic_ingestion.DAILY_BASIC_PROVIDER_FIELDS)
+
+
+def test_daily_basic_required_turnover_coverage_fails_closed_before_upsert(monkeypatch: Any) -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(trade_date, f"{index:06d}.SZ", turnover_rate_f=None)
+        for index in range(100)
+    ]
+    upserts: list[object] = []
+    monkeypatch.setattr(daily_basic_ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(daily_basic_ingestion, "_fetch_daily_basic_for_date", lambda *_args: rows)
+    monkeypatch.setattr(
+        daily_basic_ingestion,
+        "_upsert_daily_basic",
+        lambda *_args: upserts.append(object()) or len(rows),
+    )
+    monkeypatch.setattr(daily_basic_ingestion, "_update_job_progress", lambda *_args: None)
+    monkeypatch.setattr(daily_basic_ingestion, "_log", lambda *_args: None)
+
+    stats = daily_basic_ingestion.run_ingestion(
+        _DailyBasicConnection(),
+        object(),
+        "incremental",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        0,
+    )
+
+    assert stats["failed_days"] == 1
+    assert stats["success_days"] == 0
+    assert upserts == []
+
+
+def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(
+            trade_date,
+            f"{index:06d}.SZ",
+            turnover_rate_f=None if index < 5 else 1.0,
+        )
+        for index in range(100)
+    ]
+
+    receipt = daily_basic_ingestion._validate_required_field_coverage(rows, trade_date)
+
+    assert receipt["required_field_coverage"]["turnover_rate_f"]["finite_count"] == 95
 
 
 def test_daily_basic_audit_with_required_field_receipt_is_ready():
