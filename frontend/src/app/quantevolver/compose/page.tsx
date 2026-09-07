@@ -27,7 +27,16 @@ const MULTI_ALPHA_DISTRIBUTED_ENABLED =
   process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
 const QE_DEFAULT_SIGNAL_END = "2026-06-30";
 const QE_DEFAULT_BACKTEST_END = "2026-06-29";
-const DEFAULT_QE_DATA_SPLIT = {
+type QEDataSplit = {
+  train_start: string;
+  train_end: string;
+  valid_start: string;
+  valid_end: string;
+  test_start: string;
+  test_end: string;
+  backtest_end: string;
+};
+const DEFAULT_QE_DATA_SPLIT: QEDataSplit = {
   train_start: "2018-08-01",
   train_end: "2022-12-31",
   valid_start: "2023-01-01",
@@ -48,13 +57,16 @@ function parseQeRandomSeedInput(value: string, defaultValue = DEFAULT_QE_RANDOM_
   return isValidQeRandomSeed(parsed) ? parsed : defaultValue;
 }
 
-function deriveBacktestEnd(testEnd?: string, defaults: Record<string, string> = DEFAULT_QE_DATA_SPLIT) {
+function deriveBacktestEnd(testEnd?: string, defaults: QEDataSplit = DEFAULT_QE_DATA_SPLIT) {
   if (!testEnd) return defaults.backtest_end;
   return testEnd >= defaults.test_end ? defaults.backtest_end : testEnd;
 }
 
-function withSafeBacktestEnd(split?: Record<string, any>, defaults: Record<string, string> = DEFAULT_QE_DATA_SPLIT) {
-  const next = { ...defaults, ...(split || {}) };
+function withSafeBacktestEnd(
+  split?: Partial<QEDataSplit> | Record<string, unknown>,
+  defaults: QEDataSplit = DEFAULT_QE_DATA_SPLIT,
+): QEDataSplit {
+  const next: QEDataSplit = { ...defaults, ...(split || {}) };
   if (!next.backtest_end) {
     next.backtest_end = deriveBacktestEnd(next.test_end, defaults);
   }
