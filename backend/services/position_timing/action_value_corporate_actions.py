@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .action_value import ActionValueError, PositionState, TZ, cutoff_on
+from .action_value import ActionValueError, PositionState, cutoff_on
 from .artifact_store import PositionTimingArtifactStore
 from .contracts import canonical_json_bytes, canonical_sha256
 
