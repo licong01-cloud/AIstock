@@ -28,12 +28,16 @@
   ],
   "expected": "Reuse the established cross-OS repository commit and dirty-path checks so a Windows-clean canonical main can freeze the WSL research request while real dirty paths still fail closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
       "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
@@ -100,11 +104,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "WSL causal Admission prepare against canonical main -> passed: repository clean, request frozen"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
