@@ -158,6 +158,49 @@ WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
 WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
     f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
 )
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT = "rdagent_assets/factor_values/checkpoints"
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_TASK_RE = re.compile(r"^official_factor_full_\d{13}$")
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_PAIRS = 64
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES = 128 * 1024
+WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES = 16 * 1024
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "task_id",
+        "status",
+        "resumed_from_task_id",
+        "created_at",
+        "window_train_start",
+        "window_backtest_end",
+        "factor_data_dir",
+        "qlib_bin_path",
+        "include_disabled",
+        "requested_factor_names",
+        "eligible_factor_names",
+        "completed_factor_names",
+        "retry_factor_names",
+        "failed_factors",
+        "db_result",
+        "resource_failures",
+        "resource_actions",
+        "snapshot_promotion",
+    }
+)
+WORKTREE_PYTEST_FACTOR_PROGRESS_FIELDS = frozenset(
+    {
+        "schema_version",
+        "task_id",
+        "status",
+        "total_factors",
+        "value_ready_count",
+        "completed_count",
+        "success_count",
+        "failed_count",
+        "active_factor_names",
+        "last_event",
+        "updated_at",
+    }
+)
 WORKTREE_BACKEND_LOG_ROOT = "backend/logs"
 WORKTREE_BACKEND_LOG_LIMITS = {
     "backend/logs/aistock.log": 10 * 1024 * 1024,
@@ -13533,6 +13576,165 @@ def _validated_qe_live_log_transient_paths(
     return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
 
 
+def _is_pytest_temporary_path(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    candidate = Path(text)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        return False
+    try:
+        relative = candidate.resolve(strict=False).relative_to(Path(tempfile.gettempdir()).resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    parts = [part.casefold() for part in relative.parts]
+    return any(
+        part.startswith("pytest-of-")
+        and index + 2 < len(parts)
+        and re.fullmatch(r"pytest-\d+", parts[index + 1]) is not None
+        for index, part in enumerate(parts)
+    )
+
+
+def _content_bound_file_manifest_sha256(
+    worktree_path: Path,
+    relative_paths: Iterable[str],
+) -> str | None:
+    lines: list[str] = []
+    prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    for relative_path in sorted({_normalize_worktree_artifact_path(item) for item in relative_paths}):
+        candidate = worktree_path / relative_path
+        try:
+            if not relative_path.startswith(prefix) or _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return None
+            size = candidate.stat().st_size
+            limit = (
+                WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES
+                if relative_path.endswith(".progress.json")
+                else WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES
+            )
+            if size > limit:
+                return None
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        except OSError:
+            return None
+        lines.append(f"{relative_path}\t{size}\t{digest}")
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _validated_pytest_factor_checkpoint_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str, str | None]:
+    prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "pytest_factor_checkpoints_not_present", None
+    root = worktree_path / WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT
+    if not root.is_dir() or _is_reparse_or_symlink(root) or _is_reparse_or_symlink(root.parent):
+        return set(), "pytest_factor_checkpoint_unsafe_directory", None
+
+    task_paths: dict[str, dict[str, str]] = {}
+    for relative_path in sorted(observed):
+        filename = relative_path.removeprefix(prefix)
+        if "/" in filename:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        if filename.endswith(".progress.json"):
+            task_id = filename[: -len(".progress.json")]
+            kind = "progress"
+        elif filename.endswith(".json"):
+            task_id = filename[: -len(".json")]
+            kind = "checkpoint"
+        else:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        if not WORKTREE_PYTEST_FACTOR_CHECKPOINT_TASK_RE.fullmatch(task_id):
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        pair = task_paths.setdefault(task_id, {})
+        if kind in pair:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        pair[kind] = relative_path
+
+    if not task_paths or len(task_paths) > WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_PAIRS:
+        return set(), "pytest_factor_checkpoint_pair_limit_exceeded", None
+    if any(set(pair) != {"checkpoint", "progress"} for pair in task_paths.values()):
+        return set(), "pytest_factor_checkpoint_pair_incomplete", None
+
+    for task_id, pair in sorted(task_paths.items()):
+        payloads: dict[str, dict[str, Any]] = {}
+        for kind, relative_path in pair.items():
+            candidate = worktree_path / relative_path
+            try:
+                if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                    return set(), "pytest_factor_checkpoint_unsafe_file", None
+                limit = (
+                    WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES
+                    if kind == "progress"
+                    else WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES
+                )
+                if candidate.stat().st_size > limit:
+                    return set(), "pytest_factor_checkpoint_file_too_large", None
+                payload = json.loads(candidate.read_text(encoding="utf-8", errors="strict"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                return set(), "pytest_factor_checkpoint_invalid_json", None
+            if not isinstance(payload, dict):
+                return set(), "pytest_factor_checkpoint_schema_mismatch", None
+            payloads[kind] = payload
+
+        checkpoint = payloads["checkpoint"]
+        progress = payloads["progress"]
+        if (
+            set(checkpoint) != WORKTREE_PYTEST_FACTOR_CHECKPOINT_FIELDS
+            or checkpoint.get("schema_version") != "official_factor_compute_checkpoint_v1"
+            or set(progress) != WORKTREE_PYTEST_FACTOR_PROGRESS_FIELDS
+            or progress.get("schema_version") != "official_factor_compute_progress_v1"
+        ):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if checkpoint.get("task_id") != task_id or progress.get("task_id") != task_id:
+            return set(), "pytest_factor_checkpoint_task_identity_mismatch", None
+        if checkpoint.get("status") not in {"success", "failed"} or progress.get("status") != checkpoint.get("status"):
+            return set(), "pytest_factor_checkpoint_nonterminal_or_status_mismatch", None
+        if not _is_pytest_temporary_path(checkpoint.get("factor_data_dir")):
+            return set(), "pytest_factor_checkpoint_non_test_data_root", None
+        qlib_bin_path = checkpoint.get("qlib_bin_path")
+        if qlib_bin_path not in {None, ""} and not _is_pytest_temporary_path(qlib_bin_path):
+            return set(), "pytest_factor_checkpoint_non_test_qlib_root", None
+        factor_lists = (
+            checkpoint.get("requested_factor_names"),
+            checkpoint.get("eligible_factor_names"),
+            checkpoint.get("completed_factor_names"),
+            checkpoint.get("retry_factor_names"),
+            checkpoint.get("failed_factors"),
+            progress.get("active_factor_names"),
+        )
+        if any(not isinstance(items, list) for items in factor_lists):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if len(checkpoint["eligible_factor_names"]) > 64 or progress.get("active_factor_names"):
+            return set(), "pytest_factor_checkpoint_nonterminal_or_status_mismatch", None
+        counts = (
+            progress.get("total_factors"),
+            progress.get("value_ready_count"),
+            progress.get("completed_count"),
+            progress.get("success_count"),
+            progress.get("failed_count"),
+        )
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if progress["total_factors"] != len(checkpoint["eligible_factor_names"]):
+            return set(), "pytest_factor_checkpoint_count_mismatch", None
+        if progress["completed_count"] != progress["success_count"] + progress["failed_count"]:
+            return set(), "pytest_factor_checkpoint_count_mismatch", None
+
+    content_digest = _content_bound_file_manifest_sha256(worktree_path, observed)
+    if content_digest is None:
+        return set(), "pytest_factor_checkpoint_content_manifest_unavailable", None
+    return observed, "bounded_pytest_official_factor_checkpoint_pairs", content_digest
+
+
 def _validated_backend_lifespan_log_transient_paths(
     ignored_paths: Iterable[str],
     *,
@@ -13804,6 +14006,19 @@ def _worktree_ignored_artifact_profile(
         worktree_path=worktree_path,
     )
     backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    pytest_factor_checkpoint_paths, pytest_factor_checkpoint_reason, pytest_factor_checkpoint_digest = (
+        _validated_pytest_factor_checkpoint_transient_paths(
+            ignored,
+            worktree_path=worktree_path,
+        )
+    )
+    pytest_factor_checkpoint_prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    if pytest_factor_checkpoint_paths:
+        profile["content_bound_transient_manifest"] = {
+            "schema_version": "aistock_content_bound_transient_manifest_v1",
+            "paths": sorted(pytest_factor_checkpoint_paths),
+            "sha256": pytest_factor_checkpoint_digest,
+        }
     roots: list[str] = []
     transient_entries: list[tuple[str, str]] = []
     canonical_lines: list[str] = []
@@ -13820,6 +14035,9 @@ def _worktree_ignored_artifact_profile(
             elif rel.startswith(backend_log_prefix):
                 root = rel if rel in backend_log_paths else None
                 reason = backend_log_reason
+            elif rel.startswith(pytest_factor_checkpoint_prefix):
+                root = rel if rel in pytest_factor_checkpoint_paths else None
+                reason = pytest_factor_checkpoint_reason
             else:
                 root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
             if root:
@@ -13927,6 +14145,16 @@ def _purge_worktree_transient_artifacts(
     live_digest = hashlib.sha256("\n".join(live_paths).encode("utf-8")).hexdigest()
     if live_digest != expected_profile.get("transient_manifest_sha256"):
         raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
+    content_bound_manifest = expected_profile.get("content_bound_transient_manifest")
+    if content_bound_manifest:
+        if not isinstance(content_bound_manifest, dict):
+            raise WorkflowError("content-bound transient manifest is invalid")
+        content_bound_paths = [str(item) for item in content_bound_manifest.get("paths") or []]
+        if not content_bound_paths or not set(content_bound_paths).issubset(set(live_paths)):
+            raise WorkflowError("content-bound transient artifact paths changed after cleanup preflight")
+        live_content_digest = _content_bound_file_manifest_sha256(worktree_path, content_bound_paths)
+        if not live_content_digest or live_content_digest != content_bound_manifest.get("sha256"):
+            raise WorkflowError("content-bound transient artifact manifest changed after cleanup preflight")
     tracked = _run_command(
         ["git", "ls-files", "-z", "--", *transient_roots],
         cwd=worktree_path,
