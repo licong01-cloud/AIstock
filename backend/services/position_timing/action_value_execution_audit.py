@@ -84,7 +84,7 @@ def audit_minute_execution(
         day: np.asarray(indexes, dtype=int) for day, indexes in mutable_indexes.items()
     }
     spans = _instrument_spans(instruments_path)
-    population = (
+    source_population = (
         sleeve_days.loc[
             sleeve_days["baseline"].eq("BUY_AND_HOLD")
             & sleeve_days["planned_delta_qty"].ne(0)
@@ -92,7 +92,24 @@ def audit_minute_execution(
         .drop_duplicates(["sleeve_id", "target_trade_date"])
         .copy()
     )
-    population["target_trade_date"] = pd.to_datetime(population["target_trade_date"]).dt.date
+    source_population["target_trade_date"] = pd.to_datetime(
+        source_population["target_trade_date"]
+    ).dt.date
+    inside_date_range = source_population["target_trade_date"].map(
+        lambda target: coverage_start <= target <= coverage_end
+    )
+    inside_instrument_span = pd.Series(
+        (
+            any(
+                start <= row.target_trade_date <= end
+                for start, end in spans.get(str(row.symbol), ())
+            )
+            for row in source_population.itertuples()
+        ),
+        index=source_population.index,
+        dtype=bool,
+    )
+    population = source_population.loc[inside_date_range & inside_instrument_span].copy()
     population["sample_key"] = population.apply(_sample_key, axis=1)
     population = population.sort_values("sample_key").head(sample_limit)
 
@@ -110,12 +127,6 @@ def audit_minute_execution(
             "daily_proxy_status": row["fill_status"],
             "daily_proxy_price_raw": _optional_finite_float(row["fill_price_raw"]),
         }
-        if not coverage_start <= target <= coverage_end:
-            results.append({**base, "status": "MINUTE_COVERAGE_OUTSIDE_RANGE"})
-            continue
-        if not any(start <= target <= end for start, end in spans.get(symbol, ())):
-            results.append({**base, "status": "MINUTE_PIT_UNIVERSE_EXCLUDED"})
-            continue
         indexes = indexes_by_date.get(target)
         if indexes is None or not len(indexes):
             results.append({**base, "status": "DATA_ERROR_MINUTE_DAY_MISSING"})
@@ -161,9 +172,16 @@ def audit_minute_execution(
     agreement = [item for item in paired if item["fill_status_agrees"]]
     price_differences = [item["minute_minus_daily_price_bps"] for item in paired if item["minute_minus_daily_price_bps"] is not None]
     receipt = {
-        "schema_version": "position_timing_action_value_execution_audit_v2",
+        "schema_version": "position_timing_action_value_execution_audit_v3",
         "audit_role": "DIAGNOSTIC_ONLY_NOT_MINUTE_SIGNAL",
-        "sample_selection": "SHA256_PLAN_IDENTITY_FIRST_256",
+        "sample_selection": "SHA256_PLAN_IDENTITY_WITHIN_ADVERTISED_MINUTE_COVERAGE",
+        "sample_limit": sample_limit,
+        "source_population_count": int(len(source_population)),
+        "eligible_population_count": int((inside_date_range & inside_instrument_span).sum()),
+        "excluded_before_sampling_counts": {
+            "MINUTE_COVERAGE_OUTSIDE_RANGE": int((~inside_date_range).sum()),
+            "MINUTE_PIT_UNIVERSE_EXCLUDED": int((inside_date_range & ~inside_instrument_span).sum()),
+        },
         "population_count": int(len(population)),
         "result_counts": {str(key): int(value) for key, value in sorted(counts.items())},
         "paired_count": len(paired),

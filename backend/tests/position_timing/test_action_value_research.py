@@ -123,7 +123,7 @@ def test_factor_change_is_reported_not_approximated() -> None:
     assert result.coverage["counts"]["corporate_action_unavailable"] > 0
 
 
-def test_continuous_replay_right_censors_unknown_corporate_action_and_cannot_support() -> None:
+def test_continuous_replay_rejects_unbound_material_factor_change_and_cannot_support() -> None:
     candidate = FakeCandidate(820)
     population = build_action_value_rows(
         candidate,
@@ -152,6 +152,49 @@ def test_continuous_replay_right_censors_unknown_corporate_action_and_cannot_sup
         symbols=candidate.symbols,
         bootstrap_samples=40,
     )
-    assert replay.receipt["excluded"]["corporate_action_right_censored_sleeves"] == 2
+    assert replay.receipt["excluded"]["unbound_material_factor_change_sleeves"] == 2
     assert replay.receipt["coverage_can_support_policy"] is False
     assert replay.receipt["study_effect_evidence"] == "INCONCLUSIVE"
+
+
+def test_continuous_replay_carries_suspension_without_dropping_whole_sleeve() -> None:
+    candidate = FakeCandidate(820)
+    population = build_action_value_rows(
+        candidate,
+        ActionValuePopulationSpec(
+            start=candidate.calendar[35].date(),
+            end=candidate.calendar[-25].date(),
+            symbol_limit=2,
+            review_stride=10,
+        ),
+    )
+    forward = walk_forward_action_values(
+        population.rows,
+        calendar=[day.date() for day in candidate.calendar],
+        source_sha256=canonical_sha256(population.coverage),
+        request_sha256="b" * 64,
+        source_commit="a" * 40,
+    )
+    first_model_day = pd.Timestamp(forward.models[0].metadata["available_at"]).date()
+    first = candidate.calendar.get_loc(str(first_model_day))
+    frame = candidate._frames["000001.SZ"]
+    suspension = frame.index[first + 5 : first + 8]
+    frame.loc[suspension, ["open", "high", "low", "close", "volume", "factor"]] = np.nan
+    frame.loc[suspension, "is_suspended"] = True
+
+    replay = replay_continuous_cohorts(
+        candidate,
+        models=forward.models,
+        symbols=candidate.symbols,
+        bootstrap_samples=40,
+    )
+
+    assert replay.receipt["excluded"]["source_factor_invalid_sleeves"] == 0
+    assert replay.receipt["excluded"]["path_unknown"] == 0
+    assert replay.receipt["excluded"]["decision_input_unavailable_sleeve_days"] > 0
+    assert replay.receipt["sleeve_count"] == len(candidate.symbols) * 2
+    unavailable = replay.sleeve_days.loc[
+        replay.sleeve_days["decision_input_status"].eq("UNAVAILABLE")
+    ]
+    assert not unavailable.empty
+    assert unavailable["planned_delta_qty"].eq(0).all()

@@ -8,6 +8,7 @@ import pytest
 from backend.services.position_timing.action_value import ActionValueError, FEATURE_SPEC_SHA256, POLICY_SHA256
 from backend.services.position_timing.action_value_data import file_reference
 from backend.services.position_timing.action_value_pipeline import (
+    RECEIPT_SCHEMA,
     _bundle_manifest,
     _deliver_completed_bundle,
     inspect_bundle,
@@ -19,7 +20,7 @@ from backend.services.position_timing.contracts import canonical_json_bytes, can
 
 def _receipt() -> dict:
     payload = {
-        "schema_version": "position_timing_action_value_receipt_v2",
+        "schema_version": RECEIPT_SCHEMA,
         "request_sha256": "1" * 64,
         "repository_commit": "a" * 40,
         "completed_at": "2026-09-07T20:30:00+08:00",

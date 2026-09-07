@@ -9,7 +9,8 @@ registry.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from bisect import bisect_right
 from datetime import date, datetime
 from decimal import Decimal
 import hashlib
@@ -35,6 +36,10 @@ from .action_value import (
     state_features,
 )
 from .action_value_data import BENCHMARK, DailyCandidate
+from .action_value_corporate_actions import (
+    CorporateActionBook,
+    apply_corporate_action_with_audit,
+)
 from .action_value_model import HEADS, LocalActionModel, fit_local_model, monthly_training_windows
 from .contracts import canonical_sha256
 
@@ -44,6 +49,7 @@ PRIMARY_HORIZON = 20
 TERMINAL_MAX_DEFER = 5
 DEFAULT_REVIEW_STRIDE = 10
 DEFAULT_SYMBOL_LIMIT = 64
+UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS = Decimal("10")
 
 
 @dataclass(frozen=True)
@@ -104,20 +110,27 @@ def deterministic_symbols(symbols: Iterable[str], *, limit: int, seed: int) -> t
     return tuple(ranked[: min(limit, len(ranked))])
 
 
-def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulationSpec) -> ActionValueRows:
+def build_action_value_rows(
+    candidate: DailyCandidate,
+    spec: ActionValuePopulationSpec,
+    *,
+    corporate_actions: CorporateActionBook | None = None,
+) -> ActionValueRows:
     """Build two action-conditioned supervised heads without hindsight selection.
 
     The first head starts from cash and evaluates legal OPEN sizes versus cash.
     The second starts from a deterministic, fully invested twenty-session
-    buy/hold sleeve and evaluates REDUCE/EXIT versus HOLD.  Windows containing
-    an adjustment-factor change are retained in coverage as unavailable rather
-    than approximating a corporate action with a fake share quantity.
+    buy/hold sleeve and evaluates REDUCE/EXIT versus HOLD.  Implemented
+    corporate actions use a frozen source to transform quantity and cash;
+    material factor changes without a matching event remain unavailable.
     """
 
     symbols = deterministic_symbols(candidate.symbols, limit=spec.symbol_limit, seed=spec.seed)
+    action_book = corporate_actions or CorporateActionBook.empty()
     benchmark_bars = candidate.bars(BENCHMARK)
     benchmark = benchmark_bars["close"]
     calendar = candidate.calendar
+    calendar_dates = [day.date() for day in calendar]
     eligible_dates = (calendar.date >= spec.start) & (calendar.date <= spec.end)
     indexes = np.flatnonzero(eligible_dates)
     if not len(indexes):
@@ -128,6 +141,9 @@ def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulati
         "review_candidates": 0,
         "complete_core": 0,
         "corporate_action_unavailable": 0,
+        "corporate_action_error_counts": {},
+        "target_corporate_action_rows": 0,
+        "unbound_material_factor_change": 0,
         "terminal_unavailable": 0,
         "fill_unknown": 0,
         "rows": 0,
@@ -149,14 +165,25 @@ def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulati
                 bars,
                 ordinal + spec.primary_horizon,
                 max_defer=spec.terminal_max_defer,
+                symbol=symbol,
+                corporate_actions=action_book,
+                calendar_dates=calendar_dates,
             )
             if terminal_ordinal is None:
                 counts["terminal_unavailable"] += 1
                 continue
-            path = bars.iloc[ordinal : terminal_ordinal + 1]
-            factor = pd.to_numeric(path["factor"], errors="coerce")
-            if factor.isna().any() or (factor <= 0).any() or factor.nunique(dropna=False) != 1:
+            if _has_unbound_material_factor_change(
+                symbol=symbol,
+                bars=bars,
+                start_ordinal=ordinal,
+                end_ordinal=terminal_ordinal,
+                corporate_actions=action_book,
+            ):
                 counts["corporate_action_unavailable"] += 1
+                counts["unbound_material_factor_change"] += 1
+                counts["corporate_action_error_counts"]["UNBOUND_MATERIAL_FACTOR_CHANGE"] = (
+                    int(counts["corporate_action_error_counts"].get("UNBOUND_MATERIAL_FACTOR_CHANGE", 0)) + 1
+                )
                 continue
             current_price = money(bars.iloc[ordinal]["close"])
             if current_price <= 0:
@@ -169,25 +196,57 @@ def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulati
                 cash=spec.reference_capital_cny,
                 capital=spec.reference_capital_cny,
             )
-            entry_plans = [
-                plan for plan in action_candidates(symbol, entry_state, current_price) if plan.delta > 0
-            ]
-            for plan in entry_plans:
-                row = _action_row(
-                    symbol=symbol,
-                    objective=HEADS[0],
+            try:
+                entry_target_state, target_reference, target_action, entry_fractional = _project_target_state(
                     state=entry_state,
-                    plan=plan,
-                    market=current_features,
+                    symbol=symbol,
                     bars=bars,
                     decision_ordinal=ordinal,
-                    terminal_ordinal=terminal_ordinal,
-                    label_available_at=label_available_at,
+                    corporate_actions=action_book,
+                    calendar_dates=calendar_dates,
                 )
+            except ActionValueError as exc:
+                if not exc.code.startswith("CORPORATE_ACTION_"):
+                    raise
+                counts["corporate_action_unavailable"] += 1
+                counts["corporate_action_error_counts"][exc.code] = (
+                    int(counts["corporate_action_error_counts"].get(exc.code, 0)) + 1
+                )
+                continue
+            entry_plans = [
+                plan
+                for plan in action_candidates(symbol, entry_target_state, target_reference)
+                if plan.delta > 0
+            ]
+            for plan in entry_plans:
+                try:
+                    row = _action_row(
+                        symbol=symbol,
+                        objective=HEADS[0],
+                        state=entry_target_state,
+                        plan=plan,
+                        market=current_features,
+                        bars=bars,
+                        decision_ordinal=ordinal,
+                        terminal_ordinal=terminal_ordinal,
+                        label_available_at=label_available_at,
+                        corporate_actions=action_book,
+                        calendar_dates=calendar_dates,
+                        target_fractional_share_discarded=entry_fractional,
+                    )
+                except ActionValueError as exc:
+                    if not exc.code.startswith("CORPORATE_ACTION_"):
+                        raise
+                    counts["corporate_action_unavailable"] += 1
+                    counts["corporate_action_error_counts"][exc.code] = (
+                        int(counts["corporate_action_error_counts"].get(exc.code, 0)) + 1
+                    )
+                    continue
                 if row is None:
                     counts["fill_unknown"] += 1
                 else:
                     records.append(row)
+                    counts["target_corporate_action_rows"] += int(target_action is not None)
 
             initial_quantity = max(
                 (plan.delta for plan in action_candidates(symbol, entry_state, current_price)),
@@ -207,33 +266,76 @@ def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulati
                 entry_cost=entry_reference if entry_reference > 0 else None,
                 holding_age=PRIMARY_HORIZON,
             )
-            exit_plans = [
-                plan for plan in action_candidates(symbol, held_state, current_price) if plan.delta < 0
-            ]
-            for plan in exit_plans:
-                row = _action_row(
-                    symbol=symbol,
-                    objective=HEADS[1],
+            try:
+                held_target_state, held_target_reference, held_target_action, held_fractional = _project_target_state(
                     state=held_state,
-                    plan=plan,
-                    market=current_features,
+                    symbol=symbol,
                     bars=bars,
                     decision_ordinal=ordinal,
-                    terminal_ordinal=terminal_ordinal,
-                    label_available_at=label_available_at,
+                    corporate_actions=action_book,
+                    calendar_dates=calendar_dates,
                 )
+            except ActionValueError as exc:
+                if not exc.code.startswith("CORPORATE_ACTION_"):
+                    raise
+                counts["corporate_action_unavailable"] += 1
+                counts["corporate_action_error_counts"][exc.code] = (
+                    int(counts["corporate_action_error_counts"].get(exc.code, 0)) + 1
+                )
+                continue
+            exit_plans = [
+                plan
+                for plan in action_candidates(symbol, held_target_state, held_target_reference)
+                if plan.delta < 0
+            ]
+            for plan in exit_plans:
+                try:
+                    row = _action_row(
+                        symbol=symbol,
+                        objective=HEADS[1],
+                        state=held_target_state,
+                        plan=plan,
+                        market=current_features,
+                        bars=bars,
+                        decision_ordinal=ordinal,
+                        terminal_ordinal=terminal_ordinal,
+                        label_available_at=label_available_at,
+                        corporate_actions=action_book,
+                        calendar_dates=calendar_dates,
+                        target_fractional_share_discarded=held_fractional,
+                    )
+                except ActionValueError as exc:
+                    if not exc.code.startswith("CORPORATE_ACTION_"):
+                        raise
+                    counts["corporate_action_unavailable"] += 1
+                    counts["corporate_action_error_counts"][exc.code] = (
+                        int(counts["corporate_action_error_counts"].get(exc.code, 0)) + 1
+                    )
+                    continue
                 if row is None:
                     counts["fill_unknown"] += 1
                 else:
                     records.append(row)
+                    counts["target_corporate_action_rows"] += int(held_target_action is not None)
 
     if not records:
         raise ActionValueError("ACTION_VALUE_POPULATION_EMPTY")
     rows = pd.DataFrame.from_records(records)
     rows = rows.sort_values(["decision_as_of", "symbol", "objective", "planned_delta_qty"]).reset_index(drop=True)
     counts["rows"] = len(rows)
+    counts["fractional_rounding_rows"] = int(
+        rows[["candidate_fractional_share_discarded", "baseline_fractional_share_discarded"]]
+        .gt(0)
+        .any(axis=1)
+        .sum()
+    )
+    counts["max_fractional_share_discarded"] = float(
+        rows[["candidate_fractional_share_discarded", "baseline_fractional_share_discarded"]]
+        .max(axis=1)
+        .max()
+    )
     coverage = {
-        "schema_version": "position_timing_action_value_population_v2",
+        "schema_version": "position_timing_action_value_population_v3",
         "population_spec": {
             "start": spec.start.isoformat(),
             "end": spec.end.isoformat(),
@@ -244,6 +346,10 @@ def build_action_value_rows(candidate: DailyCandidate, spec: ActionValuePopulati
             "primary_horizon": spec.primary_horizon,
             "terminal_max_defer": spec.terminal_max_defer,
             "selection": "SHA256_SEED_SYMBOL_SOURCE_ONLY",
+            "corporate_action_snapshot_sha256": action_book.snapshot_sha256,
+            "unbound_factor_change_tolerance_bps": str(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS),
+            "fractional_share_policy": "FLOOR_ENTITLEMENT_NO_CASH_CREDIT",
+            "account_cash_policy": "MARKET_DIVIDEND_CASH_DIV_AFTER_TAX_FIELD",
         },
         "symbols": symbols,
         "counts": counts,
@@ -328,6 +434,7 @@ def replay_continuous_cohorts(
     *,
     models: Sequence[LocalActionModel],
     symbols: Sequence[str],
+    corporate_actions: CorporateActionBook | None = None,
     horizon: int = PRIMARY_HORIZON,
     bootstrap_samples: int = 5000,
     block_sessions: int = 25,
@@ -337,13 +444,14 @@ def replay_continuous_cohorts(
 
     Monthly retraining only changes which already-available model is consumed;
     it never injects capital or resets a position. Policy, buy/hold, and frozen
-    L1 paths share the same source bars and future execution day. Corporate-
-    action paths are fail-closed until exact share/cash transformations exist.
+    L1 paths share the same source bars, future execution day, and frozen
+    corporate-action quantity/cash transformations.
     """
 
     if horizon != PRIMARY_HORIZON or bootstrap_samples <= 0 or block_sessions <= 0:
         raise ActionValueError("CONTINUOUS_REPLAY_SPEC_DRIFT")
     ordered_models = sorted(models, key=lambda item: item.metadata["available_at"])
+    action_book = corporate_actions or CorporateActionBook.empty()
     if not ordered_models or len(set(symbols)) != len(symbols):
         raise ActionValueError("CONTINUOUS_REPLAY_INPUT_INVALID")
     calendar_dates = [day.date() for day in candidate.calendar]
@@ -368,9 +476,13 @@ def replay_continuous_cohorts(
     excluded = {
         "outside_calendar": 0,
         "pit_or_core": 0,
-        "corporate_action": 0,
-        "corporate_action_right_censored_sleeves": 0,
+        "source_factor_invalid_sleeves": 0,
+        "corporate_action_unavailable_sleeves": 0,
+        "corporate_action_applied_sleeve_days": 0,
+        "unbound_material_factor_change_sleeves": 0,
+        "decision_input_unavailable_sleeve_days": 0,
         "path_unknown": 0,
+        "path_error_counts": {},
     }
     for symbol in symbols:
         bars = bars_by_symbol[symbol]
@@ -382,37 +494,63 @@ def replay_continuous_cohorts(
             excluded["pit_or_core"] += 2
             continue
         factors = pd.to_numeric(path["factor"], errors="coerce")
-        if factors.isna().any() or (factors <= 0).any():
-            excluded["corporate_action"] += 2
+        invalid_factor = factors.isna() | factors.le(0)
+        observed_price = path[["open", "high", "low", "close"]].notna().any(axis=1)
+        unexplained_factor_gap = invalid_factor & observed_price & ~path["is_suspended"].astype(bool)
+        if unexplained_factor_gap.any():
+            excluded["source_factor_invalid_sleeves"] += 2
             continue
-        changes = np.flatnonzero(factors.pct_change(fill_method=None).abs().to_numpy() > 1e-6)
-        symbol_end_ordinal = end_ordinal
-        if len(changes):
-            first_change_ordinal = start_ordinal + int(changes[0])
-            symbol_end_ordinal = min(symbol_end_ordinal, first_change_ordinal - 1)
-            excluded["corporate_action"] += 2
-            excluded["corporate_action_right_censored_sleeves"] += 2
-        if symbol_end_ordinal <= start_ordinal:
+        if _has_unbound_material_factor_change(
+            symbol=symbol,
+            bars=bars,
+            start_ordinal=start_ordinal,
+            end_ordinal=end_ordinal + 1,
+            corporate_actions=action_book,
+        ):
+            excluded["corporate_action_unavailable_sleeves"] += 2
+            excluded["unbound_material_factor_change_sleeves"] += 2
             continue
         for initial_state in ("CASH_START", "HOLDING_START"):
             try:
-                rows.extend(
-                    _replay_one_sleeve(
-                        symbol=symbol,
-                        bars=bars,
-                        benchmark=benchmark,
-                        calendar_dates=calendar_dates,
-                        start_ordinal=start_ordinal,
-                        end_ordinal=symbol_end_ordinal,
-                        models=ordered_models,
-                        initial_state=initial_state,
-                    )
+                sleeve_rows = _replay_one_sleeve(
+                    symbol=symbol,
+                    bars=bars,
+                    benchmark=benchmark,
+                    features=features_by_symbol[symbol],
+                    calendar_dates=calendar_dates,
+                    start_ordinal=start_ordinal,
+                    end_ordinal=end_ordinal,
+                    models=ordered_models,
+                    initial_state=initial_state,
+                    corporate_actions=action_book,
                 )
-            except ActionValueError:
+                excluded["corporate_action_applied_sleeve_days"] += len(
+                    {
+                        (row["sleeve_id"], row["target_trade_date"])
+                        for row in sleeve_rows
+                        if row["corporate_action_applied"]
+                    }
+                )
+                excluded["decision_input_unavailable_sleeve_days"] += len(
+                    {
+                        (row["sleeve_id"], row["decision_trade_date"])
+                        for row in sleeve_rows
+                        if row["decision_input_status"] != "AVAILABLE"
+                    }
+                )
+                rows.extend(sleeve_rows)
+            except ActionValueError as exc:
                 excluded["path_unknown"] += 1
+                path_errors = excluded["path_error_counts"]
+                path_errors[exc.code] = int(path_errors.get(exc.code, 0)) + 1
     if not rows:
         raise ActionValueError("CONTINUOUS_REPLAY_EMPTY")
     sleeve_days = pd.DataFrame(rows)
+    policy_fractional = sleeve_days.loc[
+        sleeve_days["baseline"].eq("BUY_AND_HOLD"),
+        "policy_fractional_share_discarded",
+    ]
+    baseline_fractional = sleeve_days["baseline_fractional_share_discarded"]
     daily = _aggregate_daily_comparisons(sleeve_days)
     comparisons = {}
     for baseline in ("BUY_AND_HOLD", "FROZEN_L1_V1"):
@@ -447,21 +585,28 @@ def replay_continuous_cohorts(
             "effect_evidence": classify_effect(interval["lower_bps"], interval["upper_bps"]),
             "effective_trading_days": int(len(values)),
         }
-    unresolved_corporate_actions = excluded["corporate_action_right_censored_sleeves"] > 0
-    if unresolved_corporate_actions:
+    unresolved_paths = (
+        excluded["source_factor_invalid_sleeves"] > 0
+        or excluded["unbound_material_factor_change_sleeves"] > 0
+        or excluded["corporate_action_unavailable_sleeves"] > 0
+        or excluded["path_unknown"] > 0
+    )
+    if unresolved_paths:
         for comparison in comparisons.values():
             comparison["effect_evidence_before_coverage_constraint"] = comparison["effect_evidence"]
             comparison["effect_evidence"] = "INCONCLUSIVE"
-            comparison["coverage_reason_code"] = "UNSUPPORTED_CORPORATE_ACTION_RIGHT_CENSORING"
+            comparison["coverage_reason_code"] = "SOURCE_OR_CORPORATE_ACTION_PATH_UNAVAILABLE"
     supported = (
-        not unresolved_corporate_actions
+        not unresolved_paths
         and all(item["effect_evidence"] == "SUPPORTED" for item in comparisons.values())
     )
     receipt = {
-        "schema_version": "position_timing_continuous_policy_receipt_v2",
+        "schema_version": "position_timing_continuous_policy_receipt_v3",
         "policy_id": "DAILY_ACTION_VALUE_POLICY_V2",
         "horizon_trading_days": horizon,
         "sleeve_count": int(sleeve_days["sleeve_id"].nunique()),
+        "requested_symbol_count": len(symbols),
+        "population_contract": "SYMBOL_ACTIVE_WITH_COMPLETE_CORE_AT_COMMON_CONTINUOUS_START",
         "sleeve_day_count": len(sleeve_days),
         "initial_capital_per_sleeve_cny": str(REFERENCE_CAPITAL_CNY),
         "capital_injection_policy": "ONCE_PER_SYMBOL_INITIAL_STATE_FOR_FULL_OOT_PATH",
@@ -472,9 +617,20 @@ def replay_continuous_cohorts(
         "study_effect_evidence": "SUPPORTED" if supported else "INCONCLUSIVE",
         "excluded": excluded,
         "execution_assumption": "DAILY_SHARED_GUARD_CONSERVATIVE_V2",
-        "corporate_action_policy": "FACTOR_CHANGE_WINDOW_UNAVAILABLE",
-        "censoring_policy": "RIGHT_CENSOR_AT_FIRST_UNSUPPORTED_CORPORATE_ACTION",
-        "coverage_can_support_policy": not unresolved_corporate_actions,
+        "corporate_action_policy": "IMMUTABLE_IMPLEMENTED_DIVIDEND_QUANTITY_CASH_V1",
+        "corporate_action_snapshot_sha256": action_book.snapshot_sha256,
+        "unbound_factor_change_tolerance_bps": str(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS),
+        "fractional_share_policy": "FLOOR_ENTITLEMENT_NO_CASH_CREDIT",
+        "account_cash_policy": "MARKET_DIVIDEND_CASH_DIV_AFTER_TAX_FIELD",
+        "fractional_share_sensitivity": {
+            "policy_sleeve_days_affected": int(policy_fractional.gt(0).sum()),
+            "baseline_sleeve_days_affected": int(baseline_fractional.gt(0).sum()),
+            "max_policy_fractional_share_discarded": float(policy_fractional.max()),
+            "max_baseline_fractional_share_discarded": float(baseline_fractional.max()),
+            "interpretation": "CONSERVATIVE_ACCOUNT_LEVEL_ROUNDING_SOURCE_UNAVAILABLE",
+        },
+        "censoring_policy": "NO_SILENT_CENSOR_TYPED_PATH_UNAVAILABLE",
+        "coverage_can_support_policy": not unresolved_paths,
     }
     receipt["receipt_sha256"] = canonical_sha256(receipt)
     return ContinuousReplayResult(sleeve_days=sleeve_days, daily_comparisons=daily, receipt=receipt)
@@ -532,6 +688,9 @@ def _action_row(
     decision_ordinal: int,
     terminal_ordinal: int,
     label_available_at: datetime,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+    target_fractional_share_discarded: Decimal,
 ) -> dict[str, Any] | None:
     fill = daily_fill(
         plan,
@@ -542,8 +701,26 @@ def _action_row(
     if fill.status == "UNKNOWN":
         return None
     candidate_state = apply_fill(state, fill)
+    target_date = calendar_dates[decision_ordinal + 1]
+    terminal_date = calendar_dates[terminal_ordinal]
+    candidate_state, candidate_future_fractional = _apply_actions_until(
+        candidate_state,
+        symbol=plan.symbol,
+        start_exclusive=target_date,
+        end_inclusive=terminal_date,
+        corporate_actions=corporate_actions,
+        calendar_dates=calendar_dates,
+    )
+    baseline_state, baseline_future_fractional = _apply_actions_until(
+        state,
+        symbol=plan.symbol,
+        start_exclusive=target_date,
+        end_inclusive=terminal_date,
+        corporate_actions=corporate_actions,
+        calendar_dates=calendar_dates,
+    )
     candidate_value = _terminal_net_value(candidate_state, plan.symbol, bars.iloc[terminal_ordinal])
-    baseline_value = _terminal_net_value(state, plan.symbol, bars.iloc[terminal_ordinal])
+    baseline_value = _terminal_net_value(baseline_state, plan.symbol, bars.iloc[terminal_ordinal])
     label = (candidate_value - baseline_value) / state.capital * BPS
     return {
         "symbol": symbol,
@@ -553,9 +730,108 @@ def _action_row(
         "planned_delta_qty": plan.delta,
         "fill_status": fill.status,
         "net_action_value_bps": float(label),
+        "candidate_fractional_share_discarded": float(
+            target_fractional_share_discarded + candidate_future_fractional
+        ),
+        "baseline_fractional_share_discarded": float(
+            target_fractional_share_discarded + baseline_future_fractional
+        ),
         **{name: float(market[name]) for name in MARKET_FEATURES},
         **state_features(state, plan),
     }
+
+
+def _project_target_state(
+    *,
+    state: PositionState,
+    symbol: str,
+    bars: pd.DataFrame,
+    decision_ordinal: int,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+) -> tuple[PositionState, Decimal, Any | None, Decimal]:
+    target_ordinal = decision_ordinal + 1
+    target_date = calendar_dates[target_ordinal]
+    action = corporate_actions.on(symbol, target_date)
+    reference = money(bars.iloc[decision_ordinal]["close"])
+    if action is None:
+        return state, reference, None, Decimal(0)
+    if action.source_available_at > cutoff_on(calendar_dates[decision_ordinal]):
+        raise ActionValueError(
+            "CORPORATE_ACTION_NOT_VISIBLE_AT_DECISION",
+            symbol=symbol,
+            effective_trade_date=target_date.isoformat(),
+        )
+    current_factor = money(bars.iloc[decision_ordinal]["factor"])
+    target_factor = money(bars.iloc[target_ordinal]["factor"])
+    if min(current_factor, target_factor) <= 0:
+        raise ActionValueError("CORPORATE_ACTION_FACTOR_INVALID", symbol=symbol)
+    target_reference = reference * current_factor / target_factor
+    application = apply_corporate_action_with_audit(
+        state,
+        action,
+        next_trade_date=(
+            calendar_dates[target_ordinal + 1]
+            if target_ordinal + 1 < len(calendar_dates)
+            else None
+        ),
+    )
+    return application.state, target_reference, action, application.fractional_share_discarded
+
+
+def _apply_actions_until(
+    state: PositionState,
+    *,
+    symbol: str,
+    start_exclusive: date,
+    end_inclusive: date,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+) -> tuple[PositionState, Decimal]:
+    result = state
+    fractional_share_discarded = Decimal(0)
+    for action in corporate_actions.between(symbol, start_exclusive, end_inclusive):
+        next_ordinal = bisect_right(calendar_dates, action.effective_trade_date)
+        if not (
+            next_ordinal > 0
+            and calendar_dates[next_ordinal - 1] == action.effective_trade_date
+        ):
+            raise ActionValueError("CORPORATE_ACTION_OUTSIDE_TRADING_CALENDAR", symbol=symbol)
+        # Any T+1 lock from a preceding session has expired before this later
+        # ex-date.  The action itself may create a new one-session share lock.
+        result = replace(result, sellable=result.quantity)
+        application = apply_corporate_action_with_audit(
+            result,
+            action,
+            next_trade_date=(calendar_dates[next_ordinal] if next_ordinal < len(calendar_dates) else None),
+        )
+        result = application.state
+        fractional_share_discarded += application.fractional_share_discarded
+    return result, fractional_share_discarded
+
+
+def _has_unbound_material_factor_change(
+    *,
+    symbol: str,
+    bars: pd.DataFrame,
+    start_ordinal: int,
+    end_ordinal: int,
+    corporate_actions: CorporateActionBook,
+) -> bool:
+    factors = pd.to_numeric(bars.iloc[start_ordinal : end_ordinal + 1]["factor"], errors="coerce")
+    valid = factors.where(np.isfinite(factors) & (factors > 0)).dropna()
+    changes = valid.pct_change(fill_method=None).abs() * float(BPS)
+    previous_timestamp: pd.Timestamp | None = None
+    for timestamp, change_bps in changes.items():
+        if change_bps > float(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS):
+            if previous_timestamp is None or not corporate_actions.between(
+                symbol,
+                previous_timestamp.date(),
+                timestamp.date(),
+            ):
+                return True
+        previous_timestamp = timestamp
+    return False
 
 
 def _replay_one_sleeve(
@@ -563,11 +839,13 @@ def _replay_one_sleeve(
     symbol: str,
     bars: pd.DataFrame,
     benchmark: pd.Series,
+    features: pd.DataFrame,
     calendar_dates: Sequence[date],
     start_ordinal: int,
     end_ordinal: int,
     models: Sequence[LocalActionModel],
     initial_state: str,
+    corporate_actions: CorporateActionBook,
 ) -> list[dict[str, Any]]:
     from .action_value_advice import decide_stock_day
 
@@ -596,6 +874,7 @@ def _replay_one_sleeve(
         {"symbol": symbol, "continuous_start": calendar_dates[start_ordinal], "initial_state": initial_state}
     )[:24]
     previous_differences = {"BUY_AND_HOLD": Decimal(0), "FROZEN_L1_V1": Decimal(0)}
+    last_valuation_price = reference
     output: list[dict[str, Any]] = []
     for decision_ordinal in range(start_ordinal, end_ordinal + 1):
         target_ordinal = decision_ordinal + 1
@@ -607,49 +886,126 @@ def _replay_one_sleeve(
         buy_hold_state = _roll_state_to_decision(buy_hold_state)
         l1_state = _roll_state_to_decision(l1_state)
 
-        decision = decide_stock_day(
-            symbol=symbol,
-            state=policy_state,
-            bars=bars.iloc[: decision_ordinal + 1],
-            benchmark=benchmark,
-            decision_as_of=decision_as_of,
-            model=model,
-        )
-        pre_policy_state = policy_state
-        policy_fill = daily_fill(
-            decision.plan,
-            bars.iloc[target_ordinal],
-            sellable=policy_state.sellable,
-            full_exit=(-decision.plan.delta == policy_state.quantity),
-        )
-        policy_state = apply_fill(policy_state, policy_fill)
+        decision_bar = bars.iloc[decision_ordinal]
+        decision_reference = _available_raw_close(decision_bar)
+        decision_input_status = "AVAILABLE"
+        decision_reason = "AVAILABLE"
+        if decision_reference is None or bool(decision_bar.get("is_suspended")):
+            decision_input_status = "UNAVAILABLE"
+            decision_reason = "DECISION_BAR_SUSPENDED_OR_MISSING"
 
-        if not buy_hold_complete:
-            buy_reference = money(bars.iloc[decision_ordinal]["close"])
-            candidates = action_candidates(symbol, buy_hold_state, buy_reference)
+        target_action = corporate_actions.on(symbol, calendar_dates[target_ordinal])
+        if decision_reference is None and target_action is None:
+            policy_target_state, buy_hold_target_state, l1_target_state = (
+                policy_state,
+                buy_hold_state,
+                l1_state,
+            )
+            target_reference = last_valuation_price
+            policy_fractional = buy_hold_fractional = l1_fractional = Decimal(0)
+        else:
+            policy_target_state, target_reference, target_action, policy_fractional = _project_target_state(
+                state=policy_state,
+                symbol=symbol,
+                bars=bars,
+                decision_ordinal=decision_ordinal,
+                corporate_actions=corporate_actions,
+                calendar_dates=calendar_dates,
+            )
+            buy_hold_target_state, _, _, buy_hold_fractional = _project_target_state(
+                state=buy_hold_state,
+                symbol=symbol,
+                bars=bars,
+                decision_ordinal=decision_ordinal,
+                corporate_actions=corporate_actions,
+                calendar_dates=calendar_dates,
+            )
+            l1_target_state, _, _, l1_fractional = _project_target_state(
+                state=l1_state,
+                symbol=symbol,
+                bars=bars,
+                decision_ordinal=decision_ordinal,
+                corporate_actions=corporate_actions,
+                calendar_dates=calendar_dates,
+            )
+
+        decision = None
+        if decision_input_status == "AVAILABLE":
+            try:
+                decision = decide_stock_day(
+                    symbol=symbol,
+                    state=policy_state,
+                    bars=bars.iloc[: decision_ordinal + 1],
+                    benchmark=benchmark,
+                    decision_as_of=decision_as_of,
+                    model=model,
+                    target_state=policy_target_state,
+                    target_reference=target_reference,
+                    current_market=features.iloc[decision_ordinal],
+                )
+            except ActionValueError as exc:
+                if exc.code != "CURRENT_CORE_FEATURE_UNAVAILABLE":
+                    raise
+                decision_input_status = "UNAVAILABLE"
+                decision_reason = exc.code
+        if decision is None:
+            policy_plan = ActionPlan(symbol, 0, target_reference)
+            policy_action = "HOLD" if policy_target_state.quantity else "WAIT"
+            policy_authority = "SOURCE_UNAVAILABLE_NO_ACTION"
+            policy_model_sha256 = None
+        else:
+            policy_plan = decision.plan
+            policy_action = decision.action
+            policy_authority = decision.authority
+            policy_model_sha256 = decision.model_sha256
+        pre_policy_state = policy_target_state
+        policy_fill = daily_fill(
+            policy_plan,
+            bars.iloc[target_ordinal],
+            sellable=policy_target_state.sellable,
+            full_exit=(-policy_plan.delta == policy_target_state.quantity),
+        )
+        policy_state = apply_fill(policy_target_state, policy_fill)
+
+        if not buy_hold_complete and decision_input_status == "AVAILABLE":
+            candidates = action_candidates(symbol, buy_hold_target_state, target_reference)
             plan = max(candidates, key=lambda item: item.delta)
-            fill = daily_fill(plan, bars.iloc[target_ordinal], sellable=0)
-            buy_hold_state = apply_fill(buy_hold_state, fill)
+            fill = daily_fill(plan, bars.iloc[target_ordinal], sellable=buy_hold_target_state.sellable)
+            buy_hold_state = apply_fill(buy_hold_target_state, fill)
             buy_hold_complete = buy_hold_state.quantity > 0
+        else:
+            buy_hold_state = buy_hold_target_state
 
         from .action_value import risk_exit_plan
 
-        l1_plan = risk_exit_plan(
-            symbol,
-            l1_state,
-            money(bars.iloc[decision_ordinal]["close"]),
+        l1_plan = (
+            risk_exit_plan(symbol, l1_state, decision_reference)
+            if decision_reference is not None and not bool(decision_bar.get("is_suspended"))
+            else None
         )
         if l1_plan is not None:
+            translated_delta = -l1_target_state.sellable
+            l1_plan = (
+                ActionPlan(symbol, translated_delta, target_reference, True)
+                if translated_delta
+                else None
+            )
+        if l1_plan is not None:
             l1_state = apply_fill(
-                l1_state,
+                l1_target_state,
                 daily_fill(
                     l1_plan,
                     bars.iloc[target_ordinal],
-                    sellable=l1_state.sellable,
-                    full_exit=(-l1_plan.delta == l1_state.quantity),
+                    sellable=l1_target_state.sellable,
+                    full_exit=(-l1_plan.delta == l1_target_state.quantity),
                 ),
             )
-        price = money(bars.iloc[target_ordinal]["close"])
+        else:
+            l1_state = l1_target_state
+        target_price = _available_raw_close(bars.iloc[target_ordinal])
+        if target_price is not None:
+            last_valuation_price = target_price
+        price = last_valuation_price
         wealth = {
             "POLICY": _mark_to_market(policy_state, symbol, price),
             "BUY_AND_HOLD": _mark_to_market(buy_hold_state, symbol, price),
@@ -672,16 +1028,27 @@ def _replay_one_sleeve(
                     "policy_wealth_cny": float(wealth["POLICY"]),
                     "baseline_wealth_cny": float(wealth[baseline]),
                     "incremental_net_value_cny": float(increment),
-                    "action": decision.action,
+                    "action": policy_action,
+                    "decision_authority": policy_authority,
+                    "decision_input_status": decision_input_status,
+                    "decision_reason": decision_reason,
                     "fill_status": policy_fill.status,
                     "fill_reason": policy_fill.reason,
                     "fill_price_raw": float(policy_fill.price) if policy_fill.price is not None else None,
-                    "planned_delta_qty": decision.plan.delta,
-                    "plan_reference_raw": float(decision.plan.reference),
-                    "plan_risk_exit": decision.plan.risk_exit,
+                    "planned_delta_qty": policy_plan.delta,
+                    "plan_reference_raw": float(policy_plan.reference),
+                    "plan_risk_exit": policy_plan.risk_exit,
                     "pre_quantity": pre_policy_state.quantity,
                     "pre_sellable_qty": pre_policy_state.sellable,
-                    "model_sha256": model.metadata["model_sha256"],
+                    "model_sha256": policy_model_sha256,
+                    "corporate_action_applied": target_action is not None,
+                    "corporate_action_source_rows_sha256": (
+                        target_action.source_rows_sha256 if target_action is not None else None
+                    ),
+                    "policy_fractional_share_discarded": float(policy_fractional),
+                    "baseline_fractional_share_discarded": float(
+                        buy_hold_fractional if baseline == "BUY_AND_HOLD" else l1_fractional
+                    ),
                 }
             )
     return output
@@ -695,6 +1062,16 @@ def _roll_state_to_decision(state: PositionState) -> PositionState:
         sellable=state.quantity,
         holding_age=(state.holding_age + 1 if state.holding_age is not None and state.quantity else state.holding_age),
     )
+
+
+def _available_raw_close(bar: Mapping[str, Any]) -> Decimal | None:
+    if bool(bar.get("is_suspended")):
+        return None
+    try:
+        value = money(bar["close"])
+    except (KeyError, TypeError, ValueError, ArithmeticError, ActionValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _model_available_for(models: Sequence[LocalActionModel], decision_as_of: datetime) -> LocalActionModel | None:
@@ -732,7 +1109,15 @@ def _terminal_net_value(state: PositionState, symbol: str, terminal: Mapping[str
     return state.cash + state.quantity * price - fee
 
 
-def _effective_terminal_ordinal(bars: pd.DataFrame, nominal: int, *, max_defer: int) -> int | None:
+def _effective_terminal_ordinal(
+    bars: pd.DataFrame,
+    nominal: int,
+    *,
+    max_defer: int,
+    symbol: str,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+) -> int | None:
     for ordinal in range(nominal, min(len(bars), nominal + max_defer + 1)):
         row = bars.iloc[ordinal]
         if not bool(row.get("pit_active")) or bool(row.get("is_suspended")):
@@ -747,6 +1132,14 @@ def _effective_terminal_ordinal(bars: pd.DataFrame, nominal: int, *, max_defer: 
         if min(close, low, high, down) <= 0:
             continue
         if low == high == down:
+            continue
+        action = corporate_actions.on(symbol, calendar_dates[ordinal])
+        if (
+            action is not None
+            and action.quantity_multiplier > 1
+            and action.share_listing_date is not None
+            and action.share_listing_date > calendar_dates[ordinal]
+        ):
             continue
         return ordinal
     return None
