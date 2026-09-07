@@ -691,6 +691,7 @@ profile schema、hash、日期和 selected-window coverage 是输入正确性检
 | Review-10 | 已创建任务不漂移 | custom-evo 编辑/重跑可能在月更后重新读取当前 profile，且 editable response 可能泄露 binding | 编辑/重跑复用原 binding 且不读 profile；追加要求 generation/release/cutoff 一致；公开配置只显示语义 selection 与安全摘要 | resolved |
 | Review-11 | 身份追溯账实一致 | 初版只持久化 generation/release/cutoff，缺设计要求的 profile digest 与 resolved timestamp | 将 digest 与 UTC resolved time 写入 server-owned summary，REST/UI/MCP 继续过滤 hash/path | resolved |
 | Review-12 | coverage 合同最小化 | §5.4 把数据准备完整签收证据与 QE 高频消费投影写成同一个文件，和严格 parser 不一致 | 分为独立完整证据与 hash-pinned 最小 projection；精确定义四个顶层字段和 pool/gap 字段 | resolved |
+| Review-13 | CI 可达性 | 新增 profile/UI-contract/comparison 测试与两个脚本尚无直接 test-plan 路由，CI classifier fail closed | 增加精确 `qe.active_dataset_universe` ownership，扩展既有 `qe_read_backend` 目标并复用 `qe_mcp_backend`；不新增流水线或审批 | resolved |
 
 当前文档随实现 PR 继续接受最终 HEAD 验证；在 PR 全部门禁完成前不得表述为源码可合入，在用户后续授权前不得表述为
 活动 profile 已切换、后端/前端/MCP 已生效或实验已运行。

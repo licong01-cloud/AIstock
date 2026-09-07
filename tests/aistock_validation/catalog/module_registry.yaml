@@ -51,6 +51,17 @@ modules:
     test_plans:
       required_on_change: [l0]
       recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3, qe_mcp_backend]
+  - module_id: qe.active_dataset_universe
+    display_name: QE active dataset and PIT universe management
+    parent_module: qe
+    module_type: product_feature
+    risk_level: high
+    description: One active QE dataset profile, immutable run-scoped bindings, PIT index universes, and structured UI/MCP creation contracts.
+    description_zh: QE 单一活动数据集配置、不可变任务绑定、PIT 指数股票池及结构化 UI/MCP 创建合同。
+    ui_routes: [/quantevolver/compose, /quantevolver/evolution]
+    api_routes: [/api/v1/quantevolver/dataset-profile, /api/v1/quantevolver/evolution/universe-comparison-tasks]
+    test_plans:
+      required_on_change: [l0, qe_read_backend, qe_sector_risk_overlay_backend, qe_mcp_backend]
   - module_id: qe.long_trend_evaluation
     display_name: QE long-trend evaluation
     parent_module: qe
