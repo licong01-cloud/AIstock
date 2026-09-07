@@ -927,6 +927,7 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -1031,6 +1032,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
     from backend.services.quantevolver import qe_eval_v2_qlib_reader as qlib_reader
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -1137,6 +1139,7 @@ def test_compute_reuses_worker_precomputed_metrics(monkeypatch, tmp_path):
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -1228,6 +1231,7 @@ def test_compute_records_explicit_metric_precompute_fallback(monkeypatch, tmp_pa
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [{"factor_name": "factor_a", "code_text": "result = 1"}]
 
     class _Eligibility:
