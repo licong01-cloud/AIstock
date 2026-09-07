@@ -135,6 +135,47 @@ class MarketContext:
     receipt: Mapping[str, Any]
 
 
+@dataclass
+class FitProgress:
+    planned: int
+    started: int = 0
+    completed: int = 0
+    failed: int = 0
+    active_fit: str | None = None
+
+    def execute(self, identity: str, operation: Any) -> Any:
+        self.started += 1
+        self.active_fit = identity
+        try:
+            result = operation()
+        except Exception:
+            self.failed += 1
+            raise
+        self.completed += 1
+        self.active_fit = None
+        return result
+
+    def receipt(self) -> dict[str, Any]:
+        return {
+            "planned": self.planned,
+            "started": self.started,
+            "completed": self.completed,
+            "failed": self.failed,
+            "active_fit": self.active_fit,
+        }
+
+
+def _fit_progress_error(error: BaseException, progress: FitProgress) -> RotationL1G2AError:
+    evidence = dict(getattr(error, "evidence", {}) or {})
+    evidence["fit_progress"] = progress.receipt()
+    return RotationL1G2AError(
+        str(getattr(error, "reason_code", REASON_FIT)),
+        str(error),
+        stage=str(getattr(error, "stage", "execution")),
+        evidence=evidence,
+    )
+
+
 def _normalise_panel(panel: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(panel.index, pd.MultiIndex) or tuple(panel.index.names) != ("trade_date", "sector_code"):
         raise _fail(REASON_INPUT, "G2-A panel index must be (trade_date, sector_code)", stage="input")
@@ -1004,10 +1045,11 @@ def require_formal_runtime() -> dict[str, Any]:
     }
 
 
-def run_ridge_battery(
+def _run_ridge_battery_impl(
     bundle: Mapping[str, Any],
     *,
     producer_commit: str,
+    progress: FitProgress,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
     if len(producer_commit) != 40 or any(character not in "0123456789abcdef" for character in producer_commit):
@@ -1032,8 +1074,11 @@ def run_ridge_battery(
                 | {day for day in calendar if validation_start <= day <= _validation_end}
             )
         )
-        market_contexts[name] = fit_market_context(
-            benchmark, calendar, train_dates=train_dates, apply_dates=apply_dates
+        market_contexts[name] = progress.execute(
+            f"battery:{name}:market_context",
+            lambda train_dates=train_dates, apply_dates=apply_dates: fit_market_context(
+                benchmark, calendar, train_dates=train_dates, apply_dates=apply_dates
+            ),
         )
     horizons: dict[str, Any] = {}
     for horizon in HORIZONS:
@@ -1048,7 +1093,10 @@ def run_ridge_battery(
             if not train_mask.any() or not validation_mask.any():
                 raise _fail(REASON_HORIZON, "Ridge complete-case fold is empty", stage="battery", fold=fold.name)
             estimator = Ridge(alpha=100.0, fit_intercept=True, solver="svd", tol=1e-4, max_iter=None, positive=False)
-            estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{horizon}d"])
+            progress.execute(
+                f"battery:{fold.name}:ridge_{horizon}d",
+                lambda: estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{horizon}d"]),
+            )
             scores = pd.Series(np.nan, index=validation.index, dtype=np.float64)
             scores.loc[validation_mask] = estimator.predict(validation.loc[validation_mask, FEATURES])
             predictions.append(scores)
@@ -1126,6 +1174,7 @@ def run_ridge_battery(
         "fit_count": 15,
         "ridge_fit_count": 10,
         "market_fit_count": 5,
+        "fit_progress": progress.receipt(),
         "market_context_receipts": [market_contexts[name].receipt for name, _start, _end in FOLDS],
         "horizons": horizons,
         "selection": {
@@ -1142,6 +1191,24 @@ def run_ridge_battery(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def run_ridge_battery(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    runtime_validator: Any = require_formal_runtime,
+) -> dict[str, Any]:
+    progress = FitProgress(planned=15)
+    try:
+        return _run_ridge_battery_impl(
+            bundle,
+            producer_commit=producer_commit,
+            progress=progress,
+            runtime_validator=runtime_validator,
+        )
+    except Exception as exc:
+        raise _fit_progress_error(exc, progress) from exc
+
+
 def validate_battery_report(report: Mapping[str, Any], *, expected_identity: Mapping[str, Any]) -> None:
     body = {key: value for key, value in report.items() if key != "receipt_sha256"}
     if (
@@ -1152,6 +1219,8 @@ def validate_battery_report(report: Mapping[str, Any], *, expected_identity: Map
         or report.get("fit_count") != 15
         or report.get("ridge_fit_count") != 10
         or report.get("market_fit_count") != 5
+        or report.get("fit_progress")
+        != {"planned": 15, "started": 15, "completed": 15, "failed": 0, "active_fit": None}
         or not isinstance(report.get("producer_commit"), str)
         or len(report["producer_commit"]) != 40
         or any(character not in "0123456789abcdef" for character in report["producer_commit"])
@@ -1231,7 +1300,13 @@ def _lightgbm_profile() -> dict[str, Any]:
     }
 
 
-def _leaf_date_coverage(estimator: Any, features: pd.DataFrame, dates: Sequence[date]) -> dict[str, Any]:
+def _leaf_date_coverage(
+    estimator: Any,
+    features: pd.DataFrame,
+    dates: Sequence[date],
+    *,
+    fit_identity: str,
+) -> dict[str, Any]:
     leaves = np.asarray(estimator.predict(features, pred_leaf=True))
     if leaves.ndim == 1:
         leaves = leaves.reshape(-1, 1)
@@ -1252,7 +1327,13 @@ def _leaf_date_coverage(estimator: Any, features: pd.DataFrame, dates: Sequence[
         "distribution_sha256": canonical_sha256(observations),
     }
     if violating:
-        raise _fail(REASON_LEAF, "GBDT leaf distinct-date coverage failed", stage="fit", summary=body)
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf distinct-date coverage failed",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            summary=body,
+        )
     return body
 
 
@@ -1274,11 +1355,12 @@ def _contribution_receipt(
     return receipt, contributions
 
 
-def run_gbdt_process(
+def _run_gbdt_process_impl(
     bundle: Mapping[str, Any],
     *,
     battery_report: Mapping[str, Any],
     process_index: int,
+    progress: FitProgress,
     estimator_factory: Any | None = None,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
@@ -1308,11 +1390,15 @@ def run_gbdt_process(
     for fold in fold_slices(calendar, horizon=selected_horizon):
         first_index = calendar.index(fold.validation_dates[0])
         market_train_dates = calendar[first_index - ROLLING_WINDOW_OPEN_DAYS : first_index]
-        context = fit_market_context(
-            benchmark,
-            calendar,
-            train_dates=market_train_dates,
-            apply_dates=tuple(sorted(set(fold.train_dates) | set(market_train_dates) | set(fold.validation_dates))),
+        market_apply_dates = tuple(sorted(set(fold.train_dates) | set(market_train_dates) | set(fold.validation_dates)))
+        context = progress.execute(
+            f"process-{process_index}:{fold.name}:market_context",
+            lambda market_train_dates=market_train_dates, market_apply_dates=market_apply_dates: fit_market_context(
+                benchmark,
+                calendar,
+                train_dates=market_train_dates,
+                apply_dates=market_apply_dates,
+            ),
         )
         market_receipts.append(context.receipt)
         for day in fold.validation_dates:
@@ -1326,14 +1412,28 @@ def run_gbdt_process(
             raise _fail(REASON_FIT, "GBDT eligible fold is empty", stage="fit", fold=fold.name)
         estimator = estimator_factory(**profile)
         try:
-            estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{selected_horizon}d"])
+            progress.execute(
+                f"process-{process_index}:{fold.name}:gbdt",
+                lambda: estimator.fit(
+                    train.loc[train_mask, FEATURES],
+                    train.loc[train_mask, f"target_{selected_horizon}d"],
+                ),
+            )
+        except Exception as exc:
+            raise _fail(REASON_FIT, "GBDT fit failed", stage="fit", fold=fold.name) from exc
+        try:
             raw_scores = np.asarray(estimator.predict(validation.loc[validation_mask, FEATURES]), dtype=np.float64)
         except Exception as exc:
-            raise _fail(REASON_FIT, "GBDT fit or prediction failed", stage="fit", fold=fold.name) from exc
+            raise _fail(REASON_SCORE, "GBDT prediction failed", stage="prediction", fold=fold.name) from exc
         if raw_scores.shape != (int(validation_mask.sum()),) or not np.isfinite(raw_scores).all():
             raise _fail(REASON_SCORE, "GBDT score is non-finite or mis-shaped", stage="prediction", fold=fold.name)
         train_dates = train.loc[train_mask].index.get_level_values("trade_date")
-        leaf = _leaf_date_coverage(estimator, train.loc[train_mask, FEATURES], train_dates)
+        leaf = _leaf_date_coverage(
+            estimator,
+            train.loc[train_mask, FEATURES],
+            train_dates,
+            fit_identity=f"process-{process_index}:{fold.name}:gbdt",
+        )
         contribution, contribution_values = _contribution_receipt(
             estimator, validation.loc[validation_mask, FEATURES], raw_scores
         )
@@ -1398,11 +1498,15 @@ def run_gbdt_process(
     full_train_dates = calendar[full_train_end - ROLLING_WINDOW_OPEN_DAYS : full_train_end]
     if len(full_market_train) != ROLLING_WINDOW_OPEN_DAYS or len(full_train_dates) != ROLLING_WINDOW_OPEN_DAYS:
         raise _fail(REASON_FIT, "GBDT final rolling train is incomplete", stage="final_fit")
-    final_context = fit_market_context(
-        benchmark,
-        calendar,
-        train_dates=full_market_train,
-        apply_dates=tuple(sorted(set(full_train_dates) | set(full_market_train))),
+    final_apply_dates = tuple(sorted(set(full_train_dates) | set(full_market_train)))
+    final_context = progress.execute(
+        f"process-{process_index}:full-development:market_context",
+        lambda: fit_market_context(
+            benchmark,
+            calendar,
+            train_dates=full_market_train,
+            apply_dates=final_apply_dates,
+        ),
     )
     market_receipts.append(final_context.receipt)
     final_train = _with_market_signs(ranked.loc[(list(full_train_dates), slice(None)), :], final_context.signs)
@@ -1411,9 +1515,12 @@ def run_gbdt_process(
         raise _fail(REASON_FIT, "GBDT final eligible train is empty", stage="final_fit")
     final_estimator = estimator_factory(**profile)
     try:
-        final_estimator.fit(
-            final_train.loc[final_mask, FEATURES],
-            final_train.loc[final_mask, f"target_{selected_horizon}d"],
+        progress.execute(
+            f"process-{process_index}:full-development:gbdt",
+            lambda: final_estimator.fit(
+                final_train.loc[final_mask, FEATURES],
+                final_train.loc[final_mask, f"target_{selected_horizon}d"],
+            ),
         )
     except Exception as exc:
         raise _fail(REASON_FIT, "GBDT final fit failed", stage="final_fit") from exc
@@ -1421,6 +1528,7 @@ def run_gbdt_process(
         final_estimator,
         final_train.loc[final_mask, FEATURES],
         final_train.loc[final_mask].index.get_level_values("trade_date"),
+        fit_identity=f"process-{process_index}:full-development:gbdt",
     )
     final_model_text = final_estimator.booster_.model_to_string()
     if not isinstance(final_model_text, str) or not final_model_text:
@@ -1501,6 +1609,7 @@ def run_gbdt_process(
         "gbdt_fit_count": 6,
         "market_fit_count": 6,
         "fit_count": 12,
+        "fit_progress": progress.receipt(),
         "tail_accessed": False,
         "database_write_performed": False,
         "runtime_action_performed": False,
@@ -1513,6 +1622,28 @@ def run_gbdt_process(
         "final_model_text": final_model_text,
     }
     return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def run_gbdt_process(
+    bundle: Mapping[str, Any],
+    *,
+    battery_report: Mapping[str, Any],
+    process_index: int,
+    estimator_factory: Any | None = None,
+    runtime_validator: Any = require_formal_runtime,
+) -> dict[str, Any]:
+    progress = FitProgress(planned=12)
+    try:
+        return _run_gbdt_process_impl(
+            bundle,
+            battery_report=battery_report,
+            process_index=process_index,
+            progress=progress,
+            estimator_factory=estimator_factory,
+            runtime_validator=runtime_validator,
+        )
+    except Exception as exc:
+        raise _fit_progress_error(exc, progress) from exc
 
 
 def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
@@ -1539,6 +1670,8 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
         or payload.get("fit_count") != 12
         or payload.get("gbdt_fit_count") != 6
         or payload.get("market_fit_count") != 6
+        or payload.get("fit_progress")
+        != {"planned": 12, "started": 12, "completed": 12, "failed": 0, "active_fit": None}
         or payload.get("tail_accessed") is not False
         or payload.get("database_write_performed") is not False
         or payload.get("runtime_action_performed") is not False
