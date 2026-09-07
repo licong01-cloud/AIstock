@@ -28,12 +28,18 @@
   ],
   "expected": "QE preflight rejects missing, relative, or DB/API-mismatched workspace roots before registration is dispatched.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/node_execution.py",
+      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1402-qe-node-preflight-accepts-mismatched-workspace-root.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/node_execution.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py"
+      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1402-qe-node-preflight-accepts-mismatched-workspace-root.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/node_execution.py",
@@ -119,15 +125,20 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
     "fresh_process_evidence": [
-      "fresh Python process: backend/tests/unified_engine/test_qe_node_execution.py passed 13 tests; invalid, relative, non-canonical and DB/API-mismatched workspace roots fail before dispatch"
+      "fresh Python process: backend/tests/unified_engine/test_qe_node_execution.py passed 13 tests; invalid, relative, non-canonical and DB/API-mismatched workspace roots fail before dispatch",
+      "fresh Python process at c3ec23f2b: node preflight regression 13 passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
