@@ -116,6 +116,14 @@ def current_cards(service: PositionTimingService = Depends(get_position_timing_s
         _raise_http(exc)
 
 
+@router.get("/model-advice/current")
+def current_model_advice(service: PositionTimingService = Depends(get_position_timing_service)) -> dict[str, Any]:
+    try:
+        return service.current_model_advice()
+    except (PositionTimingServiceError, PositionTimingArtifactError, OSError) as exc:
+        _raise_http(exc)
+
+
 @router.get("/evidence")
 def evidence(service: PositionTimingService = Depends(get_position_timing_service)) -> dict[str, Any]:
     try:
