@@ -117,8 +117,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
+    "fresh_process_evidence": [
+      "fresh Python process: backend/tests/unified_engine/test_qe_node_execution.py passed 13 tests; invalid, relative, non-canonical and DB/API-mismatched workspace roots fail before dispatch"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
