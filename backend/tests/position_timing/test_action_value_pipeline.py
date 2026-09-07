@@ -128,6 +128,62 @@ def test_joint_supported_policy_is_selected_only_once(tmp_path: Path) -> None:
     assert selected["unique_variable"] == "BUY_AND_HOLD"
 
 
+def test_v3_delivery_uses_new_experiment_identity_without_drifting_v2(tmp_path: Path) -> None:
+    root = tmp_path / "timing"
+    historical = tmp_path / "global-n0.jsonl"
+    historical.write_text('{"historical":true}\n', encoding="utf-8")
+    global_before = file_reference(historical)
+
+    legacy = _receipt()
+    legacy["schema_version"] = "position_timing_action_value_receipt_v2"
+    legacy.pop("receipt_sha256")
+    legacy["receipt_sha256"] = canonical_sha256(legacy)
+    legacy_request = _request(root, historical)
+    legacy_bundle = root / "research" / "action_value_v2" / "bundles" / legacy_request["request_sha256"]
+    PositionTimingArtifactStore._publish_immutable(
+        legacy_bundle / "receipt.json", canonical_json_bytes(legacy) + b"\n"
+    )
+    _deliver_completed_bundle(
+        request=legacy_request,
+        bundle=legacy_bundle,
+        receipt=legacy,
+        global_before=global_before,
+    )
+
+    current = _receipt()
+    current["request_sha256"] = "4" * 64
+    current["source_sha256"] = "5" * 64
+    current.pop("receipt_sha256")
+    current["receipt_sha256"] = canonical_sha256(current)
+    current_request = _request(root, historical)
+    current_request["request_sha256"] = current["request_sha256"]
+    current_bundle = root / "research" / "action_value_v2" / "bundles" / current_request["request_sha256"]
+    PositionTimingArtifactStore._publish_immutable(
+        current_bundle / "receipt.json", canonical_json_bytes(current) + b"\n"
+    )
+
+    result = _deliver_completed_bundle(
+        request=current_request,
+        bundle=current_bundle,
+        receipt=current,
+        global_before=global_before,
+    )
+
+    assert result["registry"]["appended_count"] == 2
+    records = [
+        json.loads(line)
+        for line in (root / "research_registry" / "timing_trial_registry_v1.jsonl")
+        .read_bytes()
+        .splitlines()
+    ]
+    assert len(records) == 4
+    assert {record["research_stage"] for record in records} == {
+        "POSITION_TIMING_ACTION_VALUE_V2",
+        "POSITION_TIMING_ACTION_VALUE_V3",
+    }
+    assert file_reference(historical) == global_before
+
+
 def test_bundle_manifest_detects_corruption_and_unsupported_cannot_publish(tmp_path: Path) -> None:
     receipt = _receipt()
     request = {"request_sha256": receipt["request_sha256"]}

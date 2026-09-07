@@ -8,6 +8,7 @@ import pandas as pd
 
 from backend.services.position_timing.action_value_execution_audit import (
     AUDIT_FIELDS,
+    _evaluate_plan,
     audit_minute_execution,
 )
 from backend.services.position_timing.contracts import canonical_sha256
@@ -176,3 +177,35 @@ def test_minute_audit_reports_empty_eligible_population_without_shape_error(tmp_
     assert result["eligible_population_count"] == 0
     assert result["population_count"] == 0
     assert result["execution_realism_status"] == "EXECUTION_REALISM_UNVERIFIED"
+
+
+def test_minute_audit_drops_only_all_field_empty_calendar_padding() -> None:
+    row = {
+        "symbol": "000001.SZ",
+        "planned_delta_qty": 100,
+        "plan_reference_raw": 10,
+        "plan_risk_exit": False,
+        "pre_quantity": 0,
+        "pre_sellable_qty": 0,
+        "fill_status": "FILLED",
+        "fill_price_raw": 10,
+    }
+    values = {
+        "open": 10,
+        "high": 10.1,
+        "low": 9.9,
+        "close": 10,
+        "factor": 1,
+        "up_limit_price": 11,
+        "down_limit_price": 9,
+    }
+    arrays = {
+        name: np.asarray([np.nan, value], dtype=float)
+        for name, value in values.items()
+    }
+
+    assert _evaluate_plan(row, arrays)["status"] == "PAIRED"
+
+    partial = dict(arrays)
+    partial["open"] = np.asarray([10, 10], dtype=float)
+    assert _evaluate_plan(row, partial)["status"] == "DATA_ERROR_FACTOR_INVALID"

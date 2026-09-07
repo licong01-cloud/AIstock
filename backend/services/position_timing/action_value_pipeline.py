@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.research_control import AdvisoryResearchTrialRegistryV1
 from backend.services.advisory_model_first.research_control_contracts import (
     ConsumedWindowV1,
@@ -291,7 +292,13 @@ def _deliver_completed_bundle(
 
     historical_registry = Path(request["historical_registry"]["path"])
     timing_root = Path(request["timing_root"]).resolve()
-    registry = _deliver_registry(request=request, bundle=bundle, receipt=receipt)
+    try:
+        registry = _deliver_registry(request=request, bundle=bundle, receipt=receipt)
+    except AdvisoryModelFirstError as exc:
+        raise ActionValueError(
+            "TIMING_RESEARCH_REGISTRY_DELIVERY_FAILED",
+            reason_code=exc.reason_code,
+        ) from exc
     global_after_registry = file_reference(historical_registry)
     current = {
         "schema_version": "position_timing_action_value_current_research_v2",
@@ -453,6 +460,7 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
         size_bytes=ref["size_bytes"],
     )
     joint_supported = receipt["effect_evidence"] == "SUPPORTED"
+    research_version = "V3" if receipt.get("schema_version") == RECEIPT_SCHEMA else "V2"
     records = []
     for baseline, comparison in receipt["continuous_policy"]["comparisons"].items():
         effect = comparison["effect_evidence"]
@@ -464,11 +472,11 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
             result_class, decision_use = ResearchResultClass.EXPLORATORY, DecisionUse.NAVIGATION_ONLY
         records.append(
             build_trial_record(
-                experiment_id=f"position_timing_action_value_v2_{baseline.lower()}",
+                experiment_id=f"position_timing_action_value_{research_version.lower()}_{baseline.lower()}",
                 attempt_id=request["request_sha256"][:24],
-                research_stage="POSITION_TIMING_ACTION_VALUE_V2",
+                research_stage=f"POSITION_TIMING_ACTION_VALUE_{research_version}",
                 study_type=ResearchStudyType.LEARNABILITY_AUDIT,
-                hypothesis_family_id="POSITION_TIMING_ACTION_VALUE_V2_TWO_BASELINES",
+                hypothesis_family_id=f"POSITION_TIMING_ACTION_VALUE_{research_version}_TWO_BASELINES",
                 parent_lineage=("POSITION_TIMING_ADVICE_V1", request["request_sha256"]),
                 unique_variable=baseline,
                 objective_contract=ObjectiveContract.RISK_MANAGED_ADVISORY,
@@ -484,7 +492,7 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
                 selected_trial_count=int(joint_supported and baseline == "BUY_AND_HOLD"),
                 consumed_windows=(
                     ConsumedWindowV1(
-                        window_id="POSITION_TIMING_ACTION_VALUE_V2_FORWARD",
+                        window_id=f"POSITION_TIMING_ACTION_VALUE_{research_version}_FORWARD",
                         dataset_identity=receipt["source_sha256"],
                         start_date=date.fromisoformat(request["population_spec"]["start"]),
                         end_date=date.fromisoformat(request["population_spec"]["end"]),

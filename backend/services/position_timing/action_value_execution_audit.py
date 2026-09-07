@@ -203,15 +203,27 @@ def audit_minute_execution(
 
 
 def _evaluate_plan(row: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> dict[str, Any]:
-    factor = np.asarray(arrays["factor"], dtype=float)
+    raw = {name: np.asarray(arrays[name], dtype=float) for name in AUDIT_FIELDS}
+    lengths = {len(values) for values in raw.values()}
+    if len(lengths) != 1 or not lengths or next(iter(lengths)) == 0:
+        return {"status": "DATA_ERROR_MINUTE_BAR_INVALID", "reason_code": "ARRAY_SHAPE_INVALID"}
+    # The exported global minute calendar may contain a structural timestamp
+    # (for example 13:00) at which every field is absent for this instrument.
+    # Drop only all-field-empty padding; partial required-field absence remains
+    # a source error rather than being silently forward-filled.
+    observed = np.logical_or.reduce([np.isfinite(values) for values in raw.values()])
+    if not observed.any():
+        return {"status": "DATA_ERROR_MINUTE_DAY_EMPTY"}
+    raw = {name: values[observed] for name, values in raw.items()}
+    factor = raw["factor"]
     if not np.isfinite(factor).all() or (factor <= 0).any():
         return {"status": "DATA_ERROR_FACTOR_INVALID"}
     converted = {
-        field: np.asarray(arrays[field], dtype=float) / factor
+        field: raw[field] / factor
         for field in ("open", "high", "low", "close")
     }
-    converted["up_limit"] = np.asarray(arrays["up_limit_price"], dtype=float)
-    converted["down_limit"] = np.asarray(arrays["down_limit_price"], dtype=float)
+    converted["up_limit"] = raw["up_limit_price"]
+    converted["down_limit"] = raw["down_limit_price"]
     if any(not np.isfinite(values).all() for values in converted.values()):
         return {"status": "DATA_ERROR_REQUIRED_FIELD_NONFINITE"}
     plan = ActionPlan(
