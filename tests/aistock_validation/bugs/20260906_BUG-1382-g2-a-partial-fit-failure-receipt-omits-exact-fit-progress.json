@@ -29,6 +29,12 @@
   ],
   "expected": "Every battery/model/parent success or failure receipt records exact planned, started, completed and failed fit counts plus the active fit or failure stage; parent readback rejects tampered child receipts. The 20-day leaf threshold and all model contracts remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+      "scripts/hmm_risk/run_rotation_l1_g2a.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_gbdt.py",
@@ -36,7 +42,7 @@
       "scripts/hmm_risk/run_rotation_l1_g2a.py",
       "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -83,10 +89,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
