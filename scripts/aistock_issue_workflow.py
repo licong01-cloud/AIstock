@@ -88,7 +88,6 @@ CLEANUP_BATCH_TARGET_KEYS = {
 NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 MERGE_QUALITY_CHECK_CONTEXTS = (
     "CI verdict",
-    "CodeQL verdict",
 )
 ARTIFACT_PATH_PATTERNS = (
     ".codex_tmp",
@@ -17698,8 +17697,8 @@ def _merge_close_sync_pr_if_ready(
         }
     try:
         # Close-sync CI normally queues behind the source merge's default-branch
-        # CodeQL run on the single Windows runner.  Keep this wait bounded, but
-        # long enough to avoid a guaranteed second manual finalizer invocation.
+        # Keep the stable CI verdict wait bounded, but long enough to avoid a
+        # guaranteed second manual finalizer invocation for an active CI job.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,

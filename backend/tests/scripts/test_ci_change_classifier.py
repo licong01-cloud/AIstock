@@ -1756,31 +1756,22 @@ def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> N
     assert run.index("--prepare-pr-merge-base-only") < run.index('git diff --name-only "${BASE_COMMIT}...HEAD"')
 
 
-def test_codeql_selects_only_changed_languages() -> None:
+def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
-    assert list(jobs) == ["codeql-verdict"]
-    verdict = jobs["codeql-verdict"]
+    assert list(jobs) == ["codeql-nightly"]
+    verdict = jobs["codeql-nightly"]
     verdict_steps = verdict["steps"]
     prepare_steps = [
         step for step in verdict_steps if step.get("name") == "Prepare exact local workspace (no remote actions)"
     ]
 
-    assert verdict["name"] == "CodeQL verdict"
+    assert verdict["name"] == "CodeQL nightly full scan"
     assert verdict["runs-on"] == ["self-hosted", "Windows", "aistock-ci-security"]
     assert "needs" not in verdict
     assert "strategy" not in verdict
-    detect_step = next(step for step in verdict_steps if step.get("name") == "Detect CodeQL fast lane")
-    assert detect_step["id"] == "fast_lane"
-    assert "scripts/ci_change_classifier.py" in detect_step["run"]
-    assert "close_sync_metadata_only" in detect_step["run"]
-    assert "codeql_pr_languages" in detect_step["run"]
-    assert "codeql_languages" in detect_step["run"]
-    assert detect_step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
-    assert "pull_request_test_only" in detect_step["run"]
-    assert "PYTHON_CHANGED" not in detect_step["run"]
     assert len(prepare_steps) == 1
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
     assert all("--depth=1" not in step["run"] for step in prepare_steps)
@@ -1788,14 +1779,15 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert all("refs/aistock-ci/codeql-" in step["run"] for step in prepare_steps)
     assert all("update-ref -d $cacheRef" in step["run"] for step in prepare_steps)
     assert all('$env:GIT_CONFIG_KEY_0 = "core.longpaths"' in step["run"] for step in prepare_steps)
-    assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
+    assert all("refs/heads/$env:REF_NAME" in step["run"] for step in prepare_steps)
+    assert all("refs/pull/" not in step["run"] for step in prepare_steps)
     assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
     assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
     assert not any("uses" in step for step in verdict_steps)
 
     direct_analysis = next(step for step in verdict_steps if step.get("name") == "Run CodeQL CLI analysis")
-    assert direct_analysis["if"] == "steps.fast_lane.outputs.has_languages == '1'"
-    assert direct_analysis["env"]["CODEQL_LANGUAGES"] == "${{ steps.fast_lane.outputs.languages }}"
+    assert "if" not in direct_analysis
+    assert direct_analysis["env"]["CODEQL_LANGUAGES"] == '["python","javascript-typescript"]'
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
     assert "[string[]]$languages = ($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
@@ -1812,7 +1804,6 @@ def test_codeql_selects_only_changed_languages() -> None:
 
     final_verdict = next(step for step in verdict_steps if step.get("name") == "Enforce CodeQL result")
     assert final_verdict["if"] == "always()"
-    assert final_verdict["env"]["CLASSIFIER_RESULT"] == "${{ steps.fast_lane.outcome }}"
     assert final_verdict["env"]["ANALYZE_RESULT"] == "${{ steps.codeql_analysis.outcome }}"
     assert "CodeQL analysis failed" in final_verdict["run"]
 
@@ -1857,7 +1848,7 @@ def test_codeql_pr_skips_frontend_test_only_language(tmp_path: Path) -> None:
     assert payload["codeql_pr_test_only"] is True
 
 
-def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
+def test_pr_quality_is_pr_only_and_codeql_is_nightly_only() -> None:
     import yaml
 
     ci_triggers = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))[True]
@@ -1869,8 +1860,8 @@ def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
         assert set(triggers) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
-    assert "pull_request" in codeql
-    assert codeql["push"]["branches"] == ["main"]
+    assert set(codeql) == {"schedule", "workflow_dispatch"}
+    assert codeql["schedule"] == [{"cron": "27 20 * * *"}]
 
 
 def test_pr_quality_and_semgrep_enforcement_share_ci_verdict_runner() -> None:
@@ -1920,7 +1911,6 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
     workflows = {
         ".github/workflows/test.yml": ("ci-verdict", "Classify CI lane"),
         ".github/workflows/pr-quality.yml": ("pr-quality", "Detect PR quality lane"),
-        ".github/workflows/codeql.yml": ("codeql-verdict", "Detect CodeQL fast lane"),
         ".github/workflows/semgrep.yml": ("semgrep", "Detect Semgrep fast lane"),
     }
     for path, (job_name, detect_name) in workflows.items():
@@ -1974,9 +1964,10 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
 
 def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> None:
     codeql_text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
-    assert "pull_request:" in codeql_text
-    pull_request_block = codeql_text.split("  pull_request:\n", 1)[1].split("\n  ", 1)[0]
-    assert "tests/aistock_validation/bugs/**" not in pull_request_block
+    assert "pull_request:" not in codeql_text
+    assert "\n  push:\n" not in codeql_text
+    assert "schedule:" in codeql_text
+    assert "workflow_dispatch:" in codeql_text
 
     for relative_path in (".github/workflows/semgrep.yml", ".github/workflows/pr-quality.yml"):
         text = Path(relative_path).read_text(encoding="utf-8")

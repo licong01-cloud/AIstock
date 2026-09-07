@@ -1,9 +1,17 @@
 {
   "actual": "AIstock is a single-user local platform, but every source PR is forced to wait for CodeQL verdict on the sole aistock-ci-security runner. A runner self-update or availability fault blocks all unrelated development for 30-60+ minutes even though GitHub branch protection requires only CI verdict. Move heavyweight CodeQL to one daily nightly full scan of latest main plus manual dispatch, remove pull_request and push triggers, stop the merge workflow from requiring CodeQL verdict, keep lightweight security checks inside CI verdict, update the sole development standard and machine policy consistently, and preserve fail-closed Nightly findings without adding high-risk PR classification. Do not modify backend, database, business modules, runtime services, dependencies, or other windows.",
   "allowed_write_scope": [
+    ".github/workflows/codeql.yml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_workflow_policy_scan.py",
     "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex_app",
   "bug_id": "BUG-1384",
   "closed_at": null,
   "closure_requirements": [
@@ -19,14 +27,41 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260907-7b39fab28d76",
       "timestamp": "2026-09-07T04:39:21.554072Z"
+    },
+    {
+      "action": "implementation_completed",
+      "actor": "codex_app",
+      "note": "Removed CodeQL from PR and push triggers and from merge-quality contexts; added one daily latest-main Python plus JavaScript/TypeScript full scan and synchronized policy contracts.",
+      "timestamp": "2026-09-07T04:56:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Pull requests require only CI verdict, while one daily scheduled or explicitly dispatched CodeQL job performs a full latest-main Python and JavaScript/TypeScript scan without PR or push triggers, high-risk PR classification, dependency installation, or business/runtime side effects.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json",
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_workflow_policy_scan.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json",
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_workflow_policy_scan.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -40,7 +75,7 @@
     "scope_files": []
   },
   "first_seen_at": "2026-09-07T04:39:21.554088Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-si-20260907",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 4367,
@@ -63,10 +98,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -74,7 +111,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "validation"
   ],
