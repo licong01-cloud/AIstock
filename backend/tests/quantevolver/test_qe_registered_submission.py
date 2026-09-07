@@ -8,7 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
+from backend.services.quantevolver.config_composer import (
+    ConfigComposer,
+    RDAGENT_DEFAULT_DATA_SPLIT,
+)
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
@@ -218,6 +223,72 @@ def test_registration_rejects_unknown_purpose() -> None:
         build_qe_run_registration(run_kind="single", purpose="smoke")
     with pytest.raises(QERunRegistryError, match="qe_run_source_type_invalid"):
         build_qe_run_registration(run_kind="single", source_type="unknown-runner")
+
+
+def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(composer_module, "load_active_qe_profile", lambda: None)
+    composer = ConfigComposer()
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": "DemoFactor",
+                "source": "custom",
+                "code_text": (
+                    "def calculate_DemoFactor(instruments, start_date, end_date):\n"
+                    "    return None\n"
+                ),
+            }
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {
+            "workspace_base": "/tmp/qe_workspace",
+            "qlib_data_path": "/tmp/qlib_day",
+            "qlib_minute_path": "/tmp/qlib_minute",
+            "factor_data_dir": "/tmp/factor_data",
+        },
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read")
+
+    custom_params = attach_qe_run_registration(
+        {"execution_node_id": "wsl2-5080"},
+        run_kind="custom_evolution_loop",
+        source_type="agent",
+        purpose="research",
+        task_id="qe-registration-filter",
+        loop_index=1,
+        node_id="wsl2-5080",
+        factor_names=["DemoFactor"],
+    )
+    result = composer.compose_experiment_in_memory(
+        factor_names=["DemoFactor"],
+        model_id=None,
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+        custom_params=custom_params,
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    assert QE_RUN_REGISTRATION_PARAM not in result["experiment_files"]["conf.yaml"]
 
 
 def test_single_reservation_rejects_missing_or_non_created_identity() -> None:
