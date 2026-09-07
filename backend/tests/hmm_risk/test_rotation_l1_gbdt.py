@@ -498,6 +498,36 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
     assert acceptance["tail_accessed"] is False
 
 
+def test_close_processes_accepts_holiday_aligned_validation_window_start() -> None:
+    bundle = _bundle()
+    holiday_dates = set(pd.bdate_range("2025-10-01", "2025-10-08").date)
+    panel = bundle["panel"]
+    bundle["panel"] = panel.loc[
+        ~panel.index.get_level_values("trade_date").isin(holiday_dates)
+    ].copy()
+    bundle["benchmark_close"] = {
+        day: value for day, value in bundle["benchmark_close"].items() if day not in holiday_dates
+    }
+    children = [
+        subject.run_gbdt_process(
+            bundle,
+            battery_report=_battery_report(),
+            process_index=index,
+            estimator_factory=_FakeEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+
+    fold = children[0]["reproducibility_payload"]["folds"][4]
+    assert fold["purge_dates"][-1] == "2025-09-30"
+    assert fold["validation_start"] == "2025-10-09"
+    acceptance = subject.close_processes(*children)
+
+    assert acceptance["status"] == "development_complete"
+    assert acceptance["tail_accessed"] is False
+
+
 def test_close_processes_rejects_rehashed_stale_leaf_contract() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
@@ -539,6 +569,7 @@ def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
     ]
     for child in children:
         fold = child["reproducibility_payload"]["folds"][0]
+        fold["purge_dates"] = [*fold["purge_dates"][1:], "2023-09-04"]
         fold["validation_start"] = "2023-09-05"
         fold_body = {
             key: fold[key]
@@ -563,6 +594,45 @@ def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
 
     with pytest.raises(subject.RotationL1G2AError) as caught:
         subject.close_processes(*children)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert caught.value.stage == "closure"
+
+
+def test_close_processes_rejects_empty_purge_dates_with_typed_failure() -> None:
+    child = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    fold = child["reproducibility_payload"]["folds"][0]
+    fold["purge_dates"] = []
+    fold["receipt_sha256"] = subject.canonical_sha256(
+        {
+            key: fold[key]
+            for key in (
+                "fold",
+                "train_start",
+                "train_end",
+                "train_count",
+                "train_date_sha256",
+                "purge_dates",
+                "validation_start",
+                "validation_end",
+                "validation_count",
+                "validation_date_sha256",
+            )
+        }
+    )
+    child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+    child["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in child.items() if key != "report_sha256"}
+    )
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.close_processes(child, {})
 
     assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
     assert caught.value.stage == "closure"
