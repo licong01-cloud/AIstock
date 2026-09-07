@@ -44,7 +44,7 @@ from .action_value_research import (
     replay_continuous_cohorts,
     walk_forward_action_values,
 )
-from .artifact_store import PositionTimingArtifactStore
+from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
@@ -308,7 +308,7 @@ def _deliver_completed_bundle(
             reason_code=exc.reason_code,
         ) from exc
     global_after_registry = file_reference(historical_registry)
-    current = {
+    current_candidate = {
         "schema_version": "position_timing_action_value_current_research_v2",
         "model_sha256": receipt["final_model_sha256"],
         "receipt_sha256": receipt["receipt_sha256"],
@@ -317,15 +317,16 @@ def _deliver_completed_bundle(
         "advice_tier": "EXPERIMENTAL_MODEL_ADVICE",
         "updated_at": receipt["completed_at"],
     }
-    current["state_sha256"] = canonical_sha256(current)
-    PositionTimingArtifactStore._atomic_replace(
-        timing_root / "research" / "action_value_v2" / "current.json",
-        canonical_json_bytes(current),
+    current_candidate["state_sha256"] = canonical_sha256(current_candidate)
+    current, current_delivery_status = _deliver_current_research(
+        timing_root=timing_root,
+        candidate=current_candidate,
     )
     global_after = file_reference(historical_registry)
     return {
         "registry": registry,
         "current_research": current,
+        "current_research_delivery_status": current_delivery_status,
         "global_registry_observation": {
             "before": global_before,
             "after_own_registry_delivery": global_after_registry,
@@ -334,6 +335,36 @@ def _deliver_completed_bundle(
             "concurrent_change_observed": global_after != global_before,
         },
     }
+
+
+def _deliver_current_research(
+    *, timing_root: Path, candidate: Mapping[str, Any]
+) -> tuple[dict[str, Any], str]:
+    """Move the mutable research pointer forward without an old-retry rollback."""
+
+    path = timing_root / "research" / "action_value_v2" / "current.json"
+    lock = timing_root / "locks" / "action-value-current-research.lock"
+    with _exclusive_file_lock(lock):
+        existing = load_current_research(timing_root)
+        if existing is not None:
+            existing_rank = (
+                _aware_timestamp(existing.get("updated_at")),
+                str(existing.get("receipt_sha256") or ""),
+            )
+            candidate_rank = (
+                _aware_timestamp(candidate.get("updated_at")),
+                str(candidate.get("receipt_sha256") or ""),
+            )
+            if candidate_rank <= existing_rank:
+                status = (
+                    "ALREADY_CURRENT"
+                    if candidate.get("receipt_sha256") == existing.get("receipt_sha256")
+                    else "RETAINED_NEWER_CURRENT"
+                )
+                return existing, status
+        materialized = dict(candidate)
+        PositionTimingArtifactStore._atomic_replace(path, canonical_json_bytes(materialized))
+        return materialized, "CURRENT_ADVANCED"
 
 
 def publish_serving(bundle: Path, *, timing_root: Path) -> dict[str, Any]:
@@ -386,7 +417,10 @@ def load_current_research(timing_root: Path) -> dict[str, Any] | None:
     except (OSError, ValueError) as exc:
         raise ActionValueError("ACTION_VALUE_CURRENT_STATE_INVALID") from exc
     identity = {key: value for key, value in payload.items() if key != "state_sha256"}
-    if payload.get("state_sha256") != canonical_sha256(identity):
+    if (
+        payload.get("schema_version") != "position_timing_action_value_current_research_v2"
+        or payload.get("state_sha256") != canonical_sha256(identity)
+    ):
         raise ActionValueError("ACTION_VALUE_CURRENT_STATE_IDENTITY_MISMATCH")
     return payload
 
@@ -518,6 +552,16 @@ def _research_version(receipt: Mapping[str, Any]) -> str:
         return RESEARCH_VERSION_BY_RECEIPT_SCHEMA[str(receipt["schema_version"])]
     except (KeyError, TypeError) as exc:
         raise ActionValueError("ACTION_VALUE_RECEIPT_SCHEMA_UNSUPPORTED") from exc
+
+
+def _aware_timestamp(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ActionValueError("ACTION_VALUE_CURRENT_STATE_TIME_INVALID") from exc
+    if parsed.tzinfo is None:
+        raise ActionValueError("ACTION_VALUE_CURRENT_STATE_TIME_INVALID")
+    return parsed
 
 
 def _parse_date(value: str) -> date:

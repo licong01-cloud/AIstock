@@ -90,6 +90,8 @@ def test_delivery_retry_repairs_own_pointer_without_mutating_global_registry(tmp
     )
     assert first["registry"]["appended_count"] == 2
     assert second["registry"]["duplicate_noop_count"] == 2
+    assert first["current_research_delivery_status"] == "CURRENT_ADVANCED"
+    assert second["current_research_delivery_status"] == "ALREADY_CURRENT"
     assert registry_path.read_bytes() == registry_bytes
     assert (root / "research" / "action_value_v2" / "current.json").read_bytes() == current_bytes
     assert file_reference(historical) == global_before
@@ -153,6 +155,7 @@ def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp
     current = _receipt()
     current["request_sha256"] = "4" * 64
     current["source_sha256"] = "5" * 64
+    current["completed_at"] = "2026-09-08T20:30:00+08:00"
     current.pop("receipt_sha256")
     current["receipt_sha256"] = canonical_sha256(current)
     current_request = _request(root, historical)
@@ -188,6 +191,12 @@ def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp
         global_before=global_before,
     )
     assert second_attempt["registry"]["appended_count"] == 2
+    assert result["current_research_delivery_status"] == "CURRENT_ADVANCED"
+    assert second_attempt["current_research_delivery_status"] == "RETAINED_NEWER_CURRENT"
+    persisted_current = json.loads(
+        (root / "research" / "action_value_v2" / "current.json").read_text(encoding="utf-8")
+    )
+    assert persisted_current["receipt_sha256"] == current["receipt_sha256"]
     records = [
         json.loads(line)
         for line in (root / "research_registry" / "timing_trial_registry_v1.jsonl")
