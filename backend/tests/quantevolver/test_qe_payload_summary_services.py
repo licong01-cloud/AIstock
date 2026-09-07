@@ -10,7 +10,10 @@ from backend.services.quantevolver.qe_evolution_service import AutoEvolutionSche
 
 class _Cursor:
     def __init__(self, script, *, as_dict: bool = False):
-        self._script = list(script)
+        # The production query may release one pool lease before acquiring the
+        # next.  Keep one shared script across fake cursors so the test models
+        # connection boundaries instead of accidentally replaying query 1.
+        self._script = script
         self._as_dict = as_dict
         self.description = []
         self._rows = []
@@ -127,6 +130,88 @@ def test_experiment_history_summary_drops_legacy_jsonb_columns(monkeypatch):
     assert "result_metrics" not in item
     assert "custom_params" not in item
     assert "workspace_path" not in item
+
+
+def test_experiment_history_archive_filter_preserves_server_pagination(monkeypatch):
+    import backend.services.qe_archive.backfill_service as archive_module
+    import backend.services.quantevolver.config_composer as module
+
+    summary_cols = [
+        "experiment_id", "experiment_name", "status", "factor_names", "model_id", "strategy_id",
+        "qe_task_id", "qe_loop_id", "loop_index", "parent_experiment_id", "is_evolution_loop",
+        "ic", "icir", "rank_ic", "rank_icir", "annualized_return", "max_drawdown",
+        "information_ratio", "annualized_return_no_cost", "max_drawdown_no_cost", "information_ratio_no_cost",
+        "created_at", "updated_at", "custom_params", "alpha_mode", "parent_multi_alpha_id",
+        "_evolution_base_experiment_id", "_evolution_task_type",
+    ]
+    summary_row = {
+        "experiment_id": "qe_3",
+        "experiment_name": "Recommended 3",
+        "status": "completed",
+        "factor_names": ["factor"],
+        "model_id": "LSTM",
+        "strategy_id": "TWAP",
+        "is_evolution_loop": False,
+        "ic": 0.1,
+        "annualized_return": 0.2,
+        "max_drawdown": -0.1,
+        "information_ratio": 1.0,
+        "custom_params": {},
+        "alpha_mode": "single",
+    }
+    captured_sql: list[str] = []
+    script = [
+        {"cols": ["count"], "rows": [(3,)]},
+        {
+            "capture": captured_sql,
+            "cols": ["experiment_id", "qe_task_id"],
+            "rows": [("qe_1", None), ("qe_2", None), ("qe_3", None)],
+        },
+        {
+            "cols": summary_cols,
+            "rows": [tuple(summary_row.get(column) for column in summary_cols)],
+        },
+    ]
+    lease_state = {"active": 0, "acquired": 0}
+
+    class TrackingConn(_Conn):
+        def __enter__(self):
+            lease_state["active"] += 1
+            lease_state["acquired"] += 1
+            return self
+
+        def __exit__(self, *_exc):
+            lease_state["active"] -= 1
+            return False
+
+    monkeypatch.setattr(module, "get_conn", lambda: TrackingConn(script))
+
+    class FakeArchiveService:
+        def get_source_status(self, **_kwargs):
+            assert lease_state["active"] == 0
+            return {
+                "experiments": {
+                    "qe_1": {"archive_status": "archived"},
+                    "qe_2": {"archive_status": "recommended"},
+                    "qe_3": {"archive_status": "recommended"},
+                },
+                "tasks": {},
+            }
+
+    monkeypatch.setattr(archive_module, "QEArchiveBackfillService", FakeArchiveService)
+
+    result = ConfigComposer()._list_experiment_history(
+        limit=1,
+        offset=1,
+        filters={"archive_status": "recommended", "source_type": "mcp"},
+    )
+
+    assert result["total"] == 2
+    assert result["has_more"] is False
+    assert [item["experiment_id"] for item in result["items"]] == ["qe_3"]
+    assert lease_state == {"active": 0, "acquired": 2}
+    assert "LEFT JOIN LATERAL" in captured_sql[0]
+    assert "strategy_evo_config->'_qe_run_registration'" in captured_sql[0]
 
 
 def test_get_task_detail_summary_compacts_loop_jsonb(monkeypatch):

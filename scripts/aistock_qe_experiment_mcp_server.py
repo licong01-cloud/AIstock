@@ -52,12 +52,55 @@ def qe_dataset_profile_get() -> dict[str, Any]:
 
 
 @mcp.tool()
-def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False, detail: str = "summary") -> dict[str, Any]:
+def qe_experiment_list(
+    limit: int = 50,
+    offset: int = 0,
+    include_children: bool = False,
+    detail: str = "summary",
+    created_from: str | None = None,
+    created_to: str | None = None,
+    source_type: str | None = None,
+    run_kind: str | None = None,
+    purpose: str | None = None,
+    status: str | None = None,
+    node_id: str | None = None,
+    model: str | None = None,
+    factor: str | None = None,
+    dataset_release: str | None = None,
+    universe_pool: str | None = None,
+    execution_algo: str | None = None,
+    archive_status: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
     if detail not in {"summary", "full"}:
         raise ValueError("detail must be summary or full")
+    params = {
+        key: value
+        for key, value in {
+            "limit": limit,
+            "offset": offset,
+            "include_children": include_children,
+            "detail": detail,
+            "created_from": created_from,
+            "created_to": created_to,
+            "source_type": source_type,
+            "run_kind": run_kind,
+            "purpose": purpose,
+            "status": status,
+            "node_id": node_id,
+            "model": model,
+            "factor": factor,
+            "dataset_release": dataset_release,
+            "universe_pool": universe_pool,
+            "execution_algo": execution_algo,
+            "archive_status": archive_status,
+            "query": query,
+        }.items()
+        if value not in (None, "")
+    }
     return _client().get(
         "/quantevolver/experiments",
-        params={"limit": limit, "offset": offset, "include_children": include_children, "detail": detail},
+        params=params,
     )
 
 

@@ -4,7 +4,7 @@
 > Feature tier：F2
 > 设计版本：v1.1（3 个交付批次）
 > 日期：2026-09-07
-> 状态：`DESIGN_READY_SOURCE_NOT_STARTED`
+> 状态：`BATCH_A_RUNTIME_READY_BATCH_B_SOURCE_LOCAL_REVIEW_PASS`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.14
 > 既有入仓设计：`docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md`
 
@@ -386,14 +386,14 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | F-004 | `qe_run_registry.py` portable registration；active dataset binding | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | batch_a_source_test_pass | none |
 | F-005 | 现有 reconciliation coordinator 与 durable readback adapter | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | batch_a_source_test_pass | none |
 | F-006 | `qe_run_registry.py::project_history`; `payload_summary.py` | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | batch_a_source_test_pass | none |
-| F-007 | `config_composer.py`; `frontend/src/app/quantevolver/experiments/page.tsx` | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_a_source_ready_for_ci | none |
+| F-007 | `config_composer.py`; `frontend/src/app/quantevolver/experiments/page.tsx`; detail page | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`（TypeScript syntax check；完整浏览器验收归 Batch C） | batch_b_source_local_test_pass | none |
 | F-008 | persisted-only GET；60 秒 coordinator；可见页 30 秒 fallback；隐藏页零轮询 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_a_source_ready_for_ci | none |
 | F-009 | `qe_run_registry.py::build_qe_run_registration` | `backend/tests/quantevolver/test_qe_registered_submission.py` | batch_a_source_test_pass | none |
 | F-010 | 控制面登记不进入 qrun 数据面；既有 subprocess DB 隔离保持 | `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py` | batch_a_source_test_pass | none |
-| F-011 | §3.5、§4.7 | `backend/tests/qe_archive/test_manual_ingestion_selection.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
-| F-012 | existing `qe_archive` source-status/backfill service | `backend/tests/qe_archive/test_manual_ingestion_selection.py` | design_review_pass | none |
-| F-013 | §4.7 | `backend/tests/qe_archive/test_manual_ingestion_selection.py` | design_review_pass | none |
-| F-014 | §4.8 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | design_review_pass | none |
+| F-011 | existing Level 0 records + selective Archive UI | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_b_source_local_test_pass | none |
+| F-012 | existing `qe_archive` source-status/backfill service and list-page preview/execute | `pytest -q backend/tests/qe_archive/test_manual_ingestion_selection.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`；真实幂等写仓验收归 Batch C | batch_b_source_local_test_pass | none |
+| F-013 | source-status recommendation reason projected to list/detail; no automatic execute | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`；真实推荐回读归 Batch C | batch_b_source_local_test_pass | none |
+| F-014 | registered DELETE route becomes artifact cleanup and writes `_qe_artifact_retention`; legacy rows retain old behavior | `pytest -q backend/tests/unified_engine/test_qe_cleanup_path_policy.py backend/tests/quantevolver/test_qe_payload_summary_services.py`；运行态 cleanup 验收归 Batch C | batch_b_source_local_test_pass | none |
 | F-015 | §3.6、§2.3；实现不扫描/补写旧 workspace | validation-receipt: F2 feature validator PASS；本 Feature 不执行批量历史补账 | batch_a_source_test_pass | none |
 | F-016 | 仅复用现有 QE 表、接口、coordinator 与 bounded log | `python -m nox -s l0` | batch_a_source_ready_for_ci | none |
 | F-017 | §7.3 | `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`; validation-receipt: dual-node-restart-and-archive-e2e | design_review_pass | none |
@@ -494,10 +494,19 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 ## 14. Delivery Batch A 实施状态
 
-- 当前源码状态：`BATCH_A_SOURCE_READY_FOR_MERGE`。
+- 当前源码状态：`BATCH_A_REGISTERED_RUNTIME_READY`。
 - 已完成：统一预登记、事务内回读、任务/loop 与 Multi-Alpha parent/group 计划、durable readback、MCP/UI/source/purpose 摘要、只读历史/详情投影、GET 去远端写回、最小 UI 进度与隐藏页零轮询。
-- 本地证据：Batch A 聚焦回归 299 passed；`qe_read_backend` 316 passed / 1 skipped，`qe_data_contract_backend` 46 passed，`qe_sector_risk_overlay_backend` 90 passed，`platform_api_backend` 15 passed，Validation catalog/ownership/classifier 96 passed；F2 19/19、L0、Ruff、py_compile、diff-check 均通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；PR CI run `34101195705` 已在源码 HEAD 上完成 TypeScript、Lint、精确 Playwright、Backend/MCP、Semgrep、catalog 和 workflow policy 并全绿。
-- 未执行：source merge、Backend/Frontend 运行态激活、用户重启、WSL/remote 真实实验、Archive 写入、历史补账、DDL/DML、依赖安装和进程控制。
-- `BATCH_A_REGISTERED_RUNTIME_READY` 尚未达到；它只能在 source 合入、用户按 runtime contract 重启以及 post-restart 双节点/最小 UI readback 通过后声明。
+- 合入与运行态证据：PR #4382 以 merge commit `c97f4ed471704bd2763af2350b27a8e3de380c87` 合入；用户重启后 backend identity `5bf975e98b7afeaebb27cce73ec250fd268d5090` 包含该提交。health/runtime-identity、实验 summary 列表、双节点 online readback 和前端 Batch A bundle 标识均通过。
+- 尚未由 Batch A 推导：Batch B 完整筛选/详情/选择性入仓、Batch C 双节点正式实验和真实 Archive 写入；历史补账、DDL/DML、依赖安装和进程控制仍未执行。
 
-该记录证明设计与 Batch A source 已经过多轮内部审核，不表示 source 已合入、已在运行态生效或实验已经启动。Batch B/C 仍须按同一 19 项验收矩阵继续。
+该记录只证明 Batch A source 与最小运行态能力，不表示整个 Feature 已完成。Batch B/C 仍须按同一 19 项验收矩阵继续。
+
+## 15. Delivery Batch B 实施状态
+
+- 当前源码状态：`BATCH_B_SOURCE_LOCAL_REVIEW_PASS`；尚未提交 PR、尚未合入、尚未运行态激活。
+- 已实现：日期、来源、实验类型、Alpha 模式、用途、canonical 状态、节点、模型、因子、数据 release、股票池、分钟执行算法、Archive 状态和业务文本的服务端筛选；父级稳定分页；UI 不再默认全量拉取；MCP 暴露相同的人类可读筛选。
+- 已实现：列表与详情展示登记、节点、release/cutoff、股票池、seed、label、分钟执行、时间线、失败原因、artifact retention 和 Archive 推荐/状态；日志只在显式点击后读取。
+- 已实现：正式登记 experiment/task/loop 的 workspace 清理保留 Level 0 控制记录和指标，并写入 `_qe_artifact_retention.status=cleaned`；未登记 legacy 行继续保持既有删除兼容性。
+- 本地证据：聚焦 Backend/MCP/cleanup/Archive 状态合同 58 passed；`qe_read_backend` 294 passed / 1 skipped；`qe_data_contract_backend` 46 passed；F2 validator 19/19；L0 blocking=0；changed-files ownership 15/15；CI classifier 本地复验 `targeted_ci_required`、`unmapped_code_files=[]`、`unexecuted_test_files=[]`；`test_noxfile_validation_env.py` 17 passed；validation catalog/module registry 均通过；Ruff、py_compile、TypeScript syntax transpile 和 diff-check 通过。Archive 状态筛选在释放历史查询连接后再调用现有 Archive service，测试确认单次请求不存在双连接重叠占用。
+- 验证委托：worktree 未安装依赖、未启动本地前后端；TypeScript 类型检查、Lint、精确 mocked Playwright、Archive 全回归和跨模块业务流交由最终 PR CI。Batch C 的真实 WSL/remote、用户重启恢复、UI 与授权 MCP Archive 写入仍不在本批源码结论内。
+- 生产边界：DDL/DML=noop，dependency install=noop，Archive write=noop，experiment submission=noop，dataset write=0，backend/worker/frontend process control=false。

@@ -116,3 +116,20 @@ test("hidden-page guards suppress QE status and log traffic", () => {
   expect(pageSource).toContain('if (document.visibilityState !== "visible") return;');
   expect(pageSource).toContain("Math.max(30, refreshInterval)");
 });
+
+
+test("history uses server pagination and human business filters", () => {
+  const pageSource = readFileSync(
+    resolve(process.cwd(), "src/app/quantevolver/experiments/page.tsx"),
+    "utf8",
+  );
+
+  expect(pageSource).toContain('data-testid="qe-history-business-filters"');
+  expect(pageSource).toContain('aria-label="开始日期"');
+  expect(pageSource).toContain('aria-label="股票池"');
+  expect(pageSource).toContain('aria-label="数仓状态"');
+  expect(pageSource).toContain('include_children: "true"');
+  expect(pageSource).not.toContain("EXPERIMENT_HISTORY_BATCH_SIZE");
+  expect(pageSource).not.toContain("refresh all to inspect every experiment");
+  expect(pageSource).toContain('exp.registration_summary ? "清理制品" : "删除"');
+});
