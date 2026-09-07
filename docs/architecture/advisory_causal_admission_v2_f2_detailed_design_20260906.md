@@ -1,13 +1,14 @@
-# Advisory 因果绝对收益准入 v2 F2 详细设计 v1.0
+# Advisory 因果绝对收益准入 v2 F2 详细设计 v1.1
 
-> 日期：2026-09-06
-> 状态：`DESIGN_READY_CANONICAL_SECTOR_OOF_SOURCE_UNAVAILABLE_NOT_IMPLEMENTED`
+> 日期：2026-09-07
+> 状态：`DESIGN_REVISED_PARAMETERIZATION_PENDING_NOT_IMPLEMENTED`
 > tier：`F2`
-> research stage：`N3_AUX_CAUSAL_ADMISSION_V2`
+> research stage：`N3_AUX_CAUSAL_ADMISSION_V2_1`
 > objective contract：`RISK_MANAGED_ADVISORY`
 > study type：`LEARNABILITY_AUDIT`
 > decision use：`NAVIGATION_ONLY`
-> production gates：backend restart / DDL / DML / database mutation / network / Tushare / factor catalog / StrategyPackage / runtime activation / dynamic position weight / order 均为 `noop`
+> 本次交付是方法与分阶段实施设计，不是可直接开跑的冻结实验 request；§5.7 的数值参数化是下一项实现前任务，不新增人工审批。
+> production gates：backend restart / DDL / DML / runtime activation / dynamic position weight / order 均为 `noop`；本阶段训练只读文件，不访问数据库、网络或 Tushare。
 
 ## 1. Background / 背景、业务目标与当前事实
 
@@ -49,245 +50,203 @@ v1 的负相关主要来自跨日期分量，而非同日候选排序：
 
 结论边界：CPCV 仍可用于横截面 ranking、模型比较和 PBO 类诊断；它不再允许直接生成跨日期固定阈值所需的绝对收益/概率时序。v1 的 `selected=0` 保持有效和不可变，但 v1 的绝对 calibration 输出永远不得作为 activation evidence。
 
-## 2. Scope / 范围、成功边界与终止条件
+### 1.5 本次统计定义修正与历史边界
 
-### 2.1 In scope
+当前 v1 代码 `score_hmm_admission_pipeline.py` 用 inner residual 的 q20 加 final Ridge 点预测生成名为 `expected_net_return_lcb80_bps` 的值。这是预测结果分布下界的近似，不是条件期望收益的 80% 置信下界；全局残差、inner/final refit 和时序漂移也不足以保证逐条件 80% 覆盖。v1.0 设计沿用了这个混淆，本版正式替代其尚未执行的固定 q20/probability gate、sector-only candidate 和 240 日不更新要求。
 
-1. 建立一个新的 v2 request、model、artifact 和 trial lineage，不修改 v1 request、bundle、registry record 或结果。
-2. 用严格 chronological、past-only 的单一冻结训练边界生成绝对收益、正收益概率和一侧下界，消除 CPCV 补集基准进入跨日阈值的问题。
-3. 把 score-only、raw-market、market-HMM 保留为不可选的因果对照；只有真正新增 canonical sector/rotation OOF 的 sector 与 combined 两臂允许成为 candidate。
-4. 继续使用同一父 Top5、同一 aligned policy target、同一成本合同和同一 shadow-policy simulator，直接评价 0～5 只准入的成本后增量。
-5. 首次结果只作历史开发窗口导航；selected=1 只放行独立 confirmation 设计，selected=0 关闭 v2 的精确 source/model/window/threshold frontier。
+v1 的 selected=0、243 点诊断及其 exact hashes 全部不变。纠正时钟或统计定义不等于创造 Alpha，也不授权回选旧点。新实验使用 `V2_1` 新 lineage，累计试验数和窗口消费继续继承。v1.0 五臂只是旧设计，未产生正式 v2 request/trial/model，不可写成已运行。
 
-### 2.2 启动条件
+## 2. Scope / 范围、启动条件与终止状态
 
-正式 request 只能在以下条件全部成立后生成：
+### 2.1 分阶段范围
 
-- 最新 `origin/main` 已存在 canonical `rotation_L1` development OOF/prediction bundle reader；
-- source 明确为逐日 causal OOF，而非 in-sample、smoothed/Viterbi、latest snapshot 或 sealed-tail prediction；
-- source 覆盖本设计 development 窗口并携带 model/input/mapping identity、availability 和 as-of clock；
-- Advisory 的 PIT L1 映射可与 source mapping identity 对账；
-- target-free preflight 通过且不读取收益、label 或 sealed holdout。
+| 阶段 | 内容 | 放行与终止 |
+|---|---|---|
+| R0 参数化 | 绑定 §5.7 的经济目标、更新时钟、预算和支持度；补齐直接测试规格 | 参数完整且可机器校验后才生成 request；本次文档合入不等于 R0 已完成 |
+| R1 基础因果 Admission | 同包评分与原始市场形态；静态对照和一个因果更新方案；均使用修正后的预测/动作定义 | 不依赖 sector/HMM；冻结小规模 frontier，一次选择 0/1 个导航 candidate |
+| R2 可选信息增量 | 在 R1 冻结比较协议上增加一个就绪的 market-HMM 或 sector/rotation 信息块 | 仅该信息块通过 canonical causal source preflight 后运行；不自动扩成五臂全因子搜索 |
+| R3 独立确认 | 仅对有实际干预和经济迹象的已冻结 candidate 设计确认性检验 | 单次选点、独立窗口和累计检验控制；本设计不读取 sealed holdout、不激活 |
 
-当前最新主线不满足该条件。上游 PR #4343 已开放且分支clean，但变更范围仍是 G2-A direct-v2 input bundle/设计，不包含可供 Advisory 消费的 `rotation_L1` 模型、causal development OOF prediction bundle 或 reader；PR 未合入前也不是 main authority。所以本设计允许评审和合入，但禁止正式冻结 request、预占 trial 编号、编写假 prediction adapter 或运行经济实验。
+R1 保留父 Top5、既有顺序和 review/exit policy；只作固定槽位 TAKE/SKIP，不补第 6 名，不产生资金权重。重排、多源召回、共享模型、价格路径和 Exit 另属蓝图后续条件任务，不混进此实验。最多一条 Advisory 辅助线；R2 是 R1 的后续信息比较，不是第三条模型线。
 
-### 2.3 终止状态
+### 2.2 source 边界与当前事实
 
-- `SOURCE_NOT_READY_NO_TRIAL`：启动条件不成立；不生成 request、不占 trial、不训练、不改 route。
-- `INVALID`：PIT、identity、clock、label maturity、模型或 artifact 不成立；不发布经济结果，只允许未利用结果的 exact retry。
-- `CAUSAL_ADMISSION_V2_SELECTED_ZERO`：五臂完整执行但 sector/combined 均未通过；关闭该精确 frontier，不回到同一结果调阈值或反向预测。
-- `CAUSAL_ADMISSION_V2_CANDIDATE_SELECTED_NAVIGATION_ONLY`：sector 或 combined 中恰有一个通过；只进入新 confirmation 设计。
+基础 score/raw 数据先做 target-free schema、PIT、availability、label contract 身份核验；这类 preflight 不训练、不读研究收益，不计模型 trial。sector 的缺失不得阻塞不使用它的 R0/R1，也不得在运行中静默删掉 sector 或回退为其他 arm。
 
-## 3. Non-goals / 边界与禁止项
+截至 2026-09-07，PR #4343/#4353 已合入 G2-A input/executor；v1.2 实际执行 17/39 fits 后 `STRUCTURAL_ACCEPTANCE_FAILED`，尚无通过验收的完整 canonical development OOF。PR #4359 的 v1.3 leaf-distribution 修订仍开放，不能当成正式 source 或新实验完成。该结构失败不是 sector 经济价值为负。Advisory 不复制上游训练器、不控制其他窗口进程；R2 只消费其自身合同下合法交付的 causal development OOF/model/input/mapping/availability identity，不要求 HMM tail、产品 API/UI/DDL 提前完成，也不把 research OOF 冒充 runtime capability。
 
-- 不修补、覆盖或重新发布 v1 bundle；不把本设计称为 v1 exact retry。
-- 不因 v1 过度 SKIP 而降低 `LCB > 0`、`positive_probability >= 0.5`，不做阈值网格，不从 243 个诊断点选择候选。
-- 不把预测乘 `-1`、反向 score、挑选 DOWN regime、删除弱市日期或只报告正分片。
-- 不创建新的父候选、不扩大 Top20/Top5、不改变 Selection 顺序、不回填第 6 名以后股票。
-- 不让 score/raw/market-HMM 三个已消费信息对照成为 selectable candidate；它们只用于识别 sector 新信息的增量。
-- 不读取 sealed holdout，不把 development OOF 当成自然前向证据，不把历史回放用于 activation。
-- 不实现 `rotation_L1`、HMM 产品、数据库 schema、API/UI、scheduler、通用校准平台或动态仓位。
-- 不静默填充 sector/mapping/停牌/行情缺失；正常缺失保留候选和日期，并以 typed availability 进入 coverage。
+### 2.3 终止分类
+
+- `SPEC_NOT_BOUND_NO_TRIAL`：参数化未闭合，不运行经济实验。
+- `SOURCE_NOT_READY_NO_TRIAL`：所选阶段的必需 source 不可用；只阻断该阶段。
+- `INVALID`：PIT、身份、时钟、成熟性、支持输入或模型失效；不得发布为经济失败。
+- `EXPLORATORY_INSUFFICIENT_SUPPORT`：合法执行但功效/干预不足，可导航，不关闭全局方向。
+- `CAUSAL_ADMISSION_V2_1_SELECTED_ZERO`：按冻结协议没有选中 candidate；本次 frontier 已消费，不回选。
+- `CAUSAL_ADMISSION_V2_1_CANDIDATE_SELECTED_NAVIGATION_ONLY`：仅选 1 个待独立确认候选；非 activation。
+
+## 3. Non-goals / 禁止事项
+
+- 不改 v1 bundle、历史 trial 或 selected=0；不反向预测、不从 243 点回选、不事后挑 regime/窗口/阈值。
+- 不把“预期收益为正”偷换成“胜率必须超过 50%”或“收益 q20 必须为正”。旧 gate 只作明确标记的历史诊断，不进入新自动晋级。
+- 不把修正统计定义宣称为已有效；不将低样本/不收敛转成常数、prior、旧模型或其它 arm 的伪成功。
+- 不重排、不扩池、不补位、不形成资金权重或订单，不改 Selection/StrategyPackage/runtime。
+- 不读 sealed holdout，不删除停牌/正常缺失股票与日期，不填造 neutral sector。
+- 不建立通用自动重训、校准、registry UI、调度或数据平台。
 
 ## 4. Architecture / 架构与数据流
 
-```text
-frozen N1 PIT Top50 + aligned policy target + frozen cost/policy
-                         |
-                 target-free source preflight
-                         |
-       causal score/raw market/market-HMM controls
-                         |
-canonical rotation_L1 development OOF + PIT L1 mapping
-                         |
-     one chronological train/calibration/evaluation split
-                         |
- fixed Ridge value head + fixed Logistic positive head
-                         |
-          expected value + q20 lower bound + probability
-                         |
-        parent Top5 TAKE/SKIP (0..5, no backfill)
-                         |
-       same frozen shadow-policy replay and paired lift
-                         |
-  only sector/combined selectable -> 0/1 navigation route
-```
+`PIT 父 Top5 + as-of 基础特征 → 分阶段 source preflight → 因果预测层 → 独立动作层 → 同一 shadow policy 配对重放 → 一次选点 → 导航结果`。
 
-StrategyPackage 继续拥有候选召回和顺序；v2 只拥有 package-conditioned 风险准入。raw market 是 market-HMM 的共同 control，sector source 是候选级新信息；两者不得混成无归因总分。历史批量和未来单日推理必须调用同一 transform、source-as-of、模型预测和 Admission kernel，差别只在批量拓扑。
+预测层区分：条件期望净收益、正收益概率、收益分位数/尾部风险、估计不确定性。动作层根据冻结经济效用和风险约束决定 TAKE/SKIP；HMM 仅是可选上下文，不是前置网关。历史批量与未来单日必须复用相同 feature/clock/model/action kernel，仅执行拓扑不同，不新建 H0 平台。
 
-## 5. Contracts / 请求、时钟、数据和模型契约
+## 5. Contracts / 请求、时钟、模型与动作
 
-### 5.1 `FrozenAdvisoryCausalAdmissionRequestV2`
+### 5.1 请求身份
 
-request 至少冻结：
+保留请求概念 `FrozenAdvisoryCausalAdmissionRequestV2`，必须增加明确的 `contract_revision=V2_1` 和 stage；旧 v1.0 schema 不得无迁移地解释为本版：
 
 ```text
-experiment_id = ADVISORY-N3-AUX-CAUSAL-ADMISSION-V2
-objective_contract = RISK_MANAGED_ADVISORY
-study_type = LEARNABILITY_AUDIT
-decision_use = NAVIGATION_ONLY
-v1 parent request/bundle identities (read-only lineage only)
-program/binding/package/manifest/style/runtime-semantics identities
-N1 rank/source/PIT/prediction identities
-aligned target, baseline/shadow/cost policy hashes
-rotation source/model/input/mapping/availability identities
-calendar and exact chronological split
-five fixed arm schemas and selectable=false/true flags
-Ridge/Logistic/conformal/admission constants
-support, multiplicity, economic and route rules
-registry head and five consecutive candidate indices
-artifact root, repository commit and resource limits
-all production false gates
+experiment_id / lineage / parent v1 request and bundle (read-only)
+contract_revision / stage / objective_contract / study_type / decision_use
+program / package / manifest / style / runtime semantics
+candidate / feature adapter / PIT / prediction source identities
+primary target and horizon / label_information_end / price basis
+baseline / shadow / cost policy hashes
+available source set and optional HMM model/input/mapping identities
+development partition / fit schedule / calibration schedule
+frozen arm manifest / model constants / eligible candidate flags
+prediction estimands / action utility / risk and support limits
+multiplicity family / cumulative trial count / selection rule
+sealed exclusion identity / repository and resource limits / false gates
 ```
 
-功能字段全部进入 canonical request hash；只排除 `created_at/output_root`。source preflight 先完成，之后才读取 registry head 并一次预占五个连续 trial。preflight 失败不增加 trial。运行前 registry 或任一 source hash 漂移必须重新 build，不沿用旧 request。
+所有经济相关字段进入 request hash，仅排除 created_at/output_root 等非经济信封。参数与 source preflight 通过后才登记本阶段真实训练的 trial；一个 arm 内的多个 chronological fit 记录 fit count，不伪装独立研究假设；用于比较、选点的模型/窗口/信息变体全部进入累计试验账，R1/R2 新名称不重置多重检验。
 
-### 5.2 冻结开发窗口与 chronological split
+### 5.2 因果开发切分与更新
 
-沿用 N1 的 386 个开发决策日和 8 个只读时间组，但不沿用其 CPCV 补集预测：
+旧设计的 blocks 0～1 `2024-07-04..2024-11-27`、block 2 `2024-11-28..2025-02-12`、blocks 3～7 `2025-02-13..2026-02-02` 共 240 个 evaluation 日保留为静态对照的候选时间布局，不冒充新独立 OOS。R0 必须在既有已消费开发窗口内明确 inner selection 与 outer readout；不得用同一 240 日结果同时选点和声称确认。
 
-| role | block | date range | rule |
-|---|---|---|---|
-| model base train | 0～1 | `2024-07-04..2024-11-27` | 只使用在对应预测时点前已成熟的标签 |
-| calibration / final-train extension | 2 | `2024-11-28..2025-02-12` | 只保留 `label_information_end < 2025-02-13` 的行 |
-| evaluation | 3～7 | `2025-02-13..2026-02-02` | 240 日一次性 development navigation |
+每个 model/head/arm/decision row 恰有一个 as-of chronological prediction，禁止 CPCV complement 或 7-path averaging 生成跨日绝对阈值。模型、scaler、缺失处理、calibrator、prior、HMM 参数和状态命名只能使用该 fit 时点前已可见的数据；监督行必须满足 `label_information_end < fit_cutoff < prediction_clock`。20 日标签按真实 information interval purge，不因只看 decision_date 而漏过未成熟标签。
 
-最终模型只使用 evaluation 起点之前已经成熟、且与 evaluation information interval 无交叉的标签；训练 decision index 还必须严格早于 evaluation 起点至少 20 个交易日。逐 head interval-overlap 检查继续生效。evaluation 的 label、收益、未来行情和 future source revision 在全部 prediction/admission hash 固定前不可读。
+先比较静态对照与一个预注册 expanding 或 rolling 更新方案，不默认三个月、不同时穷举多个周期。更新方案在回放时间推进时只能消费当时已成熟的早期开发行；这些行是后来 fit 的训练资料，不再充当其独立外样本。对应测试毒化的是“尚未成熟/尚未可见”的未来信息，不能误要求已成熟历史标签永远不影响后续模型。预测与动作先写定并 hash，再由隔离 evaluator 读取该动作的未来结果。
 
-每个 evaluation row 只允许一个 chronological prediction；禁止 7-path averaging、validation-complement base rate 或 future block 进入训练。240 日再按连续 48 日分为 5 个只读 stability block，只作结果报告，不参与选择阈值、模型或窗口。
+各更新版本都产生明确 fit/window/transform/model identity；不得把新训模型写成旧 bundle 的继续预测。首次历史验证不等待 240 个自然交易日；自然前向成熟仅影响未来证据等级。
 
-### 5.3 Score、市场与 sector source
+### 5.3 特征与 HMM 输入
 
-- score 输入继续只用同日 rank/percentile/robust distribution 和 exact component evidence；raw score 跨日固定阈值仍非法。
-- raw market 使用 T 收盘可见宽度、涨跌停比例、基准 trailing return/drawdown、横截面波动/离散度；停牌和 synthetic rows 从分母中显式处理。
-- market-HMM 遵循相同 nested clock：inner 阶段只在 blocks 0～1 observation 拟合并因果过滤 eligible block 2，final 阶段只在 evaluation 前 observation 拟合一次；final 参数冻结后从 evaluation 前 60 个真实交易日 warm-up，并对 240 日逐日 forward-filter，不得在 evaluation 内重拟合。
-- sector source 必须提供 T 日每个 L1 sector 的 causal `rotation_score`、`forecast_state`、availability、model/input/mapping hash 和 validation basis。候选按 T 日 PIT L1 mapping 连接；missing 保留为 unavailable，不填 neutral。
-- source 若显式消费了与父包相同的 HMM/rotation ancestor，必须有 pre-source parent score 或完整 lineage 消融；否则 sector/combined 结果为 `UNATTRIBUTABLE_DUPLICATE_EXPOSURE`，不可选择。
+- 同日 score/rank/percentile/dispersion 和 exact component evidence 可用于条件建模；按日标准化的 raw score 不具备跨日统一收益尺度。
+- raw market 包括 T 收盘前可见宽度、真实涨跌停、基准 trailing return/drawdown、波动与离散度；停牌和 synthetic rows 显式进入 typed availability。
+- HMM 仅逐日 forward-filter，参数、状态命名、transform 皆 train-only。更新 HMM 时同步重建依赖模型及身份，不能在同一 model binding 下热替换；禁止 smoothed/Viterbi、latest snapshot 和未来 revision。
+- sector 必须携带 PIT L1 mapping、rotation_score/forecast_state、availability 与 model/input/mapping hash；与父包已有 HMM 暴露相交时做 pre-HMM control/消融，不能把重复暴露计为新 Alpha。
+- 全局缺源使所需 arm unavailable；逐股正常缺失保留候选和日期，按训练时已声明的 missing schema 处理。没有经过训练验证的 no-HMM 模型不得临时删列替代。
 
-### 5.4 固定 arms 与可选择边界
+### 5.4 有界比较矩阵
 
-| arm | role | selectable | 直接 predecessor |
-|---|---|---:|---|
-| `PACKAGE_SCORE_CAUSAL_CONTROL_V2` | score-only 因果对照 | no | parent TAKE-all |
-| `SCORE_PLUS_RAW_MARKET_CAUSAL_CONTROL_V2` | raw-market 对照 | no | score control |
-| `SCORE_PLUS_MARKET_HMM_CAUSAL_CONTROL_V2` | market-HMM 对照 | no | raw control |
-| `SCORE_PLUS_SECTOR_ROTATION_V2` | 新 sector 信息候选 | yes | raw control |
-| `SCORE_PLUS_MARKET_AND_SECTOR_V2` | 预注册交互候选 | yes | market-HMM 与 sector 两者 |
+R0 在同一协议内预先选择以下最小比较，不作 `特征×模型×窗口×阈值` 全笛卡尔搜索：
 
-另计算 zero-trial `PAST_ONLY_EMPIRICAL_PRIOR`：只用训练期已成熟 Top5 标签得到 expected-return mean 和 positive base rate。它是校准基准，不是 candidate，不写 model trial。五个 arm 均计入累计 trial/multiple-testing；不可选 control 的正结果也不能绕过 route 直接进入 confirmation。
+| 比较 | 唯一变量/角色 | 是否可作为新候选 |
+|---|---|---|
+| 父 TAKE-all、past-only empirical prior | 无学习动作基线、概率/收益测量基线 | 不可选择 |
+| 静态线性对照 | 修正统计定义的 score + raw 基础线 | 按 R0 预注册；不代表重新激活 v1 |
+| 因果更新线性候选 | 同特征、同动作、同族，只改一个更新协议 | 可在新 lineage 中一次选择 |
+| 一个受限树模型比较 | 仅在 R0 指定的同一窗口/信息/动作配置下改模型族 | 有明确非线性交互假设时才计入；失败不自动扩预算 |
+| 一个可用 HMM/sector 增量 | R2 保持可比 predictor/action，增加单一信息块及对应无 HMM control | source 通过后另立阶段；必须报告 predecessor 增量 |
 
-### 5.5 固定模型与 absolute calibration
+旧“所有基础 controls 永不可选、只有 sector 两臂可选”约束已被本版替代。允许新时钟/新统计定义下的基础模型成为导航候选，不意味着历史 v1 负结论失效；有限模型比较也不重启 P0-D～P0-L 同信息同族 loss 搜索。探索所得低相关不等于可组合信号。
 
-1. value head 固定为 v1 同参数 Ridge，binary head 固定为 v1 同参数 L2 Logistic；不换 loss/model family、不调参、不 early stopping。
-2. 对每个 arm/head，先以 block 0～1 的 eligible rows 拟合 inner model，对 block 2 中在 evaluation 前成熟的行产生 chronological residual；q20/q80 只从这些 residual 计算。
-3. 再以 block 0～2 中 evaluation 前成熟的全部 eligible rows拟合 final model；evaluation 输出 `expected_net_return_bps`、`expected + q20_residual`、`expected + q80_residual` 和 `positive_probability`。
-4. `train_base_rate` 只能是该固定过去训练集的单一基准，不得随 validation complement 改变。receipt 必须分别报告 within-date 与 between-date prediction/truth 关系、日期均值方差占比和相对 empirical prior 的 Brier improvement。
-5. inner/final 任一步 class variation、maturity、finite、support 或 convergence 不成立，整个 arm typed invalid；禁止常数模型、其他 arm 或 prior fallback 冒充成功。
+### 5.5 预测对象与校准语义
 
-### 5.6 Admission 动作
+输出明确命名并随模型版本绑定：
 
-每个父 Top5 槽位只允许：
+- `expected_net_return_bps`：在主 policy/执行价/期限下条件期望净收益点估计。
+- `positive_probability`：对应同一主标签的正收益概率；不是收益幅度，也不单独决定动作。
+- `predictive_return_q20_bps/q80_bps`：未来收益分布分位数估计。若只是 residual 近似必须标记方法、有限样本和漂移限制；不名为 mean LCB，不承诺条件覆盖。
+- `mean_estimation_interval`：仅当 R0 指定有效估计器、目标和重采样单位并实现验证时提供；否则 typed unavailable，不能用 residual q20 顶替。
+- 下行风险、coverage/width、校准状态及 train base rate 单列，不合成不可解释总分。
+
+校准残差只能来自因果 out-of-fit 预测。inner model 的 residual 应用于 refit final model 需要单独说明误差和覆盖验证；不能仅凭相加就宣称 conformal 保证。Adaptive Conformal 作为后续候选也不自动得到逐条件覆盖。必须报告 within-date/between-date prediction/truth 分解与相对成熟历史 prior 的 Brier/误差。
+
+### 5.6 独立 Admission 动作
 
 ```text
-UNAVAILABLE: arm/source/model 无法形成合法预测
-SKIP: expected_net_return_lcb80_bps <= 0
-SKIP: positive_probability < 0.5
-TAKE: expected_net_return_lcb80_bps > 0 and positive_probability >= 0.5
+UNAVAILABLE: 必需输入/模型/校准不满足已注册合同
+SKIP: 合法预测下，净动作价值不满足冻结经济底线或违反预注册风险预算
+TAKE: 相对固定空槽/基线动作的预期净价值满足经济底线，且风险预算满足
 ```
 
-阈值固定，不生成阈值 grid。五槽全部合法 SKIP 时日状态为 `NO_ELIGIBLE_RECOMMENDATION`；任一槽 source/model unavailable 时日状态与 coverage 必须显式披露，不能把 unavailable 记作主动 SKIP。动作只影响是否占用固定槽，不改变剩余股票权重定义、不补位。
+收益已扣费用/滑点/容量折损时不再重复扣同一成本。概率与盈亏幅度共同解释期望；例如 55% 获利 8%、45% 亏损 4% 的期望为 +2.6%，但 q20 为 -4%，说明 `q20>0` 是很强的下行偏好，绝非“正期望”的定义。该例只是数学反例，不是实验结果或推荐阈值。
 
-## 6. Evaluation contract / 评价与一次选择
+R0 将经济效用、额外未计成本、风险预算和必要估计不确定性惩罚数值化。不得为提高 TAKE 数事后调阈值；风险管理合同可接受收益/回撤/现金的预注册权衡，不要求所有维度同时改善。五槽全部合法 SKIP 才是 `NO_ELIGIBLE_RECOMMENDATION`；缺源/推理错误不能写成市场主动弃权。无补位、无动态权重。
 
-### 6.1 共同评价
+### 5.7 实现前参数化清单（当前未完成）
 
-五臂与父 TAKE-all 必须复用同一 shadow-policy simulator、同一执行价、停牌/涨跌停、cost、review/exit 和 benchmark。逐日配对报告绝对/超额净收益、相对父 baseline lift、MDD、CVaR、episode 分布、coverage、TAKE/SKIP/unavailable、cash-slot、换手和五个 stability block。
+必须一次填定：确切开发 inner/outer 日期及选择用途；primary policy label/horizon；一个更新时间表及成熟/purge规则；线性/可选非线性常数与总 trial/算力上限；预测/校准方法与可用输出；一次动作规则与风险预算；最低干预次数/日比例/regime 分布；MDE 输入、block 长度和有效样本算法；family correction、经济最小效应与一次选点/终止规则。每一项须写明经济或样本依据，不能从待评价结果反推。
 
-校准报告至少包含 MAE/RMSE/Spearman、AUC、Brier、empirical-prior Brier、Brier improvement、logloss、ECE、interval coverage，以及 within-date/between-date 分解。胜率不是 binding 经济门槛。
+未填定前只允许 source/规格测试，不运行经济实验。此缺口不妨碍本次架构文档合入，也不得被报告为 v2 代码或实验完成。填定不要求新增用户审批；代码仍按项目多轮审核流程交付，后端重启/DDL 保留用户边界。
 
-### 6.2 支持和 candidate 条件
+## 6. Evaluation contract / 评价与证据
 
-确认性解释前至少满足：
+### 6.1 测量层
 
-- 240 个 evaluation 日中不少于 200 日形成完整可评价的父 Top5；
-- TAKE 和 SKIP 各覆盖不少于 60 个交易日；
-- 相对父动作的真实干预不少于 60 日，且覆盖至少 4 个 stability block；
-- source/mapping/model coverage 均不低于 90%，正常缺失不通过删行提升 coverage；
-- primary positive-probability Brier improvement 相对 past-only empirical prior 严格大于 0；
-- 相对父基线的 daily net lift family-wise 95% lower bound 严格大于 0，point estimate 至少 `5 bps/day`；
-- late half lift 大于 0，5 个 stability block 至少 4 个为正；
-- sector arm 必须优于 raw control；combined 必须同时优于 market-HMM 和 sector arm，predecessor paired lower bound 均严格大于 0。
+复用同一 frozen shadow-policy simulator、可执行价格、T+1、涨跌停/停牌、review/exit、成本和 benchmark。分别报告日级配对净 lift、绝对/超额净收益、MDD/CVaR、episode 盈亏幅度、coverage、TAKE/SKIP/unavailable、现金槽、换手、regime 与干预支持；同一 stock/date 多记录按共同簇处理。每只股票 H1/5/10/20 的胜率和收益是辅助测量，重叠持仓标签不能直接加为组合收益。
 
-family-wise 区间使用运行前 registry 中该研究族累计 model trial 数；不能用 v2 名称重置 multiplicity。MDE 只决定结果是 confirmatory-capable 或 exploratory；欠功效结果可导航但不可支持 activation，也不能单独关闭全局方向。
+MAE/RMSE、Spearman、Brier/logloss/ECE 和分位数 coverage/width 分报，不要求每项显著改善才允许观察经济 frontier。Brier 不改善需要解释预测可信度，但不是跨全部角色通用的独立“零候选”开关。
 
-### 6.3 一次选择与 route
+### 6.2 导航、功效与确认
 
-只在两个 selectable arm 中选择 0 或 1 个，按 `daily net lift family-wise lower`、MDD、arm id 的冻结顺序裁决。frontier 读取经济结果后只能选点一次；confirmation 失败后不得回到同一 frontier 改选。exact retry 仅限结果未被用于选择的代码/数据身份错误，且 request 与输入完全相同。
+研究先报告收益×换手×现金×coverage×MDD frontier；只在 inner selection 按冻结效用选一次。outer readout 不用于再调参。MDE、干预数量/日比例/regime 和 block/cluster 推断决定 `confirmatory-capable` 或 `exploratory`，不以所有稳定块正值、所有 predecessor 同时显著和所有风险指标不恶化构成研究期空可行集。
 
-```text
-selected=1 -> N3_AUX_CAUSAL_ADMISSION_V2_CONFIRMATION_DESIGN
-selected=0 -> N3_AUX_SECTOR_INFORMATION_SET_REVIEW
-invalid    -> exact same-request repair or typed stop
-```
+R0 必须预注册确认用途下的最低支持和主经济阈值，不能在这里任意替换旧 60 日、5 bps 等数字。累计 model trials 不因新 stage 重置；oracle/不训练诊断单独计数，不能粗暴把全部 fit count 作为独立 DSR trial。DSR/PBO 的估计假设和研究者跨轮选择局限必须随结果披露，不能声称完全消除开发污染。探索可以导航或结束本次已消费 frontier，但不得关闭全局技术方向、证明稳定收益或支持激活。
 
-所有输出固定 `NAVIGATION_ONLY`、`deployable=false`、`runtime_eligible=false`、`sealed_holdout_accessed=false`。
+### 6.3 一次选点、重试与 holdout
 
-## 7. Artifact、registry 与 API/UI/DB 边界
+`frontier → candidate → confirmation → activation` 独立。confirmation 失败不得返回同一 frontier 重选。只有未利用经济结果改选择、同 candidate/request/input 的执行恢复才是 exact retry；任何影响预测/标签/动作的代码修正必须登记新 code identity 和修复关系，不冒充 bitwise exact retry。
 
-content-addressed bundle 至少包含 request、source preflight、feature schema、maturity/isolation receipt、market-HMM receipt、OOF predictions、calibration metrics、Admission decisions、policy daily/episodes、arm summary、resource report、registry records、frontier receipt、manifest 和 environment。publisher 必须 temporary sibling + atomic rename，inspect 校验 exact file set、逐文件 hash、canonical identity 和 route/registry closure。
+所有本设计结果固定 `NAVIGATION_ONLY/deployable=false/runtime_eligible=false/sealed_holdout_accessed=false`。N0 登记 sealed `2026-08-31..2026-11-30` 仅核查元数据，不读取收益；后续 candidate 冻结晚于窗口起点时，必须查清父模型训练和研究消费重叠后重新界定真正未消费的确认人口，不能事后挪窗、删除旧登记或将已见日期声称 sealed。自然前向仍需成熟，不阻断历史开发实验。
 
-registry 沿用现有 append-only JSONL，字段继续包含 `objective_contract=RISK_MANAGED_ADVISORY`、`study_type=LEARNABILITY_AUDIT`、`decision_use=NAVIGATION_ONLY`、lineage、source/window/policy identity 和累计 trial。不开 UI、审批或 reservation 服务。
+## 7. Artifact、registry 与产品边界
 
-本阶段无 API/UI/DB 变更。研究 source reader 只读 immutable bundle；不连接 PostgreSQL、网络或 Tushare。将来即使 candidate 通过，runtime binding、页面展示、后端重启或任何 DDL 仍是独立任务和独立授权。
+复用现有 append-only JSONL 和 content-addressed bundle；保存 request、阶段 source、每次 fit/clock/maturity、预测、动作、配对 policy 结果、校准/支持/MDE、多重检验、一次选点、manifest 与环境。沿用 atomic publish、exact file set/hash、fresh-process inspect；不建新 registry/审批服务。
 
-## 8. Implementation Plan / 实施方案
+artifact 必须同时绑定 package 与政策，但预测 estimand 和动作 utility 分列，为后续共享模型留接口，不宣称当前 bundle 已可跨包。API/UI/DB、生产 descriptor、因子库/StrategyPackage、runtime activation 在本阶段全不修改。
 
-source 就绪后只实现以下最小范围：
+## 8. Implementation Plan / 实施顺序
 
-1. `backend/services/advisory_model_first/causal_admission_v2_contracts.py`
-2. `backend/services/advisory_model_first/causal_admission_v2_pipeline.py`
-3. `scripts/advisory_causal_admission_v2_mve.py`
-4. `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py`
-5. `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py`
-6. `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py`
-7. 必要的 exact ownership/CI mapping 和本设计/顶层蓝图事实状态更新
+1. R0 参数化：在本设计内填定 §5.7 并完成交叉审核；不预占经济 trial。
+2. 在 fresh task worktree 实现 `causal_admission_v2_contracts.py`、`causal_admission_v2_pipeline.py` 和 `scripts/advisory_causal_admission_v2_mve.py` 的 R1 最小范围，复用现有 feature/policy/delivery。
+3. 三组 direct tests：`test_causal_admission_v2_contracts.py`、`test_causal_admission_v2_pipeline.py`、`test_causal_admission_v2_delivery.py`；必要 exact ownership/CI mapping，不新增通用后台。
+4. 多轮代码审核修复通过后，执行一次 R1；有明确迹象才进入 R2 或独立确认设计。R2 仅消费就绪 source，不写假 adapter、不重复实现 `rotation_L1`。
+5. 负结果保存精确边界并停止该 frontier；下一假设必须改变被诊断的瓶颈，不扩大原参数网格。
 
-顺序固定为：target-free source preflight → request/trial freeze → chronological split/maturity isolation → arm features → inner residual/final fit → fixed Admission → shared policy replay → once-only selection → immutable delivery/inspect。不得在 source 未就绪时实现假 adapter、fixture-only production path 或复制 `rotation_L1`。
+## 9. Verification Plan / 验证与审核
 
-## 9. Verification Plan / 验证方案与重复审核
+- Identity：contract revision、package、policy、source、fit、mapping、registry 任一经济身份漂移拒绝。
+- PIT：未来价格/label/source revision poison 不改变更早 feature/prediction/action；已成熟历史允许影响后续预定 fit。
+- Clock：静态与更新 arm 各行一次 prediction，所有 transforms 与 labels obey as-of/maturity/purge，无 complement averaging。
+- Estimand：q20 不得出现在 mean confidence 字段；正期望/负 q20 数学反例、费用不重复扣、refit residual 覆盖限制测试。
+- Stages：R1 无 sector 可独立合法构建；R2 缺 sector 零 trial 停止，不能自动删列变 R1。
+- Missing：正常缺失保留人口；系统缺源、模型无效、合法全 SKIP、selected=0 分型；无 neutral/旧模型静默 fallback。
+- Economics：same-policy parity、no backfill、干预支持/MDE、完整 frontier、一次选点和累计检验；结果后重选必须失败。
+- Holdout：开发阶段不挂载 sealed；历史、单次确认、自然前向证据不能互用。
+- Delivery：atomic/partial/tamper/collision、fresh inspect、exact retry 与新代码身份分离。
+- 本地实现门：changed-file Ruff/format、py_compile、三组 direct tests、ownership/L0、git diff --check；稳定后一次 advisory_modeling_backend 回归。
+- 文档门：`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_causal_admission_v2_f2_detailed_design_20260906.md --tier F2`。文档 validator 不等于模型实现或实验验证。
 
-1. Identity：package/policy/N1/rotation/model/input/mapping/registry 任一漂移 fail closed。
-2. Source：in-sample、smoothed、latest snapshot、sealed-tail、future revision 和 neutral fallback 全部拒绝。
-3. PIT：T+1 price/market/sector/label poison 不改变 T 日 feature/prediction/action hash。
-4. Clock：每个 evaluation row 恰有一个 prediction；任何 future block 或 validation complement 进入 train 都失败。
-5. Maturity：只读取 evaluation 起点前成熟标签；逐 head interval overlap 为 0。
-6. Calibration：固定 inner chronological residual；base rate 在 evaluation 内不随被预测 block 改变；within/between decomposition 完整。
-7. Arms：五臂完整、三个 control 不可选择；sector/combined source 不可用时正式 request 不得生成。
-8. Admission：0～5、`NO_ELIGIBLE_RECOMMENDATION`、无 rank6 backfill、unavailable 与主动 SKIP 分离。
-9. Economics：baseline parity、paired lift、family-wise multiplicity、支持度、stability 和一次选择。
-10. Delivery：partial/extra/tamper/collision、atomic publish、fresh-process inspect、exact retry、registry/route no-op。
-11. 本地门禁：changed-file Ruff/format、py_compile、三个 direct test、`git diff --check`、ownership/L0；稳定后单次 `python -m nox -s advisory_modeling_backend`。
-12. F2：`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_causal_admission_v2_f2_detailed_design_20260906.md --tier F2`。
-
-## 10. Risks and controls / 风险与控制
+## 10. Risks and controls / 风险
 
 | 风险 | 控制 |
 |---|---|
-| 把 CPCV complement 的绝对水平再次用于跨日门槛 | v2 只接受单一 past-only chronological split；每行 prediction count 固定为 1 |
-| 把纠正统计时钟误写成已创造 Alpha | old-information arms 全部不可选；只有 sector/combined 可进入 candidate |
-| 结果后降低门槛修复过度 SKIP | LCB/probability/action 门槛固定；不存在 threshold grid API |
-| 反向预测或挑 regime | 明文禁止；全窗口、late half、5 block 和 family-wise 条件共同约束 |
-| sector source 尚未就绪却先写假实现 | target-free preflight 在 request/trial/训练前；open input-bundle PR 不等于 mainline prediction authority |
-| source missing 被删行美化 | 候选和日期保留，typed unavailable 与 coverage 同时报出 |
-| HMM效果混入 raw market | raw control 固定；market-HMM 只相对 raw 判断，combined 同时比较两 predecessor |
-| development 结果污染 sealed holdout |所有诊断、选点和调试只读既有开发窗口；holdout 不挂载到命令 |
-| v2 扩张为新平台 | 两个 service 文件、一薄 CLI、三组直接测试；无 API/UI/DB/scheduler |
+| 纠正术语被当成修好 Alpha | 历史 selected=0 不变，新 lineage 仍须实际配对收益与干预证据 |
+| 再次形成“全弃权才安全” | 期望、概率、分位数、估计误差分离；风险效用前注册，不按 TAKE 数追调 |
+| 单次静态训练把老化误判为信息无效 | 一个静态 control + 一个因果更新比较，不能穷举周期 |
+| Ridge 负结果被外推为全局不可学 | 结论限当前信息/表达/模型；允许有界非线性对照而非新 loss 搜索 |
+| HMM 成为全链路阻塞 | R1/R2 依赖分离，canonical 要求只约束使用该源的阶段 |
+| 诊断/更新污染确认集 | 开发/选择/outer/ sealed 身份分离；更新只用当时成熟标签 |
+| 参数化拖成平台工程 | 只填 §5.7 必需参数并补直接测试，不做历史归档或通用校准平台 |
 
-## 11. Rollout / 发布、回滚与后续
+## 11. Rollout / 回滚与后续
 
-本设计可独立合入，但 source 未就绪时状态保持 `SOURCE_NOT_READY_NO_TRIAL`。canonical `rotation_L1` development OOF 合入并通过 target-free preflight 后，才在 fresh task worktree 实现、审核和运行一次 v2。selected=1 只进入独立 confirmation；selected=0 转新的 sector information-set review，不再改 v2 阈值、窗口、模型或 control 可选性。
-
-本阶段没有生产 rollout。回滚只移除尚未激活的 v2 代码/reference；不修改 v1 bundle、trial registry 历史行、父 StrategyPackage、Selection、生产 descriptor 或每日推荐。任何 runtime activation、backend restart、DDL/DML、动态仓位或订单仍需用户单独授权。
+本版替代 v1.0 未执行规格；没有生产 rollout，也不恢复 v1。完成 R0/R1 才报告源代码与研究结果；研究正结果仅放行独立确认，角色绑定、页面/API和动态仓位另按蓝图。回滚不删除历史 registry/window/bundle，不修改父包、Selection 或生产 descriptor。
 
 ## 12. Production Gates
 
@@ -313,35 +272,37 @@ position_or_order_write = false
 
 | design_item | requirement |
 |---|---|
-| F-231 | v1 正式负结果、阈值分解和 CPCV 跨日绝对校准限制均有明确事实边界，禁止反向预测或旧 frontier 重选 |
-| F-232 | v2 使用单一 chronological past-only split、成熟标签和一行一个预测，禁止 validation-complement absolute level |
-| F-233 | canonical `rotation_L1` causal development OOF 是 request 前硬依赖，source 不可用时零 trial 停止 |
-| F-234 | 五个固定 arm 全部计入 multiplicity，三个旧信息 control 不可选，只有 sector/combined 可选 |
-| F-235 | Ridge/Logistic/inner residual/action 阈值冻结，不换模型、不调参、不做 threshold grid |
-| F-236 | Admission 只作用父 Top5，允许 0～5 和无推荐，不重排、不补位、不形成动态权重 |
-| F-237 | shared policy simulator、causal prior calibration、支持度、family-wise lift 和 stability 分开验收 |
-| F-238 | objective/study/decision-use/lineage/registry/一次选点/exact retry 边界闭合 |
-| F-239 | PIT、normal missing、source lineage、sealed holdout 和三级证据边界 fail closed |
-| F-240 | 最小实现范围，无数据库、网络、API/UI、运行时、重启、DDL/DML 或上游 HMM 重复实现 |
+| F-231 | v1 负结果、诊断身份与 CPCV 绝对校准限制不改判；v1.0 未运行规格被新 revision 替代 |
+| F-232 | 每个 arm/日期 past-only 单预测，静态与一个因果更新对照；全部 transform 和标签按 fit 时钟成熟 |
+| F-233 | 分阶段 source gate；R1 不依赖 sector，R2 必须 canonical causal OOF，缺源零 trial |
+| F-234 | 有界线性/更新/可选非线性与信息增量比较，全部模型候选计累计 trial；不做笛卡尔网格 |
+| F-235 | 期望、概率、收益分位数与估计区间分离；动作效用独立；§5.7 参数化后才可开跑 |
+| F-236 | 父 Top5 固定槽位 0～5、不重排不补位、无资金权重；故障不等于主动 SKIP |
+| F-237 | same-policy 配对、完整 frontier、MDE/干预/经济证据分报，不要求全部维度同时改善 |
+| F-238 | 新 revision、研究族累计、一次选点、修复/重试身份及 objective/decision-use 一致 |
+| F-239 | PIT、maturity、normal missing、holdout 隔离与三级证据边界 |
+| F-240 | 最小实现，无 HMM 产品重复建设，无 DB/API/UI/runtime/DDL/重启 |
 
 ## 14. Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-231 | §1～§3；v1 bundle/diagnostic identity | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/score_hmm_admission_bundles/f8da2f70eb51b151b303ee5d19f12d9a651ba4b386291626f3dd33689a78f471/frontier_receipt.json`；本设计 §1 exact-retry hashes | DESIGN_VERIFIED | none |
-| F-232 | §5.2、§5.5 chronological contract | target `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` future-block/complement/base-rate tests | DESIGN_READY | approved_by_user: implementation follows canonical sector source readiness |
-| F-233 | §2.2、§5.1 source preflight | target `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py` source-not-ready zero-trial test | DESIGN_READY_SOURCE_UNAVAILABLE | approved_by_user: PR #4343 is input-bundle-only and not a canonical prediction source |
-| F-234 | §5.4、§6.3 arm/selection contract | target `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` control-unselectable and 0/1 selection tests | DESIGN_READY | approved_by_user: new information before selectable candidate |
-| F-235 | §5.5～§5.6 frozen model/action | target `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` fixed-model/no-grid tests | DESIGN_READY | approved_by_user: no result-driven threshold relaxation |
-| F-236 | §5.6 Admission | target `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` 0..5/no-backfill/unavailable tests | DESIGN_READY | none |
-| F-237 | §6 evaluation | target `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` baseline/calibration/support/family-wise tests | DESIGN_READY | none |
-| F-238 | §5.1、§6.3、§7 delivery/governance | target `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` registry/route/retry/tamper tests | DESIGN_READY | none |
-| F-239 | §2.2、§5.2～§5.3、§9 PIT/evidence tests | target `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py`; `test_causal_admission_v2_pipeline.py` | DESIGN_READY | none |
-| F-240 | §3、§7～§12 false gates | target `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py`; F2 validator | DESIGN_READY_NO_PRODUCTION_MUTATION | approved_by_user: restart and DDL remain separate user gates |
+| F-231 | §§1～2；历史 v1 bundle | artifact: v1 f8da2f70... frontier；§1.2 exact hashes；blueprint §1.3 | DESIGN_VERIFIED | none |
+| F-232 | §§5.1～5.2 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` chronological/update/maturity/poison tests | DESIGN_READY | approved_by_user: 本次仅设计修订，§5.7 参数化和源码未完成 |
+| F-233 | §2.2、§5.3 | PR #4343/#4353；G2-A v1.2 17/39 structural stop；target: `backend/tests/advisory_model_first/test_causal_admission_v2_contracts.py` stage-source tests | DESIGN_READY | approved_by_user: sector OOF 尚未通过验收，R1 不以此为前置 |
+| F-234 | §5.4 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` bounded-arm/trial-count tests | DESIGN_READY | approved_by_user: R0 冻结精确 arm manifest 后实施 |
+| F-235 | §§5.5～5.7 | source: score_hmm_admission_pipeline.py residual q20；target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` estimand/action/cost tests | DESIGN_READY | approved_by_user: 统计定义已修订；参数化和模型效果尚未验证 |
+| F-236 | §5.6 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` no-backfill/unavailable tests | DESIGN_READY | none |
+| F-237 | §6 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py` policy/frontier/support/multiplicity tests | DESIGN_READY | approved_by_user: 数值阈值和支持度依 §5.7 预注册 |
+| F-238 | §§5.1、6.3、7 | target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` identity/retry/route tests | DESIGN_READY | none |
+| F-239 | §§5.2～5.3、6.3、9 | artifact: N0 research_window_contract.json metadata；target: PIT/window tests | DESIGN_READY | none |
+| F-240 | §§3、7～12 | F2 validator；target: `backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py` false-gates | DESIGN_READY_NO_PRODUCTION_MUTATION | approved_by_user: 本次不改代码、不运行实验或生产操作 |
 
 ## 15. DESIGN-COMPLIANCE-001
 
-1. **禁止简化交付**：v2 必须同时实现 chronological clock、成熟标签、五臂完整消融、双头校准、固定 Admission、shared policy replay、一次选择和 immutable delivery；不得用单个 threshold patch 冒充完成。
-2. **禁止静默错误或伪成功**：source unavailable、normal missing、model invalid、合法全 SKIP 和经济 selected=0 分型；无 neutral、删行、常数、反向预测或旧 arm fallback。
-3. **禁止改变批准业务逻辑**：父候选、顺序、Top5、policy 和成本不变；模型只允许固定槽位 TAKE/SKIP，不重排、不补位、不形成资金权重。
-4. **禁止私增门禁或审批**：统计条件自动执行且只约束研究证据；不新增人工审批、registry UI 或平台。生产重启、DDL/DML、activation 继续由用户单独授权。
+1. 不以文档合入冒充实现：R0 参数化、R1 源码、R2 source 与 R3 确认逐项保留缺口；本次只完成设计修订。
+2. 不静默失败：normal missing、系统缺源、无效模型、主动 SKIP 和负实验分型；无规则/常数/旧 arm 冒充模型。
+3. 不越权改变业务：新实验 revision 不改历史结论；父 Top5、policy、成本和无资金仓位边界不变。
+4. 不新增审批或平台：仅自动正确性与预注册检查，后端重启/DDL 沿用用户权限；HMM 可选，不制造人工等待。
+
+方法依据及金融适用限制统一见顶层蓝图 §6.12；本版不把文献外部正结果认定为 AIstock 已实现效果。
