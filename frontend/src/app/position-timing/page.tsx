@@ -267,10 +267,13 @@ export default function PositionTimingPage() {
   const [alertEdges, setAlertEdges] = useState<AlertEdge[]>([]);
 
   const loadReadModels = useCallback(async () => {
+    const modelAdviceRequest = requestJson<CurrentModelAdvice>("/model-advice/current").catch(
+      () => ({ status: "MODEL_ADVICE_READ_UNAVAILABLE", advice_set: null }),
+    );
     const [intentPayload, cardsPayload, modelAdvicePayload, evidencePayload] = await Promise.all([
       requestJson<IntentList>("/intents"),
       requestJson<CurrentCards>("/cards/current"),
-      requestJson<CurrentModelAdvice>("/model-advice/current"),
+      modelAdviceRequest,
       requestJson<Evidence>("/evidence"),
     ]);
     setIntentRows(intentPayload.items);

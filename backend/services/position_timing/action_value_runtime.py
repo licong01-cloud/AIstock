@@ -100,6 +100,11 @@ def materialize_model_advice(
         try:
             if symbol in stock_errors:
                 raise stock_errors[symbol]
+            if member["delist_risk"] is None:
+                raise ActionValueError(
+                    member.get("delist_reason_code")
+                    or "MODEL_DELIST_CONTEXT_UNAVAILABLE"
+                )
             state, max_exposure, direction_only = _state_from_member(member, stock_frames[symbol])
             decision = decide_stock_day(
                 symbol=symbol,
@@ -109,7 +114,7 @@ def materialize_model_advice(
                 decision_as_of=decision_as_of,
                 model=model,
                 max_exposure=max_exposure,
-                delist_risk=bool(member.get("delist_risk")),
+                delist_risk=member["delist_risk"],
             )
             item = {
                 **public_advice(decision, direction_only=direction_only),
@@ -177,6 +182,11 @@ def current_model_advice(*, timing_root: Path, now: datetime) -> dict[str, Any]:
     if not advice_path.is_relative_to(timing_root.resolve()):
         raise ActionValueError("MODEL_ADVICE_PATH_OUTSIDE_OWNER")
     advice = _read_hash_bound(advice_path, "advice_sha256", "MODEL_ADVICE_ARTIFACT_INVALID")
+    if (
+        state.get("advice_sha256") != advice.get("advice_sha256")
+        or state.get("decision_trade_date") != advice.get("decision_trade_date")
+    ):
+        raise ActionValueError("MODEL_ADVICE_CURRENT_STATE_MISMATCH")
     target = date.fromisoformat(advice["target_trade_date"])
     if now.date() < target:
         status = "UPCOMING"
@@ -227,7 +237,11 @@ def _normalize_member(raw: Mapping[str, Any]) -> dict[str, Any]:
         "primary_source_role": raw["primary_source_role"],
         "holding": holding,
         "intent": intent,
-        "delist_risk": bool(raw.get("delist_risk")),
+        "delist_risk": (
+            raw.get("delist_risk") if isinstance(raw.get("delist_risk"), bool) else None
+        ),
+        "delist_reason_code": raw.get("delist_reason_code"),
+        "delist_identity": dict(raw.get("delist_identity") or {}),
     }
 
 
@@ -312,8 +326,9 @@ def _publish_date_advice(root: Path, payload: Mapping[str, Any]) -> tuple[dict[s
     with _exclusive_file_lock(lock):
         existing = _read_date_advice(root, decision_date)
         if existing is not None:
-            if existing["advice_sha256"] != payload["advice_sha256"]:
-                raise ActionValueError("MODEL_ADVICE_DATE_IDENTITY_CONFLICT")
+            # The first immutable daily artifact is authoritative. Concurrent
+            # callers can differ in request-time metadata such as created_at;
+            # they must converge exactly like the pre-lock fast path does.
             selected, created = existing, False
         else:
             path = root / "model_advice_v2" / decision_date.isoformat() / f"advice-{payload['advice_sha256']}.json"

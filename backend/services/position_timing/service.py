@@ -337,13 +337,45 @@ class PositionTimingService:
             if scope.updated_at > decision_as_of:
                 raise ActionValueError("ANALYSIS_SCOPE_CHANGED_AFTER_CUTOFF")
             selected, _ = self._analysis_members(members=members, scope=scope)
+            selected_symbols = [
+                member.canonical_symbol
+                for member in selected
+                if member.normalization_reason is None
+                and _is_supported_a_share(member.canonical_symbol)
+            ]
+            delist_snapshot = self._safe_batch_load(
+                self.dependencies.delist_snapshot_loader,
+                selected_symbols,
+                decision_date,
+                unavailable_code="DELIST_SOURCE_UNAVAILABLE",
+            )
+            delist_identity_valid = _has_valid_batch_identity(delist_snapshot)
+            delist_rows = delist_snapshot.get("rows") or {}
             start_date = decision_date - timedelta(days=370)
             calendar = tuple(
                 self.dependencies.calendar_service.list_trading_days(start_date, decision_date)
             )[-80:]
             intent_by_symbol = {item.canonical_symbol: item for item in self.store.list_intents()}
-            payload = [
-                {
+            payload = []
+            for member in selected:
+                if member.normalization_reason is not None:
+                    continue
+                delist_fact = dict(delist_rows.get(member.canonical_symbol) or {})
+                if not delist_identity_valid:
+                    delist_risk, delist_reason = None, "DELIST_SOURCE_IDENTITY_INVALID"
+                elif (
+                    "delist_flag" not in delist_fact
+                    or not delist_fact.get("evidence_hash")
+                ):
+                    delist_risk, delist_reason = None, "DELIST_IDENTITY_UNAVAILABLE"
+                elif not _available_by(
+                    delist_fact.get("feature_available_at"), decision_as_of
+                ):
+                    delist_risk, delist_reason = None, "DELIST_PIT_UNAVAILABLE"
+                else:
+                    delist_risk, delist_reason = bool(delist_fact["delist_flag"]), None
+                payload.append(
+                    {
                     "canonical_symbol": member.canonical_symbol,
                     "display_name": member.display_name,
                     "primary_source_role": member.primary_source_role.value,
@@ -353,11 +385,13 @@ class PositionTimingService:
                         if member.canonical_symbol in intent_by_symbol
                         else {}
                     ),
-                    "delist_risk": False,
-                }
-                for member in selected
-                if member.normalization_reason is None
-            ]
+                        "delist_risk": delist_risk,
+                        "delist_reason_code": delist_reason,
+                        "delist_identity": _per_card_identity_ref(
+                            delist_snapshot.get("identity"), row=delist_fact
+                        ),
+                    }
+                )
             return materialize_model_advice(
                 timing_root=self.store.root,
                 now=now,

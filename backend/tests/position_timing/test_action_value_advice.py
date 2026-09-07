@@ -56,6 +56,18 @@ def test_risk_override_precedes_model_and_missing_cost_is_not_zero():
         decide_stock_day(**args, model=None)
 
 
+def test_confirmed_terminal_listing_blocks_watchlist_open_without_model():
+    args = inputs()
+    args["state"] = PositionState(0, 0, D(100000), D(100000))
+
+    decision = decide_stock_day(**args, model=None, delist_risk=True)
+
+    assert decision.action == "WAIT"
+    assert decision.plan.delta == 0
+    assert decision.authority == "FROZEN_RULE_RISK_OVERRIDE"
+    assert decision.reason_codes == ("TERMINAL_LISTING_BUY_BLOCKED",)
+
+
 def test_reference_scenario_never_publishes_quantities_or_executable_alert():
     args = inputs()
     args["state"] = PositionState(0, 0, D(100000), D(100000))

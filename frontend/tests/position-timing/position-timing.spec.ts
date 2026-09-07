@@ -196,3 +196,47 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
   expect(scopeWrites[0]).toEqual({ analysis_enabled: true });
   await expect(page.getByRole("button", { name: /下单|自动交易|买入|卖出/ })).toHaveCount(0);
 });
+
+test("experimental model read failure does not hide the rule product", async ({ page }) => {
+  await page.route("**/api/v1/position-timing/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/materialize")) {
+      await route.fulfill({ json: { status: "ALREADY_MATERIALIZED" } });
+    } else if (path.endsWith("/intents")) {
+      await route.fulfill({ json: { items: [], scope_warnings: [] } });
+    } else if (path.endsWith("/cards/current")) {
+      await route.fulfill({ json: { status: "NO_CARD_SET", card_set: null } });
+    } else if (path.endsWith("/model-advice/current")) {
+      await route.fulfill({
+        status: 503,
+        json: { detail: { error_code: "MODEL_ADVICE_ARTIFACT_INVALID" } },
+      });
+    } else if (path.endsWith("/evidence")) {
+      await route.fulfill({
+        json: {
+          product_evidence_tier: "RULE_BASED_RISK_MANAGEMENT",
+          event_counts: {},
+          l2_runtime_status: "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL",
+          hmm_runtime_role: "CONTEXT_ONLY",
+          selection_runtime_role: "CONTEXT_ONLY",
+          cost_disclosure: {
+            min_commission_scope_verification: "BROKER_UNVERIFIED",
+            thresholds_cny: { "1.00": 58824, "0.50": 117648, "0.25": 235295 },
+          },
+        },
+      });
+    } else if (path.endsWith("/alerts/poll")) {
+      await route.fulfill({ json: { status: "NO_CARD_SET", items: [] } });
+    } else {
+      await route.abort();
+    }
+  });
+
+  await page.goto("/position-timing");
+
+  await expect(page.getByRole("heading", { name: "持仓与自选择时建议" })).toBeVisible();
+  await expect(page.getByText(/正式规则卡继续独立运行/)).toBeVisible();
+  await expect(page.getByTestId("model-advice-status")).toContainText(
+    "MODEL_ADVICE_READ_UNAVAILABLE",
+  );
+});

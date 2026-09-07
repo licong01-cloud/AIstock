@@ -64,7 +64,7 @@
 | `EVID-MINUTE-SNAPSHOT` | 最新只读候选 `20260831-qe_hmm_full_v2-direct-20260905-candidate` 的 minute component 为 PASS，SH/SZ、排除 BJ，日历 `2024-01-02 09:30:00` 至 `2026-08-31 15:00:00`，5,136 个 physical feature instruments、155,292 calendar rows；生产写入与 pointer change 均为 0 | `X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260905-candidate/direct_monthly_state.json`、`components/minute_bin_candidate/meta_export.json`、`calendars/1min.txt` |
 | `EVID-MINUTE-BASIS` | minute Bin 的 OHLC 为 `raw × qfq_factor`，volume 为 `raw_shares / qfq_factor`，amount 为原始人民币成交额；因此 raw open=`$open/$factor`，raw VWAP=`Σ$amount/Σ($volume×$factor)` | `backend/qlib_exporter/authoritative_bin_exporter.py:1222`、`:1231` |
 | `EVID-FACTOR-LIBRARY-20260907` | 只读分析显示因子库共 789 项、可用 584 项，覆盖 MOM/VOL/LIQ/VAL/QUAL/CORR/TECH/SIZE/STAT/MF/CHIP/ML；数据字段使用率为 daily_pv 100%、daily_basic 68.8%、moneyflow 50%、bak_basic 73.3%、cyq_perf 100%、sector_data 95.7%、static_factors 0%。这些百分比是“因子定义使用了多少字段”，不是行级/日期覆盖率，也不是择时有效性证据 | `python scripts/analyze_factor_library.py --json`；`scripts/analyze_factor_library.py` |
-| `EVID-HMM-RUNTIME-20260907` | 运行态 evidence 把 HMM 标为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`，市场 regime methods 当前 `available=[]`；这是当前接入准备度，不是永久否定 HMM 方法 | `GET /api/v1/position-timing/evidence`；`GET /api/v1/market/regime-label/methods` |
+| `EVID-HMM-RUNTIME-20260907` | 早先运行态 evidence 把 HMM 标为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`，市场 regime methods 当时 `available=[]`。随后 G2-A 产品源码已合入 main，但其权威状态仍为 `PENDING_FORMAL_39FIT`，真实 OOF/model/product、DDL 和 runtime 尚未完成；所以它现在是可评估的未来 feature-block 来源，不是 PT-NEXT-004 已可消费的稳定择时输入，也不是永久否定 HMM 方法 | `GET /api/v1/position-timing/evidence`；`GET /api/v1/market/regime-label/methods`；`docs/architecture/hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` v1.3.2 |
 | `EVID-MULTI-AGENT-BOUNDARY` | 当前股票分析默认关闭 news/announcement；response 含 `agents_raw/discussion/final_decision` 自由结构，`analyze_stock` 还会写 `app.analysis_records`。新闻内部调用未把 `analysis_date` 传入 `_get_news_data`，Eastmoney 公告内部调用也未传日期窗口；趋势分析仍声明为 mock skeleton。因此择时不得直接调用该有副作用 POST，也不得把原始 LLM 文本当模型输入或决策 authority | `backend/agents/stock_analysis.py:39`、`:47`；`backend/models/analysis.py:24`、`:29`；`backend/services/analysis_service.py:208`、`:599`、`:643`；`backend/core/qstock_news_data_impl.py:70`；`backend/core/unified_data_access_impl.py:1693` |
 | `EVID-EVENT-PIT-BASE` | timestamp 与发行人绑定纯实现可复用，但不证明旧事件值可还原；公告 adapter 对 signal_key upsert 会更新 available_at、status、severity 等，DATE_ONLY 也不等于精确可见时刻。历史特征还需当时版本/可重建源，否则只作前瞻快照或排除 | `backend/services/event_signal/time_semantics.py`；`backend/services/event_signal/announcement_issuer_binding.py:202`；`backend/services/event_signal/announcement_adapter.py:568` |
 | `EVID-CPCV-BOUNDARY` | 既有 CPCV 从 validation blocks 的补集选训练再 purge/embargo，允许训练日期晚于验证日期；这是组合稳健性诊断，不是历史可部署的滚动收益证明，v1 receipt 保持原值 | `backend/services/advisory_model_first/policy_cpcv.py:73`；`EVID-L2-FORMAL` 同 bundle 的 `cpcv_paths.json` |
@@ -966,7 +966,7 @@ git diff --check
 
 ### 10.6 v2.6 实现与文档复核记录
 
-本轮实施和正式研究按多轮复核收口：先核训练/运行时钟、模型发布因果与连续资金路径，再核公司行动删失、分钟 candidate 实际格式、非有限值 canonical JSON 和 registry selected 计数，最后核 API/UI、隔离和蓝图前后一致性。正式运行使用 `lightgbm==4.6.0`，没有安装新依赖；首次完整结果为 `INCONCLUSIVE`，没有 serving publication。F2 validator、完整 position-timing test、前端 TypeScript/lint/build/Playwright、guardrail 与 DESIGN-COMPLIANCE-001 的最终结果以本次 PR 实际记录为准；静态 validator 不证明 alpha 或生产运行态已加载。
+本轮实施和正式研究按多轮复核收口：先核训练/运行时钟、模型发布因果与连续资金路径，再核公司行动删失、分钟 candidate 实际格式、非有限值 canonical JSON 和 registry selected 计数，最后核 API/UI、隔离和蓝图前后一致性。第三轮代码复核又修正了三类失效模式：实验建议不得把退市上下文硬编码为安全值，current pointer 必须反向绑定实际 advice hash/date，同日并发物化必须收敛到首个不可变 artifact；前端实验建议读取失败仅显示 typed unavailable，不得连带隐藏正式 L1 产品。正式运行使用 `lightgbm==4.6.0`，没有安装新依赖；首次完整结果为 `INCONCLUSIVE`，没有 serving publication。完整 position-timing 后端 `151 passed`；集中 `position_timing_first_release` 同时通过 compile、同一 151 项后端、TypeScript、lint、production build 与目标 Playwright `2 passed`。F2 validator、guardrail 与 DESIGN-COMPLIANCE-001 的最终结果以本次 PR 实际记录为准；静态 validator 不证明 alpha 或生产运行态已加载。
 
 | 轮次 | 已发现并修订的设计偏差 | 对照位置 |
 |---|---|---|
@@ -975,6 +975,7 @@ git diff --check
 | 3 一致性/隔离 | 历史与未来版本、正式/实验模型、监督目标与统计 family、共享规则与可交易性、计划与已验证证据逐项分开 | §10.5、§12～§15 |
 | 4 实现/正式数据 | 月度训练不得重置袖套；20:00 与 15:00 分离；模型 published-at 不回填；逐行 available-at；公司行动改显式右删失；minute instruments datetime 可读 | `action_value_research.py`、`action_value_model.py`、`action_value_data.py`、`action_value_execution_audit.py` |
 | 5 交付/非有限值 | 研究 request/bundle/model/registry/current 全部自有且可重试；未成交 NaN 转 typed null；一个联合政策在 registry 最多 selected 1；实验建议不生成 card/alert/order | `action_value_pipeline.py`、`action_value_runtime.py`、`action_value_advice.py`、`EVID-ACTION-V2-FORMAL` |
+| 6 运行安全/UI 降级 | 实验建议复用 PIT 退市上下文且缺失时逐股 typed unavailable；current pointer 反向校验 advice；同日竞态首写胜出；实验 GET 失败不隐藏 L1 | `service.py`、`action_value_runtime.py`、`test_action_value_runtime.py`、`position-timing.spec.ts` |
 
 DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本文件，不存在另一份未同步实施计划。§10.5 的真实代码/API/UI/研究证据已经交付，但研究支持态与生产运行激活仍须按 receipt 和部署事实分别报告。
 

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from backend.services.position_timing.action_value import FEATURE_ORDER, TZ, cutoff_on
+from backend.services.position_timing.action_value import ActionValueError, FEATURE_ORDER, TZ, cutoff_on
 from backend.services.position_timing.action_value_model import HEADS, fit_local_model, write_local_model
 from backend.services.position_timing.action_value_runtime import (
+    _publish_date_advice,
     current_model_advice,
     materialize_model_advice,
 )
@@ -126,6 +129,7 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
                 "primary_source_role": "HOLDING",
                 "holding": {"quantity": 1000, "cost_price": 10},
                 "intent": {},
+                "delist_risk": True,
             },
             {
                 "canonical_symbol": "600000.SH",
@@ -136,6 +140,7 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
                     "planned_full_notional_cny": "120000",
                     "desired_target_exposure": "0.5",
                 },
+                "delist_risk": False,
             },
         ),
         snapshot_loader=lambda *_: snapshot,
@@ -148,6 +153,8 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
     assert advice["formal_card_changed"] is False
     assert advice["alert_emitted"] is False and advice["order_created"] is False
     assert advice["items"][0]["sizing_status"] == "DIRECTION_ONLY"
+    assert advice["items"][0]["action"] == "EXIT"
+    assert advice["items"][0]["authority"] == "FROZEN_RULE_RISK_OVERRIDE"
     assert advice["items"][0]["research_population_status"] == "IN_FROZEN_RESEARCH_SAMPLE"
     assert advice["items"][0]["planned_delta_qty"] is None
     assert advice["items"][1]["sizing_status"] == "PERSONALIZED_QUANTITY_ESTIMATE"
@@ -167,6 +174,100 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
     )
     assert retry["status"] == "ALREADY_MATERIALIZED"
     assert retry["advice_set"]["advice_sha256"] == advice["advice_sha256"]
+
+
+def test_missing_delist_context_is_typed_per_stock_unavailable(tmp_path: Path) -> None:
+    root = tmp_path / "timing"
+    _published_research(root)
+    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    decision_as_of = cutoff_on(calendar[-1])
+    snapshot = _snapshot(calendar, ["000001.SZ"], decision_as_of)
+
+    result = materialize_model_advice(
+        timing_root=root,
+        now=decision_as_of,
+        decision_date=calendar[-1],
+        decision_as_of=decision_as_of,
+        target_date=date(2026, 9, 9),
+        calendar=calendar,
+        members=(
+            {
+                "canonical_symbol": "000001.SZ",
+                "primary_source_role": "WATCHLIST",
+                "holding": {},
+                "intent": {},
+                "delist_reason_code": "DELIST_IDENTITY_UNAVAILABLE",
+            },
+        ),
+        snapshot_loader=lambda *_: snapshot,
+    )
+
+    assert result["advice_set"]["items"][0]["status"] == "UNAVAILABLE"
+    assert result["advice_set"]["items"][0]["reason_codes"] == [
+        "DELIST_IDENTITY_UNAVAILABLE"
+    ]
+
+
+def test_current_pointer_must_match_the_hash_bound_advice(tmp_path: Path) -> None:
+    root = tmp_path / "timing"
+    _published_research(root)
+    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    decision_as_of = cutoff_on(calendar[-1])
+    snapshot = _snapshot(calendar, ["000001.SZ"], decision_as_of)
+    materialize_model_advice(
+        timing_root=root,
+        now=decision_as_of,
+        decision_date=calendar[-1],
+        decision_as_of=decision_as_of,
+        target_date=date(2026, 9, 9),
+        calendar=calendar,
+        members=(
+            {
+                "canonical_symbol": "000001.SZ",
+                "primary_source_role": "WATCHLIST",
+                "holding": {},
+                "intent": {},
+                "delist_risk": False,
+            },
+        ),
+        snapshot_loader=lambda *_: snapshot,
+    )
+    pointer = root / "model_advice_v2" / "current.json"
+    state = json.loads(pointer.read_text(encoding="utf-8"))
+    state["decision_trade_date"] = "2026-09-07"
+    state["state_sha256"] = canonical_sha256(
+        {key: value for key, value in state.items() if key != "state_sha256"}
+    )
+    PositionTimingArtifactStore._atomic_replace(
+        pointer, canonical_json_bytes(state) + b"\n"
+    )
+
+    with pytest.raises(ActionValueError, match="CURRENT_STATE_MISMATCH"):
+        current_model_advice(timing_root=root, now=decision_as_of)
+
+
+def test_daily_publish_is_first_writer_wins_for_concurrent_request_metadata(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "timing"
+    first = {
+        "decision_trade_date": "2026-09-08",
+        "created_at": "2026-09-08T20:00:01+08:00",
+    }
+    first["advice_sha256"] = canonical_sha256(first)
+    second = {
+        "decision_trade_date": "2026-09-08",
+        "created_at": "2026-09-08T20:00:02+08:00",
+    }
+    second["advice_sha256"] = canonical_sha256(second)
+
+    selected, created = _publish_date_advice(root, first)
+    retry, retry_created = _publish_date_advice(root, second)
+
+    assert created is True
+    assert retry_created is False
+    assert selected == retry == first
+    assert len(tuple((root / "model_advice_v2" / "2026-09-08").glob("advice-*.json"))) == 1
 
 
 def test_get_is_read_only_and_before_cutoff_does_not_capture(tmp_path: Path) -> None:

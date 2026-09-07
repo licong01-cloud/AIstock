@@ -64,6 +64,19 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
         raise ActionValueError("CURRENT_RAW_PRICE_INVALID")
     if not Decimal(0) <= max_exposure <= 1:
         raise ActionValueError("ACTION_BUDGET_INVALID")
+    if delist_risk and not state.quantity:
+        plan = ActionPlan(symbol, 0, price)
+        return DailyActionDecision(
+            symbol,
+            decision_as_of,
+            "WAIT",
+            plan,
+            "FROZEN_RULE_RISK_OVERRIDE",
+            None,
+            POLICY_SHA256,
+            (),
+            ("TERMINAL_LISTING_BUY_BLOCKED",),
+        )
     risk = risk_exit_plan(symbol, state, price, delisted=delist_risk)
     if risk is not None:
         return DailyActionDecision(symbol, decision_as_of, action_name(state, risk.delta), risk,
