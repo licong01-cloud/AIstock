@@ -490,12 +490,13 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-21 | Playwright 失败反馈预算 | 关键交互继承 30 分钟全局测试上限，合同偏差会长期占用自托管 runner | 两个关键交互使用 30 秒局部超时；不放宽产品按钮、状态或自动日志读取语义 | resolved |
 | Review-22 | Playwright 折叠卡片合同 | 列表默认只展示登记与进度摘要，操作按钮位于展开区；测试直接查找“查看日志”会把正确折叠行为误判为缺失 | 按真实用户路径先点击实验卡片展开，再显式打开日志；产品折叠/按需日志合同保持不变 | resolved |
 | Review-23 | Playwright 日志协议 | 运行态日志由浏览器 `EventSource` 消费，JSON `route.fulfill` 会被正确识别为断流并重连，无法代表终态 tail 合同 | 在“查看日志”按钮已可见后把 mock 状态切为 `completed`，再点击并验证只发起一次 `/logs/tail` 读取；不伪造 SSE 或改变运行态重连逻辑 | resolved |
+| Review-24 | 最终 HEAD 与 CI 证据 | 前两次 Playwright 失败分别暴露折叠卡片和日志协议夹具偏差，不能以 Backend-only 结果宣称可合入 | 修正真实用户交互与终态 tail 合同后，最终源码 HEAD 的 AIstock CI run `34101195705` 全绿；PR #4382 为 `MERGEABLE/CLEAN` | passed |
 
 ## 14. Delivery Batch A 实施状态
 
-- 当前源码状态：`BATCH_A_SOURCE_READY_PENDING_CI_MERGE_RESTART`。
+- 当前源码状态：`BATCH_A_SOURCE_READY_FOR_MERGE`。
 - 已完成：统一预登记、事务内回读、任务/loop 与 Multi-Alpha parent/group 计划、durable readback、MCP/UI/source/purpose 摘要、只读历史/详情投影、GET 去远端写回、最小 UI 进度与隐藏页零轮询。
-- 本地证据：Batch A 聚焦回归 299 passed；`qe_read_backend` 316 passed / 1 skipped，`qe_data_contract_backend` 46 passed，`qe_sector_risk_overlay_backend` 90 passed，`platform_api_backend` 15 passed，Validation catalog/ownership/classifier 96 passed；F2 19/19、L0、Ruff、py_compile、diff-check 均通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；Playwright 与 TypeScript/build 必须由 PR CI 绑定最终 HEAD 执行。
+- 本地证据：Batch A 聚焦回归 299 passed；`qe_read_backend` 316 passed / 1 skipped，`qe_data_contract_backend` 46 passed，`qe_sector_risk_overlay_backend` 90 passed，`platform_api_backend` 15 passed，Validation catalog/ownership/classifier 96 passed；F2 19/19、L0、Ruff、py_compile、diff-check 均通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；PR CI run `34101195705` 已在源码 HEAD 上完成 TypeScript、Lint、精确 Playwright、Backend/MCP、Semgrep、catalog 和 workflow policy 并全绿。
 - 未执行：source merge、Backend/Frontend 运行态激活、用户重启、WSL/remote 真实实验、Archive 写入、历史补账、DDL/DML、依赖安装和进程控制。
 - `BATCH_A_REGISTERED_RUNTIME_READY` 尚未达到；它只能在 source 合入、用户按 runtime contract 重启以及 post-restart 双节点/最小 UI readback 通过后声明。
 
