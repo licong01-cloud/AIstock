@@ -13,7 +13,7 @@
   ],
   "assigned_agent": "codex_app",
   "bug_id": "BUG-1384",
-  "closed_at": null,
+  "closed_at": "2026-09-07T05:04:38Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -76,8 +76,8 @@
   },
   "first_seen_at": "2026-09-07T04:39:21.554088Z",
   "fix_branch": "bug/BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-si-20260907",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "494ecdadc57f8432000f3ff87eb362450d9c7b0a",
+  "fixed_at": "2026-09-07T05:04:38Z",
   "github_issue_number": 4367,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4367",
   "last_seen_at": "2026-09-07T04:39:21.554088Z",
@@ -85,6 +85,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4370",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -102,6 +103,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -111,7 +113,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -120,6 +122,10 @@
     "fingerprint": "7b39fab28d76e923ff6fbf20",
     "source_event_id": "FE-20260907-7b39fab28d76"
   },
+  "validation_evidence": [
+    "validation-receipt: id=9c7367afa082392e commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=e4f7fe65333f3ac7 commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
