@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1398",
-  "closed_at": null,
+  "closed_at": "2026-09-07T14:21:13.296629Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -185,10 +185,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1398\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1398",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "930e9b7bdf6a899861db65f4e47bb4ee8cb9808861fb78d0da9f9e26f119c0f6",
+      "contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+      "expected_identity": "782cdeed33a91af5d5bd9ed92ea0621d5c7bf908",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-07T14:20:18.831525Z",
+      "mode": "read_only",
+      "observed_identity": "782cdeed33a91af5d5bd9ed92ea0621d5c7bf908",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e0a342878fc220a55961a4b3a03910793c0ca99774c918957337a14025ad723d",
+      "receipt_sha256": "c4ff6a252839989e7f213e308724b5e49d47bbbeac22deddc718a4f2909e5a09",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "45a8a07c0c8385adb21f6ea7d990bfe817dd4f6f39c6b01b9eef4d584419b483",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -219,7 +241,7 @@
     ],
     "validation_evidence_digest": "df4d14ad55b445c406ad952f534dfcf1f7bd034ec36acb60056089f5969595a9"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -229,7 +251,8 @@
     "source_event_id": "FE-20260907-0c4144cba167"
   },
   "validation_evidence": [
-    "PR #4412 head 5b6d68bd5: CI verdict and Issue Auto Link passed; workflow finish ready_for_pr with 7 validation evidence entries"
+    "PR #4412 head 5b6d68bd5: CI verdict and Issue Auto Link passed; workflow finish ready_for_pr with 7 validation evidence entries",
+    "post-restart-verify backend-main exact identity and business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
