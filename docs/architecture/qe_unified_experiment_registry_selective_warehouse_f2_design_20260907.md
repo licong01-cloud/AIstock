@@ -2,6 +2,7 @@
 
 > Feature ID：`qe_unified_experiment_registry_selective_warehouse_v1`
 > Feature tier：F2
+> 设计版本：v1.1（3 个交付批次）
 > 日期：2026-09-07
 > 状态：`DESIGN_READY_SOURCE_NOT_STARTED`
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.14
@@ -293,52 +294,54 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 | F-018 | 代码合入、运行时生效、客户端同步、数仓写入和实验启动保持独立状态 |
 | F-019 | 实施必须逐项满足 DESIGN-COMPLIANCE-001，不得以部分入口或 mock-only 冒充完成 |
 
-## 6. Implementation Plan / 实施方案
+## 6. Implementation Plan / 三个交付批次
 
-### Phase 0：文档与入口清单
+本节只定义 3 个真实交付批次，不再把入口清单、测试准备或发布验收拆成独立开发阶段。默认每个批次形成一个可独立审核的 source PR 或验收 receipt；只有真实 ownership 冲突或 CI 无法安全覆盖时才允许在同一批次内技术性拆分 PR，拆分不产生新的业务审批、研究门禁或串行等待。19 项 Design Acceptance Index 保持不变。
 
-1. 合入本详细设计和父蓝图 v6.14 修订。
-2. 在实现分支以最新 `origin/main` 重新枚举所有正式 QE 创建/执行入口。
-3. 建立实现期 acceptance matrix，逐项绑定最终代码、测试和运行证据。
+| 批次 | 默认交付物 | 主要验收项 | 唯一结束标识 |
+|---|---|---|---|
+| A：统一登记与状态收敛 | 1 个 Backend/MCP/最小 Frontend source PR；必要运行态 readback 独立记录 | F-001～F-006、F-007 最小可见性、F-008～F-010、F-015～F-016 | `BATCH_A_REGISTERED_RUNTIME_READY`：所有正式入口先登记、现有 UI/API 可发现最小记录与进度、双节点状态可收敛；若需用户重启则在重启前保持 pending |
+| B：统一历史 UI 与选择性入仓 | 1 个 Backend/Frontend/MCP source PR | F-007 完整业务体验、F-011～F-014，并回归 A 的 identity/read-only 合同 | `BATCH_B_UI_ARCHIVE_RUNTIME_READY`：完整业务筛选历史 UI 和 preview/confirmed selective Archive 运行态可用 |
+| C：真实验收与上线 | 1 份绑定最终 HEAD 的验收 receipt；默认无 source PR | F-017～F-019，并汇总 F-001～F-016 | `FEATURE_RUNTIME_VERIFIED`：WSL/remote、用户重启恢复、UI 与授权 MCP 入仓全部形成真实证据 |
 
-### Phase 1：登记优先和轻量历史
+结束标识是技术状态摘要，不是新增的人工审批或研究准入条件。Batch A 验证完成即可恢复 registered 策略实验；Batch B/C 的完成只控制本 Feature 自身的完成声明。
 
-1. 新增薄的 `qe_run_registry` service，复用现有表和事务。
-2. 收口 single、custom、strategy、auto、Multi-Alpha 的 reservation、dispatch 和 transition。
-3. 把 source/purpose/dataset/universe/model/factor/seed/TWAP/node 摘要投影到既有字段。
-4. 阻断仓库内正式自动化脚本直接创建无登记运行。
-5. 保持 validation smoke 显式 purpose，不污染研究默认列表。
+### Delivery Batch A：统一登记与状态收敛
 
-Phase 1 完成后即可恢复正式策略实验；后续 UI/Archive 工作可以与实验运行并行，但新实验必须走已登记路径。
+目标：一次完成入口清单、统一登记、最小 UI 可见性和状态恢复，使所有新正式 QE 实验在计算前取得 identity，并可在 Backend 重启和双节点执行期间可靠收敛状态。
 
-### Phase 2：状态恢复与查询降载
+1. 以实现时最新 `origin/main` 重新枚举 single、custom、strategy、auto、Multi-Alpha、UI、Backend/Scheduler、Codex/Claude MCP、WSL 和 remote 的正式创建/执行入口，并在同一 PR 的 acceptance matrix 中绑定最终代码与测试；入口清单不是独立交付物。
+2. 新增薄的 `qe_run_registry` service，复用现有表、事务和状态机；统一 reservation-before-dispatch、dispatch identity 与 transition。
+3. 把 source/purpose/dataset/universe/model/factor/seed/TWAP/node 摘要投影到既有字段，保持 validation smoke 的显式 purpose，不污染研究默认列表。
+4. 阻断仓库内正式自动化脚本创建无登记运行；登记失败不分发，已分发 identity 不允许异步补造。
+5. 复用现有实验列表/详情能力，使登记记录在分发前即可由 UI/API 发现，运行中可查看最小进度与节点；Batch A 不等待 Batch B 的高级筛选或 Archive 操作。
+6. 统一 WSL/remote transition 和终态 receipt，复用 reconciliation coordinator 落实每对象不短于 60 秒、变化才写和终态退出。
+7. 保证 GET 只读、页面关闭零前端流量、实时日志不写 DB，并覆盖 Backend 重启期间节点继续、identity 不变、attempt 不重复提交。
+8. 完成本批直接 contract 测试、最小 UI/API 可见性测试、DB 数据面投毒、F2 validator、scope/ownership、diff-check 和 CI；若 changed files 要求 Backend/MCP runtime activation，source merge、用户重启与 post-restart readback 分开报告。
 
-1. 统一节点 transition 和终态 receipt 应用。
-2. 复用 reconciliation coordinator，落实 60 秒节流、变化才写和终态退出。
-3. 保证 GET 只读、页面关闭零前端流量、日志不写 DB。
-4. 增加 Backend 重启期间不重提交的 WSL/remote 合同测试。
+Batch A 的 source 与所需运行态验证完成后，新正式策略实验即可继续，并且必须走 registered path；不等待 Batch B 的 UI 完整展示或选择性 Archive 验收。Batch B 可以与已登记实验运行并行。
 
-### Phase 3：统一历史 UI
+### Delivery Batch B：统一历史 UI 与选择性入仓
 
-1. 扩展现有实验列表 API 的服务端分页和业务筛选。
-2. 复用现有实验/evolution/Multi-Alpha 详情组件，显示统一状态、progress counts 和数据身份。
-3. 增加 Archive 状态与 preview 入口。
-4. 禁止正式记录的普通删除；artifact 清理仅改变 retention 展示。
+目标：在 Batch A 的唯一 identity/状态源上一次交付人类可用的全部正式实验历史，以及用户选择或明确授权后的既有 QE Archive 入仓。
 
-### Phase 4：选择性入仓
+1. 扩展现有实验列表 API 的服务端分页和业务筛选；复用实验/evolution/Multi-Alpha 详情组件，统一显示状态、progress counts、数据 release、股票池、模型、因子、seed、节点、分钟 TWAP 和 artifact retention。
+2. 禁止内部 ID/JSON 作为普通用户主流程；以日期、类型、状态、节点、模型、因子族、股票池、release 和执行算法完成搜索、展开和选择。
+3. 复用 source-status、backfill preview/execute 与既有 Archive assembler；UI 支持 experiment/task/loop 多选、推荐原因、preview 和 confirm。
+4. 扩展 MCP 业务筛选和用户明确授权后的 confirmed execute；推荐规则只生成候选，不自动入仓。
+5. 覆盖重复入仓幂等、部分入仓、failed/cancelled、已清理 workspace、artifact cleaned 和正式控制记录不可普通删除的语义。
+6. 完成本批 Backend/Frontend/MCP 聚焦测试、可访问性与业务流 CI；运行态激活仍按 changed-files 合同分别报告，不与 source merge 合并。
 
-1. 复用 source-status、backfill preview/execute 和既有 Archive assembler。
-2. UI 支持 experiment/task/loop 多选、推荐原因、预览和确认。
-3. 扩展 MCP 业务筛选和授权后 confirmed execute 流程。
-4. 完成重复入仓幂等、部分入仓和已清理 workspace 的错误语义。
+### Delivery Batch C：真实验收、上线与策略主线持续运行
 
-### Phase 5：验收、发布与主线恢复
+目标：不默认新增业务代码，以最终合入 HEAD 完成真实双节点、重启恢复、UI 和选择性入仓验收；发现代码缺陷时按独立 BUG 修复，不把验收批次扩张成第四个 Feature 阶段。
 
-1. 完成最小本地测试、F2 validator、scope/ownership、diff-check 和 CI。
-2. 用户合入 source 后由用户决定 Backend/Frontend/MCP 的独立激活步骤。
-3. WSL 与远端各跑一条正式短实验，并验证 Backend 重启恢复。
-4. UI 和授权 MCP 各完成一次选择性入仓。
-5. 全部验收后继续父蓝图的 LSTM 多 seed、现实两层板块/lead-lag 与右尾目标；不启动历史补账。
+1. 确认 Batch A/B 的 source、CI、运行态身份和客户端状态分别完成；任何未完成状态单列，不伪造整体验收。
+2. WSL 与 remote 各运行一条正式短实验，验证分发前 UI/控制面已有记录、状态完整收敛、provider binding 正确且不突破现有并行上限。
+3. 由用户执行一次 Backend 重启，验证外部节点任务继续、恢复后 canonical identity 不变、无重复 attempt、GET 仍只读。
+4. UI 和用户明确授权的 MCP 各完成一次选择性入仓，验证 preview、confirmed execute、source-status、幂等和 Level 0 历史在 workspace cleanup 后仍可读。
+5. 汇总 19 项实现证据与 DESIGN-COMPLIANCE-001 四项，形成最终 receipt；不启动批量历史补账、全量 artifact 复制或通用平台建设。
+6. 策略主线在 Batch A 验证后已经恢复；Batch C 完成只代表本 Feature 全量验收，不是 LSTM 多 seed、现实两层板块/lead-lag 或右尾实验的启动门禁。
 
 ## 7. Verification Plan / 验证方案
 
@@ -377,13 +380,13 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3.2、§3.3、Phase 1 | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
+| F-001 | §3.2、§3.3、Delivery Batch A | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
 | F-002 | `qe_run_registry.py`、现有 evolution/durable adapters | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
 | F-003 | §3.3、§4.6 | `backend/tests/test_aistock_qe_mcp_servers.py` | design_review_pass | none |
 | F-004 | §3.4、active dataset binding | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-005 | §3.4、Phase 2 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | design_review_pass | none |
+| F-005 | §3.4、Delivery Batch A | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | design_review_pass | none |
 | F-006 | §3.5、§4.2 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | design_review_pass | none |
-| F-007 | §4.4、§4.5、Phase 3 | `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
+| F-007 | §4.4、§4.5、Delivery Batch A/B | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
 | F-008 | §4.3 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
 | F-009 | §4.1 | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
 | F-010 | §2.3、§7.2 | `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py` | design_review_pass | none |
@@ -401,11 +404,11 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 ### 9.1 发布顺序
 
-1. 合入设计与父蓝图修订；不产生运行时影响。
-2. 分阶段实现 source，测试和 CI 通过后单独请求或使用当次明确授权合入。
-3. 若 changed files 推断为 Backend/Frontend/MCP runtime，分别报告所需激活；Backend 重启始终由用户执行。
-4. 先做 WSL 与 remote 短验收，再让后续正式长实验全部走 registered path。
-5. 选择一个技术完整的代表性 run 做 UI 入仓，再在明确授权下做 MCP 入仓。
+1. 合入 v1.1 的三批次设计修订；不产生运行时影响。
+2. Delivery Batch A 一次交付登记与状态收敛；测试、CI、source merge、用户重启和 post-restart readback 分开记录。
+3. Batch A 运行态验证后，新正式实验立即走 registered path，策略主线无需等待 Batch B/C。
+4. Delivery Batch B 一次交付统一历史 UI 与选择性入仓；若 changed files 推断多个 runtime target，分别报告激活状态。
+5. Delivery Batch C 以最终 HEAD 完成 WSL/remote、用户重启恢复、UI 与授权 MCP 的真实验收；默认不新增代码。
 
 ### 9.2 回滚
 
@@ -446,7 +449,7 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | workspace 清理后 UI 404 | 历史与 artifact retention 分离 | DB/file 级联删除 |
 | 人工 ID/JSON 不可用 | 业务筛选、勾选和内部 identity 路由 | 暴露 ID 输入作为主流程 |
 | 双节点混用 release/path | run-scoped binding + node resolver + hash identity | WSL path 发送远端或静默回落 |
-| 功能挤占策略主线 | Phase 1 后恢复正式实验，后续并行；禁止历史补账 | 等全平台完善才允许运行 Alpha |
+| 功能挤占策略主线 | Batch A 运行态验证后恢复 registered 正式实验，Batch B/C 与实验并行；禁止历史补账 | 等全平台完善才允许运行 Alpha |
 | 非 QE 范围扩张 | QE-only ownership 和 changed-files scope | 顺带修改荐股、模拟盘或生产交易 |
 
 ## 12. DESIGN-COMPLIANCE-001 / 四项逐项审核
@@ -468,10 +471,15 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-3 | 双节点与重启语义 | 只做 UI 会继续遗漏直接 WSL/remote run，Backend 重启也可能重复提交 | 增加 reservation-before-dispatch、remote identity 和双节点 restart E2E | resolved |
 | Review-4 | 人类可用性 | 仅靠内部 ID、JSON 或 Archive 专页无法满足普通使用 | 增加业务字段筛选、parent-child 展开、列表内 preview/confirm | resolved |
 | Review-5 | DB 负载与历史膨胀 | 高频 heartbeat/event 与全量 artifact 会重复既有事故 | 60 秒节流、变化才写、终态退出、两级持久化和 bounded logs | resolved |
-| Review-6 | 研究主线优先级 | 若等待完整 UI/Archive 才恢复实验会造成目标偏移 | Phase 1 后立即允许 registered 正式实验，后续 UI/Archive 并行且不补历史 | resolved |
+| Review-6 | 研究主线优先级 | 若等待完整 UI/Archive 才恢复实验会造成目标偏移 | Batch A 运行态验证后立即允许 registered 正式实验，Batch B/C 并行且不补历史 | resolved |
 | Review-7 | 验收证据可验证性 | F-015/F-019 初稿使用了校验器无法识别的命令文本，F2 结构校验失败 | 改为明确的 `validation-receipt` 证据，不降低验收内容 | resolved |
 | Review-8 | 当前态与历史快照分离 | 父蓝图第 2.5/17 节仍残留 2026-08-30 数据阻断与 v6.13 前事实，和顶部权威段冲突 | 同步 2026-08-31 release、MA-E19R3/D1B-D1D/D2/D3 事实，并把旧阻断留在历史 rollout | resolved |
 | Review-9 | 最终结构、范围与四项合规 | 需要确认 19 项索引/矩阵、docs-only scope、无数据库/运行时动作和无新增研究审批 | F2 validator 19/19、L0 guardrail 0 finding、module registry 8 passed；四项逐项结论保留 | passed |
 | Review-10 | 最终 HEAD 格式门禁 | 首次提交后 `git diff --check origin/main...HEAD` 发现头部 5 处 Markdown 行尾空格 | 去除行尾空格并重新绑定最终提交运行全部最小门禁 | resolved |
+| Review-11 | 交付切分效率 | 6 个逻辑 Phase 容易被误执行为 6 个串行 PR/发布，增加等待与重复审核 | 压缩为 A 登记与状态、B UI 与入仓、C 真实验收三个交付批次；入口清单和测试纳入批次内 | resolved |
+| Review-12 | 压缩后完整性 | 批次数减少可能被误解为删减状态恢复、MCP、失败终态或真实 E2E | 保留全部 19 项验收和原功能范围；明确 Batch C 默认无新代码、发现缺陷走 BUG，不产生第四 Feature 阶段 | resolved |
+| Review-13 | 批次退出语义 | 三段任务未明确默认交付物和唯一结束标识，仍可能被实施者再次拆分或把 Batch C 当代码项目 | 增加 A/B/C 交付物、验收项和技术结束标识映射；强调结束标识不是审批或科研门禁 | resolved |
+| Review-14 | Batch A 过渡期可见性 | 若登记完成后立即恢复实验、但 UI 可见性全部等到 Batch B，仍可能形成新的“已登记但人类不可见”窗口 | Batch A 增加现有 UI/API 最小记录与进度可见性；Batch B 只负责完整业务检索、统一详情和选择性入仓 | resolved |
+| Review-15 | v1.1 最终审计 | 需要确认三批次映射没有减少 19 项验收、没有引入第四阶段、没有放宽 fail-closed 或增加人工门禁 | F2 validator、L0、module ownership、diff-check 与四项 DESIGN-COMPLIANCE 在最终提交重新执行 | passed |
 
 该记录只证明设计经过多轮内部审核，不表示 source 已实现、已合入、已在运行态生效或实验已经启动。实现必须在最终 HEAD 重新执行同一验收矩阵。
