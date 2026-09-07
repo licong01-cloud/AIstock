@@ -650,6 +650,9 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
     registration = _mapping(custom_params.get("_qe_run_registration"))
     if registration:
         item["registration_summary"] = registration
+    artifact_retention = _mapping(custom_params.get("_qe_artifact_retention"))
+    if artifact_retention:
+        item["artifact_retention"] = artifact_retention
     if row.get("progress_summary"):
         item["progress_summary"] = row.get("progress_summary")
     if include_config_summary:

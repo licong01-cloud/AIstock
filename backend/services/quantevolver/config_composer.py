@@ -78,6 +78,94 @@ QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 QE_DIRECT_V2_DATASET_BINDING_FILE = "qe_direct_v2_dataset_binding.json"
 QE_UNIVERSE_COVERAGE_RECEIPT_FILE = "qe_universe_coverage_receipt.json"
 
+_QE_HISTORY_STATUS_ALIASES: dict[str, tuple[str, ...]] = {
+    "planned": ("planned", "created"),
+    "queued": ("queued", "pending", "waiting", "waiting_capacity"),
+    "running": ("running", "processing"),
+    "finalizing": ("finalizing",),
+    "reconciling": ("reconciling",),
+    "completed": ("completed", "success", "succeeded"),
+    "failed": ("failed", "error", "timeout"),
+    "cancelled": ("cancelled", "canceled"),
+    "interrupted": ("interrupted",),
+}
+
+
+def _qe_history_filter_sql(
+    filters: Optional[Dict[str, Any]],
+    *,
+    alias: str = "e",
+    registration_expression: str | None = None,
+) -> tuple[str, list[Any]]:
+    """Build parameterized business filters for the QE history projection."""
+
+    values = dict(filters or {})
+    clauses: list[str] = []
+    params: list[Any] = []
+    registration = registration_expression or f"{alias}.custom_params->'_qe_run_registration'"
+
+    def add_text(field: str, expression: str, *, fuzzy: bool = False) -> None:
+        value = str(values.get(field) or "").strip()
+        if not value:
+            return
+        clauses.append(f"{expression} {'ILIKE' if fuzzy else '='} %s")
+        params.append(f"%{value}%" if fuzzy else value)
+
+    created_from = str(values.get("created_from") or "").strip()
+    if created_from:
+        clauses.append(f"{alias}.created_at >= %s::timestamptz")
+        params.append(created_from)
+    created_to = str(values.get("created_to") or "").strip()
+    if created_to:
+        clauses.append(f"{alias}.created_at < (%s::date + INTERVAL '1 day')")
+        params.append(created_to)
+
+    status = str(values.get("status") or "").strip().lower()
+    if status:
+        aliases = _QE_HISTORY_STATUS_ALIASES.get(status, (status,))
+        clauses.append(f"LOWER(COALESCE({alias}.status, '')) = ANY(%s)")
+        params.append(list(aliases))
+
+    add_text("source_type", f"{registration}->>'source_type'")
+    add_text("run_kind", f"{registration}->>'run_kind'")
+    add_text("purpose", f"{registration}->>'purpose'")
+    add_text("alpha_mode", f"COALESCE({alias}.alpha_mode, 'single')")
+    node_id = str(values.get("node_id") or "").strip()
+    if node_id:
+        clauses.append(
+            f"COALESCE({registration}->>'node_id', {alias}.custom_params->>'execution_node_id') = %s"
+        )
+        params.append(node_id)
+    add_text("model", f"COALESCE({alias}.model_id, '')", fuzzy=True)
+    add_text("dataset_release", f"{registration}->>'dataset_release_id'")
+    add_text("execution_algo", f"{registration}->>'execution_algo'")
+
+    universe_pool = str(values.get("universe_pool") or "").strip()
+    if universe_pool:
+        clauses.append(
+            f"COALESCE({registration}->'universe_pool_ids', '[]'::jsonb) @> %s::jsonb"
+        )
+        params.append(json.dumps([universe_pool], ensure_ascii=False))
+
+    factor = str(values.get("factor") or "").strip()
+    if factor:
+        clauses.append(f"COALESCE({alias}.factor_names, '[]'::jsonb)::text ILIKE %s")
+        params.append(f"%{factor}%")
+
+    query = str(values.get("query") or "").strip()
+    if query:
+        clauses.append(
+            "("
+            f"COALESCE({alias}.experiment_name, '') ILIKE %s OR "
+            f"COALESCE({alias}.model_id, '') ILIKE %s OR "
+            f"COALESCE({alias}.factor_names, '[]'::jsonb)::text ILIKE %s"
+            ")"
+        )
+        token = f"%{query}%"
+        params.extend((token, token, token))
+
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
@@ -2799,19 +2887,35 @@ class ConfigComposer:
         offset: int = 0,
         include_children: bool = False,
         detail: str = "summary",
+        filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """获取实验列表；默认只返回适合列表/MCP 使用的标量摘要。"""
-        if include_children:
-            return self._list_experiment_history(limit=limit, offset=offset, detail=detail)
+        if include_children or str((filters or {}).get("archive_status") or "").strip():
+            history = self._list_experiment_history(
+                limit=limit,
+                offset=offset,
+                detail=detail,
+                filters=filters,
+            )
+            if not include_children:
+                history["items"] = [
+                    item for item in history.get("items", [])
+                    if not item.get("parent_experiment_id")
+                ]
+            return history
 
         full_detail = detail == "full"
+        where_sql, where_params = _qe_history_filter_sql(filters)
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM qe_experiments")
+                cur.execute(
+                    f"SELECT COUNT(*) FROM qe_experiments e WHERE TRUE{where_sql}",
+                    where_params,
+                )
                 total = cur.fetchone()[0]
 
                 if full_detail:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT experiment_id, experiment_name, status,
                                factor_names, model_id, strategy_id,
                                workspace_path, wsl_command,
@@ -2822,12 +2926,13 @@ class ConfigComposer:
                                annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
                                created_at, updated_at, custom_params,
                                alpha_mode, multi_alpha_config, parent_multi_alpha_id
-                        FROM qe_experiments
+                        FROM qe_experiments e
+                        WHERE TRUE{where_sql}
                         ORDER BY created_at DESC
                         LIMIT %s OFFSET %s
-                    """, (limit, offset))
+                    """, (*where_params, limit, offset))
                 else:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT experiment_id, experiment_name, status,
                                jsonb_array_length(COALESCE(factor_names, '[]'::jsonb)) AS factor_count,
                                model_id, strategy_id,
@@ -2838,10 +2943,11 @@ class ConfigComposer:
                                annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
                                created_at, updated_at, custom_params,
                                alpha_mode, parent_multi_alpha_id
-                        FROM qe_experiments
+                        FROM qe_experiments e
+                        WHERE TRUE{where_sql}
                         ORDER BY created_at DESC
                         LIMIT %s OFFSET %s
-                    """, (limit, offset))
+                    """, (*where_params, limit, offset))
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -2850,7 +2956,15 @@ class ConfigComposer:
             compact_experiment_row(row, include_config_summary=True)
             for row in projected_rows
         ]
-        return {"ok": True, "total": total, "items": items, "detail": "full" if full_detail else "summary"}
+        return {
+            "ok": True,
+            "total": total,
+            "items": items,
+            "detail": "full" if full_detail else "summary",
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(items) < total,
+        }
 
     @staticmethod
     def _normalize_history_parent_ids(
@@ -2877,6 +2991,7 @@ class ConfigComposer:
         limit: int = 50,
         offset: int = 0,
         detail: str = "summary",
+        filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Return paged top-level QE history rows plus their evolution loops.
 
@@ -2886,14 +3001,49 @@ class ConfigComposer:
         historically persisted with parent_experiment_id == task_id.  This view
         normalizes that relationship without mutating existing experiment rows.
         """
+        task_registration = (
+            "COALESCE("
+            "et_filter.strategy_evo_config->'_qe_run_registration', "
+            "e.custom_params->'_qe_run_registration'"
+            ")"
+        )
+        where_sql, where_params = _qe_history_filter_sql(
+            filters,
+            registration_expression=task_registration,
+        )
+        archive_status = str((filters or {}).get("archive_status") or "").strip().lower()
+        task_registration_join = """
+            LEFT JOIN LATERAL (
+                SELECT et_lookup.strategy_evo_config
+                FROM qe_evolution_tasks et_lookup
+                WHERE et_lookup.task_id = e.qe_task_id
+                   OR et_lookup.base_experiment_id = e.experiment_id
+                ORDER BY et_lookup.updated_at DESC NULLS LAST, et_lookup.task_id DESC
+                LIMIT 1
+            ) et_filter ON TRUE
+        """
+        # Keep the base history query and Archive source-status projection in
+        # separate pool leases.  The Archive service has its own repository
+        # reads; holding this connection across that call would consume two
+        # leases for a single user-triggered request.
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM qe_experiments WHERE parent_experiment_id IS NULL")
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM qe_experiments e
+                    {task_registration_join}
+                    WHERE e.parent_experiment_id IS NULL{where_sql}
+                    """,
+                    where_params,
+                )
                 total = cur.fetchone()[0]
 
-                cur.execute("""
+                page_clause = "" if archive_status else "LIMIT %s OFFSET %s"
+                page_params: tuple[Any, ...] = () if archive_status else (limit, offset)
+                cur.execute(f"""
                     WITH parent_rows AS (
-                        SELECT e.experiment_id,
+                        SELECT e.experiment_id, e.qe_task_id,
                                GREATEST(
                                    COALESCE(e.updated_at, e.created_at),
                                    COALESCE((
@@ -2909,19 +3059,50 @@ class ConfigComposer:
                                    ), COALESCE(e.updated_at, e.created_at))
                                ) AS history_updated_at
                         FROM qe_experiments e
-                        WHERE e.parent_experiment_id IS NULL
+                        {task_registration_join}
+                        WHERE e.parent_experiment_id IS NULL{where_sql}
                     )
-                    SELECT experiment_id
+                    SELECT experiment_id, qe_task_id
                     FROM parent_rows
                     ORDER BY history_updated_at DESC NULLS LAST, experiment_id DESC
-                    LIMIT %s OFFSET %s
-                """, (limit, offset))
-                parent_ids = [row[0] for row in cur.fetchall()]
+                    {page_clause}
+                """, (*where_params, *page_params))
+                parent_rows = [
+                    (row[0], row[1] if len(row) > 1 else None)
+                    for row in cur.fetchall()
+                ]
 
-                if not parent_ids:
-                    return {"ok": True, "total": total, "items": []}
+        if archive_status:
+            from ..qe_archive.backfill_service import QEArchiveBackfillService
 
-                select_fields = """
+            source_status = QEArchiveBackfillService().get_source_status(
+                experiment_ids=[row[0] for row in parent_rows if not row[1]],
+                task_ids=[row[1] for row in parent_rows if row[1]],
+                include_recommendation=True,
+            )
+            matched: list[tuple[Any, Any]] = []
+            for experiment_id, task_id in parent_rows:
+                bucket = "tasks" if task_id else "experiments"
+                identity = task_id or experiment_id
+                item_status = (source_status.get(bucket) or {}).get(identity) or {}
+                if str(item_status.get("archive_status") or "not_archived").lower() == archive_status:
+                    matched.append((experiment_id, task_id))
+            total = len(matched)
+            parent_rows = matched[offset:offset + limit]
+        parent_ids = [row[0] for row in parent_rows]
+
+        if not parent_ids:
+            return {
+                "ok": True,
+                "total": total,
+                "items": [],
+                "detail": "full" if detail == "full" else "summary",
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+            }
+
+        select_fields = """
                            e.experiment_id, e.experiment_name, e.status,
                            e.factor_names, e.model_id, e.strategy_id,
                            e.qe_task_id, e.qe_loop_id,
@@ -2934,8 +3115,8 @@ class ConfigComposer:
                            et.base_experiment_id AS _evolution_base_experiment_id,
                            et.task_type AS _evolution_task_type
                     """
-                if detail == "full":
-                    select_fields = """
+        if detail == "full":
+            select_fields = """
                            e.experiment_id, e.experiment_name, e.status,
                            e.factor_names, e.model_id, e.strategy_id,
                            e.workspace_path, e.wsl_command,
@@ -2950,6 +3131,8 @@ class ConfigComposer:
                            et.task_type AS _evolution_task_type
                     """
 
+        with get_conn() as conn:
+            with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT {select_fields}
                     FROM qe_experiments e
@@ -2984,7 +3167,15 @@ class ConfigComposer:
                 str(exp.get("created_at") or ""),
             )
         )
-        return {"ok": True, "total": total, "items": normalized, "detail": "full" if detail == "full" else "summary"}
+        return {
+            "ok": True,
+            "total": total,
+            "items": normalized,
+            "detail": "full" if detail == "full" else "summary",
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(parent_ids) < total,
+        }
 
     def get_experiment_detail(self, experiment_id: str, detail: str = "summary") -> Dict[str, Any]:
         """获取实验详情；默认排除 result_metrics 等大 JSONB。"""

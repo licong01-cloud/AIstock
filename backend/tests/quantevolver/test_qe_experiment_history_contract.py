@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.services.quantevolver.config_composer import _qe_history_filter_sql
 from backend.services.quantevolver.payload_summary import compact_experiment_row
 from backend.services.quantevolver.qe_run_registry import QERunRegistry, canonical_status_counts
 
@@ -43,6 +44,57 @@ def test_registered_history_summary_keeps_business_identity_and_progress() -> No
     assert item["registration_summary"]["execution_algo"] == "TWAP"
     assert item["progress_summary"]["counts"]["failed"] == 1
     assert "custom_params" not in item
+
+
+def test_registered_history_summary_exposes_artifact_retention() -> None:
+    item = compact_experiment_row(
+        {
+            "experiment_id": "qe-cleaned",
+            "status": "completed",
+            "custom_params": {
+                "_qe_run_registration": {"source_type": "ui", "purpose": "research"},
+                "_qe_artifact_retention": {
+                    "schema_version": "qe_artifact_retention_v1",
+                    "status": "cleaned",
+                    "cleaned_at": "2026-09-07T12:00:00+08:00",
+                },
+            },
+        }
+    )
+
+    assert item["artifact_retention"]["status"] == "cleaned"
+    assert "custom_params" not in item
+
+
+def test_history_business_filters_are_parameterized_and_exclude_internal_ids() -> None:
+    sql, params = _qe_history_filter_sql(
+        {
+            "created_from": "2026-08-01",
+            "created_to": "2026-08-31",
+            "source_type": "mcp",
+            "run_kind": "custom_evolution",
+            "purpose": "research",
+            "status": "completed",
+            "node_id": "rdagent-node1",
+            "model": "LSTM",
+            "factor": "leadership",
+            "dataset_release": "qe-full-v2-20260831",
+            "universe_pool": "CSI300",
+            "execution_algo": "TWAP",
+            "query": "MA-E19",
+        }
+    )
+
+    assert "experiment_id" not in sql
+    assert "workspace_path" not in sql
+    assert "custom_params->'_qe_run_registration'" in sql
+    assert "run_kind" in sql
+    assert "factor_names" in sql
+    assert "ILIKE" in sql
+    assert params[0] == "2026-08-01"
+    assert "qe-full-v2-20260831" in params
+    assert '["CSI300"]' in params
+    assert ["completed", "success", "succeeded"] in params
 
 
 def test_partial_parent_counts_preserve_successful_and_failed_children() -> None:

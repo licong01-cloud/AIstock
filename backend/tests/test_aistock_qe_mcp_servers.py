@@ -126,6 +126,37 @@ def test_qe_experiment_list_defaults_to_summary_detail(experiment_mcp):
     assert captured["query"]["include_children"] == "true"
 
 
+def test_qe_experiment_list_forwards_human_business_filters(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["query"] = dict(request.url.params)
+        return {"ok": True, "items": []}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+    experiment_mcp.qe_experiment_list(
+        created_from="2026-08-01",
+        created_to="2026-08-31",
+        source_type="mcp",
+        run_kind="custom_evolution",
+        status="completed",
+        node_id="rdagent-node1",
+        model="LSTM",
+        factor="leadership",
+        dataset_release="qe-full-v2-20260831",
+        universe_pool="CSI300",
+        execution_algo="TWAP",
+        archive_status="recommended",
+    )
+
+    assert captured["query"]["created_from"] == "2026-08-01"
+    assert captured["query"]["run_kind"] == "custom_evolution"
+    assert captured["query"]["dataset_release"] == "qe-full-v2-20260831"
+    assert captured["query"]["universe_pool"] == "CSI300"
+    assert captured["query"]["archive_status"] == "recommended"
+    assert "experiment_id" not in captured["query"]
+
+
 def test_qe_experiment_get_defaults_to_summary_detail(experiment_mcp):
     captured = {}
 

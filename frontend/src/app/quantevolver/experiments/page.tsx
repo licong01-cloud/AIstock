@@ -16,7 +16,30 @@ const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveC
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
-const EXPERIMENT_HISTORY_BATCH_SIZE = 200;
+
+type HistoryFilters = {
+  created_from: string;
+  created_to: string;
+  source_type: string;
+  run_kind: string;
+  alpha_mode: string;
+  purpose: string;
+  status: string;
+  node_id: string;
+  model: string;
+  factor: string;
+  dataset_release: string;
+  universe_pool: string;
+  execution_algo: string;
+  archive_status: string;
+  query: string;
+};
+
+const EMPTY_HISTORY_FILTERS: HistoryFilters = {
+  created_from: "", created_to: "", source_type: "", run_kind: "", alpha_mode: "", purpose: "", status: "",
+  node_id: "", model: "", factor: "", dataset_release: "", universe_pool: "",
+  execution_algo: "", archive_status: "", query: "",
+};
 
 type Experiment = {
   experiment_id: string;
@@ -81,6 +104,11 @@ type Experiment = {
     current?: number;
     status?: string;
     counts?: Record<string, number>;
+  };
+  artifact_retention?: {
+    status?: string;
+    cleaned_at?: string | null;
+    cleanup_scope?: string;
   };
 };
 
@@ -249,7 +277,9 @@ function archiveStatusStyle(status?: string): CSSProperties {
 
 function ArchiveBadge({ status }: { status?: ArchiveSourceItemStatus | ArchiveTaskStatus }) {
   const archiveStatus = status?.archive_status || "not_archived";
-  return <span title={status?.run_ids?.join(", ") || ""} style={archiveStatusStyle(archiveStatus)}>{archiveStatusLabel(archiveStatus)}</span>;
+  const reason = status && "reason" in status ? status.reason : undefined;
+  const title = [reason, status?.run_ids?.join(", ")].filter(Boolean).join(" | ");
+  return <span title={title} style={archiveStatusStyle(archiveStatus)}>{archiveStatusLabel(archiveStatus)}</span>;
 }
 
 function summarizeBackfillReport(report: BackfillReport): string {
@@ -305,6 +335,8 @@ export default function ExperimentsPage() {
   const [selectedArchiveKeys, setSelectedArchiveKeys] = useState<Set<string>>(new Set());
   const [archiveActionLoading, setArchiveActionLoading] = useState<"preview" | "execute" | null>(null);
   const [allExperimentsLoaded, setAllExperimentsLoaded] = useState(true);
+  const [historyFilters, setHistoryFilters] = useState<HistoryFilters>({ ...EMPTY_HISTORY_FILTERS });
+  const appliedFiltersRef = useRef<HistoryFilters>({ ...EMPTY_HISTORY_FILTERS });
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -385,13 +417,21 @@ export default function ExperimentsPage() {
     });
   }
 
-  async function loadExperiments(page?: number) {
+  async function loadExperiments(page?: number, requestedPageSize: number = pageSize) {
     setLoading(true);
     setError(null);
     const targetPage = page ?? currentPage;
-    const offset = (targetPage - 1) * pageSize;
+    const offset = (targetPage - 1) * requestedPageSize;
     try {
-      const res = await fetch(`${API}/quantevolver/experiments?limit=${pageSize}&offset=${offset}&include_children=true`);
+      const search = new URLSearchParams({
+        limit: String(requestedPageSize),
+        offset: String(offset),
+        include_children: "true",
+      });
+      Object.entries(appliedFiltersRef.current).forEach(([key, value]) => {
+        if (value.trim()) search.set(key, value.trim());
+      });
+      const res = await fetch(`${API}/quantevolver/experiments?${search.toString()}`);
       const data = await res.json();
       const items = data.items || [];
       setExperiments(items);
@@ -408,37 +448,7 @@ export default function ExperimentsPage() {
   }
 
   async function loadAllExperiments() {
-    setLoading(true);
-    setError(null);
-    try {
-      let offset = 0;
-      let expectedTotal = 0;
-      const allItems: Experiment[] = [];
-      for (let guard = 0; guard < 100; guard += 1) {
-        const res = await fetch(`${API}/quantevolver/experiments?limit=${EXPERIMENT_HISTORY_BATCH_SIZE}&offset=${offset}&include_children=true`);
-        const data = await res.json();
-        if (!res.ok || data.ok === false) {
-          throw new Error(data.detail || data.error || `HTTP ${res.status}`);
-        }
-        const items: Experiment[] = data.items || [];
-        expectedTotal = data.total || expectedTotal;
-        allItems.push(...items);
-        const parentCount = allItems.filter((exp: Experiment) => !exp.parent_experiment_id).length;
-        if (parentCount >= expectedTotal || items.length === 0) break;
-        offset += EXPERIMENT_HISTORY_BATCH_SIZE;
-      }
-      setExperiments(allItems);
-      setTotal(expectedTotal);
-      setCurrentPage(1);
-      setSelectedArchiveKeys(new Set());
-      const loadedParentCount = allItems.filter((exp: Experiment) => !exp.parent_experiment_id).length;
-      setAllExperimentsLoaded(expectedTotal === 0 || loadedParentCount >= expectedTotal);
-      void loadArchiveStatusForExperiments(allItems);
-      refreshRunningStatuses(allItems, () => loadAllExperiments());
-    } catch (e: any) {
-      setError(e?.message || "Load failed");
-    }
-    setLoading(false);
+    await loadExperiments(currentPage);
   }
 
   useEffect(() => {
@@ -531,8 +541,12 @@ export default function ExperimentsPage() {
   }
 
   async function handleDelete(experimentId: string) {
-    const isRunning = experiments.find(e => e.experiment_id === experimentId)?.status === "running";
-    const msg = isRunning
+    const selected = experiments.find(e => e.experiment_id === experimentId);
+    const isRunning = selected?.status === "running";
+    const isRegistered = Boolean(selected?.registration_summary);
+    const msg = isRegistered
+      ? `确认清理 ${selected?.experiment_name || "该实验"} 的 workspace 与本地制品？\n\n正式实验历史、状态、指标和数仓记录将保留。`
+      : isRunning
       ? `实验 ${experimentId} 当前状态为"运行中"，强制删除可能导致 RDAgent 侧残留。\n\n确认删除？`
       : `确认删除实验 ${experimentId}？\n\n此操作将删除实验的workspace文件和数据库记录，不可撤销。`;
     if (!confirm(msg)) return;
@@ -541,7 +555,7 @@ export default function ExperimentsPage() {
       const data = await res.json();
       if (data.ok) {
         loadAllExperiments();
-        showToast("实验已删除", true);
+        showToast(data.history_retained ? "制品已清理，正式实验历史已保留" : "实验已删除", true);
       } else {
         alert(`删除失败: ${data.detail || "未知错误"}`);
       }
@@ -872,6 +886,19 @@ export default function ExperimentsPage() {
     const childCount = exp.childLoops.filter(child => canSelectLoopForArchive(child, exp.qe_task_id)).length;
     return count + self + childCount;
   }, 0);
+  const updateHistoryFilter = (key: keyof HistoryFilters, value: string) => {
+    setHistoryFilters(previous => ({ ...previous, [key]: value }));
+  };
+  const applyHistoryFilters = () => {
+    appliedFiltersRef.current = { ...historyFilters };
+    void loadExperiments(1);
+  };
+  const clearHistoryFilters = () => {
+    const empty = { ...EMPTY_HISTORY_FILTERS };
+    setHistoryFilters(empty);
+    appliedFiltersRef.current = empty;
+    void loadExperiments(1);
+  };
 
   return (
     <main style={{ padding: 24 }}>
@@ -901,17 +928,51 @@ export default function ExperimentsPage() {
 
       {/* 工具栏 */}
       <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+        <div data-testid="qe-history-business-filters" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginBottom: 12 }}>
+          <input aria-label="开始日期" type="date" value={historyFilters.created_from} onChange={e => updateHistoryFilter("created_from", e.target.value)} />
+          <input aria-label="结束日期" type="date" value={historyFilters.created_to} onChange={e => updateHistoryFilter("created_to", e.target.value)} />
+          <select aria-label="创建入口" value={historyFilters.source_type} onChange={e => updateHistoryFilter("source_type", e.target.value)}>
+            <option value="">全部来源</option><option value="ui">UI</option><option value="mcp">Codex/Claude MCP</option><option value="scheduler">调度器</option><option value="agent">Agent</option>
+          </select>
+          <select aria-label="实验类型" value={historyFilters.run_kind} onChange={e => updateHistoryFilter("run_kind", e.target.value)}>
+            <option value="">全部类型</option><option value="single">单次实验</option><option value="custom_evolution">自定义演进</option><option value="strategy_evolution">策略演进</option><option value="auto_evolution">自动演进</option><option value="multi_alpha">多 Alpha</option>
+          </select>
+          <select aria-label="Alpha 模式" value={historyFilters.alpha_mode} onChange={e => updateHistoryFilter("alpha_mode", e.target.value)}>
+            <option value="">全部 Alpha 模式</option><option value="single">单 Alpha</option><option value="multi">多 Alpha</option>
+          </select>
+          <select aria-label="用途" value={historyFilters.purpose} onChange={e => updateHistoryFilter("purpose", e.target.value)}>
+            <option value="">全部用途</option><option value="research">正式研究</option><option value="validation">验证</option>
+          </select>
+          <select aria-label="状态" value={historyFilters.status} onChange={e => updateHistoryFilter("status", e.target.value)}>
+            <option value="">全部状态</option><option value="planned">已规划</option><option value="queued">排队中</option><option value="running">运行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">已中断</option>
+          </select>
+          <select aria-label="节点" value={historyFilters.node_id} onChange={e => updateHistoryFilter("node_id", e.target.value)}>
+            <option value="">全部节点</option><option value="wsl2-5080">WSL</option><option value="rdagent-node1">远端节点</option>
+          </select>
+          <input aria-label="模型" placeholder="模型名称" value={historyFilters.model} onChange={e => updateHistoryFilter("model", e.target.value)} />
+          <input aria-label="因子" placeholder="因子名称或家族" value={historyFilters.factor} onChange={e => updateHistoryFilter("factor", e.target.value)} />
+          <input aria-label="数据版本" placeholder="数据 release" value={historyFilters.dataset_release} onChange={e => updateHistoryFilter("dataset_release", e.target.value)} />
+          <input aria-label="股票池" placeholder="股票池，如 CSI300" value={historyFilters.universe_pool} onChange={e => updateHistoryFilter("universe_pool", e.target.value)} />
+          <select aria-label="执行算法" value={historyFilters.execution_algo} onChange={e => updateHistoryFilter("execution_algo", e.target.value)}>
+            <option value="">全部执行算法</option><option value="TWAP">分钟 TWAP</option><option value="V24_PLAN">V24 分钟计划</option>
+          </select>
+          <select aria-label="数仓状态" value={historyFilters.archive_status} onChange={e => updateHistoryFilter("archive_status", e.target.value)}>
+            <option value="">全部数仓状态</option><option value="archived">已入仓</option><option value="fully_archived">全部入仓</option><option value="partially_archived">部分入仓</option><option value="recommended">推荐入仓</option><option value="eligible">可入仓</option><option value="manual_only">人工判断</option><option value="not_recommended">不建议</option><option value="skipped">已跳过</option><option value="not_archived">未入仓</option>
+          </select>
+          <input aria-label="业务搜索" placeholder="实验名、模型或因子" value={historyFilters.query} onChange={e => updateHistoryFilter("query", e.target.value)} onKeyDown={e => { if (e.key === "Enter") applyHistoryFilters(); }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" onClick={applyHistoryFilters} disabled={loading}>查询</button>
+            <button type="button" onClick={clearHistoryFilters} disabled={loading}>清空</button>
+          </div>
+        </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => loadAllExperiments()} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
-            {loading ? "Loading..." : "Refresh all"}
-          </button>
           <button onClick={() => loadExperiments(currentPage)} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
-            Refresh page
+            {loading ? "加载中..." : "刷新本页"}
           </button>
           <span style={{ fontSize: 12, color: "#9ca3af" }}>Parents {loadedParentCount}/{total} | Loops {loadedLoopCount} | Visible {experiments.length} | HMM {hmmRecordCount} | {allExperimentsLoaded ? "all loaded" : `page ${currentPage}/${totalPages}`}</span>
           <select
             value={pageSize}
-            onChange={e => { setPageSize(Number(e.target.value)); loadExperiments(1); }}
+            onChange={e => { const nextSize = Number(e.target.value); setPageSize(nextSize); void loadExperiments(1, nextSize); }}
             style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151" }}
           >
             {[10, 20, 50, 100, 200].map(n => <option key={n} value={n}>{n} 条/页</option>)}
@@ -993,7 +1054,7 @@ export default function ExperimentsPage() {
             刷新数仓状态
           </button>
           <span style={{ padding: "4px 8px", borderRadius: 999, background: allExperimentsLoaded ? "#ecfdf5" : "#fffbeb", color: allExperimentsLoaded ? "#047857" : "#b45309", fontWeight: 700, fontSize: 11 }}>
-            {allExperimentsLoaded ? "Full view: all saved experiments are visible" : "Paged view: refresh all to inspect every experiment"}
+            {allExperimentsLoaded ? "当前查询仅一页" : "服务端分页：按条件继续翻页"}
           </span>
         </div>
         {error && <div style={{ marginTop: 8, padding: 8, background: "#fee2e2", borderRadius: 6, fontSize: 12, color: "#991b1b" }}>{error}</div>}
@@ -1341,7 +1402,7 @@ export default function ExperimentsPage() {
                           border: "1px solid #ef4444", background: "#fff",
                           color: "#ef4444", fontWeight: 600,
                         }}>
-                        删除
+                        {exp.registration_summary ? "清理制品" : "删除"}
                       </button>
                     </div>
                   </div>
@@ -1498,7 +1559,7 @@ export default function ExperimentsPage() {
                                         border: "1px solid #ef4444", background: "#fff",
                                         color: "#ef4444", fontWeight: 600,
                                       }}>
-                                      删除
+                                      {child.registration_summary ? "清理制品" : "删除"}
                                     </button>
                                   </div>
                                 </div>
