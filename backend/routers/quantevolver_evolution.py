@@ -307,6 +307,9 @@ class EvolutionTaskCreateRequest(BaseModel):
     # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
+    created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型: ui/mcp/scheduler/agent")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 @router.post("/tasks", summary="创建并启动新的自动演进任务")
 async def create_evolution_task(req: EvolutionTaskCreateRequest, background_tasks: BackgroundTasks):
@@ -498,6 +501,9 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             label_horizon=req_label_horizon,
             random_seed=req_random_seed,
             long_trend_profile_id=req_long_trend_profile_id,
+            created_by_type=req.created_by_type,
+            created_by_name=req.created_by_name,
+            purpose=req.purpose,
         )
 
         # 保存额外字段（含 evolution_mode）
@@ -1153,6 +1159,9 @@ class EvolutionTaskForkRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+    created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
@@ -1216,6 +1225,9 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             label_horizon=req_label_horizon,
             random_seed=req_random_seed,
             long_trend_profile_id=req_long_trend_profile_id,
+            created_by_type=req.created_by_type,
+            created_by_name=req.created_by_name,
+            purpose=req.purpose,
         )
 
         # 合并从因子库额外添加的因子
@@ -1304,6 +1316,9 @@ class StrategyEvolutionForkRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+    created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 @router.post("/tasks/{task_id}/strategy-fork", summary="从指定 Loop 分叉出策略演进任务（跳过训练）")
 async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
@@ -1351,6 +1366,9 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             inherit_history=req.inherit_history,
             node_id=req.node_id,
             long_trend_profile_id=req_long_trend_profile_id,
+            created_by_type=req.created_by_type,
+            created_by_name=req.created_by_name,
+            purpose=req.purpose,
         )
 
         return {
@@ -1494,6 +1512,9 @@ class CustomEvolutionCreateRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+    created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 
 class UniverseComparisonCreateRequest(BaseModel):
@@ -1947,6 +1968,9 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             clone_from_task_id=req.clone_from_task_id,
             auto_start=req.auto_start,
             long_trend_profile_id=req_long_trend_profile_id,
+            created_by_type=req.created_by_type,
+            created_by_name=req.created_by_name,
+            purpose=req.purpose,
         )
 
         response = {

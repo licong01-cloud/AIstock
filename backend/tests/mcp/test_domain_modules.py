@@ -392,7 +392,11 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
         "/api/v1/quantevolver/evolution/tasks/task-1/custom-loops/append",
     ]
     assert calls[0]["body"]["created_by_name"] == "unit"
+    assert calls[0]["body"]["created_by_type"] == "mcp"
+    assert calls[0]["body"]["purpose"] == "research"
     assert calls[3]["body"]["auto_start"] is False
+    assert calls[3]["body"]["created_by_type"] == "mcp"
+    assert calls[3]["body"]["purpose"] == "research"
     assert calls[3]["body"]["node_id"] == "node-1"
     assert calls[3]["body"]["phase_pipeline_enabled"] is True
     assert calls[3]["body"]["resource_telemetry_enabled"] is False
@@ -512,6 +516,17 @@ def test_qe_runtime_first_create_paths_validate_before_http() -> None:
                 }
             ],
             node_parallelism={"node-1": 5},
+        )
+    assert calls == []
+
+    with pytest.raises(ValueError, match="purpose must be research or validation"):
+        mcp.tools["qe_single_experiment_create_pending"](
+            {
+                "factor_names": ["Alpha001"],
+                "model_id": "model_lgbm_v1",
+                "custom_params": {"random_seed": 42},
+            },
+            purpose="smoke",
         )
     assert calls == []
 
