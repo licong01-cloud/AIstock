@@ -148,6 +148,10 @@ class TestExperimentConfig:
                 "archive_policy": "SKIP",
                 "archive_reason": "unit",
                 "archive_allow_override": True,
+                "qe_mcp_provenance": {"created_by_name": "Codex"},
+                "qe_factor_sources": {"alpha_a": "official"},
+                "qe_pending_task_source": "mcp",
+                "qe_pending_created_by": "Codex",
                 "random_seed": 42,
             },
         )
@@ -158,13 +162,27 @@ class TestExperimentConfig:
 
         assert custom_params["topk"] == 50
         assert strategy_params == {"topk": 50}
-        for key in ("archive_policy", "archive_reason", "archive_allow_override", "random_seed"):
+        metadata_keys = (
+            "archive_policy",
+            "archive_reason",
+            "archive_allow_override",
+            "qe_mcp_provenance",
+            "qe_factor_sources",
+            "qe_pending_task_source",
+            "qe_pending_created_by",
+            "random_seed",
+        )
+        for key in metadata_keys:
             assert key not in custom_params
             assert key not in strategy_params
         assert runtime_flags == {
             "archive_policy": "SKIP",
             "archive_reason": "unit",
             "archive_allow_override": True,
+            "qe_mcp_provenance": {"created_by_name": "Codex"},
+            "qe_factor_sources": {"alpha_a": "official"},
+            "qe_pending_task_source": "mcp",
+            "qe_pending_created_by": "Codex",
             "random_seed": 42,
         }
 
