@@ -2,6 +2,8 @@
 
 - init: full range by trade_date (start_date required), per-day fetch, upsert by (trade_date, ts_code).
 - incremental: trade_date cursor from max(trade_date)+1 to today (or override), per-day fetch.
+- incremental stops at the first failed day; whole-snapshot free-float source gaps fail visibly.
+- normal per-stock NULLs remain nullable; existing historical gaps need an explicitly scoped repair.
 - supports --truncate before init, --batch-sleep between trade_date batches.
 - supports --bulk-session-tune for session-level write tuning.
 - only logs errors/warnings to ingestion_logs; normal successes print to stdout.
@@ -25,6 +27,10 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 pgx.register_uuid()
+
+# These two source columns are required by the admitted free-float factors.
+# This is a whole-snapshot check, not a per-stock non-null or coverage gate.
+FREE_FLOAT_FIELDS = ("turnover_rate_f", "free_share")
 
 
 DB_CFG = dict(
@@ -125,6 +131,22 @@ def _get_max_trade_date(conn) -> Optional[dt.date]:
         return row[0]
 
 
+def _is_trading_day(conn, trade_date: dt.date) -> bool:
+    """Resolve an explicit calendar date so an empty trading snapshot cannot pass."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_trading FROM market.trading_calendar WHERE cal_date = %s",
+            (trade_date,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise DailyBasicIngestionError(
+            f"daily_basic trading-calendar identity is unavailable: trade_date={trade_date}"
+        )
+    return bool(row[0])
+
+
 def _create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
     job_id = uuid.uuid4()
     with conn.cursor() as cur:
@@ -221,6 +243,7 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
     offset = 0
     limit = 6000
     rows: List[Dict[str, Any]] = []
+    seen_codes: set[str] = set()
     while True:
         df = pro.daily_basic(
             trade_date=ymd,
@@ -230,11 +253,32 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
         )
         if df is None or df.empty:
             break
+        missing_columns = sorted(set(DAILY_BASIC_PROVIDER_FIELDS) - set(df.columns))
+        if missing_columns:
+            raise ValueError(
+                f"DAILY_BASIC_SNAPSHOT_INCOMPLETE trade_date={ymd} "
+                f"missing_columns={missing_columns}"
+            )
         for _, row in df.iterrows():
+            source_code = row.get("ts_code")
+            source_date = row.get("trade_date")
+            # Do not relabel a provider's later snapshot as the requested PIT day.
+            if (
+                not isinstance(source_code, str)
+                or not source_code.strip()
+                or not isinstance(source_date, str)
+                or _parse_ymd(source_date) != trade_date
+                or source_code.strip() in seen_codes
+            ):
+                raise ValueError(
+                    f"DAILY_BASIC_SNAPSHOT_IDENTITY_MISMATCH trade_date={ymd} "
+                    f"offset={offset}; invalid date/key or duplicate instrument"
+                )
+            seen_codes.add(source_code.strip())
             rows.append(
                 {
                     "trade_date": trade_date,
-                    "ts_code": row.get("ts_code"),
+                    "ts_code": source_code.strip(),
                     "close": row.get("close"),
                     "turnover_rate": row.get("turnover_rate"),
                     "turnover_rate_f": row.get("turnover_rate_f"),
@@ -257,6 +301,16 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
             break
         offset += limit
         time.sleep(0.05)
+    if rows:
+        unavailable_fields = [
+            field for field in FREE_FLOAT_FIELDS
+            if not any(_finite_numeric_or_none(row[field]) is not None for row in rows)
+        ]
+        if unavailable_fields:
+            raise ValueError(
+                f"DAILY_BASIC_SNAPSHOT_INCOMPLETE trade_date={ymd} rows={len(rows)} "
+                f"all_missing_fields={unavailable_fields}; source repair required"
+            )
     return rows
 
 
@@ -372,6 +426,8 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
         "total_days": 0,
         "success_days": 0,
         "failed_days": 0,
+        "failed_dates": [],
+        "deferred_days": 0,
         "inserted_rows": 0,
         "progress_update_failures": 0,
         "progress_rollback_failures": 0,
@@ -380,14 +436,25 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
     days = _date_range(start_date, end_date)
     stats["total_days"] = len(days)
     for d in days:
+        day_failed = False
         try:
             rows = _fetch_daily_basic_for_date(pro, d)
+            if not rows and _is_trading_day(conn, d):
+                raise DailyBasicIngestionError(
+                    f"daily_basic provider returned an empty trading-day snapshot: trade_date={d}"
+                )
             _validate_required_field_coverage(rows, d)
             inserted = _upsert_daily_basic(conn, rows)
             stats["inserted_rows"] += inserted
             stats["success_days"] += 1
         except Exception as exc:  # noqa: BLE001
+            day_failed = True
             stats["failed_days"] += 1
+            stats["failed_dates"].append(d.isoformat())
+            if mode == "incremental":
+                stats["deferred_days"] = (
+                    stats["total_days"] - stats["success_days"] - stats["failed_days"]
+                )
             _log(conn, job_id, "error", f"daily_basic {d} failed: {exc}")
             print(f"[ERROR] daily_basic {d} failed: {exc}")
             time.sleep(batch_sleep)
@@ -411,6 +478,10 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
                 stats["progress_log_failures"] += 1
                 stats["last_progress_log_error"] = str(log_exc)
                 print(f"[ERROR] failed to persist job progress warning: {log_exc}")
+        if day_failed and mode == "incremental":
+            # MAX(trade_date)+1 must not leap over a failed source snapshot.
+            # Existing historical gaps still require the explicit repair operator.
+            break
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats

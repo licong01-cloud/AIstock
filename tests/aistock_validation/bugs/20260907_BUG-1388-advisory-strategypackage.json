@@ -1,0 +1,255 @@
+{
+  "actual": "2026-08-31/2026-09-04 market.daily_basic分别5545/5548行，turnover_rate_f与free_share非空数均0，导致两个Program推理无可评分行。供应端重查两日已返回有限值。ingest_tushare_daily_basic对非空但整列缺失快照仍upsert并success_days+=1；failed_days>0时main仍退出0。",
+  "allowed_write_scope": [
+    "scripts/ingest_tushare_daily_basic.py",
+    "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json",
+    "noxfile.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1388",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-07T06:35:31.435182Z",
+  "description": "2026-08-31/2026-09-04 market.daily_basic分别5545/5548行，turnover_rate_f与free_share非空数均0，导致两个Program推理无可评分行。供应端重查两日已返回有限值。ingest_tushare_daily_basic对非空但整列缺失快照仍upsert并success_days+=1；failed_days>0时main仍退出0。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260907-88ac14c14d04",
+      "timestamp": "2026-09-07T06:35:31.435167Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md#16-当前下一步",
+    "GET /api/v1/advisory/forward-runs/advfwd_3e1ee1734cc84393b798daedf10a84cc",
+    "只读SQL 2026-08-24..2026-09-04 daily_basic按日期字段计数",
+    "Tushare只读重查：20260831 5545/5545，20260904 5548/5548（turnover_rate_f/free_share）；首次20260904投影查询空响应，未当成完整证据",
+    "https://tushare.pro/document/2?doc_id=32"
+  ],
+  "expected": "同步显式请求完整字段；整日自由流通关键字段均不可用或交易日空响应时不得写入并宣称成功，增量失败不得跳日，失败返回非零退出码；个股正常缺失和既有有限值保留。不修改因子/推理策略，不伪造回填数据。对应直接测试必须由local_data验证计划真实收集。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/ingest_tushare_daily_basic.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_daily_basic_operator"
+        },
+        {
+          "file": "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_daily_basic_operator"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ]
+  },
+  "first_seen_at": "2026-09-07T06:35:31.435182Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4377,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4377",
+  "last_seen_at": "2026-09-07T06:35:31.435182Z",
+  "module": "local_data",
+  "non_goals": [
+    "不修改backend/inference_engine.py或冻结因子/策略包资产；正常缺失不删行或零填充。",
+    "不执行DEV/production DDL/DML，不重启后端或控制实验；数据修复另行授权。"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ingest_tushare_daily_basic.py -q",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": false,
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Advisory每日发布因StrategyPackage推理特征全缺而阻塞",
+  "trigger_condition": {
+    "fingerprint": "88ac14c14d04c46882197856",
+    "source_event_id": "FE-20260907-88ac14c14d04"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

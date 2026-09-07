@@ -841,6 +841,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/test_data_sync_targets.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
