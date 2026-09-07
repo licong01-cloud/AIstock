@@ -123,10 +123,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry -q -> 2 passed in a fresh Python process"
     ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
