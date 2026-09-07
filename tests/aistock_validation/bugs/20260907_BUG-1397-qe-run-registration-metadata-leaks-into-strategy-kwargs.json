@@ -1,68 +1,72 @@
 {
-  "actual": "qe_mcp_backend reports two false failures when AISTOCK_ACTIVE_DATASET_PROFILE_PATH points to the active 2026-08-31 profile.",
+  "actual": "Both loops of qe_20260907_204335_1fb0 failed before experiment submission with unsupported strategy parameter _qe_run_registration.",
   "allowed_write_scope": [
-    "backend/tests/qe_templates/test_template_validator.py",
-    "backend/tests/test_aistock_qe_mcp_servers.py",
-    "tests/aistock_validation/bugs/20260907_BUG-1399-qe-mcp-legacy-window-tests-depend-on-active-dataset-profile.json"
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/quantevolver/test_qe_registered_submission.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1397-qe-run-registration-metadata-leaks-into-strategy-kwargs.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1399",
-  "closed_at": "2026-09-07T13:10:00Z",
+  "bug_id": "BUG-1397",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-07T13:04:44.223291Z",
-  "description": "qe_mcp_backend reports two false failures when AISTOCK_ACTIVE_DATASET_PROFILE_PATH points to the active 2026-08-31 profile.",
+  "created_at": "2026-09-07T12:50:15.907014Z",
+  "description": "Both loops of qe_20260907_204335_1fb0 failed before experiment submission with unsupported strategy parameter _qe_run_registration.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260907-e9708a522b28",
-      "timestamp": "2026-09-07T13:04:44.223274Z"
+      "note": "Promoted from IC-20260907-671b3cd52b62",
+      "timestamp": "2026-09-07T12:50:15.906998Z"
     }
   ],
   "evidence_uris": [
-    "BUG-1397 required validation: 2 failed, 47 passed; isolated nodeids 2 passed"
+    "qe_20260907_204335_1fb0 loops 1-2 agent_analysis._error"
   ],
-  "expected": "Legacy-window validation tests explicitly pin their historical data_split and pass regardless of the operator active dataset profile.",
+  "expected": "QE provenance metadata remains persisted and dispatch-visible but is never passed to the Qlib strategy constructor.",
   "file_scope_contract": {
-    "actual_changed_files": [
-      "backend/tests/qe_templates/test_template_validator.py",
-      "backend/tests/test_aistock_qe_mcp_servers.py"
-    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/qe_templates/test_template_validator.py",
-      "backend/tests/test_aistock_qe_mcp_servers.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
     ],
-    "changed_files_source": "git_finish",
+    "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
-        "backend/tests/qe_templates/test_template_validator.py",
-        "backend/tests/test_aistock_qe_mcp_servers.py"
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
       ],
       "impacted_modules": [
-        "tests.backend",
-        "qe.active_dataset_universe",
+        "qe.sector_risk_overlay",
         "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation",
+        "qe.active_dataset_universe",
         "qe.single_experiment",
         "qe.custom_evolution",
-        "qe.auto_evolution",
-        "qe.sector_risk_overlay",
         "platform.mcp_gateway"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/qe_templates/test_template_validator.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
         },
         {
-          "file": "backend/tests/test_aistock_qe_mcp_servers.py",
+          "file": "backend/tests/quantevolver/test_qe_registered_submission.py",
           "impact_modules": [
             "qe.core",
             "qe.single_experiment",
@@ -77,117 +81,84 @@
         }
       ],
       "risk_levels": [
-        "medium",
         "high"
       ],
       "suggested_scope": [
-        "backend/tests/qe_templates/test_template_validator.py",
-        "backend/tests/test_aistock_qe_mcp_servers.py"
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/qe_templates/test_template_validator.py",
-      "backend/tests/test_aistock_qe_mcp_servers.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/qe_templates/test_template_validator.py",
-      "backend/tests/test_aistock_qe_mcp_servers.py"
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
     ]
   },
-  "first_seen_at": "2026-09-07T13:04:44.223291Z",
+  "first_seen_at": "2026-09-07T12:50:15.907014Z",
   "fix_branch": null,
-  "fix_commit": "0c4f997d609022013ba7671bd19be659dc10b830",
-  "fixed_at": "2026-09-07T13:10:00Z",
-  "github_issue_number": 4408,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4408",
-  "last_seen_at": "2026-09-07T13:04:44.223291Z",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4406,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4406",
+  "last_seen_at": "2026-09-07T12:50:15.907014Z",
   "module": "quantevolver",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4409",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m nox -s qe_mcp_backend",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py -q",
   "required_verification": [
     "l0",
-    "qe_read_backend",
     "qe_sector_risk_overlay_backend",
+    "qe_read_backend",
     "qe_mcp_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "actual_changed_files",
-    "persistence_basis": "not_required",
-    "planned_target_ids": [],
-    "post_restart_effective_gate": "not_required",
-    "post_restart_receipt_ref": null,
-    "provisional": false,
-    "runtime_identity_match": "not_required",
-    "runtime_impact": "none",
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P2",
-  "source_merge_receipt": {
-    "bug_id": "BUG-1399",
-    "production_gates": {
-      "production_backend_dependency_gate": "noop",
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop"
-    },
-    "receipt_id": "f555f795ecf6bf70",
-    "recorded_at": "2026-09-07T13:18:38.877924Z",
-    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
-    "runtime_identity_match": "not_required",
-    "runtime_verification": "not_required",
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "b68b35bdfb2d182f65706fa5f9e37fe6a9ead4b2",
-    "source_merge_commit": "0c4f997d609022013ba7671bd19be659dc10b830",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4409",
-    "validation_evidence": [
-      "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
-      "python -m nox -s qe_sector_risk_overlay_backend -> passed (90 passed)",
-      "python -m nox -s qe_read_backend -> passed (378 passed, 1 skipped)",
-      "python -m nox -s qe_mcp_backend -> passed (49 passed)"
-    ],
-    "validation_evidence_digest": "ef4e4aeb87fb13ff150306d2052e3ca91ed3042cdfe2d67ed9a34799f281c037"
-  },
-  "status": "fixed",
+  "severity": "P1",
+  "status": "open",
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "QE MCP legacy-window tests depend on active dataset profile",
+  "title": "QE run registration metadata leaks into strategy kwargs",
   "trigger_condition": {
-    "fingerprint": "e9708a522b2854eb0860f5e6",
-    "source_event_id": "FE-20260907-e9708a522b28"
+    "fingerprint": "671b3cd52b6246c090965f8f",
+    "source_event_id": "FE-20260907-671b3cd52b62"
   },
-  "validation_evidence": [
-    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
-    "python -m nox -s qe_sector_risk_overlay_backend -> passed (90 passed)",
-    "python -m nox -s qe_read_backend -> passed (378 passed, 1 skipped)",
-    "python -m nox -s qe_mcp_backend -> passed (49 passed)"
-  ],
   "verification_budget": {
-    "budget": "light",
+    "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
         "quantevolver",
-        "qe_read",
         "qe_sector_risk_overlay",
+        "qe_read",
         "qe_mcp"
       ],
       "plans": [
-        "qe_read_backend",
         "qe_sector_risk_overlay_backend",
+        "qe_read_backend",
         "qe_mcp_backend"
       ],
       "required": true,
@@ -223,7 +194,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "25-35%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -239,17 +210,17 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "light",
+      "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
           "quantevolver",
-          "qe_read",
           "qe_sector_risk_overlay",
+          "qe_read",
           "qe_mcp"
         ],
         "plans": [
-          "qe_read_backend",
           "qe_sector_risk_overlay_backend",
+          "qe_read_backend",
           "qe_mcp_backend"
         ],
         "required": true,
@@ -285,7 +256,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "25-35%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
   }
 }
