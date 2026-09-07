@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2 G2-A `rotation_L1` 端到端详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.3.1（交付架构澄清；模型合同继续为`hmm_risk_rotation_l1_g2a_v1_3`）
+> **文档版本**：v1.3.2（产品源码实施回填；模型合同继续为`hmm_risk_rotation_l1_g2a_v1_3`）
 > **日期**：2026-09-07
 > **状态**：`DESIGN_READY_USER_APPROVED_SOURCE_MERGED_PENDING_FORMAL_39FIT`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.45
@@ -11,6 +11,7 @@
 > **2026-09-06 MARKET-CONTEXT-A批准边界**：每个decision date `t`仅使用同release CSI300截至`t-1`的`daily_return`与`volatility_3d=population_std(ddof=0)`；每fold在固定504日target-free train上执行train-only z-score，复用K=2 jump、`lambda=4.0`、`seed=42`。semantic score固定为standardized center `daily_return-volatility_3d`，较高state映射`risk_on`、较低state映射`risk_off`。5D/10D共享同一fold-local fit；缺数、非有限、state tie或因果递推失败均fail closed，不补默认状态、不重新拟合、不读取target。39-fit总预算及其余v1.2合同不变。
 > **2026-09-06 LEAF-DISTRIBUTION-C批准边界**：G2-A v1.2保持`STRUCTURAL_ACCEPTANCE_FAILED`且不得回写；v1.3保持`min_child_samples=310`，每叶distinct decision dates硬底线为`ceil(310/31)=10`，全部实际叶中低于20日的比例必须`<=1%`。任一叶低于10日或低于20日的比例超过1%均typed fail closed；不得把20直接改成18、不得据此调参或续跑v1.2。其余G2-A合同和39-fit预算全部不变。
 > **2026-09-07源码合入状态**：v1.3源码与readback测试已通过PR #4375合入main（merge commit `901218454df7b21a811c47c7a9b161337e1033c7`）。正式v1.3受控实验尚未启动（`0/39` fits）；未读取tail，未生成model/product，未执行DDL/DML、runtime activation或服务控制；严格产品进度仍为`11/17=64.71%`，CAPABILITY_AVAILABLE、FULL_READY和真实API/UI均为0。
+> **2026-09-07产品源码工作状态**：任务worktree已实现离线surface纠偏、OOF fold-model/as-of lineage、最小append-only repository、两个read API、真实`/hmm-risk`页面、冻结模型0-fit单日推理与严格source tests；仍须完成最终模块门禁、同步最新main并经PR/CI/合入。DEV/生产DDL、真实39-fit、真实OOF写入、无mock浏览器验收、runtime activation和服务重启均未执行，因此本段不宣告surface或capability可用。
 
 ---
 
@@ -380,6 +381,8 @@ v1.2最小schema设计合同冻结为：`prediction_id UUID PRIMARY KEY`；`prod
 
 行内五轴状态记录生成时的评价快照，不代表当前部署健康；首次写入、尚未完成真实API/UI验收时surface快照必须NOT_AVAILABLE。API顶层当前surface依据同一产品identity的真实writer/readback、API/UI验收与当前服务读取状态确定，不能只复制离线receipt或行内旧状态。UI验收不要求预先将行标记AVAILABLE，也不为变更展示状态批量回写历史OOF行；历史行与当前顶层评价的日期/身份必须分别明确，避免“先假报可用才能验收”的循环。
 
+源码以显式`AISTOCK_HMM_ROTATION_L1_PRODUCT_VALIDATION_RECEIPT`绝对文件路径绑定当前产品验证receipt；缺失时顶层surface保持`NOT_AVAILABLE`，路径间接、文件不可读、mock标记、receipt hash或当前`model_hash/trade_date/31-row canonical hash`任一不一致均typed fail closed。receipt只保存当前真实repository/API/UI readback结果和identity，不改写历史prediction行、不新增状态表或通用registry；配置与runtime activation仍须独立授权。
+
 两个read API只读取该repository：overview固定返回五轴顶层状态、model/as-of、31-sector coverage、development OOF metric/区间与未实现能力；rotation-l1固定返回请求日期的31个canonical sector行及上述lineage。不存在日期返回typed 404，不返回空200；存在但全部unavailable仍返回31行与逐行reason，不伪造服务失败。
 
 持久化只允许：一个development bundle、一个独立sealed tail bundle、一个compact battery receipt、两个fresh-process child receipts、一个final acceptance/failure receipt、合同允许的model/product及真实产品预测。OOF必须保留重现其预测所必需的fold模型身份，新增推理使用完整冻结full-development模型；这不是多候选或额外fit。§8.4只保存必要输入身份和连续market状态，不再复制完整历史面板。禁止保存逐树大JSON、复制完整历史输入或迁移旧artifact。两个输入bundle只是为防止tail泄漏而分离的同一G2-A输入合同，不构成两个产品阶段。
@@ -439,10 +442,10 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 v1.3模型源码已经合入；下一轮仍使用同一G2-A交付范围，修复真实缺口并补齐产品，不重开模型选型。按具体源码授权可连续修改：
 
 - `backend/services/hmm_risk/rotation_l1_gbdt.py`：现有feature/battery/model/metric；修复`close_processes`提前宣告surface AVAILABLE，与真实产品验证分离；
-- 目标最小prediction service/repository：model/product writer、OOF回读与§8.4 label-free单日prediction，复用现有正式reader和feature构造；
-- `backend/services/hmm_risk/repository.py`或最小专用repository：持久化/readback；
+- `backend/services/hmm_risk/rotation_l1_input_bundle.py`：复用正式direct-v2 reader，以显式candidate root和截至`as_of_date`的39日股票输入/61日指数输入构造label-free单日source；不读取`trade_date`数值、不构造target、不重跑全历史C-010/L2聚合；
+- `backend/services/hmm_risk/rotation_l1_prediction.py`：唯一最小prediction service/repository，完成OOF转换、原子写入/readback、显式model-bound读取、产品surface receipt校验、正式feature构造复用与§8.4 label-free单日prediction；
 - `backend/routers/hmm_risk.py`：两个read endpoints；
-- 现有`scripts/hmm_risk/run_rotation_l1_g2a.py`及相邻已登记入口：薄离线CLI，不查询隐式DB；新增单日模式也不隐式执行训练；
+- 现有`scripts/hmm_risk/run_rotation_l1_g2a.py`保持薄离线训练CLI且不查询隐式DB；本轮不新增scheduler、自动日任务或第二套writer；
 - `frontend/src/app/hmm-risk/**`：真实L1热力图纵切；
 - 对应backend/frontend直接测试、nox/ownership登记及本设计状态回填。
 
@@ -505,9 +508,9 @@ v1.3模型源码已经合入；下一轮仍使用同一G2-A交付范围，修复
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.2；v1.3叶分布合同源码与readback测试已通过PR #4375合入main；新39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；HMM module 743 passed、coverage 76.99%；两份F2 validator PASS；真实direct-v2 development bundle Windows/WSL readback；merge commit `901218454df7b21a811c47c7a9b161337e1033c7` | APPROVED_BY_USER_SOURCE_MERGED | 用户已批准v1.3叶分布合同；v1.2保持结构失败，v1.3正式实验仍为0/39 fits，只能在main合入版本的独立validation worktree从头执行；F-013产品链仍未实施；`close_processes`提前宣告surface的源码缺口待下一轮修复，本次未改代码 |
-| F-012 | 本设计§1.2、§8.3；现有isolation guard | 目标`backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | APPROVED_BY_USER_DESIGN_READY_PENDING_SOURCE_EVIDENCE | 用户已批准advisory-only业务语义；本次没有源码、数据库或runtime变更 |
-| F-013 | 本设计D6/§8.4；目标prediction repository、两个read API、真实`/hmm-risk` L1热力图与label-free单日推理 | 目标`backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts` | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | 必须由真实OOF产品验证终态化research gate；产品链/单日推理均未完成；不得使用mock/in-sample，也不得把`AVAILABLE_EXPERIMENTAL`冒充rotation capability或advisory AVAILABLE |
+| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.3；本轮修复离线closure的surface越级并把fold model/as-of写入OOF identity | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；PR #4375历史merge `901218454df7b21a811c47c7a9b161337e1033c7`；本轮最终门禁见§19.8 | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: v1.3正式实验仍为0/39 fits；未读取tail、生成model/product或执行DDL/runtime；源码合入与实验仍分别验收 |
+| F-012 | 本设计§1.2、§8.3；read-only router与HMM-only isolation guard | `backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: advisory-only业务语义保持不变；无Selection/Paper/QMT/QE写路径；runtime尚未激活 |
+| F-013 | `rotation_l1_prediction.py`唯一writer/repository、两个read API、真实`/hmm-risk` L1热力图、显式surface receipt与label-free单日0-fit推理；`rotation_l1_input_bundle.py`把显式direct-v2 candidate root绑定到截至as-of的受限正式source window | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`test_rotation_l1_input_bundle.py`、`test_rotation_l1_api.py`、`test_schema.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`；最终门禁见§19.8 | IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: 当前仅源码/测试；真实OOF、真实candidate单日受控执行、DEV/生产DDL、writer/API/UI浏览器readback、surface receipt、runtime activation均未执行，五轴状态不得升级 |
 
 ## 16. Rollout / Rollback（发布与回滚）
 
@@ -597,3 +600,11 @@ v1.3模型源码已经合入；下一轮仍使用同一G2-A交付范围，修复
 - 明确surface只能由真实writer/API/UI验证；现有离线closure尚未修复，不能用本次F2通过掩盖。统计tail条件不依赖UI部署，UI失败也不伪造模型失败。
 - 将已有日度预测目标落实为共享feature、冻结模型、无未来label、显式as-of及连续market递推的0-fit单日路径，与OOF产品链同一任务，不建调度或新数据平台。
 - 三轮正式审核分别覆盖产品/状态、数值/因果、实施/授权一致性，已修订发现的文档缺口，复审无剩余阻断。直接比较确认§10.1全部精确值、target、feature公式、预处理/horizon、GBDT profile、复现、fit预算、MBE/MDE/forward及五fold日期表与本次基线一致。两份F2 validator与diff检查通过；文档通过不代表源码、39fits、tail、产品或运行已完成。本次无训练、数据库、依赖或进程操作。
+
+### 19.8 2026-09-07产品闭环源码实施与本地验证
+
+- 离线closure不再把计算成功直接写成surface或capability成功；OOF prediction逐行绑定实际fold model、as-of、input/mapping/model identity，缺少任一权威字段均fail closed。
+- `rotation_l1_prediction.py`实现唯一repository/writer、surface readback与0-fit单日推理；`rotation_l1_input_bundle.py`新增显式candidate root的正式单日source入口，只读取截至as-of的61日指数、20日股票派生窗口及同release权威资产，不读取trade-date数值、target或未来数据，也不扫描latest或回退旧路径/数据库。
+- 后端注册两个只读API；前端`/hmm-risk`使用真实API数据展示31-sector热力图、能力/forward状态与原因。页面不存在mock、默认状态或硬编码演示数据。DB schema目前只有源码定义，DEV/生产DDL均未执行。
+- 本地门禁：`python -m nox -s hmm_risk_backend`为770 passed、coverage 76.82%；`python -m nox -s validation_module_registry_l0`为8 passed且14/14 ownership映射；`python -m nox -s l0`为blocking=0；Python Ruff、`py_compile`、前端定向TypeScript/ESLint与`git diff --check`均通过。前端真实浏览器readback、真实OOF写入、真实candidate单日执行、DDL、runtime activation与服务重启仍未执行，不能由源码测试推导完成。
+- 本轮没有运行battery、GBDT或jump fit，没有读取tail outcome，没有生成model/product artifact，没有写数据库，也没有控制任何进程。源码合入、正式实验、DDL、runtime和浏览器验收继续作为相互独立的后续状态。

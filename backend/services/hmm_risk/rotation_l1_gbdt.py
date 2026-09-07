@@ -201,6 +201,7 @@ def build_materialised_panel(
     sector_close: Mapping[tuple[date, str], float],
     benchmark_close: Mapping[date, float],
     stock_daily_inputs: Sequence[Mapping[str, Any]],
+    include_targets: bool = True,
 ) -> pd.DataFrame:
     """Build the exact nine-column model panel from already bound components.
 
@@ -249,20 +250,21 @@ def build_materialised_panel(
     rows: list[dict[str, Any]] = []
     for decision_index, decision_day in enumerate(ordered):
         raw_targets: dict[int, dict[str, float]] = {item: {} for item in HORIZONS}
-        for horizon in HORIZONS:
-            future_index = decision_index + horizon
-            if future_index >= len(ordered):
-                continue
-            future_day = ordered[future_index]
-            market_now, market_future = finite_close(decision_day), finite_close(future_day)
-            if market_now is None or market_future is None:
-                continue
-            for sector in sectors:
-                sector_now, sector_future = finite_close(decision_day, sector), finite_close(future_day, sector)
-                if sector_now is None or sector_future is None:
-                    raw_targets[horizon].clear()
-                    break
-                raw_targets[horizon][sector] = sector_future / sector_now - market_future / market_now
+        if include_targets:
+            for horizon in HORIZONS:
+                future_index = decision_index + horizon
+                if future_index >= len(ordered):
+                    continue
+                future_day = ordered[future_index]
+                market_now, market_future = finite_close(decision_day), finite_close(future_day)
+                if market_now is None or market_future is None:
+                    continue
+                for sector in sectors:
+                    sector_now, sector_future = finite_close(decision_day, sector), finite_close(future_day, sector)
+                    if sector_now is None or sector_future is None:
+                        raw_targets[horizon].clear()
+                        break
+                    raw_targets[horizon][sector] = sector_future / sector_now - market_future / market_now
         centered_targets: dict[int, dict[str, float]] = {}
         for horizon in HORIZONS:
             values = raw_targets[horizon]
@@ -341,9 +343,10 @@ def build_materialised_panel(
             row["pit_breadth_above_ma20"] = (
                 float(breadth_value) if breadth_value is not None and math.isfinite(float(breadth_value)) else math.nan
             )
-            for horizon in HORIZONS:
-                row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
-                row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
+            if include_targets:
+                for horizon in HORIZONS:
+                    row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
+                    row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
             for feature in CONTINUOUS_FEATURES:
                 value = float(row[feature])
                 if math.isfinite(value):
@@ -370,12 +373,31 @@ def build_materialised_panel(
                     )
                 else:
                     row[f"reason__{feature}"] = "hmm_risk_rotation_price_history_incomplete"
-            for target in TARGET_COLUMNS:
-                row[f"reason__{target}"] = (
-                    None if bool(row[f"{target}_mature"]) else "hmm_risk_rotation_label_not_mature_or_incomplete"
-                )
+            if include_targets:
+                for target in TARGET_COLUMNS:
+                    row[f"reason__{target}"] = (
+                        None if bool(row[f"{target}_mature"]) else "hmm_risk_rotation_label_not_mature_or_incomplete"
+                    )
             rows.append(row)
     return pd.DataFrame.from_records(rows).set_index(["trade_date", "sector_code"]).sort_index()
+
+
+def build_label_free_feature_panel(
+    *,
+    calendar: Sequence[date],
+    sector_close: Mapping[tuple[date, str], float],
+    benchmark_close: Mapping[date, float],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Build the shared causal feature panel without constructing any target."""
+
+    return build_materialised_panel(
+        calendar=calendar,
+        sector_close=sector_close,
+        benchmark_close=benchmark_close,
+        stock_daily_inputs=stock_daily_inputs,
+        include_targets=False,
+    )
 
 
 def validate_input_bundle(
@@ -834,6 +856,8 @@ def fit_market_context(
         "train_date_sha256": canonical_sha256([item.isoformat() for item in train_dates]),
         "mean": mean.tolist(),
         "std": std.tolist(),
+        "lower": np.min(values, axis=0).tolist(),
+        "upper": np.max(values, axis=0).tolist(),
         "centers": fit.centers.tolist(),
         "centers_sha256": canonical_sha256(fit.centers.tolist()),
         "jump_penalty": 4.0,
@@ -1427,6 +1451,7 @@ def _run_gbdt_process_impl(
     fold_receipts: list[dict[str, Any]] = []
     market_receipts: list[Mapping[str, Any]] = []
     contributions_by_identity: dict[tuple[date, str], list[float]] = {}
+    model_hash_by_identity: dict[tuple[date, str], str] = {}
     validation_market_signs: dict[date, float] = {}
     profile = _lightgbm_profile()
     for fold in fold_slices(calendar, horizon=selected_horizon):
@@ -1491,6 +1516,9 @@ def _run_gbdt_process_impl(
         scores = pd.Series(np.nan, index=validation.index, dtype=np.float64)
         scores.loc[validation_mask] = raw_scores
         predictions.append(scores)
+        fold_model_hash = canonical_sha256(estimator.booster_.model_to_string())
+        for identity in validation.index:
+            model_hash_by_identity[(identity[0], str(identity[1]))] = fold_model_hash
         fold_receipts.append(
             {
                 **fold.receipt(),
@@ -1498,7 +1526,7 @@ def _run_gbdt_process_impl(
                 "prediction_row_count": int(validation_mask.sum()),
                 "leaf_date_coverage": leaf,
                 "feature_contributions": contribution,
-                "model_sha256": canonical_sha256(estimator.booster_.model_to_string()),
+                "model_sha256": fold_model_hash,
                 "market_context_receipt_sha256": context.receipt["receipt_sha256"],
             }
         )
@@ -1585,10 +1613,16 @@ def _run_gbdt_process_impl(
         "market_context": final_context.receipt,
     }
     oof_rows: list[dict[str, Any]] = []
+    calendar_position = {day: index for index, day in enumerate(calendar)}
     for (day, raw_code), raw_score in all_predictions.items():
         code = str(raw_code)
         key = (day, code)
         score = float(raw_score)
+        fold_model_hash = model_hash_by_identity.get(key)
+        day_position = calendar_position.get(day)
+        if not isinstance(fold_model_hash, str) or day_position is None or day_position == 0:
+            raise _fail(REASON_SCORE, "GBDT OOF row lacks fold model identity", stage="prediction")
+        as_of_date = calendar[day_position - 1].isoformat()
         if math.isfinite(score):
             contribution_values = contributions_by_identity.get(key)
             state = states.get(key)
@@ -1597,12 +1631,14 @@ def _run_gbdt_process_impl(
             oof_rows.append(
                 {
                     "trade_date": day.isoformat(),
+                    "as_of_date": as_of_date,
                     "sector_code": code,
                     "availability": "available",
                     "reason_code": None,
                     "rotation_score": score,
                     "forecast_state": state,
                     "feature_contributions": contribution_values,
+                    "model_hash": fold_model_hash,
                 }
             )
         else:
@@ -1612,12 +1648,14 @@ def _run_gbdt_process_impl(
             oof_rows.append(
                 {
                     "trade_date": day.isoformat(),
+                    "as_of_date": as_of_date,
                     "sector_code": code,
                     "availability": "unavailable",
                     "reason_code": reason,
                     "rotation_score": None,
                     "forecast_state": None,
                     "feature_contributions": None,
+                    "model_hash": fold_model_hash,
                 }
             )
     payload = {
@@ -1772,6 +1810,84 @@ def _valid_leaf_coverage_receipt(value: Any) -> bool:
     return True
 
 
+def _valid_fold_receipt(value: Any, *, expected: tuple[str, date, date], horizon: int) -> bool:
+    base_keys = {
+        "fold",
+        "train_start",
+        "train_end",
+        "train_count",
+        "train_date_sha256",
+        "purge_dates",
+        "validation_start",
+        "validation_end",
+        "validation_count",
+        "validation_date_sha256",
+    }
+    expected_keys = {
+        *base_keys,
+        "receipt_sha256",
+        "fit_row_count",
+        "prediction_row_count",
+        "leaf_date_coverage",
+        "feature_contributions",
+        "model_sha256",
+        "market_context_receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    try:
+        train_start = date.fromisoformat(str(value["train_start"]))
+        train_end = date.fromisoformat(str(value["train_end"]))
+        validation_start = date.fromisoformat(str(value["validation_start"]))
+        validation_end = date.fromisoformat(str(value["validation_end"]))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in value["purge_dates"])
+    except (TypeError, ValueError):
+        return False
+    contribution = value.get("feature_contributions")
+    expected_name, expected_start, expected_end = expected
+    return bool(
+        value["fold"] == expected_name
+        and validation_start == expected_start
+        and validation_end == expected_end
+        and value["train_count"] == ROLLING_WINDOW_OPEN_DAYS
+        and isinstance(value["validation_count"], int)
+        and not isinstance(value["validation_count"], bool)
+        and value["validation_count"] > 0
+        and isinstance(value["fit_row_count"], int)
+        and not isinstance(value["fit_row_count"], bool)
+        and value["fit_row_count"] > 0
+        and isinstance(value["prediction_row_count"], int)
+        and not isinstance(value["prediction_row_count"], bool)
+        and value["prediction_row_count"] > 0
+        and len(purge_dates) == horizon
+        and purge_dates == tuple(sorted(set(purge_dates)))
+        and train_start <= train_end < purge_dates[0] <= purge_dates[-1] < validation_start <= validation_end
+        and value["receipt_sha256"] == canonical_sha256({key: value[key] for key in base_keys})
+        and all(
+            isinstance(value[field], str)
+            and len(value[field]) == 64
+            and all(character in "0123456789abcdef" for character in value[field])
+            for field in (
+                "train_date_sha256",
+                "validation_date_sha256",
+                "model_sha256",
+                "market_context_receipt_sha256",
+            )
+        )
+        and isinstance(contribution, Mapping)
+        and set(contribution) == {"shape", "canonical_sha256", "maximum_reconstruction_error"}
+        and contribution["shape"] == [value["prediction_row_count"], len(FEATURES) + 1]
+        and isinstance(contribution["maximum_reconstruction_error"], (int, float))
+        and not isinstance(contribution["maximum_reconstruction_error"], bool)
+        and math.isfinite(float(contribution["maximum_reconstruction_error"]))
+        and float(contribution["maximum_reconstruction_error"]) >= 0
+        and isinstance(contribution["canonical_sha256"], str)
+        and len(contribution["canonical_sha256"]) == 64
+        and all(character in "0123456789abcdef" for character in contribution["canonical_sha256"])
+        and _valid_leaf_coverage_receipt(value["leaf_date_coverage"])
+    )
+
+
 def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
     expected_keys = {
         "schema_version",
@@ -1786,6 +1902,7 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
     model_text = child.get("final_model_text")
     folds = payload.get("folds") if isinstance(payload, Mapping) else None
     final_model = payload.get("final_model") if isinstance(payload, Mapping) else None
+    oof_rows = payload.get("oof_prediction_rows") if isinstance(payload, Mapping) else None
     if (
         set(child) != expected_keys
         or child.get("schema_version") != PROCESS_SCHEMA_VERSION
@@ -1820,14 +1937,123 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
         or not isinstance(folds, list)
         or len(folds) != len(FOLDS)
         or any(
-            not isinstance(fold, Mapping) or not _valid_leaf_coverage_receipt(fold.get("leaf_date_coverage"))
-            for fold in folds
+            not _valid_fold_receipt(fold, expected=expected, horizon=int(payload["selected_horizon"]))
+            for fold, expected in zip(folds, FOLDS, strict=True)
         )
+        or not isinstance(oof_rows, list)
+        or not oof_rows
+        or payload.get("oof_prediction_rows_sha256") != canonical_sha256(oof_rows)
         or not isinstance(final_model, Mapping)
         or final_model.get("model_sha256") != canonical_sha256(model_text)
         or not _valid_leaf_coverage_receipt(final_model.get("leaf_date_coverage"))
     ):
         raise _fail(REASON_REPRODUCIBILITY, "GBDT child envelope or receipt differs", stage="closure")
+    fold_model_hashes = {fold.get("model_sha256") for fold in folds}
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in fold_model_hashes
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "GBDT fold model identity differs", stage="closure")
+    expected_oof_keys = {
+        "trade_date",
+        "as_of_date",
+        "sector_code",
+        "availability",
+        "reason_code",
+        "rotation_score",
+        "forecast_state",
+        "feature_contributions",
+        "model_hash",
+    }
+    fold_model_by_window: list[tuple[date, date, str]] = []
+    for fold in folds:
+        try:
+            start = date.fromisoformat(str(fold["validation_start"]))
+            end = date.fromisoformat(str(fold["validation_end"]))
+            model_hash = str(fold["model_sha256"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT fold validation identity differs", stage="closure") from exc
+        if start > end:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT fold validation range differs", stage="closure")
+        fold_model_by_window.append((start, end, model_hash))
+    daily_codes: dict[date, set[str]] = {}
+    as_of_by_date: dict[date, date] = {}
+    seen_oof: set[tuple[date, str]] = set()
+    for row in oof_rows:
+        if not isinstance(row, Mapping):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF lineage differs", stage="closure")
+        try:
+            trade_date = date.fromisoformat(str(row.get("trade_date")))
+            as_of_date = date.fromisoformat(str(row.get("as_of_date")))
+        except ValueError:
+            trade_date = None
+            as_of_date = None
+        if (
+            set(row) != expected_oof_keys
+            or trade_date is None
+            or as_of_date is None
+            or as_of_date >= trade_date
+            or not isinstance(row.get("sector_code"), str)
+            or not row["sector_code"]
+            or row.get("model_hash") not in fold_model_hashes
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF lineage differs", stage="closure")
+        expected_models = {model_hash for start, end, model_hash in fold_model_by_window if start <= trade_date <= end}
+        identity = (trade_date, row["sector_code"])
+        existing_as_of = as_of_by_date.setdefault(trade_date, as_of_date)
+        if (
+            len(expected_models) != 1
+            or row["model_hash"] not in expected_models
+            or identity in seen_oof
+            or existing_as_of != as_of_date
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF fold-model identity differs", stage="closure")
+        seen_oof.add(identity)
+        daily_codes.setdefault(trade_date, set()).add(row["sector_code"])
+        if row.get("availability") == "available":
+            score = row.get("rotation_score")
+            contributions = row.get("feature_contributions")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+                or row.get("forecast_state") not in {"fading", "neutral", "trending"}
+                or not isinstance(contributions, list)
+                or len(contributions) != len(FEATURES) + 1
+                or not all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                    for value in contributions
+                )
+                or row.get("reason_code") is not None
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "GBDT available OOF payload differs", stage="closure")
+        elif row.get("availability") == "unavailable":
+            if (
+                row.get("rotation_score") is not None
+                or row.get("forecast_state") is not None
+                or row.get("feature_contributions") is not None
+                or not isinstance(row.get("reason_code"), str)
+                or not row["reason_code"]
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "GBDT unavailable OOF payload differs", stage="closure")
+        else:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF availability differs", stage="closure")
+    if not daily_codes or any(len(codes) != CANONICAL_SECTOR_COUNT for codes in daily_codes.values()):
+        raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF daily sector denominator differs", stage="closure")
+    for fold in folds:
+        validation_start = date.fromisoformat(str(fold["validation_start"]))
+        validation_end = date.fromisoformat(str(fold["validation_end"]))
+        validation_dates = tuple(sorted(day for day in daily_codes if validation_start <= day <= validation_end))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in fold["purge_dates"])
+        if (
+            len(validation_dates) != fold["validation_count"]
+            or not validation_dates
+            or as_of_by_date[validation_dates[0]] != purge_dates[-1]
+            or any(as_of_by_date[day] != previous for previous, day in zip(validation_dates, validation_dates[1:]))
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF as-of calendar lineage differs", stage="closure")
     return payload
 
 
@@ -1847,10 +2073,13 @@ def close_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict
         "contract_version": CONTRACT_VERSION,
         "status": "development_complete",
         "selected_horizon": payload["selected_horizon"],
-        "research_surface_status": "AVAILABLE_EXPERIMENTAL",
-        "rotation_l1_capability_status": (
-            "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED" if tail_allowed else "NOT_AVAILABLE"
-        ),
+        # Offline closure proves deterministic model computation only.  The
+        # research surface becomes AVAILABLE_EXPERIMENTAL after the OOF rows
+        # have passed the transactional repository/readback and real API/UI
+        # product validation defined by G2-A v1.3.
+        "research_surface_status": "NOT_AVAILABLE",
+        "rotation_l1_capability_status": "NOT_AVAILABLE",
+        "model_effect_tail_access_eligible": tail_allowed,
         "forward_power_status": forward_power_status,
         "forward_confirmation": (
             "PENDING_INSUFFICIENT_POWER"
@@ -1862,6 +2091,8 @@ def close_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict
         "development_oof_mean_rank_ic": mean_ic,
         "tail_access_gate_passed": tail_allowed,
         "tail_accessed": False,
+        "research_product_compute_conditions_satisfied": True,
+        "research_product_gate_passed": False,
         "child_sha256s": [first["report_sha256"], second["report_sha256"]],
         "reproducibility_payload_sha256": first["reproducibility_payload_sha256"],
         "battery_receipt_sha256": payload["battery_receipt_sha256"],
@@ -1893,6 +2124,7 @@ __all__ = [
     "INPUT_SCHEMA_VERSION",
     "PROCESS_SCHEMA_VERSION",
     "RotationL1G2AError",
+    "build_label_free_feature_panel",
     "build_materialised_panel",
     "close_processes",
     "cross_section_rank_features",
