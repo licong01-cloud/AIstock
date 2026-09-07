@@ -273,6 +273,140 @@ EXPECTED_VIEWS = frozenset({"sector_state_current", "daily_alert_current", "risk
 # that a drift error identifies the human-readable contract that failed.
 EXPECTED_STRUCTURE_SHA256 = "5e7dec052b1db18f1320a25c090fc09b5d50a2edb3a7c05320d61e046cb213e0"
 
+ROTATION_L1_PREDICTION_COLUMNS = (
+    "prediction_id",
+    "product_bundle_id",
+    "trade_date",
+    "as_of_date",
+    "sector_level",
+    "sector_code",
+    "sector_name",
+    "rotation_score",
+    "forecast_state",
+    "feature_contributions",
+    "availability",
+    "reason_code",
+    "research_surface_status",
+    "rotation_l1_capability_status",
+    "forward_power_status",
+    "forward_confirmation",
+    "advisory_status",
+    "validation_basis",
+    "development_oof_rank_ic",
+    "development_oof_rank_ic_hac_lower",
+    "development_oof_rank_ic_hac_upper",
+    "model_hash",
+    "input_hash",
+    "mapping_snapshot_hash",
+    "tail_accessed",
+    "revision",
+    "supersedes_prediction_id",
+    "created_at",
+)
+ROTATION_L1_PREDICTION_CONSTRAINTS = frozenset(
+    {
+        "pk_hmm_risk_rotation_l1_prediction",
+        "uq_hmm_risk_rotation_l1_prediction_revision",
+        "fk_hmm_risk_rotation_l1_prediction_supersedes",
+        "ck_hmm_risk_rotation_l1_prediction_dates",
+        "ck_hmm_risk_rotation_l1_prediction_level",
+        "ck_hmm_risk_rotation_l1_prediction_state",
+        "ck_hmm_risk_rotation_l1_prediction_availability",
+        "ck_hmm_risk_rotation_l1_prediction_surface",
+        "ck_hmm_risk_rotation_l1_prediction_capability",
+        "ck_hmm_risk_rotation_l1_prediction_power",
+        "ck_hmm_risk_rotation_l1_prediction_confirmation",
+        "ck_hmm_risk_rotation_l1_prediction_advisory",
+        "ck_hmm_risk_rotation_l1_prediction_validation_basis",
+        "ck_hmm_risk_rotation_l1_prediction_hashes",
+        "ck_hmm_risk_rotation_l1_prediction_revision",
+        "ck_hmm_risk_rotation_l1_prediction_supersedes_chain",
+        "ck_hmm_risk_rotation_l1_prediction_advisory_coupling",
+        "ck_hmm_risk_rotation_l1_prediction_metrics",
+    }
+)
+ROTATION_L1_PREDICTION_COLUMN_CONTRACT = {
+    "prediction_id": ("uuid", True, None),
+    "product_bundle_id": ("text", False, None),
+    "trade_date": ("date", True, None),
+    "as_of_date": ("date", True, None),
+    "sector_level": ("text", True, "'L1'::text"),
+    "sector_code": ("text", True, None),
+    "sector_name": ("text", True, None),
+    "rotation_score": ("double precision", False, None),
+    "forecast_state": ("text", False, None),
+    "feature_contributions": ("jsonb", False, None),
+    "availability": ("text", True, None),
+    "reason_code": ("text", False, None),
+    "research_surface_status": ("text", True, None),
+    "rotation_l1_capability_status": ("text", True, None),
+    "forward_power_status": ("text", True, None),
+    "forward_confirmation": ("text", True, None),
+    "advisory_status": ("text", True, None),
+    "validation_basis": ("text", True, None),
+    "development_oof_rank_ic": ("double precision", False, None),
+    "development_oof_rank_ic_hac_lower": ("double precision", False, None),
+    "development_oof_rank_ic_hac_upper": ("double precision", False, None),
+    "model_hash": ("character(64)", True, None),
+    "input_hash": ("character(64)", True, None),
+    "mapping_snapshot_hash": ("character(64)", True, None),
+    "tail_accessed": ("boolean", True, "false"),
+    "revision": ("integer", True, None),
+    "supersedes_prediction_id": ("uuid", False, None),
+    "created_at": ("timestamp with time zone", True, "now()"),
+}
+ROTATION_L1_PREDICTION_CONSTRAINT_TOKENS = {
+    "pk_hmm_risk_rotation_l1_prediction": ("PRIMARY KEY", "prediction_id"),
+    "uq_hmm_risk_rotation_l1_prediction_revision": (
+        "UNIQUE",
+        "model_hash",
+        "trade_date",
+        "sector_code",
+        "revision",
+    ),
+    "fk_hmm_risk_rotation_l1_prediction_supersedes": ("FOREIGN KEY", "supersedes_prediction_id"),
+    "ck_hmm_risk_rotation_l1_prediction_dates": ("CHECK", "as_of_date", "trade_date"),
+    "ck_hmm_risk_rotation_l1_prediction_level": ("CHECK", "sector_level", "L1"),
+    "ck_hmm_risk_rotation_l1_prediction_state": ("CHECK", "forecast_state", "trending", "neutral", "fading"),
+    "ck_hmm_risk_rotation_l1_prediction_availability": (
+        "CHECK",
+        "availability",
+        "rotation_score",
+        "feature_contributions",
+        "reason_code",
+    ),
+    "ck_hmm_risk_rotation_l1_prediction_surface": ("CHECK", "research_surface_status"),
+    "ck_hmm_risk_rotation_l1_prediction_capability": ("CHECK", "rotation_l1_capability_status"),
+    "ck_hmm_risk_rotation_l1_prediction_power": ("CHECK", "forward_power_status"),
+    "ck_hmm_risk_rotation_l1_prediction_confirmation": ("CHECK", "forward_confirmation"),
+    "ck_hmm_risk_rotation_l1_prediction_advisory": ("CHECK", "advisory_status"),
+    "ck_hmm_risk_rotation_l1_prediction_validation_basis": ("CHECK", "validation_basis"),
+    "ck_hmm_risk_rotation_l1_prediction_hashes": (
+        "CHECK",
+        "model_hash",
+        "input_hash",
+        "mapping_snapshot_hash",
+    ),
+    "ck_hmm_risk_rotation_l1_prediction_revision": ("CHECK", "revision"),
+    "ck_hmm_risk_rotation_l1_prediction_supersedes_chain": (
+        "CHECK",
+        "revision",
+        "supersedes_prediction_id",
+    ),
+    "ck_hmm_risk_rotation_l1_prediction_advisory_coupling": (
+        "CHECK",
+        "advisory_status",
+        "product_bundle_id",
+        "tail_accessed",
+    ),
+    "ck_hmm_risk_rotation_l1_prediction_metrics": (
+        "CHECK",
+        "development_oof_rank_ic",
+        "development_oof_rank_ic_hac_lower",
+        "development_oof_rank_ic_hac_upper",
+    ),
+}
+
 
 TABLE_DDL = (
     "CREATE SCHEMA IF NOT EXISTS hmm_risk",
@@ -505,6 +639,89 @@ TABLE_DDL = (
         CONSTRAINT ck_hmm_risk_report_terminal CHECK ((status='succeeded' AND metrics IS NOT NULL AND result_hash IS NOT NULL AND error_code IS NULL) OR (status='failed' AND metrics IS NULL AND result_hash IS NULL AND error_code IS NOT NULL))
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS hmm_risk.rotation_l1_prediction (
+        prediction_id UUID CONSTRAINT pk_hmm_risk_rotation_l1_prediction PRIMARY KEY,
+        product_bundle_id TEXT,
+        trade_date DATE NOT NULL,
+        as_of_date DATE NOT NULL,
+        sector_level TEXT NOT NULL DEFAULT 'L1',
+        sector_code TEXT NOT NULL,
+        sector_name TEXT NOT NULL,
+        rotation_score DOUBLE PRECISION,
+        forecast_state TEXT,
+        feature_contributions JSONB,
+        availability TEXT NOT NULL,
+        reason_code TEXT,
+        research_surface_status TEXT NOT NULL,
+        rotation_l1_capability_status TEXT NOT NULL,
+        forward_power_status TEXT NOT NULL,
+        forward_confirmation TEXT NOT NULL,
+        advisory_status TEXT NOT NULL,
+        validation_basis TEXT NOT NULL,
+        development_oof_rank_ic DOUBLE PRECISION,
+        development_oof_rank_ic_hac_lower DOUBLE PRECISION,
+        development_oof_rank_ic_hac_upper DOUBLE PRECISION,
+        model_hash CHAR(64) NOT NULL,
+        input_hash CHAR(64) NOT NULL,
+        mapping_snapshot_hash CHAR(64) NOT NULL,
+        tail_accessed BOOLEAN NOT NULL DEFAULT FALSE,
+        revision INTEGER NOT NULL,
+        supersedes_prediction_id UUID CONSTRAINT fk_hmm_risk_rotation_l1_prediction_supersedes
+          REFERENCES hmm_risk.rotation_l1_prediction(prediction_id) ON DELETE RESTRICT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_hmm_risk_rotation_l1_prediction_revision UNIQUE (model_hash,trade_date,sector_code,revision),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_dates CHECK (as_of_date<trade_date),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_level CHECK (
+          sector_level='L1' AND btrim(sector_code)<>'' AND btrim(sector_name)<>''
+          AND (product_bundle_id IS NULL OR btrim(product_bundle_id)<>'')
+        ),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_state CHECK (forecast_state IS NULL OR forecast_state IN ('trending','neutral','fading')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_availability CHECK (
+          (availability='available' AND rotation_score IS NOT NULL
+            AND rotation_score>'-Infinity'::double precision AND rotation_score<'Infinity'::double precision
+            AND forecast_state IS NOT NULL AND feature_contributions IS NOT NULL
+            AND jsonb_typeof(feature_contributions)='array' AND jsonb_array_length(feature_contributions)=10
+            AND NOT jsonb_path_exists(feature_contributions,'$[*] ? (@.type() != "number")')
+            AND reason_code IS NULL)
+          OR (availability='unavailable' AND rotation_score IS NULL AND forecast_state IS NULL
+            AND feature_contributions IS NULL AND reason_code IS NOT NULL AND btrim(reason_code)<>'')
+        ),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_surface CHECK (research_surface_status='NOT_AVAILABLE'),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_capability CHECK (rotation_l1_capability_status IN ('NOT_AVAILABLE','RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED','ADVISORY_PREDICTION_AVAILABLE')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_power CHECK (forward_power_status IN ('UNAVAILABLE','INSUFFICIENT','SUFFICIENT')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_confirmation CHECK (forward_confirmation IN ('NOT_STARTED','PENDING_INSUFFICIENT_POWER','PENDING_INCONCLUSIVE','PASSED','FAILED')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_advisory CHECK (advisory_status IN ('NOT_AVAILABLE','AVAILABLE')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_validation_basis CHECK (validation_basis IN ('development_causal_oof','single_date_frozen_model')),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_hashes CHECK (
+          model_hash ~ '^[0-9a-f]{64}$' AND input_hash ~ '^[0-9a-f]{64}$' AND mapping_snapshot_hash ~ '^[0-9a-f]{64}$'
+        ),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_revision CHECK (revision>0),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_supersedes_chain CHECK (
+          (revision=1 AND supersedes_prediction_id IS NULL)
+          OR (revision>1 AND supersedes_prediction_id IS NOT NULL)
+        ),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_advisory_coupling CHECK (
+          advisory_status<>'AVAILABLE' OR (
+            rotation_l1_capability_status='ADVISORY_PREDICTION_AVAILABLE'
+            AND forward_confirmation='PASSED' AND product_bundle_id IS NOT NULL AND tail_accessed
+          )
+        ),
+        CONSTRAINT ck_hmm_risk_rotation_l1_prediction_metrics CHECK (
+          (development_oof_rank_ic IS NULL AND development_oof_rank_ic_hac_lower IS NULL AND development_oof_rank_ic_hac_upper IS NULL)
+          OR (
+            development_oof_rank_ic IS NOT NULL
+            AND development_oof_rank_ic_hac_lower IS NOT NULL
+            AND development_oof_rank_ic_hac_upper IS NOT NULL
+            AND development_oof_rank_ic>'-Infinity'::double precision AND development_oof_rank_ic<'Infinity'::double precision
+            AND development_oof_rank_ic_hac_lower>'-Infinity'::double precision AND development_oof_rank_ic_hac_lower<'Infinity'::double precision
+            AND development_oof_rank_ic_hac_upper>'-Infinity'::double precision AND development_oof_rank_ic_hac_upper<'Infinity'::double precision
+            AND development_oof_rank_ic_hac_lower<=development_oof_rank_ic
+            AND development_oof_rank_ic<=development_oof_rank_ic_hac_upper
+          )
+        )
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_run_claim ON hmm_risk.daily_generation_run(status,queued_at,run_id) WHERE status='queued'",
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_run_lease ON hmm_risk.daily_generation_run(lease_expires_at,run_id) WHERE status IN ('running','cancel_requested')",
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_state_lookup ON hmm_risk.sector_state_timeline(candidate_id,sector_level,sector_code,trade_date DESC,revision DESC)",
@@ -512,6 +729,7 @@ TABLE_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_alert_lookup ON hmm_risk.daily_alert(candidate_id,trade_date DESC,sector_level,severity)",
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_event_lookup ON hmm_risk.risk_event(candidate_id,status,sector_level,sector_code,last_trade_date DESC)",
     "CREATE INDEX IF NOT EXISTS idx_hmm_risk_report_lookup ON hmm_risk.retrospective_report(candidate_id,end_trade_date DESC,sector_level)",
+    "CREATE INDEX IF NOT EXISTS idx_hmm_risk_rotation_l1_lookup ON hmm_risk.rotation_l1_prediction(trade_date,sector_code,revision DESC)",
 )
 
 
@@ -591,6 +809,24 @@ def _comment_ddl() -> Iterable[str]:
         yield f"COMMENT ON INDEX {SCHEMA_NAME}.{name} IS '{_quote(text)}'"
     for name, text in VIEW_COMMENTS.items():
         yield f"COMMENT ON VIEW {SCHEMA_NAME}.{name} IS '{_quote(text)}'"
+    yield (
+        "COMMENT ON TABLE hmm_risk.rotation_l1_prediction IS "
+        "'Append-only G2-A L1 rotation prediction revisions; scores are not probabilities.'"
+    )
+    for column in ROTATION_L1_PREDICTION_COLUMNS:
+        yield (
+            f"COMMENT ON COLUMN hmm_risk.rotation_l1_prediction.{column} IS "
+            f"'rotation_l1_prediction.{column} exact hmm_risk_rotation_l1_prediction_v1 contract'"
+        )
+    for constraint in sorted(ROTATION_L1_PREDICTION_CONSTRAINTS):
+        yield (
+            f"COMMENT ON CONSTRAINT {constraint} ON hmm_risk.rotation_l1_prediction IS "
+            f"'{constraint} enforces hmm_risk_rotation_l1_prediction_v1'"
+        )
+    yield (
+        "COMMENT ON INDEX hmm_risk.idx_hmm_risk_rotation_l1_lookup IS "
+        "'Date and sector L1 rotation revision lookup; model identity remains explicit.'"
+    )
 
 
 def iter_ddl() -> Iterable[str]:
@@ -806,6 +1042,88 @@ def verify_schema(conn: Any) -> None:
     """Read and verify the exact schema contract."""
 
     verify_contract_snapshot(collect_schema_contract(conn))
+    verify_rotation_l1_prediction_schema(conn)
+
+
+def verify_rotation_l1_prediction_schema(conn: Any) -> None:
+    """Verify the separately versioned G2-A prediction table contract."""
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,
+                   pg_get_expr(ad.adbin,ad.adrelid),col_description(c.oid,a.attnum)
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            JOIN pg_attribute a ON a.attrelid=c.oid
+            LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum
+            WHERE n.nspname=%s AND c.relname='rotation_l1_prediction'
+              AND c.relkind='r' AND a.attnum>0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """,
+            (SCHEMA_NAME,),
+        )
+        columns = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT con.conname,pg_get_constraintdef(con.oid,true),obj_description(con.oid,'pg_constraint')
+            FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname=%s AND c.relname='rotation_l1_prediction'
+            ORDER BY con.conname
+            """,
+            (SCHEMA_NAME,),
+        )
+        constraints = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT obj_description(c.oid,'pg_class')
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname=%s AND c.relname='rotation_l1_prediction' AND c.relkind='r'
+            """,
+            (SCHEMA_NAME,),
+        )
+        table_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT pg_get_indexdef(idx.oid),obj_description(idx.oid,'pg_class')
+            FROM pg_class idx JOIN pg_namespace n ON n.oid=idx.relnamespace
+            WHERE n.nspname=%s AND idx.relname='idx_hmm_risk_rotation_l1_lookup'
+            """,
+            (SCHEMA_NAME,),
+        )
+        index_row = cursor.fetchone()
+    if tuple(row[0] for row in columns) != ROTATION_L1_PREDICTION_COLUMNS:
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: columns")
+    if any(
+        (_normalize_definition(row[1]), bool(row[2]), _normalize_definition(row[3]))
+        != ROTATION_L1_PREDICTION_COLUMN_CONTRACT[row[0]]
+        for row in columns
+    ):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: column structure")
+    if any(
+        row[4] != f"rotation_l1_prediction.{row[0]} exact hmm_risk_rotation_l1_prediction_v1 contract"
+        for row in columns
+    ):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: column comments")
+    if frozenset(row[0] for row in constraints) != ROTATION_L1_PREDICTION_CONSTRAINTS:
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: constraints")
+    if any(row[2] != f"{row[0]} enforces hmm_risk_rotation_l1_prediction_v1" for row in constraints):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: constraint comments")
+    if any(
+        any(token.lower() not in str(row[1]).lower() for token in ROTATION_L1_PREDICTION_CONSTRAINT_TOKENS[row[0]])
+        for row in constraints
+    ):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: constraint definitions")
+    if not table_row or table_row[0] != (
+        "Append-only G2-A L1 rotation prediction revisions; scores are not probabilities."
+    ):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: table comment")
+    if (
+        not index_row
+        or "(trade_date, sector_code, revision DESC)" not in str(index_row[0])
+        or index_row[1] != ("Date and sector L1 rotation revision lookup; model identity remains explicit.")
+    ):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: index comment")
 
 
 if __name__ == "__main__":

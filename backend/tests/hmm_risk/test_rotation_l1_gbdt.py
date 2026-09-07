@@ -485,8 +485,15 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
     }
     assert first["reproducibility_payload"]["profile"]["n_estimators"] == 240
     assert first["reproducibility_payload_sha256"] == second["reproducibility_payload_sha256"]
+    fold_hashes = {fold["model_sha256"] for fold in first["reproducibility_payload"]["folds"]}
+    assert fold_hashes
+    assert {row["model_hash"] for row in first["reproducibility_payload"]["oof_prediction_rows"]} <= fold_hashes
     acceptance = subject.close_processes(first, second)
-    assert acceptance["research_surface_status"] == "AVAILABLE_EXPERIMENTAL"
+    assert acceptance["research_surface_status"] == "NOT_AVAILABLE"
+    assert acceptance["rotation_l1_capability_status"] == "NOT_AVAILABLE"
+    assert acceptance["research_product_compute_conditions_satisfied"] is True
+    assert acceptance["research_product_gate_passed"] is False
+    assert acceptance["model_effect_tail_access_eligible"] is True
     assert acceptance["forward_power_status"] == "INSUFFICIENT"
     assert acceptance["tail_accessed"] is False
 
@@ -517,6 +524,165 @@ def test_close_processes_rejects_rehashed_stale_leaf_contract() -> None:
         subject.close_processes(first, second)
 
     assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
+def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
+    children = [
+        subject.run_gbdt_process(
+            _bundle(),
+            battery_report=_battery_report(),
+            process_index=index,
+            estimator_factory=_FakeEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    for child in children:
+        fold = child["reproducibility_payload"]["folds"][0]
+        fold["validation_start"] = "2023-09-05"
+        fold_body = {
+            key: fold[key]
+            for key in (
+                "fold",
+                "train_start",
+                "train_end",
+                "train_count",
+                "train_date_sha256",
+                "purge_dates",
+                "validation_start",
+                "validation_end",
+                "validation_count",
+                "validation_date_sha256",
+            )
+        }
+        fold["receipt_sha256"] = subject.canonical_sha256(fold_body)
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        child["report_sha256"] = subject.canonical_sha256(
+            {key: value for key, value in child.items() if key != "report_sha256"}
+        )
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.close_processes(*children)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert caught.value.stage == "closure"
+
+
+def test_close_processes_rejects_rehashed_oof_fold_model_lineage_drift() -> None:
+    first = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    second = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=2,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    first["reproducibility_payload"]["oof_prediction_rows"][0]["model_hash"] = "f" * 64
+    first["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
+        first["reproducibility_payload"]["oof_prediction_rows"]
+    )
+    first["reproducibility_payload_sha256"] = subject.canonical_sha256(first["reproducibility_payload"])
+    body = {key: value for key, value in first.items() if key != "report_sha256"}
+    first["report_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.close_processes(first, second)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert caught.value.stage == "closure"
+
+
+def test_close_processes_rejects_rehashed_oof_as_of_calendar_drift() -> None:
+    children = [
+        subject.run_gbdt_process(
+            _bundle(),
+            battery_report=_battery_report(),
+            process_index=index,
+            estimator_factory=_FakeEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    for child in children:
+        first_day = child["reproducibility_payload"]["oof_prediction_rows"][0]["trade_date"]
+        for row in child["reproducibility_payload"]["oof_prediction_rows"]:
+            if row["trade_date"] == first_day:
+                row["as_of_date"] = "2020-01-01"
+        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
+            child["reproducibility_payload"]["oof_prediction_rows"]
+        )
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        child["report_sha256"] = subject.canonical_sha256(
+            {key: value for key, value in child.items() if key != "report_sha256"}
+        )
+
+    with pytest.raises(subject.RotationL1G2AError, match="as-of calendar"):
+        subject.close_processes(*children)
+
+
+def test_close_processes_rejects_existing_model_hash_from_the_wrong_fold() -> None:
+    first = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    second = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=2,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    hashes = [fold["model_sha256"] for fold in first["reproducibility_payload"]["folds"]]
+    if len(set(hashes)) == 1:
+        first["reproducibility_payload"]["folds"][1]["model_sha256"] = "e" * 64
+        second["reproducibility_payload"]["folds"][1]["model_sha256"] = "e" * 64
+        hashes[1] = "e" * 64
+    for child in (first, second):
+        child["reproducibility_payload"]["oof_prediction_rows"][0]["model_hash"] = hashes[1]
+        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
+            child["reproducibility_payload"]["oof_prediction_rows"]
+        )
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        child["report_sha256"] = subject.canonical_sha256(
+            {key: value for key, value in child.items() if key != "report_sha256"}
+        )
+
+    with pytest.raises(subject.RotationL1G2AError, match="fold-model"):
+        subject.close_processes(first, second)
+
+
+def test_close_processes_rejects_rehashed_partial_oof_cross_section() -> None:
+    children = [
+        subject.run_gbdt_process(
+            _bundle(),
+            battery_report=_battery_report(),
+            process_index=index,
+            estimator_factory=_FakeEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    for child in children:
+        child["reproducibility_payload"]["oof_prediction_rows"].pop()
+        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
+            child["reproducibility_payload"]["oof_prediction_rows"]
+        )
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        child["report_sha256"] = subject.canonical_sha256(
+            {key: value for key, value in child.items() if key != "report_sha256"}
+        )
+
+    with pytest.raises(subject.RotationL1G2AError, match="denominator"):
+        subject.close_processes(*children)
 
 
 def test_gbdt_process_fails_closed_on_leaf_date_collapse() -> None:
