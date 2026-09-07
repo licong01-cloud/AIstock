@@ -13,11 +13,13 @@ from backend.services.advisory_model_first.causal_admission_v2_contracts import 
 )
 from backend.services.advisory_model_first.causal_admission_v2_pipeline import (
     BUNDLE_MEMBERS,
+    CAUSAL_ADMISSION_COMPARISON_VARIABLE,
     _find_existing_bundle,
     _publish_bundle,
     inspect_causal_admission_bundle,
 )
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+from backend.services.advisory_model_first.research_control import AdvisoryResearchTrialRegistryV1
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 from backend.tests.advisory_model_first.test_causal_admission_v2_pipeline import (
     build_test_request,
@@ -70,9 +72,27 @@ def test_bundle_is_content_addressed_and_registry_refs_use_final_path(tmp_path: 
     assert repeated == bundle
     assert {item.name for item in bundle.iterdir()} == {*BUNDLE_MEMBERS, "manifest.json"}
     assert all(bundle.as_posix() in ref["artifact_uri"] for row in records for ref in row["evidence_refs"])
+    assert len(records) == 1
+    assert records[0]["unique_variable"] == CAUSAL_ADMISSION_COMPARISON_VARIABLE
+    assert records[0]["planned_trial_count"] == 2
+    assert records[0]["evaluated_trial_count"] == 2
+    assert records[0]["selected_trial_count"] == 0
     assert len(records[0]["consumed_windows"]) == 2
-    assert len(records[1]["consumed_windows"]) == 1
     assert json.loads((bundle / "resource_report.json").read_text())["temporary_bytes"] > 0
+
+
+def test_multi_arm_frontier_registry_delivery_is_atomic_and_exact_retry_is_noop(tmp_path: Path) -> None:
+    bundle, _ = _publish_fixture(tmp_path)
+    records = json.loads((bundle / "registry_records.json").read_text(encoding="utf-8"))
+    registry = AdvisoryResearchTrialRegistryV1(tmp_path / "trial_registry.jsonl")
+
+    first = registry.append_batch(records)
+    repeated = registry.append_batch(records)
+
+    assert first["requested_count"] == 1
+    assert first["appended_count"] == 1
+    assert repeated["appended_count"] == 0
+    assert repeated["duplicate_noop_count"] == 1
 
 
 @pytest.mark.parametrize("mutation", ["member", "manifest", "extra"])
