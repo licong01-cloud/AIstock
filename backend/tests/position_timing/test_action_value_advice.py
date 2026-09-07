@@ -89,3 +89,21 @@ def test_current_source_missing_or_future_is_not_model_success():
     args["decision_as_of"] = args["decision_as_of"].replace(hour=15)
     with pytest.raises(ActionValueError, match="DECISION_CLOCK"):
         decide_stock_day(**args, model=RecordingModel())
+
+
+def test_precomputed_market_features_must_belong_to_decision_date():
+    args = inputs()
+    current = pd.Series(
+        0.0,
+        index=(
+            "return_1d_bps", "return_3d_bps", "return_5d_bps", "return_20d_bps",
+            "close_to_ema20_bps", "ema20_slope_10d_bps", "realized_vol_20d_bps",
+            "downside_semivol_20d_bps", "intraday_range_bps", "close_location_in_day",
+            "volume_ratio_5d_to_20d", "relative_csi300_return_20d_bps",
+            "csi300_return_20d_bps", "csi300_vol_20d_bps",
+        ),
+        name=args["bars"].index[-2],
+    )
+
+    with pytest.raises(ActionValueError, match="CURRENT_CORE_FEATURE_DATE_MISMATCH"):
+        decide_stock_day(**args, model=RecordingModel(), current_market=current)

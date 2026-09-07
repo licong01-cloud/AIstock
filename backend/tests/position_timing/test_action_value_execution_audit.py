@@ -8,6 +8,7 @@ import pandas as pd
 
 from backend.services.position_timing.action_value_execution_audit import (
     AUDIT_FIELDS,
+    _evaluate_plan,
     audit_minute_execution,
 )
 from backend.services.position_timing.contracts import canonical_sha256
@@ -119,3 +120,92 @@ def test_minute_audit_serializes_unfilled_daily_nan_as_typed_null(tmp_path: Path
     assert result["execution_audit_sha256"] == canonical_sha256(
         {key: value for key, value in result.items() if key != "execution_audit_sha256"}
     )
+
+
+def test_minute_audit_samples_only_inside_actual_coverage(tmp_path: Path) -> None:
+    minute = _minute_candidate(tmp_path / "minute")
+    base = {
+        "symbol": "000001.SZ",
+        "baseline": "BUY_AND_HOLD",
+        "planned_delta_qty": 100,
+        "plan_reference_raw": 10,
+        "plan_risk_exit": False,
+        "pre_quantity": 0,
+        "pre_sellable_qty": 0,
+        "fill_status": "FILLED",
+        "fill_price_raw": 10,
+    }
+    rows = pd.DataFrame(
+        [
+            {**base, "sleeve_id": f"outside-{index}", "target_trade_date": "2020-01-02"}
+            for index in range(20)
+        ]
+        + [{**base, "sleeve_id": "inside", "target_trade_date": "2026-08-31"}]
+    )
+
+    result = audit_minute_execution(rows, minute_root=minute, sample_limit=1)
+
+    assert result["source_population_count"] == 21
+    assert result["eligible_population_count"] == 1
+    assert result["population_count"] == 1
+    assert result["paired_count"] == 1
+    assert result["excluded_before_sampling_counts"]["MINUTE_COVERAGE_OUTSIDE_RANGE"] == 20
+    assert result["results"][0]["target_trade_date"] == "2026-08-31"
+
+
+def test_minute_audit_reports_empty_eligible_population_without_shape_error(tmp_path: Path) -> None:
+    minute = _minute_candidate(tmp_path / "minute")
+    rows = pd.DataFrame(
+        [{
+            "sleeve_id": "no-action",
+            "symbol": "000001.SZ",
+            "target_trade_date": "2026-08-31",
+            "baseline": "BUY_AND_HOLD",
+            "planned_delta_qty": 0,
+            "plan_reference_raw": 10,
+            "plan_risk_exit": False,
+            "pre_quantity": 0,
+            "pre_sellable_qty": 0,
+            "fill_status": "NO_ACTION",
+            "fill_price_raw": None,
+        }]
+    )
+
+    result = audit_minute_execution(rows, minute_root=minute, sample_limit=1)
+
+    assert result["source_population_count"] == 0
+    assert result["eligible_population_count"] == 0
+    assert result["population_count"] == 0
+    assert result["execution_realism_status"] == "EXECUTION_REALISM_UNVERIFIED"
+
+
+def test_minute_audit_drops_only_all_field_empty_calendar_padding() -> None:
+    row = {
+        "symbol": "000001.SZ",
+        "planned_delta_qty": 100,
+        "plan_reference_raw": 10,
+        "plan_risk_exit": False,
+        "pre_quantity": 0,
+        "pre_sellable_qty": 0,
+        "fill_status": "FILLED",
+        "fill_price_raw": 10,
+    }
+    values = {
+        "open": 10,
+        "high": 10.1,
+        "low": 9.9,
+        "close": 10,
+        "factor": 1,
+        "up_limit_price": 11,
+        "down_limit_price": 9,
+    }
+    arrays = {
+        name: np.asarray([np.nan, value], dtype=float)
+        for name, value in values.items()
+    }
+
+    assert _evaluate_plan(row, arrays)["status"] == "PAIRED"
+
+    partial = dict(arrays)
+    partial["open"] = np.asarray([10, 10], dtype=float)
+    assert _evaluate_plan(row, partial)["status"] == "DATA_ERROR_FACTOR_INVALID"

@@ -1,4 +1,4 @@
-"""Immutable CLI pipeline for PT-NEXT-004 daily action-value research.
+"""Immutable CLI pipeline for daily action-value historical research.
 
 The pipeline is intentionally local and explicit: prepare a frozen request,
 run monthly forward evaluation, publish a native LightGBM final-fit bundle, and
@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.research_control import AdvisoryResearchTrialRegistryV1
 from backend.services.advisory_model_first.research_control_contracts import (
     ConsumedWindowV1,
@@ -30,6 +31,10 @@ from backend.services.advisory_model_first.research_control_contracts import (
 
 from .action_value import ActionValueError, FEATURE_SPEC_SHA256, POLICY_SHA256, TZ, cutoff_on
 from .action_value_data import DailyCandidate, file_reference
+from .action_value_corporate_actions import (
+    CorporateActionBook,
+    freeze_corporate_action_snapshot,
+)
 from .action_value_execution_audit import audit_minute_execution
 from .action_value_model import fit_local_model, write_local_model
 from .action_value_research import (
@@ -39,12 +44,21 @@ from .action_value_research import (
     replay_continuous_cohorts,
     walk_forward_action_values,
 )
-from .artifact_store import PositionTimingArtifactStore
+from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
-REQUEST_SCHEMA = "position_timing_action_value_request_v2"
-RECEIPT_SCHEMA = "position_timing_action_value_receipt_v2"
+REQUEST_SCHEMA = "position_timing_action_value_request_v4"
+LEGACY_REQUEST_SCHEMAS = {
+    "position_timing_action_value_request_v2",
+    "position_timing_action_value_request_v3",
+}
+RECEIPT_SCHEMA = "position_timing_action_value_receipt_v4"
+RESEARCH_VERSION_BY_RECEIPT_SCHEMA = {
+    "position_timing_action_value_receipt_v2": "V2",
+    "position_timing_action_value_receipt_v3": "V3",
+    RECEIPT_SCHEMA: "V4",
+}
 PIPELINE_ID = "POSITION_TIMING_ACTION_VALUE_V2"
 
 
@@ -71,6 +85,22 @@ def prepare_request(
     selected_symbols = deterministic_symbols(candidate.symbols, limit=symbol_limit, seed=spec.seed)
     if not historical_registry.is_file():
         raise ActionValueError("HISTORICAL_REGISTRY_UNAVAILABLE")
+    from backend.db.pg_pool import get_conn
+
+    with get_conn(autocommit=False) as connection:
+        connection.set_session(
+            isolation_level="REPEATABLE READ",
+            readonly=True,
+            autocommit=False,
+        )
+        corporate_action_path = freeze_corporate_action_snapshot(
+            connection,
+            symbols=selected_symbols,
+            start=population_start,
+            end=population_end,
+            timing_root=timing_root,
+        )
+    corporate_action_ref = file_reference(corporate_action_path)
     request = {
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
@@ -79,6 +109,7 @@ def prepare_request(
         "timing_root": timing_root.resolve().as_posix(),
         "repository_root": repository_root.as_posix(),
         "repository_commit": source_commit,
+        "research_evidence_clock": "HISTORICAL_CAUSAL_REPLAY_PRIMARY_PROSPECTIVE_NONBLOCKING",
         "created_at": datetime.now(TZ).isoformat(),
         "population_spec": {
             "start": population_start.isoformat(),
@@ -109,7 +140,9 @@ def prepare_request(
             "minute_meta": file_reference(candidate.root / "components" / "minute_bin_candidate" / "meta_export.json"),
             "minute_calendar": file_reference(candidate.root / "components" / "minute_bin_candidate" / "calendars" / "1min.txt"),
             "minute_instruments": file_reference(candidate.root / "components" / "minute_bin_candidate" / "instruments" / "all.txt"),
+            "corporate_action_snapshot": corporate_action_ref,
         },
+        "corporate_action_snapshot": corporate_action_ref,
         "historical_registry": file_reference(historical_registry),
         "historical_registry_context_count": len(AdvisoryResearchTrialRegistryV1(historical_registry).read()),
         "global_registry_write": False,
@@ -139,6 +172,13 @@ def run_request(request_path: Path) -> dict[str, Any]:
         return {"status": "ALREADY_MATERIALIZED", "bundle": bundle.as_posix(), **loaded, **delivered}
     _assert_repository_identity(request)
     candidate = DailyCandidate.open(Path(request["candidate_root"]))
+    corporate_action_ref = request.get("corporate_action_snapshot")
+    if not isinstance(corporate_action_ref, Mapping) or "path" not in corporate_action_ref:
+        raise ActionValueError("CORPORATE_ACTION_SNAPSHOT_NOT_BOUND")
+    corporate_action_path = Path(str(corporate_action_ref["path"]))
+    if file_reference(corporate_action_path) != corporate_action_ref:
+        raise ActionValueError("CORPORATE_ACTION_SNAPSHOT_SOURCE_CHANGED")
+    corporate_actions = CorporateActionBook.open(corporate_action_path)
     raw_spec = request["population_spec"]
     spec = ActionValuePopulationSpec(
         start=date.fromisoformat(raw_spec["start"]),
@@ -147,7 +187,7 @@ def run_request(request_path: Path) -> dict[str, Any]:
         review_stride=int(raw_spec["review_stride"]),
         seed=int(raw_spec["seed"]),
     )
-    population = build_action_value_rows(candidate, spec)
+    population = build_action_value_rows(candidate, spec, corporate_actions=corporate_actions)
     if tuple(population.coverage["symbols"]) != tuple(raw_spec["selected_symbols"]):
         raise ActionValueError("POPULATION_SELECTION_IDENTITY_MISMATCH")
     source_sha256 = canonical_sha256({
@@ -165,6 +205,7 @@ def run_request(request_path: Path) -> dict[str, Any]:
         candidate,
         models=forward.models,
         symbols=tuple(raw_spec["selected_symbols"]),
+        corporate_actions=corporate_actions,
         bootstrap_samples=int(request["training_spec"]["bootstrap_samples"]),
         block_sessions=int(request["training_spec"]["bootstrap_block_sessions"]),
         seed=int(request["training_spec"]["bootstrap_seed"]),
@@ -259,9 +300,15 @@ def _deliver_completed_bundle(
 
     historical_registry = Path(request["historical_registry"]["path"])
     timing_root = Path(request["timing_root"]).resolve()
-    registry = _deliver_registry(request=request, bundle=bundle, receipt=receipt)
+    try:
+        registry = _deliver_registry(request=request, bundle=bundle, receipt=receipt)
+    except AdvisoryModelFirstError as exc:
+        raise ActionValueError(
+            "TIMING_RESEARCH_REGISTRY_DELIVERY_FAILED",
+            reason_code=exc.reason_code,
+        ) from exc
     global_after_registry = file_reference(historical_registry)
-    current = {
+    current_candidate = {
         "schema_version": "position_timing_action_value_current_research_v2",
         "model_sha256": receipt["final_model_sha256"],
         "receipt_sha256": receipt["receipt_sha256"],
@@ -270,15 +317,16 @@ def _deliver_completed_bundle(
         "advice_tier": "EXPERIMENTAL_MODEL_ADVICE",
         "updated_at": receipt["completed_at"],
     }
-    current["state_sha256"] = canonical_sha256(current)
-    PositionTimingArtifactStore._atomic_replace(
-        timing_root / "research" / "action_value_v2" / "current.json",
-        canonical_json_bytes(current),
+    current_candidate["state_sha256"] = canonical_sha256(current_candidate)
+    current, current_delivery_status = _deliver_current_research(
+        timing_root=timing_root,
+        candidate=current_candidate,
     )
     global_after = file_reference(historical_registry)
     return {
         "registry": registry,
         "current_research": current,
+        "current_research_delivery_status": current_delivery_status,
         "global_registry_observation": {
             "before": global_before,
             "after_own_registry_delivery": global_after_registry,
@@ -287,6 +335,36 @@ def _deliver_completed_bundle(
             "concurrent_change_observed": global_after != global_before,
         },
     }
+
+
+def _deliver_current_research(
+    *, timing_root: Path, candidate: Mapping[str, Any]
+) -> tuple[dict[str, Any], str]:
+    """Move the mutable research pointer forward without an old-retry rollback."""
+
+    path = timing_root / "research" / "action_value_v2" / "current.json"
+    lock = timing_root / "locks" / "action-value-current-research.lock"
+    with _exclusive_file_lock(lock):
+        existing = load_current_research(timing_root)
+        if existing is not None:
+            existing_rank = (
+                _aware_timestamp(existing.get("updated_at")),
+                str(existing.get("receipt_sha256") or ""),
+            )
+            candidate_rank = (
+                _aware_timestamp(candidate.get("updated_at")),
+                str(candidate.get("receipt_sha256") or ""),
+            )
+            if candidate_rank <= existing_rank:
+                status = (
+                    "ALREADY_CURRENT"
+                    if candidate.get("receipt_sha256") == existing.get("receipt_sha256")
+                    else "RETAINED_NEWER_CURRENT"
+                )
+                return existing, status
+        materialized = dict(candidate)
+        PositionTimingArtifactStore._atomic_replace(path, canonical_json_bytes(materialized))
+        return materialized, "CURRENT_ADVANCED"
 
 
 def publish_serving(bundle: Path, *, timing_root: Path) -> dict[str, Any]:
@@ -339,7 +417,10 @@ def load_current_research(timing_root: Path) -> dict[str, Any] | None:
     except (OSError, ValueError) as exc:
         raise ActionValueError("ACTION_VALUE_CURRENT_STATE_INVALID") from exc
     identity = {key: value for key, value in payload.items() if key != "state_sha256"}
-    if payload.get("state_sha256") != canonical_sha256(identity):
+    if (
+        payload.get("schema_version") != "position_timing_action_value_current_research_v2"
+        or payload.get("state_sha256") != canonical_sha256(identity)
+    ):
         raise ActionValueError("ACTION_VALUE_CURRENT_STATE_IDENTITY_MISMATCH")
     return payload
 
@@ -350,7 +431,10 @@ def _load_request(path: Path) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise ActionValueError("ACTION_VALUE_REQUEST_UNAVAILABLE") from exc
     identity = {key: value for key, value in request.items() if key != "request_sha256"}
-    if request.get("schema_version") != REQUEST_SCHEMA or request.get("request_sha256") != canonical_sha256(identity):
+    if (
+        request.get("schema_version") not in {REQUEST_SCHEMA, *LEGACY_REQUEST_SCHEMAS}
+        or request.get("request_sha256") != canonical_sha256(identity)
+    ):
         raise ActionValueError("ACTION_VALUE_REQUEST_IDENTITY_MISMATCH")
     return request
 
@@ -390,8 +474,9 @@ def _bundle_manifest(root: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
     # Bundle identity is content, not the staging/final absolute directory.
     for value in files.values():
         value.pop("path", None)
+    research_version = _research_version(receipt)
     manifest = {
-        "schema_version": "position_timing_action_value_bundle_v2",
+        "schema_version": f"position_timing_action_value_bundle_{research_version.lower()}",
         "request_sha256": receipt["request_sha256"],
         "receipt_sha256": receipt["receipt_sha256"],
         "files": files,
@@ -403,13 +488,19 @@ def _bundle_manifest(root: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
 def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
     receipt_path = bundle / "receipt.json"
     ref = file_reference(receipt_path)
+    research_version = _research_version(receipt)
     evidence = EvidenceReferenceV1(
-        role="position_timing_action_value_v2_receipt",
+        role=f"position_timing_action_value_{research_version.lower()}_receipt",
         artifact_uri=receipt_path.as_posix(),
         sha256=ref["sha256"],
         size_bytes=ref["size_bytes"],
     )
     joint_supported = receipt["effect_evidence"] == "SUPPORTED"
+    parent_lineage = (
+        ("POSITION_TIMING_ADVICE_V1", f"POSITION_TIMING_ACTION_VALUE_{research_version}")
+        if research_version == "V4"
+        else ("POSITION_TIMING_ADVICE_V1", request["request_sha256"])
+    )
     records = []
     for baseline, comparison in receipt["continuous_policy"]["comparisons"].items():
         effect = comparison["effect_evidence"]
@@ -421,12 +512,12 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
             result_class, decision_use = ResearchResultClass.EXPLORATORY, DecisionUse.NAVIGATION_ONLY
         records.append(
             build_trial_record(
-                experiment_id=f"position_timing_action_value_v2_{baseline.lower()}",
+                experiment_id=f"position_timing_action_value_{research_version.lower()}_{baseline.lower()}",
                 attempt_id=request["request_sha256"][:24],
-                research_stage="POSITION_TIMING_ACTION_VALUE_V2",
+                research_stage=f"POSITION_TIMING_ACTION_VALUE_{research_version}",
                 study_type=ResearchStudyType.LEARNABILITY_AUDIT,
-                hypothesis_family_id="POSITION_TIMING_ACTION_VALUE_V2_TWO_BASELINES",
-                parent_lineage=("POSITION_TIMING_ADVICE_V1", request["request_sha256"]),
+                hypothesis_family_id=f"POSITION_TIMING_ACTION_VALUE_{research_version}_TWO_BASELINES",
+                parent_lineage=parent_lineage,
                 unique_variable=baseline,
                 objective_contract=ObjectiveContract.RISK_MANAGED_ADVISORY,
                 dataset_identity=receipt["source_sha256"],
@@ -441,7 +532,7 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
                 selected_trial_count=int(joint_supported and baseline == "BUY_AND_HOLD"),
                 consumed_windows=(
                     ConsumedWindowV1(
-                        window_id="POSITION_TIMING_ACTION_VALUE_V2_FORWARD",
+                        window_id=f"POSITION_TIMING_ACTION_VALUE_{research_version}_FORWARD",
                         dataset_identity=receipt["source_sha256"],
                         start_date=date.fromisoformat(request["population_spec"]["start"]),
                         end_date=date.fromisoformat(request["population_spec"]["end"]),
@@ -454,6 +545,23 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
         )
     registry = Path(request["timing_root"]) / "research_registry" / "timing_trial_registry_v1.jsonl"
     return AdvisoryResearchTrialRegistryV1(registry).append_batch(records)
+
+
+def _research_version(receipt: Mapping[str, Any]) -> str:
+    try:
+        return RESEARCH_VERSION_BY_RECEIPT_SCHEMA[str(receipt["schema_version"])]
+    except (KeyError, TypeError) as exc:
+        raise ActionValueError("ACTION_VALUE_RECEIPT_SCHEMA_UNSUPPORTED") from exc
+
+
+def _aware_timestamp(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ActionValueError("ACTION_VALUE_CURRENT_STATE_TIME_INVALID") from exc
+    if parsed.tzinfo is None:
+        raise ActionValueError("ACTION_VALUE_CURRENT_STATE_TIME_INVALID")
+    return parsed
 
 
 def _parse_date(value: str) -> date:
@@ -482,6 +590,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
+            from dotenv import load_dotenv
+
+            load_dotenv(args.repository_root.resolve() / ".env", override=False)
             result = {"status": "PREPARED", "request": prepare_request(
                 candidate_root=args.candidate_root,
                 timing_root=args.timing_root,
