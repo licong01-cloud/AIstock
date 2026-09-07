@@ -1,17 +1,18 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.4
+> 版本：v2.5
 > 日期：2026-09-07
 > Feature tier：F2
 > 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_L2_AUDIT_COMPLETED_L4B1_AUDIT_COMPLETED_INSUFFICIENT_DATA_PT_NEXT_004_DESIGN_PLANNED_NOT_STARTED`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
+> 演进设计：`POSITION_TIMING_ACTION_VALUE_V2`（设计完成，未实现；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
 > 对照蓝图：`F:/Dev/AIstock_worktrees/stock-timing-strategy-blueprint-20260831/docs/architecture/stock_timing_strategy_system_blueprint_f2_20260831.md`
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
 `DESIGN_VERIFIED` 只表示对应设计条款已经闭合。实现块一由 PR `#4277` 合入；包含 L1a、prospective outcome 与轻量分析范围管理的完整首发源码由 PR `#4287` 合入（merge commit `a8922fb82d4163ab4194c2efdde2ae584e5100a4`）。2026-09-06 的 backend-main 重启后收据已验证 BUG-1365 修复所在 merge commit `19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc` 为运行进程身份的祖先，业务探针与身份摘要均通过，close-sync PR `#4311` 已合入。首发之后的 `PT-NEXT-002` 已完成一次冻结的离线 L2 可学性审计；结果为 `INCONCLUSIVE`、`selected_model_id=null`，不产生运行时模型，也不改变 L1/L1a。用户完成本轮重启后，`/api/v1/position-timing/evidence` 已读回同一正式 L2 引用。`PT-NEXT-003` 的单文件离线 L4b-1 pipeline 已实现；首次双方向 audit 随后被可达性复核证明含有现行 L1 不会生成的 AT_OPEN BUY 假设，因此只保留为历史。修订后的权威 request `ptl4b1req_f55a3338e602c2dd42a32c17` 绑定干净提交 `03e3db5ec53aa433bfbc3c114a3c3215d3cd3ed6`，只注册可达的 risk-exit `EXIT/SELL/AT_OPEN` 单假设；当前两个 `CARD_ISSUED` 均为 HOLD，正式结果为 `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS`、selected side 为空。该结果不授权自动交易、数据库变更、运行时分钟新信号或 L4b-2，也不得把尚未成熟的 prospective 结果表述为个股模型有效性证据。
 
-2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。本版据此把 `PT-NEXT-004` 日频择时因子与模型增强确认为下一优先任务，但**只更新设计**：没有实现代码、训练、artifact、registry、依赖、数据库或运行态变化，也不改变现有卡片。
+2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。本次 GET evidence 再核到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。v2.4 只安排总体 shadow 报告，尚未闭合模型到个股建议；本版把 `PT-NEXT-004` 修订为日频模型建议完整闭环，`PT-NEXT-005` 再强化执行真实性与可选信息增量。**本次只更新设计**：未启动代码、训练、artifact、registry、依赖、数据库或运行态变更，现有卡片不变。
 
 ## 1. Background / 背景与结论
 
@@ -21,7 +22,9 @@
 
 > 在不替用户选股、不自动下单的前提下，于 T 日收盘后给出每只目标股票在 T+1 的明确行动、原始价格触发条件、建议数量或仓位、不可执行原因和成本；盘中只提醒日频卡片已经冻结的买卖点，由用户决定是否交易。
 
-第一阶段必须形成“收盘出计划、盘中到价提醒、事后可评价”的完整人工决策闭环。荐股模块尚不成熟不构成依赖：股票身份与目标仓位来自用户持仓和显式意图，Selection 与 HMM 仅提供可缺失的上下文。
+首发已形成“收盘出计划、盘中到价提醒、事后可评价”的规则型人工决策闭环，但尚未证明 alpha。后续研发的终点是：对用户指定股票，模型能判断是否建立、增加、保持、减少或退出敞口，并验证其**扣除费用及执行摩擦后的择时增量价值**，不是不断增加研究报告或卡片数量。股票范围由用户与唯一持仓 authority 决定；预算只约束数量，不应要求用户先填“我要买”才能分析是否值得买。Selection、HMM 与多智能体均不是主线前置依赖。
+
+收益比较必须同标的、同起始资本、同评价区间，计算完整现金与持股路径：主报告同时比较“同股固定买入持有”与“冻结 L1 政策”；市场/行业相对收益、最大回撤、换手、现金占用和错过反弹为解释维度，不能用降低敞口带来的低回撤或横截面 IC 替代择时净增量。目标是取得可重复的成本后超额收益证据，不保证每只股票或每个市场阶段盈利。历史 §5 的单卡边际 outcome 和 §6.2 的退出 audit 均不能单独充当连续策略收益。
 
 ### 1.2 现有证据给出的方向
 
@@ -29,7 +32,7 @@
 2. N2 entry 中 `FIXED_5_CASH` 与零不可分辨，`DYNAMIC_Q90_CASH` 显著为负。它们是研究臂，不是可直接搬入运行时的 guard。
 3. N3 分钟信息集的 `selected_trial_count=0` 只否定该次 `ALPHA_RANKING` 横截面增量，不回答特定股票、同方向同规模下的执行时点问题。
 4. 因此产品边界冻结为：第一批交付 L1 规则行动卡与 L1a 实时报价提醒；L2 数据契约同批冻结、训练管线后移为独立离线任务。该 L2 任务现已完成且未选出模型；L4b-1 分钟执行研究也已作为独立离线任务启动，仍不进入首发运行面。
-5. HMM 尚未形成可消费的稳定运行输入，不应让择时后续工作等待它。下一优先任务改为以现有日频、资金流、筹码、行业和 timestamp-causal 事件数据构造紧凑的择时专用特征块，分别研究持仓退出与自选入场；HMM 以后只作为一个冻结的增量 feature block。
+5. HMM 尚未形成可消费的稳定运行输入，不应等待它。下一优先任务先用长历史可核验的价量、波动、相对强弱和持仓/资金状态训练共享模型，对目标个股推断；资金流、筹码、行业、事件与 HMM 为逐块检验的可选增强，不能以未经覆盖核验的固定字段清单堵住核心研究。
 6. 现有多智能体股票分析可以复用其解释思路，但当前入口会持久化结果、输出含自由文本且新闻/公告链路尚不能直接证明完整 PIT。它不能直接成为择时模型 authority；结构化事件特征与可选解释层必须分离。
 
 ### 1.3 证据语义目录
@@ -61,15 +64,17 @@
 | `EVID-FACTOR-LIBRARY-20260907` | 只读分析显示因子库共 789 项、可用 584 项，覆盖 MOM/VOL/LIQ/VAL/QUAL/CORR/TECH/SIZE/STAT/MF/CHIP/ML；数据字段使用率为 daily_pv 100%、daily_basic 68.8%、moneyflow 50%、bak_basic 73.3%、cyq_perf 100%、sector_data 95.7%、static_factors 0%。这些百分比是“因子定义使用了多少字段”，不是行级/日期覆盖率，也不是择时有效性证据 | `python scripts/analyze_factor_library.py --json`；`scripts/analyze_factor_library.py` |
 | `EVID-HMM-RUNTIME-20260907` | 运行态 evidence 把 HMM 标为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`，市场 regime methods 当前 `available=[]`；这是当前接入准备度，不是永久否定 HMM 方法 | `GET /api/v1/position-timing/evidence`；`GET /api/v1/market/regime-label/methods` |
 | `EVID-MULTI-AGENT-BOUNDARY` | 当前股票分析默认关闭 news/announcement；response 含 `agents_raw/discussion/final_decision` 自由结构，`analyze_stock` 还会写 `app.analysis_records`。新闻内部调用未把 `analysis_date` 传入 `_get_news_data`，Eastmoney 公告内部调用也未传日期窗口；趋势分析仍声明为 mock skeleton。因此择时不得直接调用该有副作用 POST，也不得把原始 LLM 文本当模型输入或决策 authority | `backend/agents/stock_analysis.py:39`、`:47`；`backend/models/analysis.py:24`、`:29`；`backend/services/analysis_service.py:208`、`:599`、`:643`；`backend/core/qstock_news_data_impl.py:70`；`backend/core/unified_data_access_impl.py:1693` |
-| `EVID-EVENT-PIT-BASE` | 仓库已有 timestamp 语义和公告发行人绑定的确定性实现，可作为未来结构化事件特征的复用起点；只有 `available_at <= decision_as_of` 且 issuer binding 唯一的有限字段可入模 | `backend/services/event_signal/time_semantics.py`；`backend/services/event_signal/announcement_issuer_binding.py:202` |
+| `EVID-EVENT-PIT-BASE` | timestamp 与发行人绑定纯实现可复用，但不证明旧事件值可还原；公告 adapter 对 signal_key upsert 会更新 available_at、status、severity 等，DATE_ONLY 也不等于精确可见时刻。历史特征还需当时版本/可重建源，否则只作前瞻快照或排除 | `backend/services/event_signal/time_semantics.py`；`backend/services/event_signal/announcement_issuer_binding.py:202`；`backend/services/event_signal/announcement_adapter.py:568` |
+| `EVID-CPCV-BOUNDARY` | 既有 CPCV 从 validation blocks 的补集选训练再 purge/embargo，允许训练日期晚于验证日期；这是组合稳健性诊断，不是历史可部署的滚动收益证明，v1 receipt 保持原值 | `backend/services/advisory_model_first/policy_cpcv.py:73`；`EVID-L2-FORMAL` 同 bundle 的 `cpcv_paths.json` |
+| `EVID-V2-SOURCE-NAMES` | 候选公式名不等于真实字段名，例如 cyq 的 `cost_50pct` 导出为 `cp_cost_50pct`；必须核对源字段、单位、覆盖与发布时间后冻结，不凭简称建 schema | `backend/qlib_exporter/field_map.py:117` |
 
 ### 1.4 数据可行性结论
 
 - **L1/L1a 可实现**：持仓、自选、PIT 日线、复权因子、交易日、ST/停牌/涨跌停、board-lot 与 TDX quote 均已有本地 authority 或纯实现，不需要新表或荐股模块先成熟。
 - **L2 已完成一次正式离线审计、未得到可用模型**：canonical-v2 日频/QE 候选足以构造完整 synthetic episode；正式结果为 Ridge `NEGATIVE`、GBDT `INCONCLUSIVE`、study `INCONCLUSIVE`，没有 selected model。该结论不削弱 L1/L1a，也不支持 L3。
 - **分钟执行研究管线已经实现，真实 action-card 样本尚未成熟**：最新 candidate 已覆盖至 2026-08-31，本次没有重建分钟数据；历史 `EVID-L4B1-FIRST-AUDIT` 的双方向 family 已由可达性复核取代。修订后的 `EVID-L4B1-FORMAL` 只接受 risk-exit `EXIT/SELL/AT_OPEN` card，并确认当前两个生产 `CARD_ISSUED` 都是 HOLD、0 eligible；不使用 synthetic/QE/Selection 方向补齐。第一阶段盘中提醒只用 quote，不受该研究样本状态影响。
-- **日频因子与模型增强可在 HMM 缺席时启动**：本地 raw/复权日线、daily_basic、moneyflow、sector_data、cyq_perf 与 `market.event_signal` 足以构造一个紧凑、timestamp-causal 的候选特征块。584 个可用因子只是候选原料库，原有横截面 IC 不能当作择时有效性证据；每个字段仍需针对冻结的退出或入场 estimand 做 PIT、覆盖率和成本后增量评价。
-- **多智能体适合解释，不适合直接掌权**：现有服务的结构、副作用和时间语义均不满足直接嵌入择时的条件。首个增强任务优先使用结构化事件字段；可选 Agent 摘要以后只作为 `EXPERIMENTAL_CONTEXT`，不改变 action、数量或触发价。
+- **日频核心可在 HMM 缺席时启动设计与实现**：现有 raw/复权日线和 QE 导出是核心起点，但下一轮仍需冻结实际覆盖。daily_basic、moneyflow、sector_data、cyq_perf、事件仅是增强候选；“存在表/字段”不代表全历史可用或 PIT 成立。584 个可用因子目录与横截面 IC 均不是择时证据。
+- **多智能体适合可选解释，不适合直接掌权**：现有服务不能直接嵌入。事件通过因果验证后可作为模型增强信息；Agent 摘要只解释已绑定事实，不独立改变 action、数量或触发价，也不把多个 Agent 的一致意见当多份独立证据。
 - **盘中新方向尚无依据**：现有 N3 不能回答个股执行择时，也不能支持 L4b-2；后者保持范围外。
 
 ## 2. Scope / 范围
@@ -86,27 +91,28 @@
 ### 2.2 后续范围
 
 - L2：`PT-NEXT-002` 已完成一次预注册 Ridge + GBDT 可学性审计；结果见 `EVID-L2-FORMAL`，不再追加同 family 搜索。
-- L3：本轮没有 `SUPPORTED` 模型，故不实现；只有未来独立设计产生适用 objective 的 `SUPPORTED` 模型时，才可让相应卡片标为 `MODEL_ASSISTED`。
+- L3：当前没有 `SUPPORTED` 模型，未实现；§6.6 已设计下一任务的本地模型推断与支持态切换，不再等以后另建模型平台。只有适用 objective 与实际服务政策获得支持，才标 `MODEL_ASSISTED`。
 - L4b-1：`PT-NEXT-003` 在独立离线管线中研究同方向、同规模、同 horizon 下的一个冻结分钟执行窗口；无足够真实 action-card 时返回 typed insufficient-data 终态，不反向阻塞 L1/L1a。
-- **下一优先任务 `PT-NEXT-004`（本版只设计、未启动）**：新增 timing-owned 日频特征快照 v2，分别审计 held-position `EXIT/REDUCE vs HOLD` 与 selected-watchlist `OPEN/ADD vs WAIT_ONE_SESSION`；固定每个 objective 一个 GBDT challenger，以 shadow evidence 方式展示，不接管 L1。
-- HMM 增量：在其 timestamp-causal 状态概率、停留期和转换特征有稳定 artifact 后，才作为 `PT-NEXT-004` 之后的一个冻结 feature-block 假设；不等待它、不用硬标签、不做四路消融。
+- **下一优先任务 `PT-NEXT-004`（只设计、未启动）**：核心特征、前向训练评价、本地模型 artifact、特定个股推断、统一方向/规模建议、既有到价提醒与连续路径评价一起交付；保留入场/退出两个监督目标，按同一现金持仓状态合成唯一建议。无支持结果仍交付明确标注的实验分析及 L1 正式卡，不伪装 alpha。
+- **随后 `PT-NEXT-005`（只设计、未启动）**：基于已有日频闭环强化离线分钟执行回放、延迟/价差/未成交敏感性与可选信息块增量，不做运行时分钟新方向。
+- HMM 增量：在其 timestamp-causal 状态概率、停留期和转换特征有稳定 artifact 后，才作为 `PT-NEXT-004` 之后的一个冻结 feature-block 假设；不等待它，不只用硬标签取代概率，不做四路消融。
 - 多智能体解释：只在结构化事件与 provenance 契约闭合后复用为可选解释层；不直接调用当前有副作用的股票分析入口，不让 LLM 自由文本进入训练特征或运行决策。
 - L4b-2：第二阶段盘中新方向；只有独立证据证明逐腿成本后正下界时才进入设计与实现。
 
 ## 3. Non-goals / 非目标
 
 1. 不选股、不替代荐股模块，不要求荐股模块先成熟。
-2. 不自动下单，不生成订单、StrategyPackage、可部署模型、运行时仓位权重或 MiniQMT/OMS 输入。
+2. 不自动下单，不生成订单、StrategyPackage、自动执行权重或 MiniQMT/OMS 输入。此限制不禁止 timing 自有本地模型 artifact、人工建议数量和每日推断；当前 v1 audit 没有运行模型是事实，不是未来的永久禁令。
 3. 不接 SmartMonitor 的任务库、engine、`auto_trade` 或 trade 记录。
-4. 第一阶段不读取分钟 K 线、不从分钟数据生成方向或新交易。
+4. 日频运行面不读取分钟 K 线、不从分钟数据生成方向；允许显式离线使用已有分钟导出验证日频计划的触发/成交假设，不调用 TDX 分钟历史链路。
 5. 不写 QE、Selection、Advisory、Watchlist、Legacy Portfolio、Paper v2、MiniQMT 的既有表、artifact、registry、route 或调度状态。
 6. 不新建数据库表，不注册既有调度器，不新建 worker，不控制进程。
 7. 不引入 SSE、WebSocket、外部消息通道、TCN、Transformer、Offline RL、DeepLOB 或 HMM 四路消融。
 8. 不把 L1 规则卡包装成已验证 alpha，不把研究级统计量包装成个股置信度。
 9. 不把 sealed holdout、MDE、最低成交额或人工复核变成第一批、L2 或 L3 的批准门禁。
 10. `PT-NEXT-004` 不扫描全部 584 个因子，不做阈值网格、模型动物园、自动特征生成、深度模型或按回测收益事后回选。
-11. `PT-NEXT-004` 不修改 L1/L1a 规则、guard、卡片、提醒或当前运行策略；不重写 L2 v1/L4b-1 artifact，不写全局 N0 registry/current route。
-12. 不把持仓退出与自选入场混成一个标签、分数或 trial，不把 Selection 横截面 IC 当作个股择时证据。
+11. `PT-NEXT-004` 不改写 L1 v1 默认规则及历史卡片、L2 v1/L4b-1 artifact，不写全局 N0 registry/current route；新模型/政策仅在 timing 自有版本化路径中实现并接入人工建议。
+12. 不把入场和退出监督目标混成含义不明的分数；允许显式换算为同资金尺度的动作净价值后，在唯一政策中决策，禁止同股同时给出互斥买卖建议。
 
 ## 4. Architecture / 整体架构
 
@@ -147,9 +153,9 @@ frontend/tests/position-timing/
 
 仅允许两处现有 composition root 做薄接线：`backend/main.py` 注册 router（统一 `/api/v1` 前缀），`frontend/src/lib/navigation/nav-groups.ts` 增加页面入口。新路由的 `layout.tsx` 只导入既有 `paper-v2.css`，不复制样式或承载业务逻辑。两处既有接线文件不得包含择时业务逻辑；除 composition root 外，任何既有业务模块不得 import `position_timing`。
 
-L2 后续唯一新增文件是 `backend/services/position_timing/learnability_pipeline.py`：它是显式 CLI 调用的离线 request/materialize/CPCV/inference/bundle 入口，不注册 router、worker 或 scheduler，不保存 final-fit/runtime model。它不放进 `advisory_model_first`；只复用 `AdvisoryResearchTrialRegistryV1` 的纯 append/identity 实现，并写择时自有 registry 路径，绝不复用全局 registry/current route。既有 evidence API/页面只增加一个绑定正式 request/bundle/receipt hash 的总体结论引用，不读取或加载模型。
+已完成 L2 v1 新增 `backend/services/position_timing/learnability_pipeline.py`，是显式 CLI 的 request/materialize/CPCV/inference/bundle 入口，没有 final-fit/runtime model；这是历史实施边界。研究代码留在 timing namespace，只复用 `AdvisoryResearchTrialRegistryV1` 的纯 append/identity，实现写自有路径，绝不写全局 registry/current route。
 
-`PT-NEXT-004` 不再新增服务包、pipeline、router 或页面：后续实现只扩展既有 `contracts.py`、`learnability_pipeline.py`、`service.py` 的 evidence 读取和现有 position-timing 页面，并在既有 `backend/tests/position_timing/` 增补测试；router 只在现有 evidence response 中透传 typed summary，不增加训练或模型端点。若实现发现必须新增平台组件，先回到本设计说明必要性；不得为了代码分层预先创建 feature store、模型服务或任务编排器。
+`PT-NEXT-004` 仍只有一个服务包、现有 router 和页面。离线 CLI 负责训练，本地 inference 由现有日频物化入口调用；允许按实际职责增加少量 `features.py`、predictor/decision 模块，避免把所有功能继续塞入现有大文件。离线与运行态共享纯特征/决策实现，不把整套训练管线 import 到 API；不建 feature store、模型服务、独立数据库、调度平台或训练 API。文件数不是低复杂度的验收指标，职责清楚、单一 authority 与直接测试才是。
 
 ### 4.3 数据和基础设施复用
 
@@ -166,7 +172,7 @@ L2 后续唯一新增文件是 `backend/services/position_timing/learnability_pi
 | 手数 | `execution_algos.board_lot.board_lot_rule/round_to_board_lot` |
 | 实时报价 | TDX batch quote，按 `EVID-TDX-CONTRACT` 校验 |
 | HMM/市场态势 | 只读、可缺失、仅 context |
-| 择时专用日频特征 | `PT-NEXT-004` 只读复用 raw/复权日线、daily_basic、moneyflow、sector_data、cyq_perf 与 timestamp-causal `market.event_signal`，落 timing-owned immutable snapshot；不回写源表 |
+| 择时专用日频特征 | `PT-NEXT-004` 以 raw/复权日线等可核验核心为起点；其余数据逐块验证覆盖与历史可见版本，落 timing-owned immutable snapshot；不回写源表 |
 | 多智能体股票分析 | 只复用结构化解释思路与 UI 展示方式；当前有副作用 POST、自由文本 response、新闻/公告抓取链路均不直接调用 |
 | 研究证据 | 只读 N 线 receipt、QE 导出与 N0 历史计数；择时另有 registry |
 
@@ -202,14 +208,18 @@ L2 后续唯一新增文件是 `backend/services/position_timing/learnability_pi
 2. **控制面隔离**：零既有表写入、零 DDL、零既有调度注册、零进程控制、N0 registry/current_route 零写入；不调用会写 `app.analysis_records` 的现有多智能体入口；除 backend/frontend composition root 的路由与导航接线外，既有业务模块不得反向依赖 timing。
 3. **账本与身份唯一**：一次 card set 只有一个持仓 authority；canonical symbol 去重；card artifact 不可变并绑定全部输入与 policy hash。
 4. **共享实现不漂移**：不修改 guard 默认值；timing 使用显式、版本化、hash-bound snapshot 调用同一 `evaluate` 实现。
-5. **无交易副作用**：不产出订单、部署物、运行时权重或自动交易输入。
+5. **无交易副作用**：不产出订单、经纪商部署包或自动执行输入；允许 timing 自有本地模型和明确标注的人工仓位建议，绝不写 Paper/MiniQMT 交易账本。
 6. **证据完整性**：事件 append-only；同一幂等键最多一条；物化缺失、报价失败和字段缺失不得伪装成零结果或成功。研究特征/模型必须绑定 objective、feature order、source、PIT、code 与环境 identity，不能把自由文本或横截面 IC 冒充择时证据。
 
 六类之外的 MDE、sealed holdout、成本敏感性、小额成交和 UI 弹窗去重均为报告、范围或 advisory，不得升级为批准门禁。
 
 ## 5. Contracts / 核心契约
 
+§5 记录已实现的 v1 合约；共有的隔离、数量/价格/费用和事件完整性约束继续适用。§6.6 明确列出的 v2 决策时钟、方向生成、模型/正式卡版本及连续研究评价是未来增量，不将其倒写为当前 API 已具备的行为。
+
 ### 5.1 决策时钟与 PIT
+
+本节原有条款描述已实现 v1；未来 v2 采用 §6.6.2 的独立晚间 cutoff/版本，不追溯改变 v1 的 15:00 时钟。晚间数据必须证明当时已可得，不能仅凭 trade_date 放宽 PIT。
 
 - T 日收盘后生成服务 T+1 的卡片；`decision_as_of = T 15:00:00 Asia/Shanghai`。
 - `created_at` 可以晚于 15:00；市场、公告、Selection、HMM 等特征仍不得使用 `available_at > decision_as_of` 的内容。
@@ -231,9 +241,9 @@ L2 后续唯一新增文件是 `backend/services/position_timing/learnability_pi
 5. `PositionTimingIntentV1` 为 timing-owned 用户输入，至少含 `canonical_symbol`、`planned_full_notional_cny`、`desired_target_exposure` 与更新时间。允许 exposure 为 `{0, 0.25, 0.50, 1.00}`。
 6. 持仓缺少 intent 时默认目标等于当前持仓，仅给风险型 `HOLD/EXIT`，并以 `pre_action_qty × reference_price_raw` 记录当卡的 `planned_full_notional_cny`；非持仓自选缺少 sizing intent 时仍生成 `WAIT` 卡并返回 `SIZING_INPUT_UNAVAILABLE`，不得伪造默认仓位，也不影响其他股票出卡。
 
-#### 5.2.1 轻量分析范围管理（已设计，排入下一实施任务）
+#### 5.2.1 轻量分析范围管理（已实现并合入，见 §9.3）
 
-当前块一把全部 confirmed watchlist 纳入出卡集合，适合验证链路，但不适合长期人工关注大量标的。下一实施任务在不改变持仓 authority 的前提下，把“候选发现”和“实际择时分析”分开：
+历史块一曾把全部 confirmed watchlist 纳入出卡集合；已合入的首发块二在不改变持仓 authority 的前提下，把“候选发现”和“实际择时分析”分开：
 
 ```text
 PositionTimingDiscoveryUniverseV1 = holdings ∪ confirmed_watchlist
@@ -248,7 +258,7 @@ PositionTimingAnalysisUniverseV1  = holdings ∪ (confirmed_watchlist ∩ explic
 6. scope 中已经选择、但当前不再满足 watchlist lifecycle/advisory 条件的代码保留在用户当前态中，effective analysis 为 false；`GET /intents` 顶层 `scope_warnings[]` 返回 `SELECTED_SOURCE_INELIGIBLE` 与 canonical symbol。不得自动删除，也不得绕过 watchlist authority 出卡；重新满足条件后可恢复生效。
 7. canonical symbol 同时成为持仓时仍按 `HOLDING` 身份唯一出卡；scope 只保留来源意图，不能生成第二张卡。对持仓请求关闭分析返回 typed `HOLDING_ALWAYS_INCLUDED`，不写一份虚假的 disabled 状态。
 8. scope 更新只影响下一次尚未签发的 card set。已经签发的 card、当日 alert eligibility、后续 outcome 与历史事件保持不可变；API 返回 `effective_card_policy=NEXT_CARD_SET_ONLY`。
-9. card set 的 `input_identity` 在未来实现后保留 `universe_identity_sha256` 并令其明确等于 effective analysis universe identity，同时嵌入完整 canonical `analysis_scope_snapshot`，并新增 `discovery_universe_identity_sha256`、用于校验嵌入内容的 `analysis_scope_snapshot_sha256` 与同值别名 `analysis_universe_identity_sha256`。旧 scope 当前态被改写后，历史 card set 仍能回读当时选择；现有 `PositionTimingCardSetV1` 的 content hash 已覆盖 `input_identity`，因此只增加向后兼容的 identity 材料，不复制 card schema、额外 immutable scope artifact 或 v2 控制面。
+9. card set 的 `input_identity` 保留 `universe_identity_sha256` 并令其明确等于 effective analysis universe identity，同时嵌入完整 canonical `analysis_scope_snapshot`，并含 `discovery_universe_identity_sha256`、`analysis_scope_snapshot_sha256` 与同值别名 `analysis_universe_identity_sha256`。旧 scope 当前态被改写后，历史 card set 仍能回读当时选择；现有 `PositionTimingCardSetV1` 的 content hash 已覆盖 `input_identity`，不另建 scope 平台。
 10. 不设置最大选择数、最低样本数、审批或人工放行。范围越大只影响页面信息量与只读计算量，不构成业务准入门禁。
 
 API/UI 只做最小扩展：在现有 `GET /intents` 每行增加 `analysis_selected`、`analysis_effective`、`analysis_locked`、`analysis_reason_code`，顶层 `scope_warnings[]` 只列 scope 当前态中来源已失效的有限 symbol/reason 集合；GET 与缺省 scope 解析均保持零写入。新增唯一写接口 `PUT /api/v1/position-timing/analysis-scope/{symbol}`，请求体仅为 `analysis_enabled: bool`，响应返回 `UPDATED/UNCHANGED`、effective 状态、scope hash 与 `effective_card_policy=NEXT_CARD_SET_ONLY`。启用只接受当前 confirmed watchlist；取消允许作用于 scope 中已经存在但来源已失效的代码；持仓行显示“持仓始终分析”且不可关闭。不开新页面、不提供标签、分组、排序规则、批量工作流、虚拟持仓、组合编辑器或第二套通知设置。
@@ -302,7 +312,7 @@ L1 只做确定性风险与执行映射，不从历史 PnL 回选规则：
 
 ### 5.5 冻结 guard snapshot
 
-运行 authority 唯一为共享 `evaluate`，但每张卡绑定 timing-owned 显式快照，禁止依赖未来会变化的 default factory。
+v1 guard 运行 authority 唯一为共享 `evaluate`，但每张卡绑定 timing-owned 显式快照，禁止依赖未来会变化的 default factory；v2 模型决定候选动作价值，guard/执行映射仍只用同一纯实现。
 
 `PRICE_GUARD_RULE_DEFAULT_SNAPSHOT_V1`：
 
@@ -431,7 +441,7 @@ UI 的成本友好档位建议为：满仓金额至少 235,295 元可显示四�
 
 ### 5.10 Artifact、事件与幂等
 
-timing 唯一写入根为：
+timing 唯一写入根为以下目录（此处列已实现 v1 布局；v2 仅在该根新增 §6.6.4 的版本化子路径）：
 
 ```text
 F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/
@@ -548,7 +558,9 @@ paired path 只评价卡片动作造成的边际数量，不重算未受动作�
 
 页面只设一个产品入口，使用现有 shadcn-compatible token。主要区域为：当前/最近行动卡（明确显示 `UPCOMING/VALID_TODAY/EXPIRED`）、非模态已提醒边、typed 数据状态、成本明细、研究证据。不得出现“一键下单”、自动交易开关或把 `46.9%` 显示成个股置信度。
 
-## 6. L2/L3 研究契约
+## 6. L2/L3 研究与模型建议演进契约
+
+§6.1～§6.5 保留**已完成 L2 v1** 的冻结人口、参数、CPCV、单调退出政策及 receipt 语义，不代表后续所有模型永久只能减仓、禁止重训或禁止本地模型。§6.6 是尚未实施的 v2 替代设计；新结论不重分类旧 trial。
 
 ### 6.1 为什么 L2 在首发后独立实现
 
@@ -666,68 +678,95 @@ trial 只写 `position_timing_advice_v1/research_registry/timing_trial_registry_
 
 sealed holdout 是用户可选择的一次性确认动作，读后记录 consumed；不读取不妨碍 L1/L1a、L2 运行或上述 effect 分类。
 
-### 6.6 下一优先任务 PT-NEXT-004：日频择时因子与模型增强（仅设计，未启动）
+### 6.6 下一优先任务 PT-NEXT-004：日频模型到个股建议的闭环（设计，未启动）
 
-`PT-NEXT-004` 是一个完整但轻量的后续实现任务，不再拆成多个平台阶段。它只增加 timing-owned 特征快照、两个相互隔离的离线 objective audit 和既有证据区的 shadow 摘要；不增加数据库表、调度器、worker、新页面、自动交易接口或模型服务。当前 L1/L1a 继续独立运行，HMM 未就绪不阻塞该任务。
-
-#### 6.6.1 分层关系与不可变边界
-
-1. **L1 安全与可交易层不变**：持仓/自选 authority、intent、guard、ST/停牌/涨跌停、board-lot、逐腿成本、T+1 卡片与提醒语义均沿用 v1；模型不能绕过这些约束。
-2. **`TimingFeatureSnapshotV2`**：在 T 日 `decision_as_of` 构造 timestamp-causal、显式有序、hash-bound 的日频字段；原始源仍只读，快照只写 `position_timing_advice_v1/research/feature_snapshots_v2/`。
-3. **离线 challenger**：退出与入场各自只有一个冻结 GBDT hypothesis、一个 baseline、一个 receipt 和一个 timing-owned registry identity；不共享标签、阈值、样本权重或 selected 状态。
-4. **shadow evidence**：即使出现 `SUPPORTED`，本任务也只允许在证据区显示 `EXPERIMENTAL_CONTEXT`，不得修改卡片 action、target quantity、trigger、execution window 或 `RULE_BASED_RISK_MANAGEMENT`。运行接管仍需以后更新本设计并形成适用 objective 的独立 L3 证据。
-5. **历史不可变**：L2 v1、L4b-1、生产 card/event artifact 与全局 N0 registry/current route 零写入；v2 新建 request/bundle，不覆盖旧 receipt，也不把旧 trial 重新分类。
-
-#### 6.6.2 紧凑特征块，不扫描因子库
-
-held-position 的 `HELD_EXIT_FEATURE_VECTOR_V2` 按原顺序保留 §6.3 的 22 个 v1 字段，再固定追加以下 12 个字段；selected-watchlist/entry-side 的 `ENTRY_TIMING_FEATURE_VECTOR_V2` 使用同一 12 个市场/个股字段，再追加 `log1p_planned_full_notional_cny` 与按实际合法数量估算的 `entry_cost_bps`，不填充任何 holding-only 字段：
+本任务交付可运行的研究到建议闭环，不以“增加一个总体 shadow 报告”代替个股推断，也不以“必须先获得正收益”阻断研发。只在现有 namespace、CLI、router、页面及自有 artifact 内实现；没有新表、worker、模型服务或自动交易。
 
 ```text
-ema20_slope_10d_bps
-close_to_ema20_bps
-atr14_over_close_bps
-downside_semivol_20d_bps
-stock_minus_csi300_return_20d_bps
-stock_minus_sw2_return_20d_bps
-turnover_rate_percentile_60d
-large_xlarge_net_inflow_to_amount_mean_5d
-close_to_cp_cost50_bps
-winner_rate
-market_breadth_above_ma20
-event_risk_decay_5d
+本地 DB / QE immutable exports → 同一纯特征构建 → 前向训练/评价 → 本地版本化模型
+                                           ↓                  ↓
+用户分析范围 + 唯一持仓/预算 → 当晚同口径特征 → 个股动作价值 → 唯一日频建议
+                                                           ↓
+                              连续现金/持仓评价 ← 既有报价触发提醒 → 人工决策
 ```
 
-公式冻结如下：EMA 与 ATR 只用截至 T 收盘的同基准价格；`ema20_slope_10d_bps=(EMA20_T/EMA20_{T-10}-1)×10000`，`close_to_ema20_bps=(close_T/EMA20_T-1)×10000`，ATR 与 downside semivol 分别为 14 日 Wilder ATR/close 和 20 日 `sqrt(mean(min(return,0)^2))×10000`。相对收益使用股票 total-return 20 日收益减同期 CSI300、申万二级指数收益；不存在 T 时点有效申万二级归属时该字段 typed unavailable，不用当前行业倒填历史。换手率百分位只在该股票过去 60 个可用交易日内计算。大单/特大单净流入强度为 5 日逐日 `(buy_lg+buy_elg-sell_lg-sell_elg)_amount / total_amount` 的均值；分子分母缺失或单位不闭合时不可用。筹码成本与 close 必须使用同一价格基准，`winner_rate` 保留源值和源日期。市场宽度为 T 日 PIT active 股票中 close 高于各自 MA20 的比例。
+#### 6.6.1 收益目标、人口与唯一决策
 
-`event_risk_decay_5d` 只消费 `market.event_signal` 中 issuer-bound、`signal_type=risk`、状态有效、`available_at <= decision_as_of` 且处于最近 20 个交易日的行；request 仍冻结有限 event-type allowlist。每行贡献为 `severity_score × confidence × exp(-ln(2) × trading_age/5)`，总和按 symbol/T 聚合；`severity_score/confidence` 必须为源契约允许的有限值，不从标题或正文重算。只有 source coverage/watermark 证明已完整扫描该 symbol/T 窗口时，“无合格事件”才编码为 0；水位未知或扫描失败必须 typed unavailable。无法唯一绑定发行人、available-at 缺失或事件类型不在 allowlist 时不得交给 LLM 猜测，分别进入 typed coverage。事件文本本身不入模。
+**评价目标**：`POSITION_TIMING_ACTION_VALUE_V2`。同一目标股、起始资金和持仓下，比较每个交易日重新决策的政策净资产路径。研究是 pooled stock/date 训练、特定股票推断，不为每只自选股从零训练一个模型，也不把横截面排名改名为择时。
 
-上述 12 项是一次性冻结的互补信息族，不得从 584 个可用因子的历史 IC 排名回选替代项，也不得增加 RSI/MACD 交叉等第二套硬规则。因子库的 IC 是横截面选股指标；v2 必须重新报告各字段在目标 population 的 PIT 可用率、训练折分布漂移、缺失处理和成本后增量，不能继承“有效因子”标签。每个 request 序列化精确 feature order、公式版本、source manifest/hash、`available_at` 规则、imputer、包版本和 code identity；全缺列或身份漂移 fail closed，不动态删列。
+- 历史训练使用 PIT SH/SZ 股票，不用今天的自选成员倒填过去。沿用可核验日频导出与确定性名义金额赋值思路，另冻 v2 人口；v1 缺 ST 历史、用户持仓人口偏移均显式报告。真实当前持仓不要求新建合成入场日，`holding_age=UNKNOWN` 是合法输入状态，不强制 20 日退出。历史训练的资本/持仓状态由事前固定的 cohort 起点及不看未来的持有/持币路径产生，不读取验证期预测反填训练状态；未支持的资金/持有期 cell 标外推，不宣称全持仓人口已有证据。
+- 每次 T 日 review 的 primary horizon 为**从 T+1 起第 20 个交易日收盘**，不是合成入场后的第 20 日；其他 `(1,3,5,10)` 仅 diagnostic。单次监督标签可使用 §5.11 的最多五日 terminal-liquidation proxy 顺延；连续策略主报在共同日期按可核验的经济价值估值，不为每笔新动作重置资本或改变报告终点，不能把尚不能清仓的市值当已实现现金。
+- 两个监督 objective：`ENTRY_ACTION_VALUE_V2` 评价 OPEN/ADD 相对保留现金/当前仓位的净增量；`EXIT_ACTION_VALUE_V2` 评价 REDUCE/EXIT 相对保持当前仓位的净增量。每个候选合法动作单独建 action-conditioned row，输入含动作规模、费用与持仓状态，标签为该动作按冻结执行政策实施后至共同 horizon 的净资产差（bps 分母为相同起始资本），不以 hindsight 最优动作先筛样本。
+- 分别使用一个 `LIGHTGBM_GBDT_V2_ENTRY/EXIT`，参数沿用 §6.3 完整固定规格，不搜索超参；仅 objective、feature/schema、label 与 model id 更新。相同 symbol/review 的不同动作及标签区间不得跨训练/验证边界。动作输入只能用 cutoff 已知的计划数量、触发分支和预计成本，不将 T+1 realized fill/fee 放进特征；实际成交量价仅用于标签。两套监督目标可共享纯特征构建，但必须带 objective identity；研究模型数不等于统计假设数。
+- 唯一 `DAILY_ACTION_VALUE_POLICY_V2`：枚举预算允许的 `{0,0.25,0.50,1.00}` 目标敞口以及“保持当前实际数量”候选，按板块规则、可卖量、资金和用户风险上限得到合法实际数量并去重。增加/减少分别由对应模型评价相对不交易的同单位净增量，保持动作值为 0；取严格大于 0 的最大预测值，否则 HOLD/WAIT。并列时优先少换手，再按固定目标敞口升序；无模型时不以零预测伪装成功。一个 symbol/T 只给一个行动，不平均两个含义不同的分数、不同时发买卖指令。
+- WAIT 不强制次日买入：每日重新预测，允许连续持币、多日等待、退出后再入场；动作仍只在 T+1 有效。卖出后仅在股票仍是用户有效已选自选时继续分析，不能为了回补研究自动扩大生产 scope。历史连续 replay 的研究成员在起点固定并记录退出规则；该研究人口与当前用户 scope 的差异必须披露。
 
-#### 6.6.3 两个 objective、两个明确反事实
+**两条主比较基线同时保留**：①同股固定买入持有（已有持仓保持；现金起点在首个计划日尝试买入，未成交后按冻结规则逐日重试），②同样起始资本、scope、预算和输入的冻结 L1 v1 政策。两基线均适用同一可交易性、公司行动、实际数量、逐腿费用和执行摩擦，L1 不补造用户买入意图；其无 intent 时可能保持现金，这正是需另报买入持有基线的原因。市场/行业、持仓时间、现金比例、回撤、换手与错过上涨分开诊断，不替代上述比较。
 
-**A. `HELD_EXIT_TIMING_V2`**
+单卡 action label 与 policy performance 不同：先用监督学习估计有限动作价值，再用**连续、资金守恒、可回补**的 out-of-time 路径评价完整政策。不能把重叠单卡收益相加、把早期卖出所得现金反复分配，或只挑成功成交行。股票间不默认共享无限预算：主研究按起点冻结的独立标的资金 sleeve 聚合；每个 sleeve 资金只注入一次、月度重训不重置仓位，最后一个共同报告日未平仓市值/现金与退出成本敏感性分别展示。用户未提供总资金时只给逐股建议，不宣称整组合可同时执行。
 
-- population、20 日 terminal、逐腿成本、公司行动、CPCV 和 `MONOTONE_EXPOSURE_V1` 复用 §6.2～§6.4；只研究 `pre_action_qty>0` 的 `EXIT/REDUCE versus HOLD`。
-- baseline 是 v1 的 do-nothing hold path；challenger 是一个使用 `HELD_EXIT_FEATURE_VECTOR_V2` 的冻结 `LIGHTGBM_GBDT_V2_EXIT`。相对 L2 v1 GBDT 的 paired lift 只作 diagnostic；selected 仍只由 v2 challenger 相对 do-nothing 的 family-wise 区间决定。
+v2.4 的 `OPEN_T1 vs WAIT_ONE_SESSION_OPEN_T2` 撤出主目标。在同数量、共同终值、无公司行动的简化情形，两者终值抵消，买入净差仅为 `Q×(P_T2-P_T1) + buy_fee_T2-buy_fee_T1`，不能回答“未来是否值得持有”。若保留该旧提案，只作执行价格 diagnostic，不能把它的正结果升级为入场 alpha。§6.2 的 monotone exit 同样只保留为历史 audit，不是 v2 的永久持仓限制。
 
-**B. `ENTRY_TIMING_V2`**
+#### 6.6.2 核心信息、晚间时钟与历史版本
 
-- population 是 T 时点 PIT active 的 synthetic entry cohort，不依赖 Selection TopN；名义金额复用 §6.2 的 `L2_DEPLOYMENT_NOTIONAL_ASSIGNMENT_V1`，从 cutoff 前所有正 `planned_full_notional_cny` 的 held-position 卡确定性分配用户资金尺度，不等待真实 OPEN/ADD 样本，也不把该尺度称为入场人口分布。部署人口只由 source role 为 selected watchlist 的 `OPEN` 卡以及持仓侧显式 `ADD` intent 卡形成权重诊断，两者不得与退出 objective 混权。
-- 同一 T 日冻结 symbol、实际合法数量、parent-order 假设、共同终值日 T+20 与最多 5 日 terminal 顺延。candidate `OPEN_T1` 在 T+1 首个合法 raw open 买入；baseline `WAIT_ONE_SESSION_OPEN_T2` 跳过 T+1、在 T+2 首个合法 raw open 买入。两条路径在同一终值日退出并逐腿收费；任一路径停牌、方向性一字涨停、数量或价格不可用时保留 typed coverage，只用 paired evaluable episode 计算 lift。
-- 该 estimand 只回答“同一买入意图等待一个交易日是否更优”，不选股票、不生成 intent、不决定长期持有期。T+1 实际卡仍单日过期，下一日由 L1 重新决策；离线 baseline 不把旧卡顺延成运行行为。
-- challenger 固定为一个使用 `ENTRY_TIMING_FEATURE_VECTOR_V2` 的 `LIGHTGBM_GBDT_V2_ENTRY`，唯一政策为预测 `OPEN_T1` 相对 `WAIT_ONE_SESSION_OPEN_T2` 的成本后增量 `>0` 时 OPEN，否则 WAIT。阈值固定为 0，不按历史 PnL 调参。
+`TimingFeatureSnapshotV2` 分为核心与可选增强，不再强制“22+12”全字段。核心选择依据为经济机制与不看收益的字段覆盖，不按因子库 IC/PnL 排名回选：
 
-两个 objective 各自 `familywise_hypothesis_count=1`，分别使用 `economic_threshold_bps=0.0`、effect/power 正交分类、cohort block bootstrap 和 cost-sensitivity 标注；entry objective 同样使用 §6.3 的 8-block/2-validation、20-trading-day embargo、28 paths，按 T 日 cohort 分块，同一 symbol/T episode 不跨折。两者不得合并成一个加权总分。模型参数一次性沿用 §6.3 `LIGHTGBM_GBDT_V1` 的完整冻结值，只变更 model id、feature vector 和 objective；不做参数搜索、early stopping 或 final refit。实现时必须验证仓库声明的 `lightgbm==4.6.0` 可导入且版本一致；环境缺包返回 typed prerequisite failure，不切换 sklearn 模型，也不构成 L1/L1a 发布门禁。
+| 信息块 | 首个 v2 处置 | 机制与约束 |
+|---|---|---|
+| 自身价格/成交量/波动 | 核心：短中期收益、趋势偏离、区间位置、量比、下行波动 | 共享复权/单位定义；少量互补窗口，不堆同义技术指标 |
+| 相对指数与市场状态 | 核心：相对 CSI300 收益及指数连续收益/波动 | 不等 HMM；市场宽度依赖全市场覆盖，作为可选增强 |
+| 持仓/动作/资金成本 | 核心：当前数量、现金、可卖量、动作规模、费用；持有期/浮盈缺失带 mask | 预算缺失影响定量建议，持有期未知不能直接拒绝分析；不伪造入场成本 |
+| 行业/资金流/筹码/宽度 | 可选 block，逐个新版本检验 | 核查历史行业归属、流量单位、筹码价格基准、全市场 coverage |
+| 新闻公告结构化事件 | 可选 block，历史版本不可证时只前瞻采集或排除 | 必须同时满足 issuer、timestamp、source version 与扫描完整性 |
+| HMM / Agent 解释 | 后接、非依赖 | HMM 独立增量；Agent 只解释已绑定事实 |
 
-现有 L1 只是可解释、可执行的风险管理 baseline，不宣称“最佳规则”。v2 对当前市场的一致性不靠临时改阈值，而由时间分块 OOF、最近 252 个交易日的独立 diagnostic slice、regime/holding-age 分层、特征缺失与分布漂移报告，以及持续积累的 prospective card outcome 共同说明；最近 slice 不参与模型/参数/特征选择。若历史总体与最近 slice 不一致，只标 `CURRENT_MARKET_ALIGNMENT_UNCERTAIN` 并展示证据，不改 L1、不触发人工审批，也不事后重训或换规则。
+v2.4 的 EMA20 slope/距离、ATR14、20 日 downside semivol、相对 CSI300/申万二级、60 日换手分位、大单净流入、筹码成本/获利盘、宽度、事件衰减 **12 项保留为候选机制目录，不再是强制可用字段或已证有效因子**。具体 source field（如 `cp_cost_50pct`）、公式、窗口、单位、顺序、缺失规则在首次读取研究收益前，以 source/schema coverage 固定到 request。核心缺口只结束对应模型计算并显式返回原因；可选块缺席不阻塞 core，运行中不得静默删列、换模型或重新定义字段。
 
-#### 6.6.4 HMM 与多智能体的后接方式
+v2 每个交易日固定 `decision_as_of=T 20:00 Asia/Shanghai`、服务 T+1。20:00 前 materialize 返回 `DECISION_CUTOFF_NOT_REACHED`，不提前锁死新卡；错过 cutoff 后可物化，但仍只用 cutoff 前真正可见且可重建的数据，不能以 created_at 替换信息时钟。按 trade_date 存储的资金流/筹码不自动等于 20:00 前可得：不能证明当晚可见时使用已证可见的滞后版本或排除该字段。旧 v1 卡的 15:00 identity 不变，同一正式日期不并发签发两个策略版本。
 
-HMM 当前零依赖：v2 先使用连续的指数相对收益、波动和市场宽度。未来只有在 HMM 输出具备 immutable artifact、`as_of/available_at`、状态概率、dwell/transition 与稳定读取契约后，才能在**新的独立 request/family** 中注册一个 `HMM_CONTEXT_INCREMENT_V1` 假设，与不含 HMM 的冻结 v2 baseline 做增量比较；不得向已经运行的 v2 family 追加 hypothesis，不得用硬状态替代连续特征，不做四路消融，也不得因 HMM 缺失暂停 v2。
+快照同时冻结 `feature_available_at`、source manifest/hash、历史源版本、公式/feature order、预处理、calendar、cost/guard 与代码身份；同一纯构建器用于训练和运行。数值填补只在训练数据上拟合并保存 mask/参数；required core 列全缺时 typed failed，不运行后替换候选。日期级未知可见时间不能升级成精确 timestamp。
 
-多智能体不进入首个训练或运行 authority。结构化新闻/公告只通过 `EVID-EVENT-PIT-BASE` 的事件字段进入 `event_risk_decay_5d`。若另行后续任务展示解释，输入必须是卡片、结构化特征和 source refs 的只读副本，输出为 schema-bound 的摘要并绑定 model/prompt/source/as-of hash；标记 `EXPERIMENTAL_CONTEXT`，不落 `app.analysis_records`，不把 absence 当无事件，不把自然语言分数送入 GBDT，也不改变 L1。当前 `/analysis/stock` 及 trend mock 均不得直接复用。
+`market.event_signal` 当前行会被 upsert/suppress 改写，仅检查旧 `available_at` 不足以还原当时 severity/status。只有历史版本化数据或可从当时已知源材料确定性重建的规则结果能进入历史特征；否则该块不进 core，可用 timing-owned 前瞻有界快照积累，无需新表。“无事件=0”还要求该 issuer/time window 已完整扫描；扫描未知、分类后改、时间不精确均显式标注，不交给 LLM 猜测。
 
-## 7. 第二阶段分钟机制
+#### 6.6.3 前向验证、统计与有限迭代
+
+- **主证据使用 walk-forward**：首个训练窗口为数据起点起 756 个交易日，此后按月扩展；每月最后交易日 20:00 为训练 cutoff，新模型最早用于下一月。训练只含 label 的真实可用终点（含 terminal 顺延及发布延迟）不晚于 cutoff 的 row；任何与验证信息区间重叠的 label 都 purge。训练迟到时沿用最近已发布且身份完整的同政策版本模型并标 age；没有可用模型才 L1 fallback，日期仍计入部署路径，不把迟到的模型回填为当时已服务。
+- 该训练日程、起点、标签时钟与固定参数是首次运行前的设计选择，不是已证最优参数，不因 PnL 改动。历史 replay 将模型最早可用时点固定为 cutoff 后首个交易日 20:00，下一张卡才可消费，明确 `SIMULATED_TRAINING_LATENCY_ONE_SESSION`，不声称模型历史上实际存在；真实运行再校验 trained_at/published_at 不晚于 card cutoff，迟到只从后续卡生效。可以显式 CLI 批量执行历史月份和当前 final fit；不建定时 worker，页面不训练。计划月度重训不是事后收益选参，漏跑时显示模型 age/训练日期，不新增人工放行流程。
+- 既有 8-block CPCV 只作可选稳健性诊断。其训练可能来自验证日期之后，purge/embargo 不会使其自动成为历史部署路径；不更改 v1 receipt，也不把 CPCV OOF 收益接到 v2 主净值曲线。
+- 主报告为固定日历区间、固定资本下连续政策相对两基线的净值/收益差，现金收益基准为 0，费用按实际未来腿计；另报滑点/延迟情景。推断序列为各日“candidate 净资产增量减 baseline 净资产增量”除以相同总起始资本的 bps，累计值对应期间净增量，日均 CI 与期间累计收益分别命名。相同日期跨股票先聚合，再按连续交易日做时间 block 推断；不把数百万重叠 review/action rows 当独立样本。首个 request 固定 25 交易日 moving blocks、5,000 次、seed=20260907、95% interval；同时报告有效交易日数、覆盖、block 假设局限，不以此保证有效样本量充足。
+- **计数按可被选择的策略/比较，不按模型文件数**：首轮固定 2 个监督模型、1 个联合政策、相对 2 条主基线的 2 个主比较（Bonferroni simultaneous alpha=0.05/2）；两个 head、单卡 horizon、holding-age/regime 与最近 252 日是 diagnostic-only，不能据其结果另选政策。历史搜索、v1 结果和后续 feature-block 尝试在自有 registry 显式累计披露，不宣称只剩两个无历史背景的新发现。
+- `economic_threshold_bps=0.0`；每条主比较沿用 adjusted lower>0 为 SUPPORTED、upper<=0 为 NEGATIVE、其余 INCONCLUSIVE；**联合人工建议政策只有两条主比较均 SUPPORTED 才标支持态**，否则研究区逐条显示结果，不能把某一个 head 支持等同整个服务政策支持。MDE/cost sensitivity 均为报告义务；v2 的日均增量与 v1 的 episode oracle 不是同单位 estimand，禁止直接相除。首个 v2 报日均 MDE，power classification 在没有事前同口径效应尺度时为 `NOT_COMPUTABLE`，不额外建设最优控制 oracle、不伪造 ADEQUATE、也不阻塞运行。
+- 前向时间、PIT/特征完整性、真实执行路径是证据有效性，不是人工审批。离线 candidate 路径使用该折训练出的可用模型，不等待尚未完成的全研究 SUPPORTED 分类，否则会形成自锁；只有实际服务政策按最终证据决定支持标签。无正结果仍完成研发和发布实验分析；L1 不受影响。研究区展示阴性/不可分辨与成本敏感性，不隐藏失败，也不把研究置信区间当个股胜率。
+- 冻结只约束同一次实验，不把研发永久锁死。新的机制/可选特征块需新 request、code/data identity、显式 trial 计数和同一前向比较；禁止看测试收益改参数后仍沿用原“无搜索”名义。最近 slice/漂移只标 `CURRENT_MARKET_ALIGNMENT_UNCERTAIN` 等解释，不触发事后重训分支或批准门禁。
+
+#### 6.6.4 本地推断、方向与数量分离、支持态接线
+
+本任务必须实现 local model → 所选个股 daily prediction，而不是只有 aggregate receipt。模型存 timing-owned `models_v2/<model_bundle_sha256>/`，绑定 estimator/预处理、目标、特征、训练 cutoff、代码环境、cost/decision policy 与 forward evidence identity；只加载本任务 CLI 生成并校验的可信本地 artifact，不接受外部上传的可执行 pickle。训练环境校验 LightGBM 4.6.0，缺包 typed failure，不静默换模型。
+
+1. 用户只需选择分析股票即可看方向研究；已有持仓默认数量来自唯一账本。没有预算的自选仍需给模型明确资金输入：以 request 冻结的 `DIRECTION_REFERENCE_NOTIONAL_CNY=100000` 作为**公开的参考情景**在内部做合法数量估算，只展示该情景下的方向，不把它写进用户 intent/仓位或 card 数量；标 `DIRECTION_ONLY/SIZING_INPUT_UNAVAILABLE/REFERENCE_NOT_USER_BUDGET`，不得称用户成本后支持或发可执行买入提醒。参考金额只为让方向分析可计算，不参与预算适用性结论、不得按收益调参；参考情景本身不可评价时直接 typed unavailable。预算补齐后才给个性化合法数量/成本，不用预先买入 intent 决定模型该预测哪一边。旧 v1 无 intent→WAIT 保留为基线，不冒充新能力。
+2. `position_source`、T+1、限价/停牌/手数、用户预算/风险上限是不可绕过的可执行性边界；L1 中止损、止盈、趋势/价格护栏参数则是冻结的**政策基线**，不是永远最佳的市场真理。首个 v2 明确保留 v1 exit guard 的风险覆盖和 price guard 执行映射，顺序为可交易性/用户上限 → 冻结风险退出 → 模型候选 → 冻结价格分支，回放与服务同序。只有未被风险退出覆盖的行由模型选动作；若以后改变经济规则，作为新政策版本整体评价，不修改共享 defaults 或历史 snapshot，也不把所有旧参数永远写成不可优化的 HARD。
+3. 新卡冻结 T 日的模型版本、候选价值、唯一方向和合法分支，T+1 只观察已有 quote trigger。预测值是模型估计，不是保证收益/概率。对同一标的先展示一个主建议，再给规则/模型差异原因，不能出现两张互相竞争的正式卡。
+4. 未获联合支持时，L1 继续为正式建议；个股模型结果作为同页 `EXPERIMENTAL_MODEL_ADVICE` 只读影子分析（含数据缺口），不生成可执行 alert、不中途改 L1。支持态获得后，显式 CLI 发布绑定证据的自有 `serving_policy_v2` 版本，下一尚未签发的交易日卡可标 `MODEL_ASSISTED` 并复用原提醒链路；这是普通版本发布，不要求新增审批或双人确认。
+5. 同一正式日期只使用一个 serving policy：发布不覆盖已签发 v1/v2 卡。模型不可加载、核心输入缺失或身份不符时，显式降为 L1 并显示 `MODEL_UNAVAILABLE_RULE_FALLBACK`；已签发模型卡若完整性受损则拒绝提醒，不伪造同日替代卡。训练过旧标日期/age，不借机静默换模型。历史模型/卡片/事件可回读；回退只影响下一张未签发卡。
+6. 既有 `GET /evidence` 增加研究与部署版本区别，current/materialize 同页扩展方向/数量/模型来源；如兼容需要新增 schema version，必须明确 v1/v2 reader 和幂等键，不能把旧 v1 内容 hash 偷换。研究 shadow 位于独立 `research/...`，正式 v2 卡与事件使用 timing-owned 版本化子路径，旧目录/事件不改写，不为新模型创建第二套通知或账本。
+
+支持证据绑定整个冻结训练/重训程序、核心字段、政策、适用人口和执行假设，不声称最新 final-fit 权重已有独立历史验证。同规格月度更新写新 model hash 与 cutoff、继承程序证据且明确适用边界；改特征/政策/时钟则是新研究版本，不能借旧支持态背书。仅日线 proxy 可用时，所有收益说明仍带执行假设标签，不能升级成真实人工成交证明。
+
+#### 6.6.5 执行真实性、可选信息及下一块边界
+
+首个 v2 即需遵守与服务一致的 `AT_OPEN/ON_PRICE_TRIGGER` 分支、方向性 no-fill、T+1、真实数量与分项费用；不能训练/评价一律假定开盘成交，却在线按到价条件提醒。复用 §5.11 保守日线 proxy 开始长历史回放，同时对已有分钟覆盖的固定连续留出区间做离线触发顺序/可成交性核对；分钟覆盖不足的结论标 `DAILY_FILL_PROXY/EXECUTION_REALISM_UNVERIFIED`，不得包装为真实成交超额收益。基础连续路径评价不能后移到第二块。
+
+合法未成交不是未知数据：保留原现金/持仓，进入 intention-to-treat 主路径，计漏买、漏卖与机会成本；市场数据确实未知则报告 unknown coverage，不按 0 填补、也不只报告幸存者收益。共同已知覆盖下的 paired 统计必须连同全人口分母、缺失时段和收益可计算范围展示。费用之外还需冻结价差/滑点/提醒延迟情景，数值由源能力与人工执行假设在看收益前决定，并披露而非凭空声称“无冲击”。
+
+`PT-NEXT-005` 再扩大分钟回放覆盖、检验执行假设及可选块增量。它不是等待真实 risk-exit 卡攒够才做所有研究：可对 v2 前向生成的日频计划做模型标记的历史回放，但与 §7 的真实 prospective SELL-only audit 分开，不伪造成用户卡。分钟方向/自适应执行/分钟链路改造仍不在当前两块范围。
+
+资金流、筹码、历史行业、结构化事件、HMM 逐块与冻结 core 比较；有 causal OOF 的 HMM 概率/dwell/transition 才进入新 request，不以 HMM 未实现阻塞 core，也不做四路消融。事件按 §6.6.2 验证历史版本，可影响后续模型但不是首个模型的必需条件。
+
+多智能体只做可选解释，输入为卡片/结构化事实/source refs 只读副本，输出 schema-bound 摘要并绑定 model/prompt/source/as-of hash，标 `EXPERIMENTAL_CONTEXT`。不调用当前有副作用 `/analysis/stock`、不写 `app.analysis_records`、不用 trend mock；Agent 一致意见不算独立统计证据，不将自由文本分数送入核心模型。未来可用小型手工成交记录/导入核对实际建议收益，但不接自动交易、不新建券商账本；当前所有 policy outcome 仍不是用户实际成交回报。
+
+## 7. 分钟研究：既有独立审计与后续机制
+
+§7.1～§7.2 是已完成的真实 risk-exit SELL-only L4b-1 契约，不覆盖所有日频触发建议。§6.6.5/§9.7 的日频计划离线分钟回放属于执行真实性验证，不生成分钟新方向，也不修改本节历史 audit 的人口/receipt。
 
 ### 7.1 L4b-1 执行窗口
 
@@ -775,18 +814,19 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 | 风险/可交易性规则 | 已持仓是否应止损、能否交易、用户目标如何合法落地 | L1 正式采用；明确标为 rule-based risk management，不冒充 alpha |
 | 趋势、相对强弱与波动 | 当前持仓继续持有的状态是否恶化 | 只取 T 时点可见的固定特征进入 L2；不单独搜索阈值 |
 | 缺口/短期均值回归 | 既定方向是否应等待更好的当日价格 | L1 只执行现有 price guard；L4b-1 才独立检验分钟执行价差 |
-| continuation/exit value 监督学习 | 下一可执行日减仓相对继续持有是否有成本后价值 | L2 主线；Ridge 与 GBDT 预测同一 row target，单调 policy 决定 exposure |
-| meta-label / act-or-hold | 已有动作意图应执行还是保持基线 | 已由 L2 的 candidate-versus-do-nothing estimand 覆盖，不另建第三套模型 |
+| 动作增量价值监督学习 | 建立、增减或保持敞口是否有成本后价值 | v1 为单调退出 audit；v2 用入场/退出监督模型与唯一日频政策，评价连续净值路径 |
+| meta-label / act-or-hold | 已有动作或候选是否优于不交易 | 可作为建模解释，不另建第三套模型；不能把买入推迟一天当完整入场目标 |
 | barrier、hazard、最优停止 | 退出风险何时集中、删失如何处理 | 可作未来 challenger；第一批与首个 L2 不需要 |
 | HMM / regime conditioning | 市场或板块状态是否改变规则有效性 | 第一批 context-only；首个 L2 不入模也不按 HMM 分层，未来增量必须另立一个冻结 feature-block 假设 |
 | 成本约束动态仓位/执行 | 应一次完成还是分档、何时成交 | L1 用确定性 exposure 与逐腿成本；L4b-1 研究执行窗口 |
 | TCN/Transformer/Offline RL | 是否能从长分钟序列学到更复杂控制 | 当前不采用；现有本地证据和人工建议目标不足以抵偿复杂度与模拟器风险 |
 
 1. [Moskowitz, Ooi & Pedersen (2012), Time Series Momentum](https://doi.org/10.1016/j.jfineco.2011.11.003)研究的是期货的一至十二月收益持续性，只支持把中期趋势当作背景，不能据此声称“日内到数日不稳健”或否决分钟机制。
-2. [Gârleanu & Pedersen (2013), Dynamic Trading with Predictable Returns and Transaction Costs](https://doi.org/10.1111/jofi.12080)支持有成本时向目标部分移动；在本设计中对应 exposure 档位、逐腿成本和 monotone policy，不等于为个股规则提供现成参数。
-3. 既有 purged/embargoed CPCV 与 family-wise 结构继续复用；目的在于时间因果与诚实计数，不增加人工审批。
+2. [Gârleanu & Pedersen (2013), Dynamic Trading with Predictable Returns and Transaction Costs](https://doi.org/10.1111/jofi.12080)提供有交易成本时向目标部分移动的研究背景；在本设计中启发有限仓位动作与逐腿成本，不证明单调退出最优，也不提供 A 股现成参数。
+3. family-wise 结构可复用；主证据改用训练严格先于预测的 walk-forward，CPCV 只作稳健性诊断。purge/embargo 与时间先后是不同要求，不能混称历史部署因果证据；不增加人工审批。
 4. [Almgren & Chriss, Optimal Execution of Portfolio Transactions](https://www.smallake.kr/wp-content/uploads/2016/03/optliq.pdf)只作为第二阶段执行成本/风险背景，不声称它定义 `AT_OPEN/ON_PRICE_TRIGGER/WAIT_UNAVAILABLE`。
 5. HMM 可作为市场态势 context 与后续 diagnostic slice，但在没有 L2 支持前不参与方向、校准或四路消融。
+6. [AQR, Trading Costs](https://www.aqr.com/insights/research/working-paper/trading-costs)以机构真实成交研究成本随交易规模、股票和时间变化。这支持本设计区分手续费与执行摩擦，但不能把其发达市场机构成本参数直接套给 A 股个人账户，也不证明当前择时模型有效。
 
 方法选择以终极产品目标和本地证据为准，不以“技术更新”本身为目标。
 
@@ -838,11 +878,19 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 - 后续 minute candidate 覆盖真实 risk-exit `EXIT/SELL/AT_OPEN` card 的 target date 后，按同一 CLI 重新冻结新 request 并运行；这是一项数据驱动的重复审计，不拆成新产品阶段。
 - L4b-2 继续维持范围外，除非其独立证据条件成立且用户决定扩展范围。
 
-### 9.6 下一项：PT-NEXT-004 日频择时因子与模型增强（设计已闭合，实施未启动）
+### 9.6 下一项：PT-NEXT-004 日频模型建议闭环（设计已更新，实施未启动）
 
-下一项不等待 HMM，也不先做分钟新方向。实施时作为一个任务完成三件事：构造并冻结 `TimingFeatureSnapshotV2`；运行两个分离 objective 的固定 GBDT 离线 audit；把 hash-bound 总体结论接入既有 evidence 区并保持 `EXPERIMENTAL_CONTEXT`。不新建 Timing Lab、在线模型服务、调度平台、数据库表或新页面。
+一个实施块完成：①不看收益的 core coverage/schema 与正确 action-value/两基线契约；②共享特征构建、前向训练、连续政策回放、基本分钟子区间核对及费用摩擦报告；③本地版本化模型对所选股/持仓股推断，方向与数量分离，同页实验/支持态、既有卡片/提醒接线与显式 fallback。两监督 head 组成一个联合政策，统计计数见 §6.6.3。不等 HMM，不新建 Timing Lab、模型服务、调度平台、数据库表或新页面。
+
+完成标准分开报告：工程闭环可运行且与设计一致；研究是 SUPPORTED/NEGATIVE/INCONCLUSIVE 的哪一种；是否仍仅 L1 正式建议；运行进程是否加载新代码。阴性结果仍是完成的研究，不阻断工程交付；只有总体 shadow summary 而无个股预测，不能称本块完成。正收益是终极研发目标而不是任何一次模型实验必然交付的承诺。
 
 本版只确定方向、契约、隔离与验证范围。它没有创建源码、request、feature snapshot、model、receipt 或 registry，也没有安装 `lightgbm`、运行训练、修改卡片或激活运行态。用户明确要求本次合入后暂停，故 `PT-NEXT-004` 的实现必须由后续单独任务启动，不得把本次文档合入报告成该功能已完成。
+
+### 9.7 随后一项：PT-NEXT-005 执行真实性与信息增量（设计排队，未启动）
+
+不细拆产品阶段。在已可用日频闭环上，扩大已有导出分钟的触发路径回放，量化价差/延迟/未成交及错过反弹；按不看测试收益的源准备度确定一个可选信息块，冻结新 trial 后与 core 做增量比较。优先可因果重建、覆盖充分的字段，不预设 HMM、事件或筹码必然更优。若没有 ready block，仍可独立完成执行真实性工作，不能再制造对外部模块的等待链。
+
+基础资金守恒、两基线、前向评价与实际日频触发语义已属 PT-NEXT-004，不得留到此处才补。L4b-1 SELL-only 有真实样本及分钟覆盖后可按原 CLI 新 request 重审，但它不是此块的唯一人口；不改旧 receipt、不用历史合成卡冒充真实 prospective。新分钟方向、完整 Agent 平台和自动交易继续范围外。
 
 ## 10. Verification Plan / 验证方案
 
@@ -870,7 +918,7 @@ git diff --check
 
 分析范围管理不新增测试文件或独立验证 lane，直接补入既有矩阵：`test_universe.py` 验证 discovery/analysis 集合与持仓强制纳入，`test_artifact_store.py` 验证 scope 原子更新/hash，`test_api.py` 验证唯一新增接口和三个 GET 零写，`test_card_service.py` 验证 scope snapshot 进入 card-set identity，前端既有 spec 验证复选框与“下一卡片生效”。
 
-### 10.3 已完成的 L2 audit 验证
+### 10.3 已完成的 L2 v1 audit 历史验证
 
 - `backend/tests/position_timing/test_l2_population.py`：source/episode/review identity、确定性 notional assignment、合法 board-lot、deployment weighting 与历史覆盖 fail-closed。
 - `backend/tests/position_timing/test_l2_model_specs.py`：冻结 feature order、Ridge/GBDT 完整参数、环境身份与无 final fit/runtime model。
@@ -878,7 +926,7 @@ git diff --check
 - `backend/tests/position_timing/test_l2_inference.py`：threshold 0、nominal/family-wise、effect/power 正交分类、合法父订单成本敏感性与 own-registry/N0 隔离。
 - 正式 request 为 `research/l2_requests/ptl2req_163c90896899e65cf3183e5e.json`，绑定代码提交 `e26881abb7366f1726b2365a398d0d04786c6eb7`；immutable bundle 为 `research/l2_learnability_bundles/eef1f771a5d8ae3c002feaf6ed46007df9a0ee3726894893abdc93cddc8f3f51`。独立 `inspect` 返回 `BUNDLE_VALID`，exact retry 返回同一 bundle/receipt 且两条 registry append 均为 duplicate no-op。
 - 验证是审计证据，不是新 gate：study `INCONCLUSIVE` 直接结束本次 family，L1/L1a 继续运行，L3 不实现。
-- 当前本地结果为 position-timing 88 tests、相邻 Advisory CPCV/registry/control 16 tests、集中 `position_timing_first_release` nox（含 TypeScript、lint、production build、Playwright）和 F2 validator 27/27 全部通过；validation catalog integrity 0 finding，L0 无 blocking finding。仓库既有 frontend hook/autoprefixer、Browserslist、npm audit 提示不来自本次业务路径，也不被改写成新增发布门禁。
+- 该次历史交付记录为 position-timing 88 tests、相邻 Advisory CPCV/registry/control 16 tests、集中 `position_timing_first_release` nox（含 TypeScript、lint、production build、Playwright）和当时 F2 validator 27/27 通过；不是本次 v2.5 重跑结果，也不证明未实现的 v2 能力。仓库既有 frontend hook/autoprefixer、Browserslist、npm audit 提示不被改写成新增发布门禁。
 
 ### 10.4 L4b-1 离线执行窗口验证
 
@@ -890,14 +938,30 @@ git diff --check
 
 后续实现沿用现有 position-timing validation lane，不新建 CI 平台；至少覆盖：
 
-1. 12 个新增字段的公式、固定顺序/hash、raw/total-return 单位、source identity 与 `feature_available_at <= decision_as_of`。
-2. 申万二级历史归属、资金流单位、筹码价格基准、市场宽度 PIT universe、事件 issuer binding/available-at 的缺失均 typed，禁止当前值倒填或动态删列。
-3. held exit 与 entry timing 的 population、label、baseline、terminal、cost、registry 和 selected 状态完全分离；跨 objective 合并必须测试失败。
-4. 每个 objective 只有一个固定 GBDT、一个冻结政策、零参数搜索、零 final refit；LightGBM 4.6.0 不可用时 typed prerequisite failure，不静默换模型。
-5. v2 artifact/registry 只写 timing-owned 新路径；L2 v1、L4b-1、生产 card/event、全局 N0/current route、QE/Selection/Watchlist/Portfolio/Paper/MiniQMT 均保持原 hash 或零写入。
-6. shadow evidence 不改变 L1/L1a 的 action、quantity、trigger、guard、card schema 或 `RULE_BASED_RISK_MANAGEMENT`；无模型或任意失败时现有产品继续工作。
-7. 当前多智能体 POST、`app.analysis_records`、原始文本、trend mock 均不被调用；若展示可选摘要，验证 schema/provenance/`EXPERIMENTAL_CONTEXT` 与零决策权。
-8. `python scripts/analyze_factor_library.py --json` 只作为候选目录收据；测试证明实现没有按 IC/PnL 遍历或回选 584 因子。
+1. core/optional 的确定性 coverage 冻结、公式/order/hash/单位、训练与运行同构；20:00 cutoff、实际 available-at/历史版本与滞后规则，旧 v1 15:00 不变。
+2. 事件 mutable upsert、DATE_ONLY、历史行业归属、资金流单位/筹码基准缺失用反例验证；optional 不阻 core，required core 缺失不能伪装成零或动态删列。
+3. 两监督目标和动作候选 identity 清楚，统一政策只输出一个 action；连续 WAIT、长期/未知持有期、卖出后合法回补、无 scope 不扩池、无预算仍可方向分析但无数量/触发提醒。
+4. 月度前向训练只见成熟标签、同股同日所有动作不跨折、训练/模型实际可用时间不越过服务时点；final fit/模型 hash、包版本、预处理可回读，CPCV 不混入历史部署曲线。
+5. 同股同资本的买入持有/L1 两基线、动作标签与连续策略差异、现金守恒、真实数量、逐腿费用、公司行动、未成交保留、漏卖/错过上涨、unknown coverage 与模型失败 fallback 日期均进入可解释结果。
+6. 两监督模型/一个联合政策/两个主比较及多重校正如实计数；overlap 不按 episode 独立、阴性/不可分辨/功效/成本敏感性不隐藏、不变门禁。
+7. 本地模型→实验个股分析→证据绑定支持态→下一未签发正式卡→现有 alert 全链；无支持仍保留 L1，旧卡不重写，失败 typed、不可执行 artifact 不加载；研究统计不得显示成个股胜率。
+8. v2 仅写 timing-owned 新子路径和 serving 当前态；L2 v1/L4b-1/历史卡事件/全局 N0 不改，既有 DB/模块零写入和零反向依赖；共享 defaults 不改、历史 snapshot 不漂移。
+9. ON_PRICE_TRIGGER/AT_OPEN 评价与服务分支一致，分钟覆盖子区间的触发顺序、成交价、可交易性及价差/延迟差异留证，历史 replay 与真实 prospective 卡分开。
+10. 不调用多智能体副作用 POST、不写 `app.analysis_records`、不使用原始自由文本或 mock trend；只读解释不改变决策。因子目录只作候选发现，不遍历 IC/PnL 回选。
+
+上述为**计划测试，尚未实现/执行**：优先扩展 `backend/tests/position_timing/test_l2_population.py`、`test_l2_model_specs.py`、`test_l2_inference.py`、`test_card_service.py`、`test_api.py`、`test_isolation.py` 和既有前端 spec；前向/连续路径可单独建少量直接测试，不以旧文件名限制职责。PT-NEXT-005 沿用同一 lane 增补执行/feature-block 对照，不新建 CI 平台。
+
+### 10.6 v2.5 文档复核记录
+
+本轮只做文档与只读证据核验，不重跑训练或全量产品测试。审核按三轮收口：目标/架构、数值与因果契约、跨章节/验收范围。F2 validator 结果为 34 design items/34 matrix rows、0 warnings；逐腿费率 Decimal 复算为 1.491/6.491/7.982 bps，三个阈值为 58,824/117,648/235,295，与原成本契约一致；最终 diff 检查和提交身份记录于 PR。静态 validator 只检查设计结构/引用，不证明模型有效、代码完成或运行态已加载。
+
+| 轮次 | 已发现并修订的设计偏差 | 对照位置 |
+|---|---|---|
+| 1 目标/产品 | shadow 无个股闭环、自动交易禁令误伤本地模型、scope 已实现却写待实施、强制 12 字段制造依赖 | §1～§5、§6.6.2/4、§9 |
+| 2 收益/因果 | 一天买价差冒充入场目标、单调退出遗漏回补、入场年龄当未来 horizon、CPCV 当可部署收益、事件当前行冒充历史值 | §6.6.1～3/5、EVID-CPCV-BOUNDARY、EVID-EVENT-PIT-BASE |
+| 3 一致性/隔离 | 历史与未来版本、正式/实验模型、监督目标与统计 family、共享规则与可交易性、计划与已验证证据逐项分开 | §10.5、§12～§15 |
+
+DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本文件，不存在另一份未同步实施计划。下一实现仍须交付 §10.5 的真实代码/API/UI/研究证据，不能引用此表代替实现验收。
 
 ## 11. Risks / 风险与失败模式
 
@@ -911,12 +975,14 @@ git diff --check
 | 荐股/Selection 进展慢 | universe 与 intent 不依赖荐股；Selection 缺失只禁用 alpha-decay context |
 | HMM 缺失或漂移 | 字段级 `hmm_context_status=UNAVAILABLE`；方向不受影响 |
 | 等待 HMM 导致主线停滞 | `PT-NEXT-004` 使用连续日频市场上下文直接实施；HMM 仅作为以后一个冻结增量 block |
-| 把 584 个因子库变成搜索空间 | v2 只用 §6.6 一次冻结的 12 个互补字段；禁止按历史 IC/PnL 替换、叠加或调参 |
-| 退出与入场 estimand 混用 | 两套 population/label/baseline/model/receipt/registry identity；不合并分数与 selected 状态 |
+| 把 584 个因子库变成搜索空间或以缺事件阻塞 core | 核心按不看收益的 coverage/schema 冻结；可选 block 后接；新尝试显式版本/计数，禁止冒充原无搜索结果 |
+| 退出与入场 estimand 混用 | 两监督目标保持 identity，以同单位净动作价值组成唯一政策；不得把某 head 支持当联合政策支持 |
+| 只优化早买一天、避跌或短期回撤 | 同股同资本的连续净值比较买入持有与 L1；计现金、回补、missed upside 和全部实际交易腿 |
+| CPCV 或事件最新值造成伪历史证据 | 前向训练/成熟标签主验证；事件须还原当时版本，optional 缺失不阻 core |
 | 多智能体自由文本形成不可复现信号 | 首个 v2 不用文本；事件只用 timestamp-causal 结构化字段，解释层 schema/hash-bound 且无决策权 |
 | LightGBM 声明与执行环境不一致 | 后续 implementation receipt 校验 `lightgbm==4.6.0`；缺失 typed failure，不改模型、不阻塞 L1/L1a |
 | 退市研究 overlay 尚非运行 authority | L1 只消费 issuer-bound、timestamp-causal confirmed terminal event，并仅用已生效 `stock_basic` 终态兜底；研究 profile 不接入；仅自选买入与持仓卖出按方向处理 |
-| 用户未提供 planned full notional | 该股票 `SIZING_INPUT_UNAVAILABLE`，不虚构仓位；其他股票正常 |
+| 用户未提供 planned full notional | 已实现 v1 为 WAIT/SIZING_INPUT_UNAVAILABLE；v2 设计保留方向研究但不虚构数量、不称成本后支持、不发买入触发提醒 |
 | 未显式选择的自选股被误当成数据缺失或仍批量出卡 | discovery 与 analysis universe 分离；缺 scope 为 `NOT_SELECTED`，只对显式选择的 active watchlist 出卡；持仓始终覆盖 |
 | scope 更新改写当日卡或变成第二套 watchlist | `NEXT_CARD_SET_ONLY`、card immutable；scope 只保存 selected symbol set，成员资格仍由只读 watchlist authority 决定 |
 | 最低佣金实际聚合口径与假设不同 | `BROKER_UNVERIFIED` 披露 + 1/2/3 parent-order sensitivity；不阻塞 |
@@ -924,7 +990,7 @@ git diff --check
 | 除权除息使 raw 收益失真 | raw 只用于触发/成交/费用；经济结果绑定公司行动或等价 total-return identity，缺失即 unavailable |
 | 复权数据暂未成熟 | 不阻塞只使用 raw 的块一 card；实现块二 outcome 到期评价时才 fail closed 为 `UNAVAILABLE_AT_HORIZON` |
 | 文件 artifact 并发冲突 | content address、file lock、fsync、atomic replace；冲突 fail closed |
-| 规则卡被误读成 alpha | 卡片固定 `RULE_BASED_RISK_MANAGEMENT`；研究统计只在证据区 |
+| 规则卡或实验模型被误读成 alpha | L1 固定 RULE_BASED；v2 实验明确标注，只有适用联合政策支持才 MODEL_ASSISTED；研究统计只在证据区 |
 | L2 双模型没有正下界 | 正式结果如实记录 Ridge `NEGATIVE + ADEQUATE`、GBDT `INCONCLUSIVE + ADEQUATE`、study `INCONCLUSIVE`；L1/L1a 不受影响，不追加同 family 搜索 |
 | 合成 L2 population 与用户人口仍偏移 | 同时报 synthetic 与 prospective deployment-weighted；不用“消除偏移”措辞 |
 | 分钟 candidate 截至 2026-08-31，晚于 cutoff 的 action-card 尚不可评价 | 记 `MINUTE_COVERAGE_PENDING`，后续月更后新建 immutable request；不影响 L1/L1a |
@@ -934,21 +1000,21 @@ git diff --check
 
 ### 12.1 蓝图文档历史合入边界
 
-- 蓝图初次合入只包含 Markdown；当前 feature 分支已经在其约束下实现块一源码，不能再用本段宣称“当前只改文档”。
+- 蓝图初次合入只包含 Markdown；随后首发和离线审计已分别实现，见 §9。当前 v2.5 文档分支再次仅改 Markdown，不以历史首发状态暗示本次实现了新模型。
 - `production_ddl_gate=noop`。
 - `production_dependency_gate=noop`。
 - `runtime_activation=noop`。
 - `backend_restart=noop`。
 - `frontend_activation=noop`。
-- 蓝图初次合入当时 DB、artifact、registry 和运行进程均未修改；该历史事实不得用于否认后续首发 artifact 或本次 timing-owned L2 research bundle/registry 的已授权写入。
+- 蓝图初次合入当时 DB、artifact、registry 和运行进程均未修改；该历史事实不得用于否认后续首发 artifact 或历史 timing-owned L2 research bundle/registry 的已授权写入。
 
 文档回滚通过后续 PR revert；不删除任何 artifact 或历史证据。
 
 ### 12.2 当前首发运行面与离线 L2 边界
 
-块一已由 PR `#4277` 合入，块二及运行态收口见 §9.3。`PT-NEXT-002` 只在显式 CLI 下写 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/` 与自有 `research_registry/`，没有修改生产 card/event artifact、数据库、全局 N0 registry/current route 或 8001/3000 进程，也没有把模型接入 API/页面。完整方案保持零 DDL、零新依赖；若后续偏离为数据库表或运行模型，必须先更新本 F2 设计并按 DEV/生产授权边界重新处理。源码合入、离线研究 evidence 与运行激活继续作为独立状态报告。
+块一已由 PR `#4277` 合入，块二及运行态收口见 §9.3。`PT-NEXT-002` 只在显式 CLI 下写 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/` 与自有 `research_registry/`，没有改生产 card/event、DB、N0 或进程，没有运行模型。v2.5 已设计 timing-owned 本地模型与人工建议接线，但尚未实施；不需要新表或新服务。后续依赖/训练/激活按实际任务范围分别报告，数据库或进程变更不从本次文档授权推定。
 
-### 12.3 本次 v2.4 文档合入边界
+### 12.3 本次 v2.5 文档合入边界
 
 - 仅修改本蓝图 Markdown；`PT-NEXT-004` implementation、training、artifact、registry、dependency install、数据库与运行激活均为 `NOT_STARTED`。
 - `production_ddl_gate=noop`、`production_dml_gate=noop`、`production_dependency_gate=noop`、`runtime_activation=noop`、`backend_restart=noop`、`frontend_activation=noop`。
@@ -961,7 +1027,7 @@ git diff --check
 
 | design_item | legacy_review_ref | level | requirement |
 |---|---|---|---|
-| F-001 | PT-015 | HARD | 只产出人工建议，不生成订单、部署物或运行时权重 |
+| F-001 | PT-015 | HARD | 只产出人工建议，不生成订单、经纪商部署包或自动执行权重；不禁止 timing-owned 本地模型 |
 | F-002 | PT-001, PT-014 | HARD | 轻量独立 namespace/artifact；仅 composition root 薄接线，既有业务模块零反向依赖、零既有写入 |
 | F-003 | PT-002 | HARD | 唯一 `LEGACY_PORTFOLIO` authority，active watchlist 合并并按 holding 优先去重 |
 | F-004 | PT-003 | HARD | timestamp 级 PIT、T+1 单日 card 时钟与旧卡不顺延 |
@@ -977,9 +1043,9 @@ git diff --check
 | F-014 | PT-008 | HARD | 四种 outcome 读取态与成功扫描水位，物化失败不可伪装为 pending |
 | F-015 | PT-018, PT-019 | HARD | L1a 只用 batch quote，分钟级 poll；stale/future/unavailable 显式且禁止弹窗 |
 | F-016 | PT-019 | HARD | alert claim artifact exact-once；UI at-most-once 仅 advisory，already-alerted 仍可见 |
-| F-017 | PT-002, PT-016 | SCOPE | HMM/Selection 只作可缺失 context，不阻塞整卡或决定 universe |
+| F-017 | PT-002, PT-016 | SCOPE | 首发 HMM/Selection 只作可缺失 context，不阻塞整卡或决定 universe；未来增量见 F-032 |
 | F-018 | PT-008, PT-010 | SCOPE | 第一批冻结 L2 population/sampling/outcome 字段；后续一次性离线 audit 必须遵守同一 identity |
-| F-019 | PT-009, PT-010, PT-011 | SCOPE | Ridge+GBDT、一个 monotone policy、两个 hypotheses，无搜索、own registry |
+| F-019 | PT-009, PT-010, PT-011 | SCOPE | 已完成 L2 v1 的 Ridge+GBDT、一个 monotone policy、两个 hypotheses，无搜索、own registry；不是 v2 永久限制 |
 | F-020 | PT-009, PT-010 | SCOPE | threshold 0、effect/power 正交、nominal/family-wise 与 cost-sensitive 标签 |
 | F-021 | PT-009, PT-012, PT-017 | ADVISORY | MDE 报告、sealed 可选、小额标注均非批准门禁 |
 | F-022 | PT-018, PT-020 | SCOPE | L4b-1 只用真实 risk-exit EXIT/SELL/AT_OPEN card、一个冻结 30 分钟 raw VWAP challenger、一个可达假设和 own artifact；其他 action/ON_PRICE_TRIGGER 不事后选 branch，N3 objective 不混用，L4b-2 保持范围外 |
@@ -988,13 +1054,13 @@ git diff --check
 | F-025 | PT-001, PT-004 | HARD | card/receipt 绑定实际消费的 dataset、calendar、limit、delist、policy、fee 与 code provenance；card 未消费的 adjustment 明确 NOT_APPLICABLE，outcome 必须绑定 adjustment/corporate-action |
 | F-026 | PT-014 | HARD | 文档与未来实现具备逐条测试、隔离、回滚和 production gate 证据 |
 | F-027 | NEW-20260904 | SCOPE | discovery 与 analysis universe 分离；全部真实持仓始终分析，仅显式选择的 confirmed watchlist 出卡；scope 为 timing-owned 原子当前态并绑定 card-set identity，不建第二持仓池或新平台 |
-| F-028 | PT-NEXT-004 | SCOPE | 下一优先任务是日频择时因子与模型增强；不等待 HMM，先于 L4b-2，且本版只完成设计、不启动实现 |
-| F-029 | PT-NEXT-004 | HARD | `TimingFeatureSnapshotV2` 只含冻结的 v1 baseline 与 12 个新增字段，逐字段 PIT/source/formula/order/hash 闭合；禁止 584 因子扫描与事后回选 |
-| F-030 | PT-NEXT-004 | HARD | held exit 与 entry timing 使用分离 population、反事实、label、cost、model、receipt 和 selected 状态，不合并 estimand |
-| F-031 | PT-NEXT-004 | SCOPE | 每个 objective 仅一个固定 GBDT challenger；结果只进 `EXPERIMENTAL_CONTEXT`，不改变 L1/L1a 或产生运行模型 |
-| F-032 | PT-NEXT-004 | HARD | 结构化事件只消费 issuer-bound timestamp-causal 字段；当前多智能体有副作用 POST、自由文本和 mock trend 不进入模型或决策 authority |
-| F-033 | PT-NEXT-004 | HARD | v2 使用 timing-owned 新 artifact/registry；L2 v1、L4b-1、生产 card/event、全局 N0 与既有模块零写入、零反向依赖 |
-| F-034 | PT-NEXT-004 | HARD | 后续实现沿用集中验证并覆盖公式/PIT/objective 隔离/依赖身份/shadow 不改卡；不新增平台型门禁或基础设施 |
+| F-028 | PT-NEXT-004/005 | SCOPE | 下一块交付日频训练到个股建议闭环；随后增强执行真实性与可选信息，不等 HMM；本版不实施 |
+| F-029 | PT-NEXT-004 | HARD | core/optional 分层，覆盖先于收益，精确字段/PIT/历史版本/formula/order/hash；v2 晚间 20:00 与 v1 15:00 分版本 |
+| F-030 | PT-NEXT-004 | HARD | 两监督目标形成唯一动作价值政策；从当前 review 的 forward horizon、同股同资本两基线、连续现金/持仓与可回补路径 |
+| F-031 | PT-NEXT-004 | SCOPE | 2 固定 GBDT/1 联合政策/2 主比较；walk-forward/月度训练/成熟标签与 local final fit；个股实验/支持态、方向数量分离与显式 fallback |
+| F-032 | PT-NEXT-004/005 | HARD | 可选事件/HMM 验证增量与历史版本，不阻 core；有副作用多智能体 POST、自由文本、mock 不进入决策 authority |
+| F-033 | PT-NEXT-004 | HARD | 新模型/研究/正式建议只写 timing-owned 版本化路径；旧 L2/L4b-1/card/event 不改写，N0/既有模块零写入及零反向依赖 |
+| F-034 | PT-NEXT-004/005 | HARD | 验证闭环、时序/收益/执行真实性/隔离与支持态；代码完成、证据支持、上线状态分开；不新增平台门禁 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1024,24 +1090,24 @@ git diff --check
 | F-020 | threshold/effect/power/inference implementation、immutable receipt 与 hash-bound evidence summary | `backend/tests/position_timing/test_l2_inference.py`；`backend/tests/position_timing/test_api.py`；formal `learnability_receipt.json`；frontend target spec | L2_INFERENCE_AND_VISIBILITY_VERIFIED | none |
 | F-021 | frozen non-gating semantics；own registry delivery | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_l2_inference.py`；formal `learnability_receipt.json` and unchanged N0 SHA-256 | L2_NON_GATING_VERIFIED | none |
 | F-022 | §7 corrected reachable EXIT/SELL population/window/statistics/source/artifact contract；`backend/services/position_timing/minute_execution_pipeline.py` | `backend/tests/position_timing/test_l2_population.py`；`backend/tests/position_timing/test_minute_execution_pipeline.py`（12 项）；old count=2 bundle inspect；`EVID-L4B1-FIRST-AUDIT` retained as history；`EVID-L4B1-FORMAL` | L4B1_AUDIT_COMPLETED_INSUFFICIENT_DATA | none |
-| F-023 | 首发 8 API/one page/only one new `alerts.py`；后续唯一新文件为 offline `learnability_pipeline.py`，复用既有 evidence surface 且无 SSE/worker/runtime-model imports | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_isolation.py`；`backend/tests/position_timing/test_l2_model_specs.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_SCOPE_AND_L2_ISOLATION_VERIFIED | none |
+| F-023 | 首发 8 API/one page、块二新增 `alerts.py`；L2 v1 新增 offline `learnability_pipeline.py`，后续 L4b-1 另有 minute pipeline；v2 演进单列 F-028～F-034 | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_isolation.py`；`backend/tests/position_timing/test_l2_model_specs.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_SCOPE_AND_L2_ISOLATION_VERIFIED | none |
 | F-024 | card/scope/quote/claim/outcome typed reason and coverage states | `backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_alerts.py`；`backend/tests/position_timing/test_outcome_materialization.py` | FIRST_RELEASE_TYPED_FAILURES_VERIFIED | none |
 | F-025 | immutable card identities；outcome identities；L2 request/dataset/derived/contract/code/receipt identities | `backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_policy_snapshot.py`；formal `source_identity_receipt.json`/`manifest.json`；exact retry readback | FIRST_RELEASE_AND_L2_IDENTITY_VERIFIED | none |
 | F-026 | module-owned concentrated nox/catalog/F2 routing、L2 target tests and isolation | `python -m nox -s position_timing_first_release`；`backend/tests/position_timing/`；`backend/tests/position_timing/test_isolation.py`；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_advice_f2_redesign_20260903.md --tier F2` | FIRST_RELEASE_AND_L2_LOCAL_GATE_VERIFIED | PRODUCTION_RUNTIME_ACTIVATION_SEPARATE_APPROVED_BY_USER |
 | F-027 | `PositionTimingAnalysisScopeV1`、单一 PUT、既有页面复选框与 card-set scope identities | `backend/tests/position_timing/test_universe.py`；`backend/tests/position_timing/test_artifact_store.py`；`backend/tests/position_timing/test_api.py`；`backend/tests/position_timing/test_card_service.py`；`frontend/tests/position-timing/position-timing.spec.ts` | FIRST_RELEASE_VERIFIED | none |
-| F-028 | §2.2、§6.6、§9.6 priority and non-dependency contract | validation-receipt: F2 design validator；`EVID-HMM-RUNTIME-20260907` | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-029 | §6.6.2 exact feature vector/formula/source/PIT contract | validation-receipt: F2 design validator；`python scripts/analyze_factor_library.py --json`；§10.5 planned checks | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-030 | §6.6.3 two objective contracts | validation-receipt: F2 design validator；§6.2 historical exit baseline；§10.5 planned objective-isolation checks | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-031 | §6.6.1/§6.6.3 fixed GBDT and shadow boundary | validation-receipt: F2 design validator；§6.3 frozen GBDT identity；§10.5 planned no-search/L1-unchanged checks | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-032 | §6.6.2/§6.6.4 structured event and agent boundary | validation-receipt: F2 design validator；`backend/services/event_signal/time_semantics.py`；`backend/services/analysis_service.py` | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-033 | §6.6.1 immutable v2 ownership；§4.4 isolation matrix | validation-receipt: F2 design validator；§10.5 planned hash/read-only/reverse-import checks | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
-| F-034 | §10.5 validation contract；§12.3 production gates | validation-receipt: F2 design validator；`git diff --check` | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-028 | 设计 §2.2、§6.6、§9.6/7；代码未实现 | artifact: 本文件 §10.6 文档复核；`EVID-HMM-RUNTIME-20260907` | DESIGN_VERIFIED | PT_NEXT_004_005_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-029 | 设计 §6.6.2；代码未实现 | artifact: 本文件 §10.6；`EVID-EVENT-PIT-BASE`、`EVID-V2-SOURCE-NAMES`；§10.5 计划测试 | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-030 | 设计 §1.1、§6.6.1/5；代码未实现 | artifact: 本文件 §10.6 收益复核；§10.5 计划连续路径/资金守恒测试 | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-031 | 设计 §6.6.3/4；代码未实现 | artifact: 本文件 §10.6；`EVID-CPCV-BOUNDARY`；§10.5 计划前向/个股推断/API/UI 测试 | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-032 | 设计 §6.6.2/5；可选接入未实现 | artifact: 本文件 §10.6；`backend/services/event_signal/announcement_adapter.py`；`backend/services/analysis_service.py` | DESIGN_VERIFIED | PT_NEXT_004_005_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-033 | 设计 §4.4、§6.6.4；新版本接线未实现 | artifact: 本文件 §10.6；§10.5 计划历史 hash/零写入/反向依赖测试 | DESIGN_VERIFIED | PT_NEXT_004_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
+| F-034 | 设计 §10.5、§12.3；未来实现验证未执行 | artifact: 本文件 §10.6；F2 validator 与 diff check 结果见本次文档 PR | DESIGN_VERIFIED | PT_NEXT_004_005_IMPLEMENTATION_NOT_STARTED_APPROVED_BY_USER |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-1. **禁止简化交付**：首发适用的 L1、scope、L1a、prospective outcome、8 API、一个页面与集中验证均已实现；后续 L2 也按冻结 population、两模型、CPCV、推断、成本与 registry 契约完整执行，没有用缩小人口、单模型或 mock-only receipt 冒充完成。`PT-NEXT-004` 明确是设计闭合、实现未启动，不用文档冒充代码、训练或模型；L3、分钟新信号和外部通知仍保持批准的后续/范围外边界。
-2. **禁止静默错误**：PIT、source/hash、scope、报价 freshness/future-skew、position/intent drift、方向性不可交易、outcome pending/missing/unavailable 和 L2 feature/source/identity 缺口均为 typed 状态；首个 ranking 覆盖失败没有降级填零，GET 不追加事件，失败扫描不推进成功水位。
-3. **禁止改变业务逻辑**：唯一 `LEGACY_PORTFOLIO` authority、持仓强制覆盖、自选显式 opt-in、共享 guard 纯实现、逐腿成本、T+1 卡片单日有效和 outcome 最多五日终值顺延保持分离；HMM/Selection 不决定 L1 方向或 universe，现有 L2 与未来 v2 都不导出 runtime weight/order。v2 shadow 不能改 L1/L1a。
-4. **禁止私增门禁审批**：没有引入样本/MDE、最低金额、HMM/Selection、券商核验或人工审批阻断；scope opt-in 是用户分析选择，不是质量准入。L2 已在 prospective outcome 为 0 时直接执行并如实结束；L4b-1 也在 eligible action-card 为 0 时直接产出 `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS` receipt。`PT-NEXT-004` 不等待 HMM，typed dependency/data failure 只结束相应离线 run，不阻塞 L1/L1a、PR 或发布；L4b-2 范围外也不构成首发门禁。
+1. **禁止简化交付**：已完成首发、L2 v1 与 L4b-1 的历史事实/receipt 保留；本轮只交付蓝图，不把计划测试当已通过、不把 2 张 HOLD/0 成熟结果当收益证据。PT-NEXT-004/005 明确未实现；未来只有总体研究摘要而没有个股推断不能称第一块完成。代码交付、研究支持与运行激活分开。
+2. **禁止静默错误**：保留 v1 typed PIT/source/scope/quote/outcome 语义；新设计追加历史可见版本、晚间 cutoff、forward-label 可用时间、no-fill 与 unknown、模型失败 fallback 的明确区分。CPCV 不冒充历史部署收益，未预算的方向不冒充成本后可执行建议。
+3. **禁止改变业务逻辑**：按用户本轮授权把评审结论同步到唯一蓝图：日频模型闭环、同股净超额目标、core-first、前向训练、连续回补和本地推断；不修改共享 defaults、旧 v1 卡/receipt 或既有模块。新版本允许人工模型建议而不允许自动交易；支持态仅影响下一未签发卡，不改当日承诺。
+4. **禁止私增门禁审批**：无样本/MDE、最低金额、HMM/事件、券商核验、sealed holdout 或人工审批阻断。因果/数量/身份错误只阻止对应无效计算或提醒；收益支持控制证据措辞与正式模型政策，不阻断研究、实验分析和 L1 发布。只分两个后续实施块，不新增平台或部署审批链；L4b-2 仍范围外。
 
-结论：蓝图仍是唯一 position-timing 设计基线；首发已经合入并完成既有运行态验收，`PT-NEXT-002` 与 `PT-NEXT-003` 的独立离线审计实现和 immutable evidence 也已完成，均没有产生可部署模型或运行 policy。L4b-1 因无 eligible prospective action-card 而结束为 typed insufficient-data。`PT-NEXT-004` 已被设计为下一优先任务：不等待 HMM，以紧凑日频特征分别研究退出和入场，并保持 shadow/隔离；本次仅合入设计，implementation、training、artifact、dependency、DB 与 runtime 均未启动。`production_ddl_gate=noop`、`production_dml_gate=noop`、`production_dependency_gate=noop`；L4b-2 仍保持范围外。
+结论：首发规则能力已上线，L2 v1 无入选模型、L4b-1 无 eligible prospective action-card；目前尚无个股模型 alpha 的已验证运行功能。下一块 PT-NEXT-004 实现日频训练到个股建议和评价完整闭环，PT-NEXT-005 强化执行真实性及可选信息增量；不等 HMM、不做模型平台、不承诺单次研究必有正收益。本次仅交付 v2.5 蓝图，后续 implementation/training/artifact/registry/dependency/DB/runtime 未启动。production DDL/DML/dependency 与运行激活均 noop；最终合入与 root 同步以文档 PR 实际状态报告。
