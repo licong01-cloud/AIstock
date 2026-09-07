@@ -77,6 +77,7 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 BASELINE_ARM_ID = "BASELINE_ALL_TAKE"
 CAUSAL_BUNDLE_SCHEMA = "advisory_causal_admission_bundle_v1"
+CAUSAL_ADMISSION_COMPARISON_VARIABLE = "STATIC_VS_EXPANDING20D_CAUSAL_ADMISSION"
 RESULT_MEMBERS = frozenset(
     {
         "source_preflight.json",
@@ -852,10 +853,11 @@ def inspect_causal_admission_bundle(bundle_path: str | Path) -> dict[str, Any]:
         or receipt.next_task != summary.get("next_task")
         or summary.get("summary_sha256")
         != canonical_json_sha256({key: value for key, value in summary.items() if key != "summary_sha256"})
-        or len(records) != len(CAUSAL_ADMISSION_ARM_IDS)
-        or {item.unique_variable for item in records} != set(CAUSAL_ADMISSION_ARM_IDS)
-        or sum(item.evaluated_trial_count for item in records) != receipt.evaluated_trial_count
-        or sum(item.selected_trial_count for item in records) != receipt.selected_trial_count
+        or len(records) != 1
+        or records[0].unique_variable != CAUSAL_ADMISSION_COMPARISON_VARIABLE
+        or records[0].planned_trial_count != request.planned_trial_count
+        or records[0].evaluated_trial_count != receipt.evaluated_trial_count
+        or records[0].selected_trial_count != receipt.selected_trial_count
         or any(item.decision_use != DecisionUse.NAVIGATION_ONLY for item in records)
         or any(item.objective_contract != ObjectiveContract.RISK_MANAGED_ADVISORY for item in records)
         or int(resource.get("peak_rss_bytes") or 0) > request.resource_max_rss_bytes
@@ -987,50 +989,46 @@ def _build_registry_records(
             ("causal_admission_summary", "frontier_summary.json"),
         )
     )
-    records = []
-    for arm_id in CAUSAL_ADMISSION_ARM_IDS:
-        windows = [
+    windows = [
+        ConsumedWindowV1(
+            window_id="CAUSAL_ADMISSION_V2_1_INNER",
+            dataset_identity=request.dataset_identity,
+            start_date=request.inner_start,
+            end_date=request.inner_end,
+        )
+    ]
+    if summary["inner_selected_arm_id"] is not None:
+        windows.append(
             ConsumedWindowV1(
-                window_id="CAUSAL_ADMISSION_V2_1_INNER",
+                window_id="CAUSAL_ADMISSION_V2_1_OUTER",
                 dataset_identity=request.dataset_identity,
-                start_date=request.inner_start,
-                end_date=request.inner_end,
-            )
-        ]
-        if summary["inner_selected_arm_id"] == arm_id:
-            windows.append(
-                ConsumedWindowV1(
-                    window_id="CAUSAL_ADMISSION_V2_1_OUTER",
-                    dataset_identity=request.dataset_identity,
-                    start_date=request.outer_start,
-                    end_date=request.outer_end,
-                )
-            )
-        records.append(
-            build_trial_record(
-                experiment_id=CAUSAL_ADMISSION_EXPERIMENT_ID,
-                attempt_id=request.request_id,
-                research_stage=CAUSAL_ADMISSION_STAGE,
-                study_type=ResearchStudyType.LEARNABILITY_AUDIT,
-                hypothesis_family_id=CAUSAL_ADMISSION_FAMILY_ID,
-                parent_lineage=("ADVISORY-N3-AUX-SCORE-HMM-ADMISSION-V1",),
-                unique_variable=arm_id,
-                objective_contract=ObjectiveContract.RISK_MANAGED_ADVISORY,
-                dataset_identity=request.dataset_identity,
-                schema_identity=CAUSAL_ADMISSION_FEATURE_SCHEMA_HASH,
-                policy_identity=request.policy_identity,
-                planned_trial_count=1,
-                generated_trial_count=1,
-                evaluated_trial_count=1,
-                selected_trial_count=int(summary["selected_arm_id"] == arm_id),
-                consumed_windows=tuple(windows),
-                result_class=ResearchResultClass.EXPLORATORY,
-                decision_use=DecisionUse.NAVIGATION_ONLY,
-                evidence_refs=refs,
-                recorded_at=receipt.created_at,
+                start_date=request.outer_start,
+                end_date=request.outer_end,
             )
         )
-    return tuple(records)
+    record = build_trial_record(
+        experiment_id=CAUSAL_ADMISSION_EXPERIMENT_ID,
+        attempt_id=request.request_id,
+        research_stage=CAUSAL_ADMISSION_STAGE,
+        study_type=ResearchStudyType.LEARNABILITY_AUDIT,
+        hypothesis_family_id=CAUSAL_ADMISSION_FAMILY_ID,
+        parent_lineage=("ADVISORY-N3-AUX-SCORE-HMM-ADMISSION-V1",),
+        unique_variable=CAUSAL_ADMISSION_COMPARISON_VARIABLE,
+        objective_contract=ObjectiveContract.RISK_MANAGED_ADVISORY,
+        dataset_identity=request.dataset_identity,
+        schema_identity=CAUSAL_ADMISSION_FEATURE_SCHEMA_HASH,
+        policy_identity=request.policy_identity,
+        planned_trial_count=request.planned_trial_count,
+        generated_trial_count=request.planned_trial_count,
+        evaluated_trial_count=summary["evaluated_trial_count"],
+        selected_trial_count=summary["selected_trial_count"],
+        consumed_windows=tuple(windows),
+        result_class=ResearchResultClass.EXPLORATORY,
+        decision_use=DecisionUse.NAVIGATION_ONLY,
+        evidence_refs=refs,
+        recorded_at=receipt.created_at,
+    )
+    return (record,)
 
 
 def _deliver_bundle(*, request: FrozenAdvisoryCausalAdmissionRequestV2, bundle_path: Path) -> dict[str, Any]:
