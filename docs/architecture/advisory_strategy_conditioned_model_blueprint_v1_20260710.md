@@ -1449,7 +1449,6 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-238 | 新 revision、研究族累计、一次选点、修复/重试身份及 objective/decision-use 一致 |
 | F-239 | PIT、maturity、normal missing、holdout 隔离与三级证据边界 |
 | F-240 | 最小实现，无 HMM 产品重复建设，无 DB/API/UI/runtime/DDL/重启 |
-
 | F-241 | 公共stock/PIT预测、显式包adapter与独立动作层分离；不冒充跨包通用已实现 |
 | F-242 | 候选扩展归QE/Selection，同预算同policy、多源去重/provenance；无静默扩池补位 |
 | F-243 | 市场—板块—个股分层与可选HMM可归因；禁止重复暴露和独立分位数相加 |
