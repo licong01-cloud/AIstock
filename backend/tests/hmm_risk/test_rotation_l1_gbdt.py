@@ -312,6 +312,7 @@ def test_cli_child_failure_persists_typed_receipt(tmp_path) -> None:
     )
     failure = json.loads((tmp_path / "battery.failure.json").read_text(encoding="utf-8"))
     assert failure["reason_code"] == subject.REASON_INPUT
+    assert failure["contract_version"] == subject.CONTRACT_VERSION
     assert failure["fit_success_claimed"] is False
     assert failure["tail_accessed"] is False
     body = {key: value for key, value in failure.items() if key != "failure_sha256"}
@@ -362,6 +363,21 @@ def test_parent_rejects_tampered_child_failure_receipt(tmp_path) -> None:
     assert caught.value.stage == "fresh_process_readback"
 
 
+def test_parent_rejects_rehashed_failure_from_stale_contract(tmp_path) -> None:
+    path = tmp_path / "fresh_process_1.failure.json"
+    failure = cli._failure(RuntimeError("original"), stage="fresh_process")
+    failure["contract_version"] = "hmm_risk_rotation_l1_g2a_v1_2"
+    body = {key: value for key, value in failure.items() if key != "failure_sha256"}
+    failure["failure_sha256"] = subject.canonical_sha256(body)
+    cli._write_once(path, failure)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        cli._run_child([sys.executable, "-c", "raise SystemExit(2)"], path)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert caught.value.stage == "fresh_process_readback"
+
+
 class _FakeBooster:
     def model_to_string(self) -> str:
         return "fixed-model"
@@ -388,6 +404,60 @@ class _FakeEstimator:
             result[:, -1] = self._mean
             return result
         return score
+
+
+def _leaf_distribution(*, sparse_tree_count: int, sparse_date_count: int) -> tuple[object, pd.DataFrame, pd.Index]:
+    dates = pd.Index(pd.bdate_range("2024-01-02", periods=504).date, name="trade_date")
+    repeated_dates = dates.repeat(subject.CANONICAL_SECTOR_COUNT)
+    features = pd.DataFrame({"x": np.zeros(len(repeated_dates))}, index=repeated_dates)
+    sector_offsets = np.tile(np.arange(subject.CANONICAL_SECTOR_COUNT), len(dates))
+    base = np.tile((sector_offsets % 7).reshape(-1, 1), (1, 240))
+    day_offsets = np.repeat(np.arange(len(dates)), subject.CANONICAL_SECTOR_COUNT)
+    for tree_index in range(sparse_tree_count):
+        sparse_leaf = (day_offsets < sparse_date_count) & (sector_offsets < 18)
+        base[:, tree_index] = sector_offsets % 6
+        base[sparse_leaf, tree_index] = 6
+
+    class LeafEstimator:
+        def predict(self, _features: pd.DataFrame, pred_leaf: bool = False) -> np.ndarray:
+            assert pred_leaf
+            return base
+
+    return LeafEstimator(), features, repeated_dates
+
+
+def test_leaf_date_coverage_accepts_isolated_under_20_day_leaf_within_one_percent_budget() -> None:
+    estimator, features, dates = _leaf_distribution(sparse_tree_count=1, sparse_date_count=18)
+    receipt = subject._leaf_date_coverage(estimator, features, dates, fit_identity="test-fit")
+
+    assert receipt["minimum"] == 18
+    assert receipt["leaf_count"] == 1680
+    assert receipt["below_target_leaf_count"] == 1
+    assert receipt["below_target_leaf_fraction"] == pytest.approx(1 / 1680)
+    assert receipt["hard_floor_violating_leaf_ids"] == []
+    assert receipt["contract_passed"] is True
+
+
+def test_leaf_date_coverage_rejects_more_than_one_percent_under_20_day_leaves() -> None:
+    estimator, features, dates = _leaf_distribution(sparse_tree_count=20, sparse_date_count=18)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject._leaf_date_coverage(estimator, features, dates, fit_identity="test-fit")
+
+    assert caught.value.reason_code == subject.REASON_LEAF
+    assert caught.value.evidence["summary"]["below_target_leaf_count"] == 20
+    assert caught.value.evidence["summary"]["contract_passed"] is False
+
+
+def test_leaf_date_coverage_rejects_any_leaf_below_derived_ten_day_floor() -> None:
+    estimator, features, dates = _leaf_distribution(sparse_tree_count=1, sparse_date_count=9)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject._leaf_date_coverage(estimator, features, dates, fit_identity="test-fit")
+
+    assert caught.value.reason_code == subject.REASON_LEAF
+    assert caught.value.evidence["summary"]["hard_floor_violating_leaf_ids"] == [[0, 6, 9]]
+    assert caught.value.evidence["summary"]["contract_passed"] is False
 
 
 def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> None:
@@ -419,6 +489,34 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
     assert acceptance["research_surface_status"] == "AVAILABLE_EXPERIMENTAL"
     assert acceptance["forward_power_status"] == "INSUFFICIENT"
     assert acceptance["tail_accessed"] is False
+
+
+def test_close_processes_rejects_rehashed_stale_leaf_contract() -> None:
+    first = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    second = subject.run_gbdt_process(
+        _bundle(),
+        battery_report=_battery_report(),
+        process_index=2,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    for child in (first, second):
+        leaf = child["reproducibility_payload"]["folds"][0]["leaf_date_coverage"]
+        leaf.pop("hard_floor_distinct_dates")
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        body = {key: value for key, value in child.items() if key != "report_sha256"}
+        child["report_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.close_processes(first, second)
+
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
 
 
 def test_gbdt_process_fails_closed_on_leaf_date_collapse() -> None:

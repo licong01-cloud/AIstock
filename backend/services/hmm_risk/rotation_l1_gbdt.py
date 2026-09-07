@@ -1,4 +1,4 @@
-"""Approved G2-A v1.2 development executor for L1 sector rotation.
+"""Approved G2-A v1.3 development executor for L1 sector rotation.
 
 This module owns the model-facing, development-only contract. It consumes an
 already materialised causal panel and fits the approved target-free market
@@ -34,7 +34,7 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
 from backend.services.hmm_risk.state_model_set import canonical_sha256
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 
-CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_2"
+CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_3"
 INPUT_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_bundle_v1"
 PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v1"
 ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v1"
@@ -62,7 +62,10 @@ MINIMUM_METRIC_SECTORS = 28
 CANONICAL_SECTOR_COUNT = 31
 MINIMUM_VALID_CONTINUOUS_FEATURES = 7
 MINIMUM_DEVELOPMENT_COVERAGE = 0.90
-MINIMUM_LEAF_DISTINCT_DATES = 20
+MINIMUM_LEAF_ROW_COUNT = 310
+MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR = math.ceil(MINIMUM_LEAF_ROW_COUNT / CANONICAL_SECTOR_COUNT)
+LEAF_DISTINCT_DATE_TARGET = 20
+MAXIMUM_BELOW_TARGET_LEAF_FRACTION = 0.01
 BINDING_MBE_IC = 0.02
 STATE_TIE_EPSILON = 1e-12
 SINGLE_THREAD_ENVIRONMENT = (
@@ -1275,7 +1278,7 @@ def _lightgbm_profile() -> dict[str, Any]:
         "learning_rate": 0.03,
         "n_estimators": 240,
         "subsample_for_bin": 200000,
-        "min_child_samples": 310,
+        "min_child_samples": MINIMUM_LEAF_ROW_COUNT,
         "min_child_weight": 0.001,
         "min_split_gain": 0.0,
         "reg_alpha": 1.0,
@@ -1310,26 +1313,65 @@ def _leaf_date_coverage(
     leaves = np.asarray(estimator.predict(features, pred_leaf=True))
     if leaves.ndim == 1:
         leaves = leaves.reshape(-1, 1)
+    if (
+        leaves.ndim != 2
+        or leaves.shape[0] != len(features)
+        or leaves.shape[1] == 0
+        or len(dates) != len(features)
+        or not np.isfinite(leaves).all()
+        or np.any(leaves < 0)
+        or not np.equal(leaves, np.floor(leaves)).all()
+    ):
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf identity matrix is invalid",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            leaf_shape=list(leaves.shape),
+            feature_rows=len(features),
+            date_rows=len(dates),
+        )
     observations: list[tuple[int, int, int]] = []
     date_array = np.asarray(dates, dtype=object)
     for tree_index in range(leaves.shape[1]):
         for leaf_id in sorted(set(int(value) for value in leaves[:, tree_index])):
             distinct = len(set(date_array[leaves[:, tree_index] == leaf_id]))
             observations.append((tree_index, leaf_id, distinct))
-    counts = np.asarray([item[2] for item in observations], dtype=np.float64)
-    violating = [[tree, leaf, count] for tree, leaf, count in observations if count < MINIMUM_LEAF_DISTINCT_DATES]
-    body = {
-        "minimum": int(counts.min()) if len(counts) else 0,
-        "p05": float(np.quantile(counts, 0.05)) if len(counts) else 0.0,
-        "median": float(np.median(counts)) if len(counts) else 0.0,
-        "leaf_count": len(observations),
-        "violating_leaf_ids": violating,
-        "distribution_sha256": canonical_sha256(observations),
-    }
-    if violating:
+    if not observations:
         raise _fail(
             REASON_LEAF,
-            "GBDT leaf distinct-date coverage failed",
+            "GBDT leaf coverage is empty",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+        )
+    counts = np.asarray([item[2] for item in observations], dtype=np.float64)
+    below_target = [[tree, leaf, count] for tree, leaf, count in observations if count < LEAF_DISTINCT_DATE_TARGET]
+    below_hard_floor = [
+        [tree, leaf, count] for tree, leaf, count in observations if count < MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+    ]
+    below_target_fraction = len(below_target) / len(observations)
+    distribution_budget_passed = len(below_target) * 100 <= len(observations)
+    contract_passed = not below_hard_floor and distribution_budget_passed
+    body = {
+        "hard_floor_distinct_dates": MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR,
+        "target_distinct_dates": LEAF_DISTINCT_DATE_TARGET,
+        "maximum_below_target_leaf_fraction": MAXIMUM_BELOW_TARGET_LEAF_FRACTION,
+        "minimum": int(counts.min()),
+        "p01": float(np.quantile(counts, 0.01)),
+        "p05": float(np.quantile(counts, 0.05)),
+        "median": float(np.median(counts)),
+        "leaf_count": len(observations),
+        "below_target_leaf_count": len(below_target),
+        "below_target_leaf_fraction": below_target_fraction,
+        "below_target_leaf_ids": below_target,
+        "hard_floor_violating_leaf_ids": below_hard_floor,
+        "contract_passed": contract_passed,
+        "distribution_sha256": canonical_sha256(observations),
+    }
+    if not contract_passed:
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf distinct-date distribution coverage failed",
             stage="leaf_date_coverage",
             fit_identity=fit_identity,
             summary=body,
@@ -1646,6 +1688,90 @@ def run_gbdt_process(
         raise _fit_progress_error(exc, progress) from exc
 
 
+def _valid_leaf_coverage_receipt(value: Any) -> bool:
+    expected_keys = {
+        "hard_floor_distinct_dates",
+        "target_distinct_dates",
+        "maximum_below_target_leaf_fraction",
+        "minimum",
+        "p01",
+        "p05",
+        "median",
+        "leaf_count",
+        "below_target_leaf_count",
+        "below_target_leaf_fraction",
+        "below_target_leaf_ids",
+        "hard_floor_violating_leaf_ids",
+        "contract_passed",
+        "distribution_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    leaf_count = value.get("leaf_count")
+    below_count = value.get("below_target_leaf_count")
+    below_fraction = value.get("below_target_leaf_fraction")
+    below_ids = value.get("below_target_leaf_ids")
+    hard_floor_ids = value.get("hard_floor_violating_leaf_ids")
+    summary_values = [value.get(name) for name in ("minimum", "p01", "p05", "median")]
+    if (
+        value.get("hard_floor_distinct_dates") != MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+        or value.get("target_distinct_dates") != LEAF_DISTINCT_DATE_TARGET
+        or value.get("maximum_below_target_leaf_fraction") != MAXIMUM_BELOW_TARGET_LEAF_FRACTION
+        or not isinstance(leaf_count, int)
+        or isinstance(leaf_count, bool)
+        or leaf_count <= 0
+        or not isinstance(below_count, int)
+        or isinstance(below_count, bool)
+        or not 0 <= below_count <= leaf_count
+        or not isinstance(below_ids, list)
+        or len(below_ids) != below_count
+        or not isinstance(hard_floor_ids, list)
+        or hard_floor_ids
+        or value.get("contract_passed") is not True
+        or not isinstance(below_fraction, (int, float))
+        or isinstance(below_fraction, bool)
+        or not math.isfinite(float(below_fraction))
+        or not all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(float(item))
+            for item in summary_values
+        )
+        or not (
+            MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+            <= float(summary_values[0])
+            <= float(summary_values[1])
+            <= float(summary_values[2])
+            <= float(summary_values[3])
+        )
+        or not math.isclose(
+            float(below_fraction),
+            below_count / leaf_count,
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )
+        or below_count * 100 > leaf_count
+        or not isinstance(value.get("distribution_sha256"), str)
+        or len(value["distribution_sha256"]) != 64
+        or any(character not in "0123456789abcdef" for character in value["distribution_sha256"])
+    ):
+        return False
+    for item in below_ids:
+        if (
+            not isinstance(item, list)
+            or len(item) != 3
+            or not all(isinstance(part, int) and not isinstance(part, bool) for part in item)
+            or item[0] < 0
+            or item[1] < 0
+            or not MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR <= item[2] < LEAF_DISTINCT_DATE_TARGET
+        ):
+            return False
+    minimum = int(summary_values[0])
+    if (not below_ids and minimum < LEAF_DISTINCT_DATE_TARGET) or (
+        below_ids and minimum != min(item[2] for item in below_ids)
+    ):
+        return False
+    return True
+
+
 def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
     expected_keys = {
         "schema_version",
@@ -1658,11 +1784,15 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
     body = {key: value for key, value in child.items() if key != "report_sha256"}
     payload = child.get("reproducibility_payload")
     model_text = child.get("final_model_text")
+    folds = payload.get("folds") if isinstance(payload, Mapping) else None
+    final_model = payload.get("final_model") if isinstance(payload, Mapping) else None
     if (
         set(child) != expected_keys
         or child.get("schema_version") != PROCESS_SCHEMA_VERSION
         or child.get("process_index") != expected_index
         or not isinstance(payload, Mapping)
+        or payload.get("contract_version") != CONTRACT_VERSION
+        or payload.get("profile") != _lightgbm_profile()
         or child.get("reproducibility_payload_sha256") != canonical_sha256(payload)
         or child.get("report_sha256") != canonical_sha256(body)
         or not isinstance(model_text, str)
@@ -1687,8 +1817,15 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
         or not isinstance(payload.get("tail_access_gate"), Mapping)
         or not isinstance(payload["tail_access_gate"].get("passed"), bool)
         or payload["tail_access_gate"].get("binding_mbe_rank_ic") != BINDING_MBE_IC
-        or not isinstance(payload.get("final_model"), Mapping)
-        or payload["final_model"].get("model_sha256") != canonical_sha256(model_text)
+        or not isinstance(folds, list)
+        or len(folds) != len(FOLDS)
+        or any(
+            not isinstance(fold, Mapping) or not _valid_leaf_coverage_receipt(fold.get("leaf_date_coverage"))
+            for fold in folds
+        )
+        or not isinstance(final_model, Mapping)
+        or final_model.get("model_sha256") != canonical_sha256(model_text)
+        or not _valid_leaf_coverage_receipt(final_model.get("leaf_date_coverage"))
     ):
         raise _fail(REASON_REPRODUCIBILITY, "GBDT child envelope or receipt differs", stage="closure")
     return payload
