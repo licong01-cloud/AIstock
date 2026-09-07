@@ -83,10 +83,12 @@ test("registered QE run is visible before dispatch and logs require an explicit 
   expect(logReads).toBe(0);
 
   await page.getByText(experimentId).first().click({ timeout: 30_000 });
-  await page.getByRole("button", { name: "查看日志" }).click({ timeout: 30_000 });
+  const viewLogsButton = page.getByRole("button", { name: "查看日志" });
+  await expect(viewLogsButton).toBeVisible();
+  terminal = true;
+  await viewLogsButton.click({ timeout: 30_000 });
   await expect(page.getByText("registered terminal log").first()).toBeVisible();
   expect(logReads).toBe(1);
-  terminal = true;
 
   await page.getByText("自动刷新").click({ timeout: 30_000 });
   const intervalValues = await page.locator('[data-testid="qe-refresh-interval"] option').evaluateAll(options =>
