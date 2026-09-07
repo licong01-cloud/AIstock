@@ -202,6 +202,42 @@ def test_qe_template_create_rejects_future_stock_pool_before_http(experiment_mcp
     assert called is False
 
 
+def test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["path"] = request.url.path
+        captured["payload"] = json.loads(request.content.decode("utf-8"))
+        return {"status": "success", "task_id": "qe_cmp"}
+
+    _swap(
+        experiment_mcp,
+        experiment_mcp.LoopbackApiClient(
+            base_url="http://127.0.0.1/api/v1",
+            env_name="test",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = experiment_mcp.qe_universe_comparison_task_create(
+        task_name="pool comparison",
+        pool_ids=["csi300", "csi500"],
+        factor_keys=["factor_a||catalog"],
+        model_id="model_lgbm_v1",
+        node_id="wsl2-5080",
+        random_seed=2718,
+    )
+
+    assert result["task_id"] == "qe_cmp"
+    assert captured["path"].endswith("/quantevolver/evolution/universe-comparison-tasks")
+    payload = captured["payload"]
+    assert payload["pool_ids"] == ["csi300", "csi500"]
+    assert payload["base_loop"]["runtime_flags"]["random_seed"] == 2718
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "provider_uri" not in serialized
+    assert "sha256" not in serialized
+    assert "dataset_binding" not in serialized
+
+
 def test_qe_template_delete_requires_confirm_before_http(experiment_mcp):
     called = False
 

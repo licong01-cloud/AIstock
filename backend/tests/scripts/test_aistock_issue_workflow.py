@@ -90,31 +90,25 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_runtime_catalog(root: Path) -> Path:
-    for script_name in (
-        "scripts/backfill_tushare_daily_basic_fields.py",
-        "scripts/build_core_index_membership_authority.py",
-        "scripts/ingest_tushare_daily_basic.py",
-        "scripts/prepare_core_index_membership_pit.py",
-        "scripts/qlib_authoritative_bin_export.py",
-        "scripts/seed_dataset_refresh_audit.py",
-    ):
-        script_path = root / script_name
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text("# one-shot operator fixture\n", encoding="utf-8")
+    authority_path = (
+        Path(workflow.__file__).resolve().parent.parent
+        / "docs"
+        / "standards"
+        / "aistock_runtime_targets_v1.yaml"
+    )
+    authority = yaml.safe_load(authority_path.read_text(encoding="utf-8"))
+    non_runtime_source_paths = tuple(authority["non_runtime_source_paths"])
+    for source_name in non_runtime_source_paths:
+        source_path = root / source_name
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text("# offline source fixture\n", encoding="utf-8")
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
-                "non_runtime_source_paths": [
-                    "scripts/backfill_tushare_daily_basic_fields.py",
-                    "scripts/build_core_index_membership_authority.py",
-                    "scripts/ingest_tushare_daily_basic.py",
-                    "scripts/prepare_core_index_membership_pit.py",
-                    "scripts/qlib_authoritative_bin_export.py",
-                    "scripts/seed_dataset_refresh_audit.py",
-                ],
+                "non_runtime_source_paths": list(non_runtime_source_paths),
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
@@ -1525,10 +1519,6 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/bug_registry_metadata_check.py"],
         root=isolated_workflow_root,
     )
-    retired_cross_tool_dispatcher = workflow._classify_runtime_impact(
-        ["scripts/cross_tool_review_dispatch.py"],
-        root=isolated_workflow_root,
-    )
     backend_test = workflow._classify_runtime_impact(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
@@ -1645,8 +1635,6 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert allocator_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
-    assert retired_cross_tool_dispatcher["runtime_impact"] == "none"
-    assert retired_cross_tool_dispatcher["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
     assert score_weighted_asset["runtime_impact"] == "backend"
     assert score_weighted_asset["target_ids"] == ["backend-main"]
@@ -1991,7 +1979,7 @@ def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_
     assert payload["backend_restart"]["required"] is False
 
 
-def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
+def test_runtime_catalog_non_runtime_paths_are_exact_and_cannot_override_exact_runtime_sources(
     isolated_workflow_root: Path,
 ) -> None:
     catalog_path = _write_runtime_catalog(isolated_workflow_root)
@@ -2002,10 +1990,22 @@ def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
     with pytest.raises(workflow.WorkflowError, match="exact paths without wildcards"):
         workflow._load_runtime_target_catalog(isolated_workflow_root)
 
-    catalog["non_runtime_source_paths"] = ["backend/services/example.py"]
+    catalog["non_runtime_source_paths"] = ["backend/services/hmm_risk/rotation_l1_gbdt.py"]
     catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    loaded = workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert loaded["non_runtime_source_paths"] == ["backend/services/hmm_risk/rotation_l1_gbdt.py"]
+    assert workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/rotation_l1_gbdt.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "none"
+    assert workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "backend"
 
-    with pytest.raises(workflow.WorkflowError, match="overlaps runtime targets"):
+    catalog["non_runtime_source_paths"] = ["scripts/score_weighted_strategy.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="overlaps an exact runtime source"):
         workflow._load_runtime_target_catalog(isolated_workflow_root)
 
 
@@ -2031,7 +2031,7 @@ def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_
     non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
     catalog["non_runtime_source_paths"] = ["tools/offline.py"]
     catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
-    with pytest.raises(workflow.WorkflowError, match="Python or PowerShell operator scripts under scripts"):
+    with pytest.raises(workflow.WorkflowError, match="exact Python or PowerShell sources"):
         workflow._load_runtime_target_catalog(isolated_workflow_root)
 
     powershell_operator = isolated_workflow_root / "scripts" / "configure_ci_runner.ps1"
@@ -2159,6 +2159,50 @@ def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
     assert contract["blocking"] == []
     assert nearby_unregistered["runtime_impact"] == "backend"
     assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
+def test_bug_1383_rotation_g2a_offline_sources_use_catalog_and_preserve_fail_closed_neighbors() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/rotation_l1_gbdt.py",
+        "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+        "scripts/hmm_risk/run_rotation_l1_g2a.py",
+        "tests/aistock_validation/bugs/20260906_BUG-1382-g2-a-partial-fit-failure-receipt-omits-exact-fit-progress.json",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+    neighboring_script = workflow._classify_runtime_impact(
+        ["scripts/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+    assert neighboring_script["runtime_impact"] == "unknown"
+    assert neighboring_script["target_ids"] == []
 
 
 def test_bug_1331_offline_advisory_generator_runtime_contract_is_none_and_exact() -> None:
@@ -4938,12 +4982,16 @@ _BUG_993_BUG989_CHANGED_FILES = [
 
 
 def _write_bug993_runtime_catalog(root: Path) -> Path:
+    exporter = root / "scripts" / "export_suspend_d_candidate.py"
+    exporter.parent.mkdir(parents=True, exist_ok=True)
+    exporter.write_text("# offline exporter fixture\n", encoding="utf-8")
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
+                "non_runtime_source_paths": ["scripts/export_suspend_d_candidate.py"],
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
@@ -6063,6 +6111,7 @@ def test_close_sync_uses_merged_commit_files_instead_of_unmodified_allowed_scope
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
     merge_commit = "a" * 40
     issue = _write_json(
         isolated_workflow_root / "offline-bug.json",
@@ -10648,6 +10697,41 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     assert "do not rerun broad suites" in digest["validation_loop_budget"]["rule"]
     assert resume["worktree"] is None
     assert "run --bug-id BUG-199 --mode plan --create-worktree" in resume["next_command"]
+
+
+def test_resume_runtime_preflight_surfaces_unknown_actual_diff_without_adding_stop_gate(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    (isolated_workflow_root / ".git").mkdir()
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(
+            allowed_write_scope=["scripts/hmm_risk/unregistered_runtime_candidate.py"],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+    )
+
+    def fake_run(command: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        stdout = "scripts/hmm_risk/unregistered_runtime_candidate.py\n" if "origin/main...HEAD" in command else ""
+        return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    preflight = workflow._build_resume_runtime_preflight(
+        isolated_workflow_root,
+        {"source_bug_json": str(issue)},
+    )
+
+    assert preflight["advisory_only"] is True
+    assert preflight["status"] == "attention_required"
+    assert preflight["runtime_impact"] == "unknown"
+    assert preflight["target_ids"] == []
+    assert preflight["changed_files_count"] == 1
+    assert any("cannot downgrade inferred runtime impact" in item for item in preflight["blocking"])
 
 
 def test_run_plan_without_create_worktree_records_planned_not_actual_worktree(

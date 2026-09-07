@@ -66,6 +66,14 @@ from ..services.quantevolver.node_execution import (
     resolve_default_qe_node_id,
 )
 from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
+from ..services.quantevolver.qe_active_dataset_profile import (
+    QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    QEActiveDatasetProfileError,
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
+    reject_client_dataset_internals,
+)
+from ..services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -203,6 +211,11 @@ class GenerateConfigRequest(BaseModel):
     data_split: Optional[Dict[str, str]] = None
     custom_params: Optional[Dict[str, Any]] = None
     experiment_name: Optional[str] = None
+    node_id: Optional[str] = Field(None, description="QE execution node; blank uses the configured default")
+    universe_selection: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Human-readable QE universe selection: stock_universe, single_index, or index_union",
+    )
     dispatch_mode: Optional[str] = Field(None, description="调度模式: normal / evolution")
     evolution_params: Optional[Dict[str, Any]] = Field(None, description="演进参数（dispatch_mode=evolution时）")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
@@ -279,6 +292,15 @@ def _single_experiment_start_state(exp_record: Mapping[str, Any]) -> tuple[bool,
 
 def _single_experiment_editable_payload(exp_record: Mapping[str, Any]) -> Dict[str, Any]:
     custom_params = _parse_json_object(exp_record.get("custom_params"))
+    binding = _parse_json_object(custom_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM))
+    selection = _parse_json_object(binding.get("selection_pins"))
+    for key in (
+        QE_DIRECT_V2_DATASET_BINDING_PARAM,
+        QE_RUN_STOCK_POOL_CONTENT_PARAM,
+        QE_RUN_COVERAGE_RECEIPT_PARAM,
+        QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    ):
+        custom_params.pop(key, None)
     startable, reason = _single_experiment_start_state(exp_record)
     alpha_mode = exp_record.get("alpha_mode") or "single"
     editable = startable and alpha_mode == "single"
@@ -295,6 +317,14 @@ def _single_experiment_editable_payload(exp_record: Mapping[str, Any]) -> Dict[s
         "strategy_id": exp_record.get("strategy_id"),
         "data_split": _parse_json_object(exp_record.get("data_split")),
         "custom_params": custom_params,
+        "universe_selection": (
+            {
+                "mode": selection.get("mode") or "stock_universe",
+                "pool_ids": list(selection.get("pool_ids") or []),
+            }
+            if selection
+            else None
+        ),
         "editable": editable,
         "startable": startable,
         "resume_allowed": False,
@@ -3031,6 +3061,27 @@ def generate_from_requirement(req: GenerateFromRequirementRequest):
 # Phase 2 API: ConfigComposer
 # ============================================================
 
+@router.get("/dataset-profile")
+def get_qe_dataset_profile():
+    """Return the human-readable active QE release/default/universe summary."""
+
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QEActiveDatasetProfileError,
+        get_qe_dataset_profile_summary,
+    )
+
+    try:
+        return {"ok": True, "data": get_qe_dataset_profile_summary()}
+    except QEActiveDatasetProfileError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason_code": exc.reason_code,
+                "message": str(exc),
+                "context": exc.context,
+            },
+        ) from exc
+
 @router.post("/config/generate")
 def generate_config(req: GenerateConfigRequest):
     """生成QLib配置文件。支持 HMM 板块轮动和分钟线策略。dispatch_mode=evolution时标记为待演进。"""
@@ -3049,6 +3100,34 @@ def generate_config(req: GenerateConfigRequest):
             req,
             source="quantevolver.config.generate",
         )
+
+        from ..services.quantevolver.qe_active_dataset_profile import (
+            load_active_qe_profile,
+            resolve_and_apply_active_qe_dataset,
+        )
+
+        if req.universe_selection is not None and custom_params.get("stock_pool"):
+            raise ValueError("stock_pool and universe_selection cannot be supplied together for new QE work")
+        active_profile = load_active_qe_profile()
+        if active_profile is not None:
+            reject_client_dataset_internals(req.custom_params)
+        if active_profile is None and req.universe_selection is not None:
+            raise ValueError(
+                "reason_code=qe_active_dataset_profile_missing: "
+                "universe_selection requires an activated QE dataset profile"
+            )
+        effective_node_id = req.node_id or resolve_default_qe_node_id()
+        custom_params.setdefault("execution_node_id", effective_node_id)
+        resolved_dataset_summary = None
+        if active_profile is not None and not (req.alpha_mode == "multi" and req.multi_alpha_config):
+            req.data_split, custom_params, resolved_dataset_summary = resolve_and_apply_active_qe_dataset(
+                node_id=effective_node_id,
+                data_split=req.data_split,
+                universe_selection=req.universe_selection,
+                custom_params=custom_params,
+                label_horizon=int(custom_params.get("label_horizon") or 1),
+                profile=active_profile,
+            )
 
 
         cc = ConfigComposer()
@@ -3097,6 +3176,7 @@ def generate_config(req: GenerateConfigRequest):
                 stock_pool=custom_params.get("stock_pool"),
                 hmm_config=hmm_cfg_dict,
                 experiment_name=req.experiment_name,
+                node_id=effective_node_id,
             )
             # 查询可用节点（用于分布式规划 + 前端展示）
             available_nodes = []
@@ -3113,6 +3193,8 @@ def generate_config(req: GenerateConfigRequest):
                 experiment_config=exp_cfg,
                 composer=cc,
                 available_nodes=available_nodes,
+                active_dataset_profile=active_profile,
+                universe_selection=req.universe_selection,
             )
             engine_result = engine.run()
 
@@ -3198,6 +3280,23 @@ def generate_config(req: GenerateConfigRequest):
                 "node_distribution": node_groups,
                 "is_distributed": len(node_groups) > 1,
             }
+            if active_profile is not None:
+                result["wsl_command"] = None
+                result["group_configs"] = [
+                    {
+                        key: group[key]
+                        for key in ("group_name", "node_id", "order", "reuse_mode")
+                        if key in group
+                    }
+                    for group in group_configs
+                ]
+                result["resolved_dataset"] = {
+                    "generation": active_profile.generation,
+                    "release_id": active_profile.release_id,
+                    "cutoff": active_profile.cutoff.isoformat(),
+                    "universe_selection": req.universe_selection
+                    or active_profile.qe["default_universe"],
+                }
 
             if req.dispatch_mode == "evolution":
                 result["evolution_pending"] = True
@@ -3206,15 +3305,41 @@ def generate_config(req: GenerateConfigRequest):
             return result
 
         # ── Single-Alpha（原有逻辑）────────────────────────────────
-        result = cc.compose_experiment(
-            factor_names=req.factor_names,
-            factor_sources=req.factor_sources,
-            model_id=req.model_id,
-            strategy_id=req.strategy_id,
-            data_split=req.data_split,
-            custom_params=custom_params,
-            experiment_name=req.experiment_name,
-        )
+        if active_profile is not None:
+            result = cc.compose_experiment_in_memory(
+                factor_names=req.factor_names,
+                factor_sources=req.factor_sources,
+                model_id=req.model_id,
+                strategy_id=req.strategy_id,
+                data_split=req.data_split,
+                custom_params=custom_params,
+                experiment_name=req.experiment_name,
+                node_id=effective_node_id,
+                skip_db_save=False,
+                execution_algo=custom_params.get("execution_algo"),
+                execution_algo_params=custom_params.get("execution_algo_params"),
+            )
+            result["ok"] = True
+            result["resolved_dataset"] = resolved_dataset_summary
+            for internal_key in (
+                "experiment_files",
+                "wsl_command",
+                "wsl_command_core",
+                "wsl_workdir",
+                "direct_v2_dataset_binding",
+                "canonical_pit_dataset_binding",
+            ):
+                result.pop(internal_key, None)
+        else:
+            result = cc.compose_experiment(
+                factor_names=req.factor_names,
+                factor_sources=req.factor_sources,
+                model_id=req.model_id,
+                strategy_id=req.strategy_id,
+                data_split=req.data_split,
+                custom_params=custom_params,
+                experiment_name=req.experiment_name,
+            )
 
         if req.dispatch_mode == "evolution":
             result["evolution_pending"] = True
@@ -3225,6 +3350,22 @@ def generate_config(req: GenerateConfigRequest):
         raise
     except TradingCoreError as e:
         raise HTTPException(status_code=422, detail=e.to_dict()) from e
+    except QEActiveDatasetProfileError as e:
+        request_codes = {
+            "qe_dataset_internal_input_forbidden",
+            "qe_dataset_window_outside_release",
+            "qe_universe_mode_invalid",
+            "qe_universe_pool_unknown",
+            "qe_universe_window_coverage_incomplete",
+        }
+        raise HTTPException(
+            status_code=400 if e.reason_code in request_codes else 503,
+            detail={
+                "reason_code": e.reason_code,
+                "message": str(e),
+                "context": e.context,
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -3343,6 +3484,35 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
             source="quantevolver.experiments.editable_config",
         )
         existing_custom_params = _parse_json_object(exp_record.get("custom_params"))
+        existing_split = _parse_json_object(exp_record.get("data_split"))
+        existing_binding = _parse_json_object(
+            existing_custom_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        )
+        if existing_binding:
+            if req.data_split is not None and dict(req.data_split) != existing_split:
+                raise HTTPException(
+                    status_code=409,
+                    detail="resolved dataset dates are immutable after pending-task creation; create a new task",
+                )
+            selection = _parse_json_object(existing_binding.get("selection_pins"))
+            existing_semantic_selection = {
+                "mode": selection.get("mode") or "stock_universe",
+                "pool_ids": list(selection.get("pool_ids") or []),
+            }
+            if req.universe_selection is not None and dict(req.universe_selection) != existing_semantic_selection:
+                raise HTTPException(
+                    status_code=409,
+                    detail="resolved universe is immutable after pending-task creation; create a new task",
+                )
+            for key in (
+                QE_DIRECT_V2_DATASET_BINDING_PARAM,
+                QE_RUN_STOCK_POOL_CONTENT_PARAM,
+                QE_RUN_COVERAGE_RECEIPT_PARAM,
+                QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+                "stock_pool",
+            ):
+                if key in existing_custom_params:
+                    custom_params[key] = existing_custom_params[key]
         for provenance_key in (
             "qe_mcp_provenance",
             "qe_pending_task_source",
@@ -3379,7 +3549,7 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
                         json.dumps(req.factor_names or []),
                         req.model_id,
                         req.strategy_id,
-                        json.dumps(req.data_split) if req.data_split else None,
+                        json.dumps(req.data_split) if req.data_split else json.dumps(existing_split) if existing_split else exp_record.get("data_split"),
                         json.dumps(custom_params) if custom_params else None,
                         experiment_id,
                     ),

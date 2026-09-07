@@ -1860,22 +1860,28 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
             raise WorkflowError(
                 f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
             )
-        overlapping_targets = sorted(
-            str(target_id)
+        exact_runtime_overlaps = sorted(
+            f"{target_id}:{pattern}"
             for target_id, target in targets.items()
-            if any(
-                _runtime_glob_matches(path_value, str(pattern))
-                for pattern in flow._as_list(target.get("source_globs"))
-            )
+            for pattern in flow._as_list(target.get("source_globs"))
+            if not any(character in str(pattern) for character in "*?[")
+            and _runtime_glob_matches(path_value, str(pattern))
         )
-        if overlapping_targets:
+        if exact_runtime_overlaps:
             raise WorkflowError(
-                "runtime target catalog non-runtime path overlaps runtime targets: "
-                f"{path_value} -> {overlapping_targets}"
+                "runtime target catalog non-runtime path overlaps an exact runtime source: "
+                f"{path_value} -> {exact_runtime_overlaps}"
             )
-        if not path_value.startswith("scripts/") or Path(path_value).suffix.casefold() not in {".py", ".ps1"}:
+        suffix = Path(path_value).suffix.casefold()
+        supported_namespace = (
+            (path_value.startswith("scripts/") and suffix in {".py", ".ps1"})
+            or (path_value.startswith("backend/services/") and suffix == ".py")
+            or path_value == "noxfile.py"
+        )
+        if not supported_namespace:
             raise WorkflowError(
-                "runtime target catalog non_runtime_source_paths only accepts Python or PowerShell operator scripts under scripts/: "
+                "runtime target catalog non_runtime_source_paths only accepts exact Python or PowerShell sources "
+                "under scripts/, exact Python sources under backend/services/, or noxfile.py: "
                 f"{path_value}"
             )
         candidate = root.joinpath(*path_value.split("/"))
@@ -1960,61 +1966,6 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/ci_",
         "tests/",
     )
-    known_non_runtime_files = {
-        "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
-        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
-        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
-        "backend/services/advisory_model_first/score_hmm_admission_pipeline.py",
-        "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
-        "scripts/advisory_p0l_build_training_request.py",
-        "scripts/wsl/advisory_p0l_train.py",
-        "backend/services/advisory_phase0b/audit_service.py",
-        "backend/services/advisory_phase0b/snapshot_reader.py",
-        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-        "backend/services/hmm_risk/b3_mixed_dimension.py",
-        "backend/services/hmm_risk/b3_training.py",
-        "backend/services/hmm_risk/market_relative_jump_spike.py",
-        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
-        "backend/services/hmm_risk/market_relative_ridge_holdout.py",
-        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-        "backend/services/hmm_risk/state_model_set.py",
-        "backend/services/dataset_release/direct_monthly.py",
-        "backend/services/hmm_risk/stock_fact_repository.py",
-        "backend/services/announcements/title_classifier.py",
-        "backend/services/event_signal/st_announcement_adapter.py",
-        "scripts/advisory_short_rebound_batch_b.py",
-        "scripts/aistock_bug_id_allocator.py",
-        "scripts/bug_registry_metadata_check.py",
-        "scripts/aistock_issue_workflow.py",
-        "scripts/issue_flow.py",
-        "scripts/aistock_guardrail_scan.py",
-        "scripts/ci_failure_issue_summary.py",
-        "scripts/cross_tool_review_dispatch.py",
-        "scripts/ci/prepare_self_hosted_workspace.py",
-        "scripts/export_qe_qlib_candidate.py",
-        "scripts/export_suspend_d_candidate.py",
-        "scripts/build_stock_universe_pit_spans.py",
-        "scripts/classify_announcement_titles_v0.py",
-        "scripts/sync_eastmoney_anns_metadata.py",
-        "scripts/dataset_release_control_store.py",
-        "scripts/update_backtest_dataset_monthly.py",
-        "scripts/qlib_multi_dataset_smoke_backtest.py",
-        "scripts/qlib_authoritative_smoke_backtest.py",
-        "scripts/llm_provider_adapter.py",
-        "scripts/nightly_adaptive_scheduler.py",
-        "scripts/nightly_session_runner.py",
-        "scripts/ci_change_classifier.py",
-        "scripts/hmm_risk/prepare_state_model_set.py",
-        "scripts/hmm_risk/run_market_relative_jump_spike.py",
-        "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
-        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
-        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
-        "noxfile.py",
-    }
     known_client_files = {
         "scripts/aistock_mcp_server.py",
     }
@@ -2023,9 +1974,13 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
+        # The workflow must remain classifiable while its catalog is being
+        # created or repaired. All business/offline sources stay catalog-only.
+        if path == "scripts/aistock_issue_workflow.py":
+            impacts.add("none")
+            continue
         if (
-            path in known_non_runtime_files
-            or path in catalog_non_runtime_files
+            path in catalog_non_runtime_files
             or lower.startswith(known_non_runtime_prefixes)
         ):
             impacts.add("none")
@@ -12107,6 +12062,70 @@ def _state_roots_for_bug(bug_id: str) -> list[Path]:
     return unique
 
 
+def _build_resume_runtime_preflight(root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_resume_runtime_preflight_v1",
+        "status": "not_available",
+        "advisory_only": True,
+        "changed_files_count": 0,
+        "changed_files_preview": [],
+        "runtime_impact": None,
+        "target_ids": [],
+        "blocking": [],
+        "reason": None,
+    }
+    if not (root / ".git").exists():
+        payload["reason"] = "workflow root is not a git checkout"
+        return payload
+    commands = (
+        ["git", "diff", "--name-only", "origin/main...HEAD"],
+        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "diff", "--cached", "--name-only", "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    )
+    changed_files: set[str] = set()
+    for command in commands:
+        result = _run_command(command, cwd=root)
+        if not result.get("ok"):
+            payload["reason"] = f"changed-file discovery failed: {json.dumps(command[1:])}"
+            return payload
+        changed_files.update(
+            line.strip().replace("\\", "/")
+            for line in str(result.get("stdout") or "").splitlines()
+            if line.strip()
+        )
+    ordered_files = sorted(changed_files)
+    payload["changed_files_count"] = len(ordered_files)
+    payload["changed_files_preview"] = ordered_files[:12]
+    if not ordered_files:
+        payload["status"] = "not_applicable"
+        payload["reason"] = "no actual changed files"
+        return payload
+    try:
+        inference = _classify_runtime_impact(ordered_files, root=root)
+        payload["runtime_impact"] = inference["runtime_impact"]
+        payload["target_ids"] = inference["target_ids"]
+        issue_path = _state_issue_json_path(root, state)
+        if issue_path and issue_path.is_file():
+            contract = build_runtime_contract(
+                record=_load_json(issue_path),
+                changed_files=ordered_files,
+                root=root,
+            )
+            payload["blocking"] = list(contract.get("blocking") or [])
+        payload["status"] = "attention_required" if payload["blocking"] else "ready"
+        payload["reason"] = (
+            "resolve runtime catalog or contract mismatch before finish"
+            if payload["blocking"]
+            else "actual changed-file runtime classification is consistent"
+        )
+    except WorkflowError as exc:
+        payload["status"] = "attention_required"
+        payload["blocking"] = [str(exc)]
+        payload["reason"] = "runtime catalog validation failed"
+    return payload
+
+
 def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit: int = 8) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
@@ -12154,6 +12173,7 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "context_resume_digest": _workflow_context_resume_digest(resume_state, root=root),
+        "runtime_preflight": _build_resume_runtime_preflight(root, state),
         "state": state,
         "recent_events": events,
         "stop_conditions": stop_conditions,

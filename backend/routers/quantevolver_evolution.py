@@ -1289,6 +1289,10 @@ class StrategyLoopConfig(BaseModel):
     unfilled_handler: Optional[str] = Field(None, description="尾盘涨停处理: TAIL_BOOST / TAIL_SUBSTITUTE / 空=不使用")
     sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
     stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
+    universe_selection: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Human-readable QE universe selection",
+    )
 
 class StrategyEvolutionForkRequest(BaseModel):
     from_loop_index: int = Field(..., description="从哪个 loop 分叉（必须已完成且有模型文件）")
@@ -1458,6 +1462,10 @@ class CustomEvoLoopConfig(BaseModel):
     unfilled_handler_params: Optional[Dict[str, Any]] = Field(None, description="尾盘处理参数")
     sector_blacklist: Optional[List[str]] = Field(None, description="行业黑名单")
     stock_pool: Optional[str] = Field(None, description="Qlib股票池文件WSL路径")
+    universe_selection: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Human-readable QE universe selection",
+    )
     label_type: Optional[str] = Field(None, description="训练标签类型: close/open/vwap")
     label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20/30/40/60/120/180d")
     data_split: Optional[Dict[str, str]] = Field(None, description="数据划分覆盖，None=使用系统默认")
@@ -1486,6 +1494,19 @@ class CustomEvolutionCreateRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+
+
+class UniverseComparisonCreateRequest(BaseModel):
+    """Expand one immutable QE setup into independent per-universe custom-evo arms."""
+
+    task_name: str
+    pool_ids: List[str] = Field(..., min_length=2)
+    base_loop: CustomEvoLoopConfig
+    target_desc: str = "QE same-strategy universe comparison"
+    node_id: Optional[str] = None
+    node_parallelism: Optional[Dict[str, int]] = None
+    auto_start: bool = False
+    long_trend_profile_id: Optional[str] = None
 
 
 class CustomEvoConfigUpdateRequest(BaseModel):
@@ -1533,6 +1554,62 @@ class CustomEvoRunRequest(BaseModel):
     force_full_train: bool = Field(False, description="Force full training when submitting a pending custom_evo task")
 
 
+def _persisted_qe_dataset_context(loop_config: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    )
+    from ..services.quantevolver.qe_dataset_contract import (
+        QE_DIRECT_V2_DATASET_BINDING_PARAM,
+    )
+
+    source = dict(loop_config or {})
+    custom_params = source.get("custom_params")
+    if not isinstance(custom_params, dict):
+        return None
+    binding = custom_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+    if not isinstance(binding, dict):
+        return None
+    selection = binding.get("selection_pins")
+    if not isinstance(selection, dict):
+        raise HTTPException(status_code=409, detail="persisted QE dataset binding is invalid")
+    profile_summary = custom_params.get(QE_ACTIVE_PROFILE_SUMMARY_PARAM)
+    return {
+        "data_split": dict(source.get("data_split") or {}),
+        "custom_params": dict(custom_params),
+        "stock_pool": source.get("stock_pool") or custom_params.get("stock_pool"),
+        "node_id": source.get("node_id"),
+        "universe_selection": {
+            "mode": selection.get("mode") or "stock_universe",
+            "pool_ids": list(selection.get("pool_ids") or []),
+        },
+        "resolved_dataset": source.get("resolved_dataset"),
+        "profile_summary": dict(profile_summary) if isinstance(profile_summary, dict) else {},
+    }
+
+
+def _public_custom_evo_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove server-owned dataset material from the editable UI/MCP response."""
+
+    sanitized = dict(config)
+    public_loops: List[Dict[str, Any]] = []
+    for raw_loop in config.get("loops") or []:
+        loop = dict(raw_loop)
+        persisted = _persisted_qe_dataset_context(loop)
+        loop.pop("custom_params", None)
+        loop.pop("resolved_dataset", None)
+        if persisted is not None:
+            loop["universe_selection"] = persisted["universe_selection"]
+            summary = persisted["profile_summary"]
+            loop["dataset_summary"] = {
+                key: summary[key]
+                for key in ("generation", "release_id", "cutoff")
+                if key in summary
+            }
+        public_loops.append(loop)
+    sanitized["loops"] = public_loops
+    return sanitized
+
+
 async def _prepare_custom_evo_loop_configs(
     loops: List[CustomEvoLoopConfig],
     *,
@@ -1540,6 +1617,9 @@ async def _prepare_custom_evo_loop_configs(
     node_parallelism_payload: Optional[Dict[str, int]],
     assigned_loop_indexes: Optional[List[int]] = None,
     node_parallelism_scope_node_ids: Optional[set[str]] = None,
+    persisted_loop_configs: Optional[Dict[int, Dict[str, Any]]] = None,
+    required_profile_identity: Optional[Dict[str, str]] = None,
+    existing_legacy_task: bool = False,
 ) -> tuple[List[Dict[str, Any]], str, Dict[str, int]]:
     """Validate custom_evo loop payloads and resolve execution nodes fail-fast."""
     if assigned_loop_indexes and len(assigned_loop_indexes) != len(loops):
@@ -1651,6 +1731,118 @@ async def _prepare_custom_evo_loop_configs(
         node_rows = await preflight_qe_nodes(selected_node_ids)
     except QENodePreflightError as e:
         raise HTTPException(status_code=400, detail=e.to_detail()) from e
+
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QEActiveDatasetProfileError,
+        load_active_qe_profile,
+        reject_client_dataset_internals,
+        resolve_and_apply_active_qe_dataset,
+    )
+
+    unresolved: List[tuple[int, Dict[str, Any]]] = []
+    persisted_by_index = persisted_loop_configs or {}
+    for pos, cfg_dict in enumerate(loops_config, start=1):
+        persisted = _persisted_qe_dataset_context(
+            persisted_by_index.get(int(cfg_dict["loop_index"]))
+        )
+        if persisted is None:
+            unresolved.append((pos, cfg_dict))
+            continue
+        if str(cfg_dict.get("node_id") or "") != str(persisted.get("node_id") or ""):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Loop {pos}: execution node is immutable after dataset binding",
+            )
+        requested_split = cfg_dict.get("data_split")
+        if requested_split is not None and dict(requested_split) != persisted["data_split"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Loop {pos}: dataset dates are immutable after task creation",
+            )
+        requested_selection = cfg_dict.get("universe_selection")
+        if requested_selection is not None and dict(requested_selection) != persisted["universe_selection"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Loop {pos}: universe is immutable after task creation",
+            )
+        cfg_dict["data_split"] = persisted["data_split"]
+        cfg_dict["custom_params"] = persisted["custom_params"]
+        cfg_dict["stock_pool"] = persisted["stock_pool"]
+        cfg_dict["universe_selection"] = persisted["universe_selection"]
+        cfg_dict["resolved_dataset"] = persisted["resolved_dataset"]
+
+    try:
+        active_profile = load_active_qe_profile() if unresolved else None
+    except QEActiveDatasetProfileError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason_code": exc.reason_code,
+                "message": str(exc),
+                "context": exc.context,
+            },
+        ) from exc
+    if active_profile is not None and existing_legacy_task:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "legacy QE task has no immutable dataset binding; create a new task "
+                "instead of changing its dataset after profile activation"
+            ),
+        )
+    if unresolved and active_profile is None:
+        semantic_requested = any(
+            cfg.get("universe_selection") is not None for _pos, cfg in unresolved
+        )
+        if semantic_requested or required_profile_identity is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "reason_code=qe_active_dataset_profile_missing: "
+                    "universe_selection requires an activated QE dataset profile"
+                ),
+            )
+    if active_profile is not None:
+        if required_profile_identity is not None:
+            actual_identity = {
+                "generation": active_profile.generation,
+                "release_id": active_profile.release_id,
+                "cutoff": active_profile.cutoff.isoformat(),
+            }
+            if actual_identity != required_profile_identity:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "active QE dataset profile changed after task creation; "
+                        "append requires a new task"
+                    ),
+                )
+        for pos, cfg_dict in unresolved:
+            try:
+                reject_client_dataset_internals(cfg_dict.get("custom_params"))
+            except RuntimeError as exc:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
+            if cfg_dict.get("stock_pool") and cfg_dict.get("universe_selection") is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: stock_pool and universe_selection cannot be supplied together",
+                )
+            try:
+                split, active_params, summary = resolve_and_apply_active_qe_dataset(
+                    node_id=str(cfg_dict["node_id"]),
+                    data_split=cfg_dict.get("data_split"),
+                    universe_selection=cfg_dict.get("universe_selection"),
+                    custom_params=cfg_dict.get("custom_params"),
+                    label_horizon=int(cfg_dict.get("label_horizon") or 1),
+                    profile=active_profile,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
+            cfg_dict["data_split"] = split
+            active_params.setdefault("execution_node_id", str(cfg_dict["node_id"]))
+            cfg_dict["custom_params"] = active_params
+            cfg_dict["stock_pool"] = active_params.get("stock_pool")
+            cfg_dict["resolved_dataset"] = summary
 
     synced_stock_pool_keys: set[tuple[str, str]] = set()
     for cfg_dict in loops_config:
@@ -1786,11 +1978,76 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post(
+    "/universe-comparison-tasks",
+    summary="Create same-strategy independent QE universe comparison arms",
+)
+async def create_universe_comparison_task(
+    req: UniverseComparisonCreateRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Reuse custom-evo orchestration; only the selected universe may vary by arm."""
+
+    base = _model_to_dict(req.base_loop)
+    if base.get("stock_pool") or base.get("universe_selection") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="base_loop must omit stock_pool and universe_selection; pool_ids define the arms",
+        )
+    pool_ids = sorted(set(str(item).strip() for item in req.pool_ids if str(item).strip()))
+    if len(pool_ids) < 2 or len(pool_ids) != len(req.pool_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="pool_ids must contain at least two unique non-empty pools",
+        )
+    group_id = f"qeucmp_{uuid.uuid4().hex[:20]}"
+    loops: list[CustomEvoLoopConfig] = []
+    arm_summaries: list[dict[str, str]] = []
+    for pool_id in pool_ids:
+        arm = dict(base)
+        arm["label"] = f"universe:{pool_id}"
+        arm["universe_selection"] = (
+            {"mode": "stock_universe", "pool_ids": []}
+            if pool_id == "stock_universe"
+            else {"mode": "single_index", "pool_ids": [pool_id]}
+        )
+        flags = dict(arm.get("runtime_flags") or {})
+        flags["qe_universe_comparison"] = {
+            "schema_version": "qe_universe_comparison_arm_v1",
+            "comparison_group_id": group_id,
+            "comparison_mode": "separate_runs",
+            "arm_label": pool_id,
+        }
+        arm["runtime_flags"] = flags
+        loops.append(CustomEvoLoopConfig(**arm))
+        arm_summaries.append({"pool_id": pool_id, "arm_label": pool_id})
+
+    result = await create_custom_evolution_task(
+        CustomEvolutionCreateRequest(
+            task_name=req.task_name,
+            target_desc=req.target_desc,
+            loops=loops,
+            node_id=req.node_id,
+            node_parallelism=req.node_parallelism,
+            auto_start=req.auto_start,
+            long_trend_profile_id=req.long_trend_profile_id,
+        ),
+        background_tasks,
+    )
+    result["comparison_group_id"] = group_id
+    result["comparison_mode"] = "separate_runs"
+    result["comparison_task_id"] = result.get("task_id")
+    result["arms"] = arm_summaries
+    return result
+
+
 @router.get("/tasks/{task_id}/custom-evo-config", summary="Get editable custom evolution config")
 async def get_custom_evo_config(task_id: str):
     try:
         data = await scheduler.get_custom_evo_editable_config(task_id)
-        return {"status": "success", "data": data}
+        return {"status": "success", "data": _public_custom_evo_config(data)}
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1810,10 +2067,23 @@ async def update_custom_evo_config(task_id: str, req: CustomEvoConfigUpdateReque
                 status_code=400,
                 detail="QE legacy execution engine has been removed; only engine_mode='unified' is supported.",
             )
+        existing_config = await scheduler.get_custom_evo_editable_config(task_id)
+        persisted_loop_configs = {
+            int(loop["loop_index"]): dict(loop)
+            for loop in existing_config.get("loops") or []
+            if loop.get("loop_index") is not None
+        }
+        request_node_id = (req.node_id or "").strip() or existing_config.get("node_id")
         loops_config, loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
             req.loops,
-            request_node_id=req.node_id,
+            request_node_id=request_node_id,
             node_parallelism_payload=req.node_parallelism,
+            persisted_loop_configs=persisted_loop_configs,
+            existing_legacy_task=bool(persisted_loop_configs)
+            and not any(
+                _persisted_qe_dataset_context(loop) is not None
+                for loop in persisted_loop_configs.values()
+            ),
         )
         result = await scheduler.update_custom_evo_editable_config(
             task_id=task_id,
@@ -1928,6 +2198,16 @@ async def rerun_custom_evo_loop(
             node_parallelism_payload=scoped_node_parallelism,
             assigned_loop_indexes=[loop_index],
             node_parallelism_scope_node_ids=full_node_scope,
+            persisted_loop_configs={
+                int(cfg["loop_index"]): dict(cfg)
+                for cfg in existing_loops
+                if cfg.get("loop_index") is not None
+            },
+            existing_legacy_task=not any(
+                _persisted_qe_dataset_context(cfg) is not None
+                for cfg in existing_loops
+                if int(cfg.get("loop_index") or 0) == loop_index
+            ),
         )
         result = await scheduler.rerun_custom_evo_loop(
             task_id=task_id,
@@ -1974,11 +2254,34 @@ async def append_custom_evo_loops(
         ]
         full_node_scope = _resolve_custom_evo_node_scope(full_scope_loops, request_node_id)
         scoped_node_parallelism = _filter_node_parallelism_for_scope(req.node_parallelism, full_node_scope)
+        persisted_contexts = [
+            context
+            for context in (
+                _persisted_qe_dataset_context(dict(cfg))
+                for cfg in existing_config.get("loops") or []
+            )
+            if context is not None
+        ]
+        required_profile_identity = None
+        if persisted_contexts:
+            summary = persisted_contexts[0]["profile_summary"]
+            required_profile_identity = {
+                key: str(summary.get(key) or "")
+                for key in ("generation", "release_id", "cutoff")
+            }
+            if any(not value for value in required_profile_identity.values()):
+                raise HTTPException(
+                    status_code=409,
+                    detail="persisted QE dataset profile identity is incomplete",
+                )
         loops_config, _loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
             req.loops,
             request_node_id=request_node_id,
             node_parallelism_payload=scoped_node_parallelism,
             node_parallelism_scope_node_ids=full_node_scope,
+            required_profile_identity=required_profile_identity,
+            existing_legacy_task=bool(existing_config.get("loops"))
+            and not persisted_contexts,
         )
         result = await scheduler.append_custom_evo_loops(
             task_id=task_id,

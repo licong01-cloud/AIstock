@@ -598,6 +598,21 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
     )
     if execution_summary:
         summary["execution_algo_params"] = execution_summary
+    active_dataset = _mapping(cfg.get("_qe_active_dataset_summary"))
+    direct_binding = _mapping(cfg.get("_qe_direct_v2_dataset_binding"))
+    selection = _mapping(direct_binding.get("selection_pins"))
+    if active_dataset:
+        summary["dataset"] = {
+            key: active_dataset[key]
+            for key in ("generation", "release_id", "cutoff", "defaults")
+            if key in active_dataset
+        }
+    if selection:
+        summary["universe"] = {
+            "mode": selection.get("mode") or "stock_universe",
+            "pool_ids": list(selection.get("pool_ids") or []),
+            "label": selection.get("instrument_name") or selection.get("stock_pool"),
+        }
     return summary
 
 

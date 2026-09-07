@@ -45,6 +45,8 @@ class QETemplateMaterializer:
             "data_split": config.get("data_split"),
             "custom_params": custom_params,
             "experiment_name": config.get("experiment_name") or template.get("title"),
+            "node_id": config.get("node_id"),
+            "universe_selection": config.get("universe_selection"),
             "dispatch_mode": config.get("dispatch_mode"),
             "evolution_params": config.get("evolution_params"),
             "unfilled_handler": config.get("unfilled_handler"),
