@@ -380,22 +380,22 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3.2、§3.3、Delivery Batch A | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
-| F-002 | `qe_run_registry.py`、现有 evolution/durable adapters | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
-| F-003 | §3.3、§4.6 | `backend/tests/test_aistock_qe_mcp_servers.py` | design_review_pass | none |
-| F-004 | §3.4、active dataset binding | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | design_review_pass | none |
-| F-005 | §3.4、Delivery Batch A | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | design_review_pass | none |
-| F-006 | §3.5、§4.2 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | design_review_pass | none |
-| F-007 | §4.4、§4.5、Delivery Batch A/B | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
-| F-008 | §4.3 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
-| F-009 | §4.1 | `backend/tests/quantevolver/test_qe_registered_submission.py` | design_review_pass | none |
-| F-010 | §2.3、§7.2 | `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py` | design_review_pass | none |
+| F-001 | `backend/services/quantevolver/qe_run_registry.py`; single/evolution/Multi-Alpha/durable 调用点 | `backend/tests/quantevolver/test_qe_registered_submission.py` | batch_a_source_test_pass | none |
+| F-002 | `qe_run_registry.py`、现有 evolution/durable adapters | `backend/tests/quantevolver/test_qe_registered_submission.py` | batch_a_source_test_pass | none |
+| F-003 | `backend/mcp/modules/qe_experiment.py`; `backend/services/qe_templates/materializer.py` | `backend/tests/mcp/test_domain_modules.py`; `backend/tests/test_aistock_qe_mcp_servers.py` | batch_a_source_test_pass | none |
+| F-004 | `qe_run_registry.py` portable registration；active dataset binding | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | batch_a_source_test_pass | none |
+| F-005 | 现有 reconciliation coordinator 与 durable readback adapter | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | batch_a_source_test_pass | none |
+| F-006 | `qe_run_registry.py::project_history`; `payload_summary.py` | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | batch_a_source_test_pass | none |
+| F-007 | `config_composer.py`; `frontend/src/app/quantevolver/experiments/page.tsx` | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_a_source_ready_for_ci | none |
+| F-008 | persisted-only GET；60 秒 coordinator；可见页 30 秒 fallback；隐藏页零轮询 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_a_source_ready_for_ci | none |
+| F-009 | `qe_run_registry.py::build_qe_run_registration` | `backend/tests/quantevolver/test_qe_registered_submission.py` | batch_a_source_test_pass | none |
+| F-010 | 控制面登记不进入 qrun 数据面；既有 subprocess DB 隔离保持 | `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py` | batch_a_source_test_pass | none |
 | F-011 | §3.5、§4.7 | `backend/tests/qe_archive/test_manual_ingestion_selection.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | design_review_pass | none |
 | F-012 | existing `qe_archive` source-status/backfill service | `backend/tests/qe_archive/test_manual_ingestion_selection.py` | design_review_pass | none |
 | F-013 | §4.7 | `backend/tests/qe_archive/test_manual_ingestion_selection.py` | design_review_pass | none |
 | F-014 | §4.8 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | design_review_pass | none |
-| F-015 | §3.6、§2.3 | validation-receipt: F2 feature validator PASS；本 Feature 不执行批量历史补账 | design_review_pass | none |
-| F-016 | §2.3、§3.1 | `python -m nox -s l0` | design_review_pass | none |
+| F-015 | §3.6、§2.3；实现不扫描/补写旧 workspace | validation-receipt: F2 feature validator PASS；本 Feature 不执行批量历史补账 | batch_a_source_test_pass | none |
+| F-016 | 仅复用现有 QE 表、接口、coordinator 与 bounded log | `python -m nox -s l0` | batch_a_source_ready_for_ci | none |
 | F-017 | §7.3 | `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`; validation-receipt: dual-node-restart-and-archive-e2e | design_review_pass | none |
 | F-018 | §2.3、§9 | `python -m nox -s validation_module_registry_l0` | design_review_pass | none |
 | F-019 | §11 | validation-receipt: F2 feature validator PASS；DESIGN-COMPLIANCE-001 四项逐项审核 | design_review_pass | none |
@@ -482,4 +482,22 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-14 | Batch A 过渡期可见性 | 若登记完成后立即恢复实验、但 UI 可见性全部等到 Batch B，仍可能形成新的“已登记但人类不可见”窗口 | Batch A 增加现有 UI/API 最小记录与进度可见性；Batch B 只负责完整业务检索、统一详情和选择性入仓 | resolved |
 | Review-15 | v1.1 最终审计 | 需要确认三批次映射没有减少 19 项验收、没有引入第四阶段、没有放宽 fail-closed 或增加人工门禁 | F2 validator、L0、module ownership、diff-check 与四项 DESIGN-COMPLIANCE 在最终提交重新执行 | passed |
 
-该记录只证明设计经过多轮内部审核，不表示 source 已实现、已合入、已在运行态生效或实验已经启动。实现必须在最终 HEAD 重新执行同一验收矩阵。
+| Review-16 | Batch A 首轮源码审核 | 直接分散写入会继续产生分发前不可见窗口，Multi-Alpha 还可能先物化 child workspace | 新增薄 `qe_run_registry` 并把 single/custom/strategy/auto/Multi-Alpha/durable 收敛为 reservation-before-dispatch | resolved |
+| Review-17 | 事务与身份不可变性 | 初稿回读位于显式 commit 后，且任务登记覆盖 base experiment 原始来源 | 改为 managed transaction 内回读失败回滚；任务登记写入既有 `qe_evolution_tasks.strategy_evo_config`，保留 base identity | resolved |
+| Review-18 | UI/GET 负载与状态语义 | 初稿仍可能在隐藏页面首次加载，且数据库原始状态未统一投影 | 隐藏页不发起初始加载/SSE/轮询；可见页 fallback 不短于 30 秒；仅在响应层映射 canonical status | resolved |
+| Review-19 | PR CI 分类与测试可达性 | 新增 QE Backend/MCP/Playwright 测试虽已本地执行，但未全部挂入现有 catalog/nox 计划，CI fail closed | 精确映射三个 QE 测试到 `qe_read_backend`、MCP 合同到 `qe_data_contract_backend`，并新增单一 mocked UI 目标；不使用宽泛通配或跳过 | resolved |
+| Review-20 | 已激活数据集下的测试隔离 | 两个既有 QE 测试会读取本机活动 profile，导致测试结果依赖工作站状态 | 仅在对应单元测试 fixture 中显式隔离 active profile；生产 fail-closed 路径不改动 | resolved |
+| Review-21 | Playwright 失败反馈预算 | 关键交互继承 30 分钟全局测试上限，合同偏差会长期占用自托管 runner | 两个关键交互使用 30 秒局部超时；不放宽产品按钮、状态或自动日志读取语义 | resolved |
+| Review-22 | Playwright 折叠卡片合同 | 列表默认只展示登记与进度摘要，操作按钮位于展开区；测试直接查找“查看日志”会把正确折叠行为误判为缺失 | 按真实用户路径先点击实验卡片展开，再显式打开日志；产品折叠/按需日志合同保持不变 | resolved |
+| Review-23 | Playwright 日志协议 | 运行态日志由浏览器 `EventSource` 消费，JSON `route.fulfill` 会被正确识别为断流并重连，无法代表终态 tail 合同 | 在“查看日志”按钮已可见后把 mock 状态切为 `completed`，再点击并验证只发起一次 `/logs/tail` 读取；不伪造 SSE 或改变运行态重连逻辑 | resolved |
+| Review-24 | 最终 HEAD 与 CI 证据 | 前两次 Playwright 失败分别暴露折叠卡片和日志协议夹具偏差，不能以 Backend-only 结果宣称可合入 | 修正真实用户交互与终态 tail 合同后，最终源码 HEAD 的 AIstock CI run `34101195705` 全绿；PR #4382 为 `MERGEABLE/CLEAN` | passed |
+
+## 14. Delivery Batch A 实施状态
+
+- 当前源码状态：`BATCH_A_SOURCE_READY_FOR_MERGE`。
+- 已完成：统一预登记、事务内回读、任务/loop 与 Multi-Alpha parent/group 计划、durable readback、MCP/UI/source/purpose 摘要、只读历史/详情投影、GET 去远端写回、最小 UI 进度与隐藏页零轮询。
+- 本地证据：Batch A 聚焦回归 299 passed；`qe_read_backend` 316 passed / 1 skipped，`qe_data_contract_backend` 46 passed，`qe_sector_risk_overlay_backend` 90 passed，`platform_api_backend` 15 passed，Validation catalog/ownership/classifier 96 passed；F2 19/19、L0、Ruff、py_compile、diff-check 均通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；PR CI run `34101195705` 已在源码 HEAD 上完成 TypeScript、Lint、精确 Playwright、Backend/MCP、Semgrep、catalog 和 workflow policy 并全绿。
+- 未执行：source merge、Backend/Frontend 运行态激活、用户重启、WSL/remote 真实实验、Archive 写入、历史补账、DDL/DML、依赖安装和进程控制。
+- `BATCH_A_REGISTERED_RUNTIME_READY` 尚未达到；它只能在 source 合入、用户按 runtime contract 重启以及 post-restart 双节点/最小 UI readback 通过后声明。
+
+该记录证明设计与 Batch A source 已经过多轮内部审核，不表示 source 已合入、已在运行态生效或实验已经启动。Batch B/C 仍须按同一 19 项验收矩阵继续。

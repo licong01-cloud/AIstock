@@ -51,6 +51,9 @@ class QETemplateMaterializer:
             "evolution_params": config.get("evolution_params"),
             "unfilled_handler": config.get("unfilled_handler"),
             "unfilled_handler_params": config.get("unfilled_handler_params"),
+            "created_by_type": template.get("created_by_type") or "agent",
+            "created_by_name": template.get("created_by_name"),
+            "purpose": "research",
         }
         try:
             result = _generate_single_experiment_through_existing_api(request_payload)
@@ -96,6 +99,9 @@ class QETemplateMaterializer:
             engine_mode="unified",
             clone_from_task_id=config.get("clone_from_task_id"),
             auto_start=False,
+            created_by_type=str(template.get("created_by_type") or "agent"),
+            created_by_name=template.get("created_by_name"),
+            purpose="research",
         )
         runtime_config = {**config, "task_id": task_id, "loops": loops_config, "node_parallelism": node_parallelism}
         row = self._repository.mark_materialized(
