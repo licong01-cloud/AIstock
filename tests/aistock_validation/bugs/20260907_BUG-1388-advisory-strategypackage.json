@@ -32,21 +32,18 @@
   ],
   "expected": "同步显式请求完整字段；整日自由流通关键字段均不可用时不得写入并宣称成功，失败返回非零退出码；个股正常缺失和既有有限值保留。不修改因子/推理策略，不伪造回填数据。生产缺失字段补写另待DEV验证及具体DML授权。",
   "file_scope_contract": {
-    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+      "scripts/ingest_tushare_daily_basic.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
       "scripts/ingest_tushare_daily_basic.py",
-      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+      "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
     ],
-    "planned_files": [
-      "scripts/ingest_tushare_daily_basic.py",
-      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
-    ],
-    "scope_files": [
-      "scripts/ingest_tushare_daily_basic.py",
-      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
-    ],
-    "changed_files_source": "root_cause_scope_correction",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_daily_basic.py",
@@ -93,7 +90,16 @@
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
       ],
       "unmatched_files": []
-    }
+    },
+    "planned_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ]
   },
   "first_seen_at": "2026-09-07T06:35:31.435182Z",
   "fix_branch": null,
@@ -118,15 +124,19 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
     "backend_restart_owner": "user",
-    "runtime_impact": "none",
     "backend_restart_required": false,
-    "persistence_basis": "git_tracked_source",
-    "inference_basis": "planned_scope",
     "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
