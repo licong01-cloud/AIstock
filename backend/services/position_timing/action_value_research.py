@@ -895,14 +895,42 @@ def _replay_one_sleeve(
             decision_reason = "DECISION_BAR_SUSPENDED_OR_MISSING"
 
         target_action = corporate_actions.on(symbol, calendar_dates[target_ordinal])
-        if decision_reference is None and target_action is None:
-            policy_target_state, buy_hold_target_state, l1_target_state = (
-                policy_state,
-                buy_hold_state,
-                l1_state,
-            )
+        if decision_reference is None:
             target_reference = last_valuation_price
-            policy_fractional = buy_hold_fractional = l1_fractional = Decimal(0)
+            if target_action is None:
+                policy_target_state, buy_hold_target_state, l1_target_state = (
+                    policy_state,
+                    buy_hold_state,
+                    l1_state,
+                )
+                policy_fractional = buy_hold_fractional = l1_fractional = Decimal(0)
+            else:
+                if target_action.source_available_at > decision_as_of:
+                    raise ActionValueError(
+                        "CORPORATE_ACTION_NOT_VISIBLE_AT_DECISION",
+                        symbol=symbol,
+                        effective_trade_date=calendar_dates[target_ordinal].isoformat(),
+                    )
+                next_trade_date = (
+                    calendar_dates[target_ordinal + 1]
+                    if target_ordinal + 1 < len(calendar_dates)
+                    else None
+                )
+                applications = tuple(
+                    apply_corporate_action_with_audit(
+                        state,
+                        target_action,
+                        next_trade_date=next_trade_date,
+                    )
+                    for state in (policy_state, buy_hold_state, l1_state)
+                )
+                policy_target_state, buy_hold_target_state, l1_target_state = (
+                    application.state for application in applications
+                )
+                policy_fractional, buy_hold_fractional, l1_fractional = (
+                    application.fractional_share_discarded
+                    for application in applications
+                )
         else:
             policy_target_state, target_reference, target_action, policy_fractional = _project_target_state(
                 state=policy_state,
