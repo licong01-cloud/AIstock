@@ -547,6 +547,13 @@ def frontend_type_lint(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_experiment_registry_ui(session: nox.Session) -> None:
+    """Run the mocked QE experiment registry and progress UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/quantevolver/qe_experiment_history_registry.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def hmm_evolution_ui(session: nox.Session) -> None:
     """Run only the HMM Evolution mocked UI contract."""
 
@@ -1259,6 +1266,9 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
         "backend/tests/quantevolver/test_qe_active_dataset_profile_api.py",
         "backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py",
+        "backend/tests/quantevolver/test_qe_experiment_history_contract.py",
+        "backend/tests/quantevolver/test_qe_reconciliation_coordinator.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
         "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
@@ -3315,6 +3325,7 @@ def qe_data_contract_backend(session: nox.Session) -> None:
         session,
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/mcp/test_domain_modules.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "-q",
         "-p",

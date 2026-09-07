@@ -485,12 +485,14 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-16 | Batch A 首轮源码审核 | 直接分散写入会继续产生分发前不可见窗口，Multi-Alpha 还可能先物化 child workspace | 新增薄 `qe_run_registry` 并把 single/custom/strategy/auto/Multi-Alpha/durable 收敛为 reservation-before-dispatch | resolved |
 | Review-17 | 事务与身份不可变性 | 初稿回读位于显式 commit 后，且任务登记覆盖 base experiment 原始来源 | 改为 managed transaction 内回读失败回滚；任务登记写入既有 `qe_evolution_tasks.strategy_evo_config`，保留 base identity | resolved |
 | Review-18 | UI/GET 负载与状态语义 | 初稿仍可能在隐藏页面首次加载，且数据库原始状态未统一投影 | 隐藏页不发起初始加载/SSE/轮询；可见页 fallback 不短于 30 秒；仅在响应层映射 canonical status | resolved |
+| Review-19 | PR CI 分类与测试可达性 | 新增 QE Backend/MCP/Playwright 测试虽已本地执行，但未全部挂入现有 catalog/nox 计划，CI fail closed | 精确映射三个 QE 测试到 `qe_read_backend`、MCP 合同到 `qe_data_contract_backend`，并新增单一 mocked UI 目标；不使用宽泛通配或跳过 | resolved |
+| Review-20 | 已激活数据集下的测试隔离 | 两个既有 QE 测试会读取本机活动 profile，导致测试结果依赖工作站状态 | 仅在对应单元测试 fixture 中显式隔离 active profile；生产 fail-closed 路径不改动 | resolved |
 
 ## 14. Delivery Batch A 实施状态
 
 - 当前源码状态：`BATCH_A_SOURCE_READY_PENDING_CI_MERGE_RESTART`。
 - 已完成：统一预登记、事务内回读、任务/loop 与 Multi-Alpha parent/group 计划、durable readback、MCP/UI/source/purpose 摘要、只读历史/详情投影、GET 去远端写回、最小 UI 进度与隐藏页零轮询。
-- 本地证据：Batch A 及相关 QE/Multi-Alpha/MCP 回归 298 passed；Ruff、py_compile、diff-check 通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；Playwright 与 TypeScript/build 必须由 PR CI 绑定最终 HEAD 执行。
+- 本地证据：Batch A 聚焦回归 299 passed；`qe_read_backend` 316 passed / 1 skipped，`qe_data_contract_backend` 46 passed，`qe_sector_risk_overlay_backend` 90 passed，`platform_api_backend` 15 passed，Validation catalog/ownership/classifier 96 passed；F2 19/19、L0、Ruff、py_compile、diff-check 均通过。前端 worktree 未安装 `node_modules`，没有擅自安装依赖；Playwright 与 TypeScript/build 必须由 PR CI 绑定最终 HEAD 执行。
 - 未执行：source merge、Backend/Frontend 运行态激活、用户重启、WSL/remote 真实实验、Archive 写入、历史补账、DDL/DML、依赖安装和进程控制。
 - `BATCH_A_REGISTERED_RUNTIME_READY` 尚未达到；它只能在 source 合入、用户按 runtime contract 重启以及 post-restart 双节点/最小 UI readback 通过后声明。
 
