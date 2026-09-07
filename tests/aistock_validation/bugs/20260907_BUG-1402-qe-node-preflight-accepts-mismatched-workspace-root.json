@@ -2,7 +2,7 @@
   "actual": "Preflight accepted workspace_base='.' and the submitted WSL qrun failed because its command workspace did not exist.",
   "allowed_write_scope": [
     "backend/services/quantevolver/node_execution.py",
-    "backend/tests/unified_engine/test_qe_node_execution.py",
+    "backend/tests/quantevolver/test_qe_registered_submission.py",
     "tests/aistock_validation/bugs/20260907_BUG-1402-qe-node-preflight-accepts-mismatched-workspace-root.json"
   ],
   "assigned_agent": null,
@@ -30,20 +30,20 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/quantevolver/node_execution.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
       "tests/aistock_validation/bugs/20260907_BUG-1402-qe-node-preflight-accepts-mismatched-workspace-root.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/node_execution.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
       "tests/aistock_validation/bugs/20260907_BUG-1402-qe-node-preflight-accepts-mismatched-workspace-root.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/node_execution.py",
-        "backend/tests/unified_engine/test_qe_node_execution.py"
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -68,7 +68,7 @@
           "rule_id": "qe_services"
         },
         {
-          "file": "backend/tests/unified_engine/test_qe_node_execution.py",
+          "file": "backend/tests/quantevolver/test_qe_registered_submission.py",
           "impact_modules": [
             "qe.single_experiment",
             "qe.custom_evolution",
@@ -86,18 +86,18 @@
       ],
       "suggested_scope": [
         "backend/services/quantevolver/node_execution.py",
-        "backend/tests/unified_engine/test_qe_node_execution.py"
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/quantevolver/node_execution.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py"
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/node_execution.py",
-      "backend/tests/unified_engine/test_qe_node_execution.py"
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
     ]
   },
   "first_seen_at": "2026-09-07T15:16:29.668482Z",
@@ -125,8 +125,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?detail=summary&limit=1",
     "fresh_process_evidence": [
-      "fresh Python process: backend/tests/unified_engine/test_qe_node_execution.py passed 13 tests; invalid, relative, non-canonical and DB/API-mismatched workspace roots fail before dispatch",
-      "fresh Python process at c3ec23f2b: node preflight regression 13 passed"
+      "fresh Python process: backend/tests/quantevolver/test_qe_registered_submission.py passed 25 tests; invalid, relative, non-canonical and DB/API-mismatched workspace roots fail before dispatch",
+      "fresh Python process after CI-lane repair: registered submission regression passed 25 tests"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
