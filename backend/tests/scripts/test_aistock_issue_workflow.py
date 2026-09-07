@@ -11554,7 +11554,7 @@ def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.M
     assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
 
 
-def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> None:
+def test_merge_quality_contract_accepts_ci_verdict_without_codeql() -> None:
     result = workflow._normalize_merge_quality_check_result(
         {
             "ok": True,
@@ -11569,7 +11569,7 @@ def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> Non
     assert result is not None
     summary = workflow._required_pr_check_summary(result)
     assert summary["passed"] == ["CI verdict"]
-    assert summary["pending"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS[1:])
+    assert summary["pending"] == []
 
 
 def test_close_sync_merge_quality_contract_only_requires_ci_verdict() -> None:
