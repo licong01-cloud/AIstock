@@ -173,7 +173,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "fresh Python process: 59 focused tests passed at HEAD 98bdbed45; ConfigComposer excluded registered metadata and persistence capture retained it"
+      "fresh Python process: 59 focused tests passed at HEAD 98bdbed45; ConfigComposer excluded registered metadata and persistence capture retained it",
+      "fresh Python process d19f8eb10: registered control metadata excluded from strategy YAML; persistence regression retains provenance and factor sources"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
