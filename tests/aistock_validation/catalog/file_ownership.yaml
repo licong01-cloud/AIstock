@@ -203,6 +203,8 @@ rules:
     priority: 123
     include:
       - scripts/qe_alpha_candidates/**
+      - backend/tests/quantevolver/test_rotation_index_factors.py
+      - backend/tests/quantevolver/test_rotation_liquidity_factors.py
       - backend/tests/quantevolver/test_sector_participation_gap_v2.py
       - backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py
       - backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py

@@ -184,6 +184,7 @@ class BatchComputeConfig:
     validation_mode: str | None = None
     expected_factor_count: int | None = None
     resumed_from_task_id: str | None = None
+    supplemental_data_dir: str | None = None
 
 
 class OfficialFactorBatchComputeService:
@@ -250,7 +251,8 @@ class OfficialFactorBatchComputeService:
         )
 
         resource_at_start = _resource_snapshot()
-        base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date)
+        extra_inputs = {"supplemental_data_dir": cfg.supplemental_data_dir} if cfg.supplemental_data_dir else {}
+        base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date, **extra_inputs)
         base_cache_manifest = base_cache.manifest()
         resource_after_base = _resource_snapshot()
         self._emit(
@@ -753,6 +755,7 @@ class OfficialFactorBatchComputeService:
             resumed_from_task_id=(str(data.get("resumed_from_task_id")).strip() or None)
             if data.get("resumed_from_task_id") is not None
             else None,
+            supplemental_data_dir=str(data["supplemental_data_dir"]) if data.get("supplemental_data_dir") else None,
         )
 
     def _select_batch_workers(self, requested_workers: int, snapshot: ResourceSnapshot) -> int:
