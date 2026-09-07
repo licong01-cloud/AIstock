@@ -3,13 +3,14 @@
 > **设计层级**：F2
 > **版本**：v1.3
 > **日期**：2026-09-04
-> **状态**：`DESIGN_READY_USER_APPROVED_SOURCE_IMPLEMENTED_REVIEW_COMPLETE_PENDING_PR`
-> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.43
+> **状态**：`DESIGN_READY_USER_APPROVED_SOURCE_MERGED_PENDING_FORMAL_39FIT`
+> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.44
 > **终极目标**：在同一个G2-A闭环内交付真实日度L1板块轮动预测、最小repository/read API和真实`/hmm-risk` L1热力图，而不是只交付模型、fit、artifact、receipt或market regime页面。
 > **2026-09-04批准边界**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
 > **历史v1.2批准边界**：用户曾一次性批准§10.1的504日rolling、特征完整性、Ridge/horizon规则、LightGBM 4.6.0 profile、coverage、state projection与最小DB/API设计合同；当时未授权源码、39 fits、tail读取、DDL或runtime activation。其后源码与development实验分别获得授权，实际终态见§19.4～§19.5。
 > **2026-09-06 MARKET-CONTEXT-A批准边界**：每个decision date `t`仅使用同release CSI300截至`t-1`的`daily_return`与`volatility_3d=population_std(ddof=0)`；每fold在固定504日target-free train上执行train-only z-score，复用K=2 jump、`lambda=4.0`、`seed=42`。semantic score固定为standardized center `daily_return-volatility_3d`，较高state映射`risk_on`、较低state映射`risk_off`。5D/10D共享同一fold-local fit；缺数、非有限、state tie或因果递推失败均fail closed，不补默认状态、不重新拟合、不读取target。39-fit总预算及其余v1.2合同不变。
 > **2026-09-06 LEAF-DISTRIBUTION-C批准边界**：G2-A v1.2保持`STRUCTURAL_ACCEPTANCE_FAILED`且不得回写；v1.3保持`min_child_samples=310`，每叶distinct decision dates硬底线为`ceil(310/31)=10`，全部实际叶中低于20日的比例必须`<=1%`。任一叶低于10日或低于20日的比例超过1%均typed fail closed；不得把20直接改成18、不得据此调参或续跑v1.2。其余G2-A合同和39-fit预算全部不变。
+> **2026-09-07源码合入状态**：v1.3源码与readback测试已通过PR #4375合入main（merge commit `901218454df7b21a811c47c7a9b161337e1033c7`）。正式v1.3受控实验尚未启动（`0/39` fits）；未读取tail，未生成model/product，未执行DDL/DML、runtime activation或服务控制；严格产品进度仍为`11/17=64.71%`，CAPABILITY_AVAILABLE、FULL_READY和真实API/UI均为0。
 
 ---
 
@@ -494,7 +495,7 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.2；v1.3叶分布合同源码与readback测试已完成；新39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；HMM module 743 passed、coverage 76.99%；两份F2 validator PASS；真实direct-v2 development bundle Windows/WSL readback | V1_3_SOURCE_IMPLEMENTED_REVIEW_COMPLETE_APPROVED_BY_USER_PENDING_PR | v1.2保持结构失败；v1.3正式39-fit只能在源码合入后的独立validation worktree执行；F-013产品链仍未实施 |
+| F-011 | 本设计D1～D5；`rotation_l1_gbdt.py`、离线CLI与development immutable input writer已实现v1.2；v1.3叶分布合同源码与readback测试已通过PR #4375合入main；新39 fits、tail读取、正式model/product writer均未执行 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；HMM module 743 passed、coverage 76.99%；两份F2 validator PASS；真实direct-v2 development bundle Windows/WSL readback；merge commit `901218454df7b21a811c47c7a9b161337e1033c7` | APPROVED_BY_USER_SOURCE_MERGED | 用户已批准v1.3叶分布合同；v1.2保持结构失败，v1.3正式实验仍为0/39 fits，只能在main合入版本的独立validation worktree从头执行；F-013产品链仍未实施 |
 | F-012 | 本设计§1.2、§8.3；现有isolation guard | 目标`backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | APPROVED_BY_USER_DESIGN_READY_PENDING_SOURCE_EVIDENCE | 用户已批准advisory-only业务语义；本次没有源码、数据库或runtime变更 |
 | F-013 | 本设计D6；目标prediction repository、两个read API和真实`/hmm-risk` L1热力图 | 目标`backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_api.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts` | APPROVED_BY_USER_REAL_OOF_EXPERIMENTAL_SURFACE_WITHOUT_CAPABILITY_DRIFT | research gate通过后允许真实OOF闭合最终工程链；不得使用mock/in-sample，也不得把`AVAILABLE_EXPERIMENTAL`冒充rotation capability或advisory AVAILABLE |
 
@@ -577,3 +578,4 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 - 叶矩阵必须为有限、非负、整数identity且行数与训练features/dates一致；空矩阵、硬底线失败或1%分布预算失败均保留typed failure和精确fit identity。
 - RED→GREEN覆盖单个18日叶在1%预算内通过、超过1%失败、任一叶低于10日失败、旧leaf/failure receipt即使重新哈希仍拒绝；完整HMM module为743 passed、coverage 76.99%，L0 blocking=0，两份F2 validator均PASS。
 - 三轮审核确认没有修改LightGBM参数、MARKET-CONTEXT-A、horizon、feature、MBE/MDE、research/tail双门、fit预算或tail边界；未执行fit、数据写入、DDL/DML、依赖安装或进程控制。
+- PR #4375已将v1.3源码与readback测试合入main（merge commit `901218454df7b21a811c47c7a9b161337e1033c7`）。该source merge不等于正式实验、tail授权、model/product完成、DDL实施或runtime生效；截至2026-09-07正式v1.3实验仍为`0/39` fits。
