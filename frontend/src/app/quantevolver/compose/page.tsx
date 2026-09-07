@@ -133,7 +133,7 @@ type QEDatasetProfile = {
   generation?: string | null;
   release_id?: string | null;
   cutoff: string;
-  defaults: Record<string, string>;
+  defaults: QEDataSplit;
   default_universe: { mode: "stock_universe" | "single_index" | "index_union"; pool_ids: string[] };
   available_nodes: string[];
   universes: Array<{ pool_id: string; label: string; available_start?: string; available_end?: string; gap_count?: number }>;
