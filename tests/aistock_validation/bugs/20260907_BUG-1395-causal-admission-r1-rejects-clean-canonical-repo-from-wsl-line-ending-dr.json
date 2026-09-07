@@ -1,0 +1,228 @@
+{
+  "actual": "prepare exits with ADVISORY_CAUSAL_REPOSITORY_INVALID although Windows git status is clean at merge commit e00fac12f.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+    "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1395-causal-admission-r1-rejects-clean-canonical-repo-from-wsl-line-ending-dr.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1395",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-07T11:16:59.006912Z",
+  "description": "prepare exits with ADVISORY_CAUSAL_REPOSITORY_INVALID although Windows git status is clean at merge commit e00fac12f.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260907-982b748a448f",
+      "timestamp": "2026-09-07T11:16:59.006899Z"
+    }
+  ],
+  "evidence_uris": [
+    "merge:e00fac12f; reason_code:ADVISORY_CAUSAL_REPOSITORY_INVALID"
+  ],
+  "expected": "Reuse the established cross-OS repository commit and dirty-path checks so a Windows-clean canonical main can freeze the WSL research request while real dirty paths still fail closed.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+        "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+        "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_pipeline.py"
+    ]
+  },
+  "first_seen_at": "2026-09-07T11:16:59.006912Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4398,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4398",
+  "last_seen_at": "2026-09-07T11:16:59.006912Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "wsl.exe -e /home/lc999/miniconda3/envs/rdagent-gpu/bin/python /mnt/f/Dev/AIstock/scripts/advisory_causal_admission_v2_mve.py prepare --parent-v1-bundle /mnt/f/Dev/AIstock_model_artifacts/advisory_n3_score_hmm_admission_20260905/score_hmm_admission_bundles/f8da2f70eb51b151b303ee5d19f12d9a651ba4b386291626f3dd33689a78f471 --repository-root /mnt/f/Dev/AIstock --output-root /mnt/f/Dev/AIstock_model_artifacts/advisory_n3_causal_admission_v21_20260907 --output /mnt/f/Dev/AIstock_model_artifacts/advisory_n3_causal_admission_v21_20260907/request.json",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Causal Admission R1 rejects clean canonical repo from WSL line-ending drift",
+  "trigger_condition": {
+    "fingerprint": "982b748a448faa326c6c368c",
+    "source_event_id": "FE-20260907-982b748a448f"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
