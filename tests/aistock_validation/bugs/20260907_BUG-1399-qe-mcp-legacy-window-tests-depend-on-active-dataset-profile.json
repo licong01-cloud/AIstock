@@ -1,0 +1,253 @@
+{
+  "actual": "qe_mcp_backend reports two false failures when AISTOCK_ACTIVE_DATASET_PROFILE_PATH points to the active 2026-08-31 profile.",
+  "allowed_write_scope": [
+    "backend/tests/qe_templates/test_template_validator.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1399-qe-mcp-legacy-window-tests-depend-on-active-dataset-profile.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1399",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-07T13:04:44.223291Z",
+  "description": "qe_mcp_backend reports two false failures when AISTOCK_ACTIVE_DATASET_PROFILE_PATH points to the active 2026-08-31 profile.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260907-e9708a522b28",
+      "timestamp": "2026-09-07T13:04:44.223274Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-1397 required validation: 2 failed, 47 passed; isolated nodeids 2 passed"
+  ],
+  "expected": "Legacy-window validation tests explicitly pin their historical data_split and pass regardless of the operator active dataset profile.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/qe_templates/test_template_validator.py",
+      "backend/tests/test_aistock_qe_mcp_servers.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/qe_templates/test_template_validator.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py"
+      ],
+      "impacted_modules": [
+        "tests.backend",
+        "qe.active_dataset_universe",
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.sector_risk_overlay",
+        "platform.mcp_gateway"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/qe_templates/test_template_validator.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/test_aistock_qe_mcp_servers.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        }
+      ],
+      "risk_levels": [
+        "medium",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/qe_templates/test_template_validator.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/qe_templates/test_template_validator.py",
+      "backend/tests/test_aistock_qe_mcp_servers.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/qe_templates/test_template_validator.py",
+      "backend/tests/test_aistock_qe_mcp_servers.py"
+    ]
+  },
+  "first_seen_at": "2026-09-07T13:04:44.223291Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4408,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4408",
+  "last_seen_at": "2026-09-07T13:04:44.223291Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m nox -s qe_mcp_backend",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend",
+    "qe_mcp_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE MCP legacy-window tests depend on active dataset profile",
+  "trigger_condition": {
+    "fingerprint": "e9708a522b2854eb0860f5e6",
+    "source_event_id": "FE-20260907-e9708a522b28"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read",
+        "qe_sector_risk_overlay",
+        "qe_mcp"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_sector_risk_overlay_backend",
+        "qe_mcp_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read",
+          "qe_sector_risk_overlay",
+          "qe_mcp"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_sector_risk_overlay_backend",
+          "qe_mcp_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
