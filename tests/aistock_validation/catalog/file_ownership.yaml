@@ -593,6 +593,7 @@ rules:
       - backend/tests/quantevolver/test_stock_pool_sync.py
       - backend/tests/quantevolver/test_official_factor_batch_compute.py
       - backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py
+      - backend/tests/quantevolver/test_qe_payload_summary_services.py
       - backend/tests/test_correlation_compute_independence.py
       - backend/tests/test_factor_st_pit_metrics_cache.py
       - backend/tests/test_factor_metrics_h20_contract.py

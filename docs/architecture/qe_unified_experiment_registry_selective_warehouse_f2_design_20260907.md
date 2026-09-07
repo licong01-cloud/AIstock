@@ -507,6 +507,6 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 - 已实现：日期、来源、实验类型、Alpha 模式、用途、canonical 状态、节点、模型、因子、数据 release、股票池、分钟执行算法、Archive 状态和业务文本的服务端筛选；父级稳定分页；UI 不再默认全量拉取；MCP 暴露相同的人类可读筛选。
 - 已实现：列表与详情展示登记、节点、release/cutoff、股票池、seed、label、分钟执行、时间线、失败原因、artifact retention 和 Archive 推荐/状态；日志只在显式点击后读取。
 - 已实现：正式登记 experiment/task/loop 的 workspace 清理保留 Level 0 控制记录和指标，并写入 `_qe_artifact_retention.status=cleaned`；未登记 legacy 行继续保持既有删除兼容性。
-- 本地证据：聚焦 Backend/MCP/cleanup/Archive 状态合同 58 passed；`qe_read_backend` 294 passed / 1 skipped；`qe_data_contract_backend` 46 passed；F2 validator 19/19；L0 blocking=0；ownership 12/12；Ruff、py_compile、TypeScript syntax transpile 和 diff-check 通过。Archive 状态筛选在释放历史查询连接后再调用现有 Archive service，测试确认单次请求不存在双连接重叠占用。
+- 本地证据：聚焦 Backend/MCP/cleanup/Archive 状态合同 58 passed；`qe_read_backend` 294 passed / 1 skipped；`qe_data_contract_backend` 46 passed；F2 validator 19/19；L0 blocking=0；changed-files ownership 15/15；CI classifier 本地复验 `targeted_ci_required`、`unmapped_code_files=[]`、`unexecuted_test_files=[]`；`test_noxfile_validation_env.py` 17 passed；validation catalog/module registry 均通过；Ruff、py_compile、TypeScript syntax transpile 和 diff-check 通过。Archive 状态筛选在释放历史查询连接后再调用现有 Archive service，测试确认单次请求不存在双连接重叠占用。
 - 验证委托：worktree 未安装依赖、未启动本地前后端；TypeScript 类型检查、Lint、精确 mocked Playwright、Archive 全回归和跨模块业务流交由最终 PR CI。Batch C 的真实 WSL/remote、用户重启恢复、UI 与授权 MCP Archive 写入仍不在本批源码结论内。
 - 生产边界：DDL/DML=noop，dependency install=noop，Archive write=noop，experiment submission=noop，dataset write=0，backend/worker/frontend process control=false。
