@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1387",
-  "closed_at": null,
+  "closed_at": "2026-09-07T09:56:11.896640Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -187,10 +187,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1387\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1387",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b90b243a2501f6ae257cff2e4bcb31f91d8670cdf446e0ec25cbd786261a49a8",
+      "contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+      "expected_identity": "e8cef63f8f0243dbf7b5dde956bec73aaebeb46b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-07T09:54:09.954078Z",
+      "mode": "read_only",
+      "observed_identity": "5bf975e98b7afeaebb27cce73ec250fd268d5090",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e0b7d164d359a51d3eb823f2cbad787538b908d360b4f7d5c38323503fc0a43a",
+      "receipt_sha256": "ac76bcf5a7439e02fbced60e8ddb10f1d0ca4bd4a6def0a9490230daa8afde7d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c220bf6adb224a1eb1d600a58a30ea49dcf57f57f45a132fbff0f257daf0c881",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -221,7 +243,7 @@
     ],
     "validation_evidence_digest": "1c4998b602697a3eff097f08c7a9dd28a071e264ff477c6b4c04760013e8bf2f"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
