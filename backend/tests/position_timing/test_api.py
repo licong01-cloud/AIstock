@@ -16,6 +16,7 @@ def test_block_one_get_endpoints_do_not_create_timing_artifacts(service_factory)
 
     assert client.get("/api/v1/position-timing/intents").status_code == 200
     assert client.get("/api/v1/position-timing/cards/current").status_code == 200
+    assert client.get("/api/v1/position-timing/model-advice/current").status_code == 200
     assert client.get("/api/v1/position-timing/evidence").status_code == 200
     assert client.get("/api/v1/position-timing/alerts/poll").status_code == 200
     assert not service.store.root.exists()
@@ -56,6 +57,7 @@ def test_block_one_api_surface_and_side_effect_boundaries(service_factory) -> No
     materialize = client.post("/api/v1/position-timing/materialize")
     assert materialize.status_code == 200
     assert materialize.json()["outcome_materialization_status"] == "NO_DUE_OUTCOMES"
+    assert materialize.json()["model_advice_materialization_status"] == "MODEL_RESEARCH_NOT_AVAILABLE"
     assert len(materialize.json()["card_set"]["cards"]) == 2
     assert len(materialize.json()["card_set"]["cards_sha256"]) == 64
 
@@ -83,6 +85,7 @@ def test_block_one_api_surface_and_side_effect_boundaries(service_factory) -> No
     assert not any("order" in path for path in route_paths)
     assert "/api/v1/position-timing/alerts/poll" in route_paths
     assert "/api/v1/position-timing/alerts/{trigger_id}/claim" in route_paths
+    assert "/api/v1/position-timing/model-advice/current" in route_paths
 
 
 def test_alert_poll_and_claim_api_use_bounded_snapshot(service_factory) -> None:
