@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "scripts/ingest_tushare_daily_basic.py",
     "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
-    "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json"
+    "tests/aistock_validation/bugs/20260907_BUG-1388-advisory-strategypackage.json",
+    "noxfile.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1388",
@@ -30,7 +31,7 @@
     "Tushare只读重查：20260831 5545/5545，20260904 5548/5548（turnover_rate_f/free_share）；首次20260904投影查询空响应，未当成完整证据",
     "https://tushare.pro/document/2?doc_id=32"
   ],
-  "expected": "同步显式请求完整字段；整日自由流通关键字段均不可用时不得写入并宣称成功，失败返回非零退出码；个股正常缺失和既有有限值保留。不修改因子/推理策略，不伪造回填数据。生产缺失字段补写另待DEV验证及具体DML授权。",
+  "expected": "同步显式请求完整字段；整日自由流通关键字段均不可用或交易日空响应时不得写入并宣称成功，增量失败不得跳日，失败返回非零退出码；个股正常缺失和既有有限值保留。不修改因子/推理策略，不伪造回填数据。对应直接测试必须由local_data验证计划真实收集。",
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
