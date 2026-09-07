@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
@@ -227,6 +228,7 @@ def test_registration_rejects_unknown_purpose() -> None:
 def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(composer_module, "load_active_qe_profile", lambda: None)
     composer = ConfigComposer()
     monkeypatch.setattr(
         composer,
