@@ -101,8 +101,8 @@
   },
   "first_seen_at": "2026-09-07T10:06:30.451267Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
+  "fixed_at": "2026-09-07T10:44:48Z",
   "github_issue_number": 4389,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4389",
   "last_seen_at": "2026-09-07T10:06:30.451267Z",
@@ -110,6 +110,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4393",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,6 +135,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -145,7 +147,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1392",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ffeebb525e261f68",
+    "recorded_at": "2026-09-07T10:45:47.158350Z",
+    "runtime_contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "faaced094dc769ac76fb16c69d347e45c4915bb3",
+    "source_merge_commit": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4393",
+    "validation_evidence": [
+      "validation-receipt: id=fd37cd1e56cb5457 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider` result=`PASS (54 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
+      "validation-receipt: id=73a24a8de6532e63 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`PASS (8 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
+      "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`"
+    ],
+    "validation_evidence_digest": "9c9c67efad644895add23e3b881f5996ee005ee03ee81ac0e34ab9f211aeda91"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -154,6 +179,11 @@
     "fingerprint": "40abc74fc6ca9807d1658cef",
     "source_event_id": "FE-20260907-40abc74fc6ca"
   },
+  "validation_evidence": [
+    "validation-receipt: id=fd37cd1e56cb5457 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider` result=`PASS (54 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
+    "validation-receipt: id=73a24a8de6532e63 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`PASS (8 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
+    "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
