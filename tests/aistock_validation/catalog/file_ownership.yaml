@@ -134,6 +134,23 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: F-014 Phase 3 compact persistence, allowlisted snapshot resolution, and bounded QE-only API/MCP form one cross-module feature delivery.
+  - rule_id: qe_active_dataset_universe_management
+    priority: 140
+    include:
+      - backend/services/quantevolver/qe_active_dataset_profile.py
+      - backend/tests/quantevolver/test_qe_active_dataset_profile.py
+      - backend/tests/quantevolver/test_qe_active_dataset_profile_api.py
+      - backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py
+      - backend/tests/quantevolver/test_qe_universe_comparison.py
+      - backend/tests/test_aistock_qe_mcp_servers.py
+      - backend/tests/unified_engine/test_custom_evo_mutation_routes.py
+      - scripts/aistock_qe_experiment_mcp_server.py
+      - scripts/qe_active_dataset_profile.py
+    primary_module: qe.active_dataset_universe
+    impact_modules: [qe.core, qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.sector_risk_overlay, platform.mcp_gateway]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: The active profile, immutable binding lifecycle, semantic universe controls, and thin MCP adapter form one QE creation contract.
   - rule_id: qe_sector_risk_overlay
     priority: 124
     include:

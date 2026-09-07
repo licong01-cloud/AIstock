@@ -14,18 +14,19 @@ Execution modes:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
 import uuid
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ...db.pg_pool import get_conn
-from .experiment_config import ExperimentConfig, MultiAlphaConfig, AlphaGroup
-from .meta_model import MetaModelCombiner
+from .experiment_config import AlphaGroup, ExperimentConfig
 from .multi_alpha_resource_planner import plan_assignments, GroupAssignment
+from .qe_active_dataset_profile import (
+    QEActiveDatasetProfile,
+    resolve_and_apply_active_qe_dataset,
+)
 
 logger = logging.getLogger("aistock.quantevolver.multi_alpha_engine")
 
@@ -44,6 +45,8 @@ class MultiAlphaEngine:
         experiment_config: ExperimentConfig,
         composer: Any = None,
         available_nodes: list[dict[str, Any]] | None = None,
+        active_dataset_profile: QEActiveDatasetProfile | None = None,
+        universe_selection: dict[str, Any] | None = None,
     ):
         if experiment_config.alpha_mode != "multi":
             raise ValueError("MultiAlphaEngine requires alpha_mode='multi'")
@@ -54,6 +57,26 @@ class MultiAlphaEngine:
         self.ma_config = experiment_config.multi_alpha_config
         self.composer = composer
         self.available_nodes = available_nodes
+        self.active_dataset_profile = active_dataset_profile
+        self.universe_selection = universe_selection
+
+    def _resolve_node_dataset(
+        self,
+        *,
+        node_id: str,
+        custom_params: dict[str, Any],
+    ) -> tuple[dict[str, str] | None, dict[str, Any], dict[str, Any] | None]:
+        active_profile = getattr(self, "active_dataset_profile", None)
+        if active_profile is None:
+            return self.config.data_split, custom_params, None
+        return resolve_and_apply_active_qe_dataset(
+            node_id=node_id,
+            data_split=self.config.data_split,
+            universe_selection=getattr(self, "universe_selection", None),
+            custom_params=custom_params,
+            label_horizon=int(self.config.label_horizon or 1),
+            profile=active_profile,
+        )
 
     def run(self) -> dict[str, Any]:
         """Run the full Multi-Alpha pipeline.
@@ -218,13 +241,17 @@ class MultiAlphaEngine:
         # 多Alpha默认禁用Alpha158（除非实验配置中显式启用）
         if "disable_alpha158" not in custom_params:
             custom_params["disable_alpha158"] = True
+        resolved_split, custom_params, _resolved_summary = self._resolve_node_dataset(
+            node_id=node_id,
+            custom_params=custom_params,
+        )
 
         # 统一回测模式：所有组 train_only=True，不传 execution_algo（从节点不需要v24）
         result = self.composer.compose_experiment_in_memory(
             factor_names=group.factor_names,
             model_id=group.model_id,
             strategy_id=self.config.strategy_id,
-            data_split=self.config.data_split,
+            data_split=resolved_split,
             custom_params=custom_params,
             experiment_name=f"{self.config.experiment_name or 'malpha'}_{group.group_name}",
             skip_db_save=True,
@@ -301,19 +328,28 @@ class MultiAlphaEngine:
         custom_params = self.config.build_custom_params()
         if "disable_alpha158" not in custom_params:
             custom_params["disable_alpha158"] = True
+        primary_node_id = str(
+            group_configs[0].get("node_id")
+            or getattr(self.config, "node_id", None)
+            or "wsl2-5080"
+        )
+        resolved_split, custom_params, _resolved_summary = self._resolve_node_dataset(
+            node_id=primary_node_id,
+            custom_params=custom_params,
+        )
 
         result = self.composer.compose_experiment_in_memory(
             factor_names=first_group_obj.factor_names,
             model_id=first_group_obj.model_id,
             strategy_id=self.config.strategy_id,
-            data_split=self.config.data_split,
+            data_split=resolved_split,
             custom_params=custom_params,
             experiment_name=f"{self.config.experiment_name or 'malpha'}_unified_backtest",
             skip_db_save=True,
             execution_algo=self.config.execution_algo,
             execution_algo_params=self.config.execution_algo_params,
             strategy_params=self.config.build_strategy_params(),
-            node_id=None,
+            node_id=primary_node_id,
             train_only=False,
         )
         files = result.get("experiment_files") or {}

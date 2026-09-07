@@ -32,6 +32,7 @@ from ..qe_active_execution_capacity import (
     submission_intent_hash_for_source,
 )
 from ..runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
+from ..qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
 from .base import BaseExecutor, ExecutionContext, ExecutionResult
 
 logger = logging.getLogger("aistock.quantevolver.executors.backtest")
@@ -191,7 +192,7 @@ class BacktestExecutor(BaseExecutor):
         loop = asyncio.get_running_loop()
         def compose_call() -> tuple[dict[str, Any], dict[str, Any] | None]:
             stock_pool_payload = None
-            if ctx.node_id:
+            if ctx.node_id and QE_DIRECT_V2_DATASET_BINDING_PARAM not in custom_params:
                 from ..stock_pool_sync import prepare_stock_pool_loop_payload_for_compute_node_by_id
 
                 stock_pool_payload = prepare_stock_pool_loop_payload_for_compute_node_by_id(

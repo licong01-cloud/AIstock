@@ -45,6 +45,13 @@ def _client() -> LoopbackApiClient:
 
 
 @mcp.tool()
+def qe_dataset_profile_get() -> dict[str, Any]:
+    """Read current QE release, default dates, nodes, and human-readable universes."""
+
+    return _client().get("/quantevolver/dataset-profile")
+
+
+@mcp.tool()
 def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False, detail: str = "summary") -> dict[str, Any]:
     if detail not in {"summary", "full"}:
         raise ValueError("detail must be summary or full")
@@ -224,6 +231,167 @@ def qe_template_create(template_kind: str, title: str, config_json: dict[str, An
     if not validation.get("valid"):
         raise ValueError("template validation failed: " + "; ".join(validation.get("errors") or []))
     return _client().post("/qe-templates", {"template_kind": template_kind, "title": title, "description": description, "config_json": normalized_config, "archive_policy": archive_policy})
+
+
+@mcp.tool()
+def qe_single_experiment_template_create(
+    title: str,
+    factor_names: list[str],
+    model_id: str,
+    strategy_id: str | None = None,
+    node_id: str | None = None,
+    universe_mode: str = "stock_universe",
+    pool_ids: list[str] | None = None,
+    train_start: str | None = None,
+    train_end: str | None = None,
+    valid_start: str | None = None,
+    valid_end: str | None = None,
+    test_start: str | None = None,
+    test_end: str | None = None,
+    backtest_end: str | None = None,
+    random_seed: int = 123,
+    archive_policy: str = "AUTO",
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Create a QE template without asking callers for internal dataset JSON or paths."""
+
+    split_values = {
+        "train_start": train_start,
+        "train_end": train_end,
+        "valid_start": valid_start,
+        "valid_end": valid_end,
+        "test_start": test_start,
+        "test_end": test_end,
+        "backtest_end": backtest_end,
+    }
+    config: dict[str, Any] = {
+        "factor_names": list(factor_names),
+        "model_id": model_id,
+        "strategy_id": strategy_id,
+        "node_id": node_id,
+        "universe_selection": {
+            "mode": universe_mode,
+            "pool_ids": list(pool_ids or []),
+        },
+        "custom_params": {"random_seed": int(random_seed)},
+    }
+    explicit_split = {key: value for key, value in split_values.items() if value}
+    if explicit_split:
+        config["data_split"] = explicit_split
+    normalized_config = ensure_template_fixed_seeds("single_experiment", config)
+    validation = validate_template_payload("single_experiment", normalized_config)
+    if not validation.get("valid"):
+        raise ValueError("template validation failed: " + "; ".join(validation.get("errors") or []))
+    return _client().post(
+        "/qe-templates",
+        {
+            "template_kind": "single_experiment",
+            "title": title,
+            "description": description,
+            "config_json": normalized_config,
+            "archive_policy": archive_policy,
+        },
+    )
+
+
+def _comparison_base_loop(
+    *,
+    factor_keys: list[str],
+    model_id: str,
+    strategy_id: str | None,
+    node_id: str | None,
+    random_seed: int,
+    topk: int,
+    n_drop: int,
+    label_horizon: int,
+    execution_algo: str,
+    train_start: str | None,
+    train_end: str | None,
+    valid_start: str | None,
+    valid_end: str | None,
+    test_start: str | None,
+    test_end: str | None,
+    backtest_end: str | None,
+) -> dict[str, Any]:
+    split = {
+        key: value
+        for key, value in {
+            "train_start": train_start,
+            "train_end": train_end,
+            "valid_start": valid_start,
+            "valid_end": valid_end,
+            "test_start": test_start,
+            "test_end": test_end,
+            "backtest_end": backtest_end,
+        }.items()
+        if value
+    }
+    loop: dict[str, Any] = {
+        "factor_keys": list(factor_keys),
+        "model_id": model_id,
+        "strategy_id": strategy_id,
+        "strategy_params": {"topk": int(topk), "n_drop": int(n_drop)},
+        "runtime_flags": {"random_seed": int(random_seed)},
+        "label_horizon": int(label_horizon),
+        "execution_algo": execution_algo,
+        "node_id": node_id,
+    }
+    if split:
+        loop["data_split"] = split
+    return loop
+
+
+@mcp.tool()
+def qe_universe_comparison_task_create(
+    task_name: str,
+    pool_ids: list[str],
+    factor_keys: list[str],
+    model_id: str,
+    strategy_id: str | None = None,
+    node_id: str | None = None,
+    random_seed: int = 123,
+    topk: int = 50,
+    n_drop: int = 5,
+    label_horizon: int = 20,
+    execution_algo: str = "TWAP",
+    train_start: str | None = None,
+    train_end: str | None = None,
+    valid_start: str | None = None,
+    valid_end: str | None = None,
+    test_start: str | None = None,
+    test_end: str | None = None,
+    backtest_end: str | None = None,
+    auto_start: bool = False,
+) -> dict[str, Any]:
+    """Create independent same-strategy index-pool arms without dataset paths or JSON."""
+
+    return _client().post(
+        "/quantevolver/evolution/universe-comparison-tasks",
+        {
+            "task_name": task_name,
+            "pool_ids": list(pool_ids),
+            "base_loop": _comparison_base_loop(
+                factor_keys=factor_keys,
+                model_id=model_id,
+                strategy_id=strategy_id,
+                node_id=node_id,
+                random_seed=random_seed,
+                topk=topk,
+                n_drop=n_drop,
+                label_horizon=label_horizon,
+                execution_algo=execution_algo,
+                train_start=train_start,
+                train_end=train_end,
+                valid_start=valid_start,
+                valid_end=valid_end,
+                test_start=test_start,
+                test_end=test_end,
+                backtest_end=backtest_end,
+            ),
+            "node_id": node_id,
+            "auto_start": bool(auto_start),
+        },
+    )
 
 
 @mcp.tool()

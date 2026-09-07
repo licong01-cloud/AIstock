@@ -58,6 +58,12 @@ from .qe_dataset_contract import (
     require_qe_formal_dataset_request,
     require_qe_formal_dataset_window,
 )
+from .qe_active_dataset_profile import (
+    QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
+    load_active_qe_profile,
+)
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 
@@ -65,6 +71,7 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 QE_DIRECT_V2_DATASET_BINDING_FILE = "qe_direct_v2_dataset_binding.json"
+QE_UNIVERSE_COVERAGE_RECEIPT_FILE = "qe_universe_coverage_receipt.json"
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -140,6 +147,23 @@ def _direct_v2_dataset_binding(
             "QE dataset request cannot select formal and direct-v2 bindings together"
         )
     return require_qe_direct_v2_dataset_binding(raw)
+
+
+def _reject_unbound_active_dataset(
+    custom_params: Optional[Dict[str, Any]],
+    *,
+    operation: str,
+) -> None:
+    """Prevent active-profile dates from being paired with legacy data roots."""
+
+    if _direct_v2_dataset_binding(custom_params) is not None:
+        return
+    if load_active_qe_profile() is not None:
+        raise RuntimeError(
+            "reason_code=qe_active_dataset_binding_missing: "
+            f"{operation} requires a resolved run-scoped dataset binding while the "
+            "QE active dataset profile is enabled"
+        )
 
 
 def _requires_qe_custom_loaders(
@@ -1399,9 +1423,19 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
+        direct_selection_mode = (
+            str(direct_binding.selection_pins.get("mode") or "stock_universe")
+            if direct_binding is not None
+            else "stock_universe"
+        )
         if (
             direct_binding is not None
             and provider_uri_day != direct_binding.provider_uri_day
+            and not (
+                direct_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
+                and direct_selection_mode != "stock_universe"
+                and provider_uri_day.endswith("/qe_provider_day")
+            )
         ):
             raise RuntimeError(
                 "reason_code=qe_direct_v2_provider_mismatch: "
@@ -1477,7 +1511,10 @@ class ConfigComposer:
             }
             qlib_pins = {
                 **day_pins,
-                "instruments_file": f"{selection_pins['stock_pool']}.txt",
+                "instruments_file": str(
+                    selection_pins.get("instruments_file")
+                    or f"{selection_pins['stock_pool']}.txt"
+                ),
                 "instruments_sha256": selection_pins["instruments_sha256"],
             }
             suspend_identity = {
@@ -1704,6 +1741,7 @@ class ConfigComposer:
                 "QE direct-v2 candidate runs require compose_experiment_in_memory; "
                 "the legacy workspace API cannot preserve the explicit component paths"
             )
+        _reject_unbound_active_dataset(custom_params, operation="compose_experiment")
         experiment_id = self._generate_unique_experiment_id()
         experiment_name = experiment_id  # 两者统一
 
@@ -2070,6 +2108,7 @@ class ConfigComposer:
         if not experiment_name:
             experiment_name = f"qe_exp_{experiment_id}"
 
+        _reject_unbound_active_dataset(custom_params, operation="compose_experiment_in_memory")
         if not data_split:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
@@ -2155,6 +2194,7 @@ class ConfigComposer:
         # ── 获取路径配置（支持多节点） ──
         rdagent_cfg = self._fetch_workspace_config(node_id)
         workspace_wsl = rdagent_cfg.get("workspace_base", QE_WORKSPACE_WSL)
+        wsl_path = f"{workspace_wsl}/{experiment_name}"
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
         qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
@@ -2162,6 +2202,35 @@ class ConfigComposer:
             qlib_data_path = direct_v2_dataset_binding.provider_uri_day
             qlib_minute_path = direct_v2_dataset_binding.provider_uri_1min
             factor_data_dir = direct_v2_dataset_binding.factor_data_dir
+        day_provider_prepare_command: str | None = None
+        if (
+            direct_v2_dataset_binding is not None
+            and direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
+            and direct_v2_dataset_binding.selection_pins["mode"] != "stock_universe"
+        ):
+            selection = dict(direct_v2_dataset_binding.selection_pins)
+            filename = str(selection["instruments_file"])
+            content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
+            if not isinstance(content, str) or hashlib.sha256(content.encode("utf-8")).hexdigest() != selection["instruments_sha256"]:
+                raise ValueError(
+                    "reason_code=qe_universe_sidecar_hash_mismatch: "
+                    "persisted run-local stock pool content differs from binding"
+                )
+            overlay = f"{wsl_path}/qe_provider_day"
+            qlib_data_path = overlay
+            source = direct_v2_dataset_binding.provider_uri_day.rstrip("/")
+            filename_q = shlex.quote(filename)
+            overlay_q = _quote_qe_shell_path(overlay, field_name="qe_provider_day")
+            source_q = _quote_qe_shell_path(source, field_name="direct_v2_provider_uri_day")
+            day_provider_prepare_command = " && ".join(
+                [
+                    f"mkdir -p {overlay_q}/instruments",
+                    f"ln -sfn {source_q}/calendars {overlay_q}/calendars",
+                    f"ln -sfn {source_q}/features {overlay_q}/features",
+                    f"ln -sfn {source_q}/meta_export.json {overlay_q}/meta_export.json",
+                    f"cp -f {filename_q} {overlay_q}/instruments/{filename_q}",
+                ]
+            )
         prediction_store_base_url = self._prediction_store_base_url(
             node_id=node_id,
             node_callback_url=rdagent_cfg.get("callback_url"),
@@ -2189,6 +2258,27 @@ class ConfigComposer:
                 separators=(",", ":"),
                 allow_nan=False,
             )
+            coverage_receipt = (custom_params or {}).get(QE_RUN_COVERAGE_RECEIPT_PARAM)
+            if not isinstance(coverage_receipt, str):
+                if direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3":
+                    raise ValueError(
+                        "reason_code=qe_universe_window_coverage_incomplete: "
+                        "persisted coverage receipt is missing"
+                    )
+            else:
+                expected_receipt_sha = direct_v2_dataset_binding.selection_pins.get(
+                    "coverage_receipt_sha256"
+                )
+                if expected_receipt_sha and hashlib.sha256(coverage_receipt.encode("utf-8")).hexdigest() != expected_receipt_sha:
+                    raise ValueError(
+                        "reason_code=qe_universe_sidecar_hash_mismatch: persisted coverage receipt differs from binding"
+                    )
+                experiment_files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] = coverage_receipt
+            if day_provider_prepare_command is not None:
+                selection = dict(direct_v2_dataset_binding.selection_pins)
+                experiment_files[str(selection["instruments_file"])] = str(
+                    (custom_params or {})[QE_RUN_STOCK_POOL_CONTENT_PARAM]
+                )
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
@@ -2415,7 +2505,6 @@ class ConfigComposer:
         # 7) hmm_sector_coefficients.json — 已在步骤 0 提前处理
 
         # ── 生成 WSL 命令 ──
-        wsl_path = f"{workspace_wsl}/{experiment_name}"
         factor_cache_dir = rdagent_cfg.get("factor_cache_dir")
         _, auto_core_parts = self._build_auto_wsl_command_parts(
             wsl_path,
@@ -2443,6 +2532,7 @@ class ConfigComposer:
                 if direct_v2_dataset_binding is not None
                 else None
             ),
+            day_provider_prepare_command=day_provider_prepare_command,
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2472,6 +2562,7 @@ class ConfigComposer:
                 if direct_v2_dataset_binding is not None
                 else None
             ),
+            day_provider_prepare_command=day_provider_prepare_command,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2965,6 +3056,7 @@ class ConfigComposer:
                 "QE direct-v2 candidate runs cannot use regenerate_experiment; "
                 "recompose from the persisted direct-v2 binding instead"
             )
+        _reject_unbound_active_dataset(custom_params, operation="regenerate_experiment")
 
         # 创建实验目录 (本地)
         exp_dir = _qe_experiment_dir(experiment_name)
@@ -3718,6 +3810,7 @@ class ConfigComposer:
             "label_type",   # 训练标签类型：close/open/vwap
             "label_horizon",  # Training label horizon: 1/3/5/10/20/30/40/60/120/180d
             "stock_pool",   # 股票池文件路径
+            "execution_node_id",
             "runtime_mode",
             "bar_freq",
             "runtime_contract_version",
@@ -3745,6 +3838,9 @@ class ConfigComposer:
             "_seed_ensemble_config",
             QE_FORMAL_DATASET_REQUEST_PARAM,
             QE_DIRECT_V2_DATASET_BINDING_PARAM,
+            QE_RUN_STOCK_POOL_CONTENT_PARAM,
+            QE_RUN_COVERAGE_RECEIPT_PARAM,
+            QE_ACTIVE_PROFILE_SUMMARY_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -4068,12 +4164,16 @@ class ConfigComposer:
         direct_binding = _direct_v2_dataset_binding(custom_params)
         if direct_binding is not None:
             requested_stock_pool = str(stock_pool or "all").strip()
-            if requested_stock_pool not in {"all", direct_binding.selection_pins["stock_pool"]}:
+            resolved_stock_pool = str(
+                direct_binding.selection_pins.get("instrument_name")
+                or direct_binding.selection_pins.get("stock_pool")
+            )
+            if requested_stock_pool not in {"all", resolved_stock_pool}:
                 raise ValueError(
                     "reason_code=qe_direct_v2_stock_pool_outside_binding: "
                     f"stock_pool={requested_stock_pool!r}"
                 )
-            stock_pool = direct_binding.selection_pins["stock_pool"]
+            stock_pool = resolved_stock_pool
             logger.info(
                 "QE direct-v2 selection universe bound: requested_stock_pool=%s resolved_stock_pool=%s",
                 requested_stock_pool,
@@ -5727,6 +5827,7 @@ class ConfigComposer:
         long_trend_postprocess_enabled: bool = False,
         direct_v2_validation_enabled: bool = False,
         index_context_path: Optional[str] = None,
+        day_provider_prepare_command: Optional[str] = None,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -5844,6 +5945,8 @@ class ConfigComposer:
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
         if resource_session_id:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
+        if day_provider_prepare_command:
+            core_parts.append(day_provider_prepare_command)
         if direct_v2_validation_enabled:
             core_parts.append(scrub_credentials)
             core_parts.append("python qe_validate_direct_v2_dataset.py")
@@ -5886,7 +5989,8 @@ class ConfigComposer:
                               phase_pipeline_enabled: bool = False,
                               long_trend_postprocess_enabled: bool = False,
                               direct_v2_validation_enabled: bool = False,
-                              index_context_path: Optional[str] = None) -> str:
+                              index_context_path: Optional[str] = None,
+                              day_provider_prepare_command: Optional[str] = None) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -5917,6 +6021,7 @@ class ConfigComposer:
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
             direct_v2_validation_enabled=direct_v2_validation_enabled,
             index_context_path=index_context_path,
+            day_provider_prepare_command=day_provider_prepare_command,
         )
         env_block = "\n".join(env_lines)
         scrub_credentials = _qe_subprocess_credential_scrub_command()
@@ -5963,6 +6068,8 @@ cd -- {quoted_wsl_path}
 {manual_conda_chain}
 {scrub_credentials}
 
+{day_provider_prepare_command or ""}
+
 {direct_validation_manual}
 
 {_link_data_manual}
@@ -5999,6 +6106,8 @@ cd -- {quoted_wsl_path}
 # 设置环境变量
 {env_block}
 
+{day_provider_prepare_command or ""}
+
 {direct_validation_manual}
 
 {_link_data_manual}
@@ -6025,6 +6134,8 @@ cd -- {quoted_wsl_path}
 
 # 设置环境变量
 {env_block}
+
+{day_provider_prepare_command or ""}
 
 {direct_validation_manual}
 

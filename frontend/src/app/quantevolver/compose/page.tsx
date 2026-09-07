@@ -27,7 +27,16 @@ const MULTI_ALPHA_DISTRIBUTED_ENABLED =
   process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
 const QE_DEFAULT_SIGNAL_END = "2026-06-30";
 const QE_DEFAULT_BACKTEST_END = "2026-06-29";
-const DEFAULT_QE_DATA_SPLIT = {
+type QEDataSplit = {
+  train_start: string;
+  train_end: string;
+  valid_start: string;
+  valid_end: string;
+  test_start: string;
+  test_end: string;
+  backtest_end: string;
+};
+const DEFAULT_QE_DATA_SPLIT: QEDataSplit = {
   train_start: "2018-08-01",
   train_end: "2022-12-31",
   valid_start: "2023-01-01",
@@ -43,20 +52,23 @@ function isValidQeRandomSeed(value: number) {
   return Number.isInteger(value) && value >= 0 && value <= QE_RANDOM_SEED_MAX;
 }
 
-function parseQeRandomSeedInput(value: string, fallback = DEFAULT_QE_RANDOM_SEED) {
+function parseQeRandomSeedInput(value: string, defaultValue = DEFAULT_QE_RANDOM_SEED) {
   const parsed = Number(value);
-  return isValidQeRandomSeed(parsed) ? parsed : fallback;
+  return isValidQeRandomSeed(parsed) ? parsed : defaultValue;
 }
 
-function deriveBacktestEnd(testEnd?: string) {
-  if (!testEnd) return QE_DEFAULT_BACKTEST_END;
-  return testEnd >= QE_DEFAULT_SIGNAL_END ? QE_DEFAULT_BACKTEST_END : testEnd;
+function deriveBacktestEnd(testEnd?: string, defaults: QEDataSplit = DEFAULT_QE_DATA_SPLIT) {
+  if (!testEnd) return defaults.backtest_end;
+  return testEnd >= defaults.test_end ? defaults.backtest_end : testEnd;
 }
 
-function withSafeBacktestEnd(split?: Record<string, any>) {
-  const next = { ...DEFAULT_QE_DATA_SPLIT, ...(split || {}) };
+function withSafeBacktestEnd(
+  split?: Partial<QEDataSplit> | Record<string, unknown>,
+  defaults: QEDataSplit = DEFAULT_QE_DATA_SPLIT,
+): QEDataSplit {
+  const next: QEDataSplit = { ...defaults, ...(split || {}) };
   if (!next.backtest_end) {
-    next.backtest_end = deriveBacktestEnd(next.test_end);
+    next.backtest_end = deriveBacktestEnd(next.test_end, defaults);
   }
   return next;
 }
@@ -111,6 +123,20 @@ type ConfigResult = {
   group_configs?: Array<{ group_name: string; node_id: string; model_id: string; factor_count: number; reuse_mode?: string }>;
   node_distribution?: Record<string, string[]>;
   is_distributed?: boolean;
+  comparison_mode?: "separate_runs";
+  comparison_group_id?: string;
+  comparison_task_id?: string;
+  arms?: Array<{ pool_id: string; arm_label: string }>;
+};
+type QEDatasetProfile = {
+  mode: string;
+  generation?: string | null;
+  release_id?: string | null;
+  cutoff: string;
+  defaults: QEDataSplit;
+  default_universe: { mode: "stock_universe" | "single_index" | "index_union"; pool_ids: string[] };
+  available_nodes: string[];
+  universes: Array<{ pool_id: string; label: string; available_start?: string; available_end?: string; gap_count?: number }>;
 };
 
 /* ━━ 类型标签颜色 ━━ */
@@ -234,6 +260,11 @@ function ComposePageContent() {
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [blacklistSnapshot, setBlacklistSnapshot] = useState<any | null>(null);
   const [dataSplit, setDataSplit] = useState(() => ({ ...DEFAULT_QE_DATA_SPLIT }));
+  const [datasetProfile, setDatasetProfile] = useState<QEDatasetProfile | null>(null);
+  const [datasetProfileError, setDatasetProfileError] = useState<string | null>(null);
+  const [universeMode, setUniverseMode] = useState<"stock_universe" | "single_index" | "index_union">("stock_universe");
+  const [universePoolIds, setUniversePoolIds] = useState<string[]>([]);
+  const [universeComparisonMode, setUniverseComparisonMode] = useState<"union" | "separate_runs">("union");
   const [dispatchMode, setDispatchMode] = useState<"independent" | "evolution">("independent");
   const [evolutionLoops, setEvolutionLoops] = useState(5);
   const [evolutionObjective, setEvolutionObjective] = useState("");
@@ -317,12 +348,25 @@ function ComposePageContent() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [fRes, mRes, sRes, cRes] = await Promise.all([
+      const [fRes, mRes, sRes, cRes, profileRes] = await Promise.all([
         fetch(`${API}/quantevolver/factors?limit=1000&exclude_source=qlib_alpha158,alpha158,alpha360&sort_field=ind_ic&sort_order=desc`).then(r => r.json()),
         fetch(`${API}/quantevolver/models?limit=100`).then(r => r.json()),
         fetch(`${API}/quantevolver/strategies?limit=50`).then(r => r.json()),
         fetch(`${API}/quantevolver/factor-analyst/classifications?limit=1000&active_only=false`).then(r => r.json()).catch(() => ({ items: [] })),
+        fetch(`${API}/quantevolver/dataset-profile`).then(r => r.json()),
       ]);
+      if (profileRes?.ok && profileRes?.data) {
+        const profile = profileRes.data as QEDatasetProfile;
+        setDatasetProfile(profile);
+        setDatasetProfileError(null);
+        if (!isEditPendingExperiment) {
+          setDataSplit(withSafeBacktestEnd(profile.defaults, profile.defaults));
+          setUniverseMode(profile.default_universe.mode);
+          setUniversePoolIds(profile.default_universe.pool_ids || []);
+        }
+      } else {
+        setDatasetProfileError(profileRes?.detail?.reason_code || profileRes?.detail?.message || "QE数据集配置不可用");
+      }
       const classMap: Record<string, any> = {};
       (cRes.items || []).forEach((c: any) => { classMap[c.factor_name] = c; });
       setClassificationMap(classMap);
@@ -355,9 +399,12 @@ function ComposePageContent() {
       ];
       setModels(allModels);
       setStrategies(sRes.items || []);
-    } catch (e) { console.error("加载数据失败", e); }
+    } catch (e) {
+      console.error("加载数据失败", e);
+      setDatasetProfileError("无法读取QE活动数据集配置");
+    }
     setLoading(false);
-  }, []);
+  }, [isEditPendingExperiment]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -388,12 +435,21 @@ function ComposePageContent() {
     setLabelHorizon(normalizeQELabelHorizon(cp.label_horizon));
     setExecutionAlgo(cp.execution_algo || "");
     setExecutionAlgoParams(cp.execution_algo_params || {});
+    setExecutionNodeId(cp.execution_node_id || cp.node_id || "");
     setBacktestFreq(cp.execution_algo === "CLOSE_PRICE" || cp.backtest_freq === "day" ? "day" : "1min");
     setFilterSuspendedOnSignal(!!(cp.filter_suspended_on_signal || cp.exclude_suspended));
     setSuspendFilterStrict(cp.suspend_filter_strict !== false);
-    setBlacklistEnabled(!!cp.stock_pool);
-    setStockPoolPath(cp.stock_pool || null);
-    setBlacklistSnapshot(cp.sector_blacklist_snapshot || null);
+    if (exp.universe_selection) {
+      setUniverseMode(exp.universe_selection.mode || "stock_universe");
+      setUniversePoolIds(exp.universe_selection.pool_ids || []);
+      setBlacklistEnabled(false);
+      setStockPoolPath(null);
+      setBlacklistSnapshot(null);
+    } else {
+      setBlacklistEnabled(!!cp.stock_pool);
+      setStockPoolPath(cp.stock_pool || null);
+      setBlacklistSnapshot(cp.sector_blacklist_snapshot || null);
+    }
     setEnableSectorHmm(!!cp.enable_sector_hmm);
     setHmmModelVersionId(cp.hmm_model_version_id || "");
     setHmmSignalPreset(cp.hmm_signal_preset || "preset_A");
@@ -687,6 +743,34 @@ function ComposePageContent() {
 
   /* ── 操作动作 ── */
   function validateRuntimeSelections() {
+    if (datasetProfileError) {
+      alert(`QE数据集配置不可用：${datasetProfileError}`);
+      return false;
+    }
+    if (datasetProfile?.mode === "active_profile" && blacklistEnabled) {
+      alert("活动数据集任务必须使用全市场或PIT指数股票池；行业黑名单旧股票池不能与新binding混用。");
+      return false;
+    }
+    if (datasetProfile?.mode !== "active_profile" && universeMode !== "stock_universe") {
+      alert("指数股票池需要先激活QE活动数据集 profile；当前只能使用兼容全市场模式。");
+      return false;
+    }
+    if (!blacklistEnabled && universeMode === "single_index" && universePoolIds.length !== 1) {
+      alert("单指数股票池必须选择一个指数。");
+      return false;
+    }
+    if (!blacklistEnabled && universeMode === "index_union" && universePoolIds.length < 1) {
+      alert("多指数并集至少选择一个指数。");
+      return false;
+    }
+    if (!blacklistEnabled && universeMode === "index_union" && universeComparisonMode === "separate_runs" && universePoolIds.length < 2) {
+      alert("分别对比至少需要选择两个指数股票池。");
+      return false;
+    }
+    if (isEditPendingExperiment && universeComparisonMode === "separate_runs") {
+      alert("分别对比会创建多个独立实验臂，请从新建任务入口创建。");
+      return false;
+    }
     if (executionAlgo && executionAlgoCatalog.length > 0 && !selectedExecutionAlgoInfo) {
       alert(`Execution algorithm ${executionAlgo} is not present in the backend catalog; refusing to submit inconsistent UI config.`);
       return false;
@@ -797,29 +881,72 @@ function ComposePageContent() {
           )
         : undefined;
 
+      const useUniverseComparison = alphaMode === "single"
+        && !isEditPendingExperiment
+        && !blacklistEnabled
+        && universeMode === "index_union"
+        && universeComparisonMode === "separate_runs";
+      const resolvedSplit = withSafeBacktestEnd(dataSplit, datasetProfile?.defaults || DEFAULT_QE_DATA_SPLIT);
+      const requestPayload = useUniverseComparison
+        ? {
+            task_name: `QE股票池对比-${new Date().toISOString().slice(0, 19)}`,
+            target_desc: "同模型、因子、参数、seed与分钟执行，仅比较PIT指数股票池",
+            pool_ids: universePoolIds,
+            node_id: executionNodeId || undefined,
+            auto_start: false,
+            base_loop: {
+              factor_keys: Array.from(selectedFactors),
+              model_id: selectedModel,
+              strategy_id: selectedStrategy || undefined,
+              model_params: quickTrain ? { quick_train: true } : undefined,
+              strategy_params: { topk, n_drop: nDrop, hold_thresh: holdThresh },
+              runtime_flags: { random_seed: randomSeed },
+              disable_alpha158: disableAlphaBaseline,
+              label_type: labelType,
+              label_horizon: labelHorizon,
+              data_split: resolvedSplit,
+              node_id: executionNodeId || undefined,
+              execution_algo: executionAlgo || undefined,
+              execution_algo_params: executionAlgo ? executionAlgoParams : undefined,
+              filter_suspended_on_signal: filterSuspendedOnSignal,
+              suspend_filter_strict: suspendFilterStrict,
+              enable_sector_hmm: enableSectorHmm,
+              hmm_model_version_id: hmmModelVersionId || undefined,
+              hmm_signal_preset: enableSectorHmm ? hmmSignalPreset : undefined,
+              ...buildUnfilledHandlerPayload(),
+            },
+          }
+        : {
+            factor_names: factorNames,
+            factor_sources: factorSources,
+            model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
+            strategy_id: selectedStrategy || undefined,
+            data_split: resolvedSplit,
+            custom_params: buildRuntimeCustomParams(),
+            node_id: executionNodeId || undefined,
+            ...(!blacklistEnabled && datasetProfile?.mode === "active_profile" ? {
+              universe_selection: { mode: universeMode, pool_ids: universePoolIds },
+            } : {}),
+            ...buildUnfilledHandlerPayload(),
+            dispatch_mode: dispatchMode,
+            evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined,
+            ...(alphaMode === "multi" && multiAlphaConfig ? {
+              alpha_mode: "multi",
+              multi_alpha_config: multiAlphaConfig,
+            } : {}),
+          };
+
       const usePendingExperimentEndpoint = alphaMode === "single" && dispatchMode === "independent";
-      const endpoint = isEditPendingExperiment
+      const endpoint = useUniverseComparison
+        ? `${API}/quantevolver/evolution/universe-comparison-tasks`
+        : isEditPendingExperiment
         ? `${API}/quantevolver/experiments/${editExperimentId}/editable-config`
         : usePendingExperimentEndpoint
           ? `${API}/quantevolver/experiments/pending`
           : `${API}/quantevolver/config/generate`;
       const res = await fetch(endpoint, {
         method: isEditPendingExperiment ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          factor_names: factorNames,
-          factor_sources: factorSources,
-          model_id: alphaMode === "single" ? (selectedModel || undefined) : multiAlphaConfig?.alpha_groups[0]?.model_id,
-          strategy_id: selectedStrategy || undefined,
-          data_split: withSafeBacktestEnd(dataSplit), custom_params: buildRuntimeCustomParams(),
-          ...buildUnfilledHandlerPayload(),
-          dispatch_mode: dispatchMode,
-          evolution_params: dispatchMode === "evolution" ? { loops: evolutionLoops, objective: evolutionObjective } : undefined,
-          // Multi-Alpha 字段
-          ...(alphaMode === "multi" && multiAlphaConfig ? {
-            alpha_mode: "multi",
-            multi_alpha_config: multiAlphaConfig,
-          } : {}),
-        }),
+        body: JSON.stringify(requestPayload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -827,7 +954,9 @@ function ComposePageContent() {
         setActionLoading(null);
         return;
       }
-      setConfigResult(data);
+      setConfigResult(useUniverseComparison
+        ? { ...data, ok: data.status === "success", experiment_id: data.task_id, comparison_task_id: data.task_id }
+        : data);
     } catch (e: any) { alert("生成失败: " + (e?.message || "")); }
     setActionLoading(null);
   }
@@ -1751,7 +1880,7 @@ function ComposePageContent() {
                       <span style={{ color: "#94a3b8" }}>-</span>
                       <input data-testid={`qe-date-${seg.ek}`} type="date" value={(dataSplit as any)[seg.ek]} onChange={e => setDataSplit(p => {
                         const next = { ...p, [seg.ek]: e.target.value };
-                        if (seg.ek === "test_end") next.backtest_end = deriveBacktestEnd(e.target.value);
+                        if (seg.ek === "test_end") next.backtest_end = deriveBacktestEnd(e.target.value, datasetProfile?.defaults || DEFAULT_QE_DATA_SPLIT);
                         return next;
                       })} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                     </div>
@@ -1761,10 +1890,10 @@ function ComposePageContent() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "20px", alignItems: "end", marginTop: "8px" }}>
                 <div>
                   <label style={labelStyle}>组合回测截止</label>
-                  <input data-testid="qe-date-backtest-end" type="date" value={dataSplit.backtest_end || deriveBacktestEnd(dataSplit.test_end)} onChange={e => setDataSplit(p => ({ ...p, backtest_end: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
+                  <input data-testid="qe-date-backtest-end" type="date" value={dataSplit.backtest_end || deriveBacktestEnd(dataSplit.test_end, datasetProfile?.defaults || DEFAULT_QE_DATA_SPLIT)} onChange={e => setDataSplit(p => ({ ...p, backtest_end: e.target.value }))} style={{ ...inputStyle, padding: "6px 8px", fontSize: "12px" }} />
                 </div>
                 <div style={{ fontSize: "12px", color: "#64748b", lineHeight: 1.6 }}>
-                  默认回测到 {QE_DEFAULT_BACKTEST_END}；测试/信号数据保留到 {QE_DEFAULT_SIGNAL_END}，用于 Qlib 下一交易日价格和标签读取，避免最后一日日历越界。
+                  默认回测到 {datasetProfile?.defaults?.backtest_end || dataSplit.backtest_end}；信号数据保留到 {datasetProfile?.defaults?.test_end || dataSplit.test_end}。最终窗口由服务端按活动 release 固化。
                 </div>
               </div>
               <div style={{ display: "flex", gap: "24px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
@@ -1857,6 +1986,87 @@ function ComposePageContent() {
                   </span>
                 )}
               </div>
+            </div>
+
+            <div data-testid="qe-dataset-universe-controls" style={{ padding: "14px", marginBottom: "16px", border: "1px solid #bfdbfe", borderRadius: "8px", background: "#eff6ff" }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "#1d4ed8", marginBottom: "8px" }}>
+                数据集：{datasetProfile?.release_id || "兼容默认"}（截止 {datasetProfile?.cutoff || dataSplit.test_end}）
+              </div>
+              {datasetProfileError && (
+                <div data-testid="qe-dataset-profile-error" style={{ color: "#b91c1c", fontSize: 12, marginBottom: 10 }}>
+                  数据集配置不可用：{datasetProfileError}。新任务已禁止提交，请修复活动 profile 后重试。
+                </div>
+              )}
+              <label style={{ display: "grid", gap: 4, maxWidth: 360, marginBottom: 12, fontSize: 12, color: "#475569" }}>
+                执行节点（创建时固化）
+                <select
+                  data-testid="qe-dataset-execution-node"
+                  value={executionNodeId}
+                  onChange={event => setExecutionNodeId(event.target.value)}
+                  style={{ ...inputStyle, padding: "7px 9px" }}
+                >
+                  <option value="">系统默认节点</option>
+                  {computeNodes
+                    .filter((node: any) => !datasetProfile?.available_nodes?.length || datasetProfile.available_nodes.includes(node.node_id))
+                    .map((node: any) => (
+                      <option key={node.node_id} value={node.node_id}>{node.display_name || node.node_id}</option>
+                    ))}
+                </select>
+              </label>
+              <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "10px" }}>
+                {([
+                  ["stock_universe", "全市场"],
+                  ["single_index", "单指数"],
+                  ["index_union", "多指数并集"],
+                ] as const).map(([mode, label]) => (
+                  <label key={mode} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input
+                      data-testid={`qe-universe-mode-${mode}`}
+                      type="radio"
+                      name="qe-universe-mode"
+                      checked={universeMode === mode}
+                      onChange={() => {
+                        setUniverseMode(mode);
+                        setUniversePoolIds([]);
+                      }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              {universeMode !== "stock_universe" && (
+                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                  {(datasetProfile?.universes || []).filter(pool => pool.pool_id !== "stock_universe").map(pool => (
+                    <label key={pool.pool_id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                      <input
+                        data-testid={`qe-universe-pool-${pool.pool_id}`}
+                        type={universeMode === "single_index" ? "radio" : "checkbox"}
+                        name={universeMode === "single_index" ? "qe-single-index-pool" : undefined}
+                        checked={universePoolIds.includes(pool.pool_id)}
+                        onChange={event => setUniversePoolIds(current => {
+                          if (universeMode === "single_index") return event.target.checked ? [pool.pool_id] : [];
+                          return event.target.checked
+                            ? [...new Set([...current, pool.pool_id])].sort()
+                            : current.filter(item => item !== pool.pool_id);
+                        })}
+                      />
+                      {pool.label}{pool.gap_count ? `（覆盖缺口 ${pool.gap_count}）` : ""}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {universeMode === "index_union" && (
+                <div style={{ display: "flex", gap: "16px", marginTop: "12px", paddingTop: "10px", borderTop: "1px solid #bfdbfe" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                    <input type="radio" name="qe-universe-comparison" checked={universeComparisonMode === "union"} onChange={() => setUniverseComparisonMode("union")} />
+                    合并为一个股票池
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                    <input data-testid="qe-universe-separate-runs" type="radio" name="qe-universe-comparison" checked={universeComparisonMode === "separate_runs"} onChange={() => setUniverseComparisonMode("separate_runs")} />
+                    分别对比（每个指数独立实验臂）
+                  </label>
+                </div>
+              )}
             </div>
 
             <SectorBlacklistPanel
@@ -2040,7 +2250,7 @@ function ComposePageContent() {
                     <button onClick={() => { navigator.clipboard.writeText(configResult.wsl_command || ""); alert("已复制命令"); }}
                       style={{ ...btnSecondary, fontSize: "13px", borderColor: "#86efac", color: "#166534" }}>复制终端命令</button>
                   )}
-                  {dispatchMode === "independent" && configResult.experiment_id && (
+                  {dispatchMode === "independent" && configResult.experiment_id && !configResult.comparison_mode && (
                     <>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <span style={{ fontSize: 11, color: "#94a3b8", marginRight: 2 }}>引擎:</span>
@@ -2050,11 +2260,11 @@ function ComposePageContent() {
                         data-testid="qe-execution-node"
                         value={executionNodeId}
                         onChange={e => setExecutionNodeId(e.target.value)}
-                        disabled={sse.runStatus === "running" || sse.runStatus === "starting"}
+                        disabled={datasetProfile?.mode === "active_profile" || sse.runStatus === "running" || sse.runStatus === "starting"}
                         style={{ padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", minWidth: 180 }}
                       >
                         <option value="">默认 WSL 节点</option>
-                        {computeNodes.map((n: any) => (
+                        {computeNodes.filter((n: any) => !datasetProfile?.available_nodes?.length || datasetProfile.available_nodes.includes(n.node_id)).map((n: any) => (
                           <option key={n.node_id} value={n.node_id}>{n.display_name || n.node_id} ({n.status || "unknown"})</option>
                         ))}
                       </select>
@@ -2073,6 +2283,24 @@ function ComposePageContent() {
                         {sse.runStatus === "starting" ? "正在提交..." : sse.runStatus === "running" ? "执行中..." : "启动"}
                       </button>
                     </>
+                  )}
+                  {configResult.comparison_mode === "separate_runs" && configResult.comparison_task_id && (
+                    <button
+                      data-testid="qe-run-universe-comparison"
+                      onClick={async () => {
+                        const response = await fetch(`${API}/quantevolver/evolution/tasks/${configResult.comparison_task_id}/custom-evo/run`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ confirm_custom_evo: "QE_CUSTOM_EVO_RUN" }),
+                        });
+                        const payload = await response.json();
+                        if (!response.ok) alert("启动股票池对比失败: " + (payload?.detail || response.statusText));
+                        else alert("股票池对比实验已提交，可在演进页面查看进度。");
+                      }}
+                      style={{ ...btnPrimary, backgroundColor: "#059669", fontSize: "13px" }}
+                    >
+                      启动股票池对比
+                    </button>
                   )}
                   {dispatchMode === "evolution" && (
                     <button onClick={() => window.open(`/quantevolver/evolution?base_experiment_id=${configResult?.experiment_id || ""}`, "_blank")}
