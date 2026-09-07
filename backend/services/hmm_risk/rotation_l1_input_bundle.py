@@ -2059,13 +2059,20 @@ def _read_spooled_month(path: Path) -> np.ndarray:
     return rows
 
 
-def _month_bounds(path: Path) -> tuple[date, date]:
+def _month_bounds(
+    path: Path,
+    *,
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
+) -> tuple[date, date]:
     month = path.stem
     if len(month) != 6 or not month.isdigit():
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib month spool name differs")
     start = date(int(month[:4]), int(month[4:]), 1)
     next_month = (pd.Timestamp(start) + pd.DateOffset(months=1)).date()
-    return max(start, SOURCE_START), min(next_month - timedelta(days=1), SOURCE_END)
+    if window_start > window_end:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "Qlib month read window is empty")
+    return max(start, window_start), min(next_month - timedelta(days=1), window_end)
 
 
 def _h5_lookup(frame: pd.DataFrame) -> dict[tuple[date, str], tuple[float, ...]]:
@@ -2336,6 +2343,9 @@ def _build_stock_fact_aggregates(
     contributor_eligibility: Mapping[str, bool],
     resource_started: float | None = None,
     g2a_l1_daily_output: list[dict[str, Any]] | None = None,
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
+    build_feature_domain_aggregates: bool = True,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
@@ -2358,7 +2368,11 @@ def _build_stock_fact_aggregates(
                 max_seconds=BUILD_MAX_SECONDS,
                 max_rss_bytes=BUILD_MAX_RSS_BYTES,
             )
-        month_start, month_end = _month_bounds(month_path)
+        month_start, month_end = _month_bounds(
+            month_path,
+            window_start=window_start,
+            window_end=window_end,
+        )
         basic, basic_updates_by_day = _daily_basic_lookup(
             _load_fixed_h5_window(
                 assets["files"]["daily_basic"],
@@ -2645,13 +2659,14 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
                 g2a_history[symbol].append((day, qlib["close"]))
             advance_circ_state(through=day)
-            _append_day_level_aggregates(
-                day_rows,
-                l1_aggregates=l1_aggregates,
-                l2_aggregates=l2_aggregates,
-                unavailable=unavailable,
-                contributor_eligibility=contributor_eligibility,
-            )
+            if build_feature_domain_aggregates:
+                _append_day_level_aggregates(
+                    day_rows,
+                    l1_aggregates=l1_aggregates,
+                    l2_aggregates=l2_aggregates,
+                    unavailable=unavailable,
+                    contributor_eligibility=contributor_eligibility,
+                )
             if g2a_l1_daily_output is not None:
                 _append_g2a_l1_daily_inputs(day_rows, output=g2a_l1_daily_output)
         advance_circ_state()
@@ -3101,6 +3116,221 @@ def build_rotation_l1_inputs_from_assets(
         )
     )
     return inputs, source, source_identity
+
+
+def build_rotation_l1_single_date_source_from_assets(
+    *,
+    direct_v2_candidate_root: Path,
+    security_identity_manifest: Path,
+    provider_absence_manifest: Path,
+    industry_authority: Mapping[str, Any],
+    forbidden_roots: Sequence[Path],
+    work_parent: Path,
+    trade_date: date,
+    as_of_date: date,
+    market_start: date,
+) -> dict[str, Any]:
+    """Bind one label-free G2-A inference request to an explicit direct-v2 release.
+
+    The source reader consumes prices only through ``as_of_date``.  ``trade_date``
+    exists solely as the next canonical decision session; no value from that date
+    is placed in the returned feature or market inputs.
+    """
+
+    if not isinstance(trade_date, date) or not isinstance(as_of_date, date) or not isinstance(market_start, date):
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "single-date source dates are invalid")
+    assets = load_rotation_l1_g2a_direct_v2_source_assets(
+        direct_v2_candidate_root,
+        security_identity_manifest=security_identity_manifest,
+        provider_absence_manifest=provider_absence_manifest,
+        data_window_end=as_of_date,
+    )
+    calendar_all = _load_qlib_calendar(assets["qlib_root"] / "calendars" / "day.txt")
+    try:
+        trade_position = calendar_all.index(trade_date)
+    except ValueError as exc:
+        raise _fail(
+            REASON_SOURCE_RANGE_INCOMPLETE, "single-date decision session is outside the selected release"
+        ) from exc
+    if (
+        trade_position < 61
+        or calendar_all[trade_position - 1] != as_of_date
+        or market_start not in calendar_all
+        or market_start > as_of_date
+        or assets["data_window_end"] != as_of_date
+    ):
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date canonical as-of/calendar boundary differs")
+
+    feature_calendar = tuple(calendar_all[trade_position - 61 : trade_position + 1])
+    market_start_position = calendar_all.index(market_start)
+    market_calendar = tuple(calendar_all[market_start_position : trade_position + 1])
+    stock_history_calendar = tuple(calendar_all[trade_position - 39 : trade_position])
+    stock_feature_dates = frozenset(calendar_all[trade_position - 20 : trade_position])
+    if (
+        len(feature_calendar) != 62
+        or len(stock_history_calendar) != 39
+        or len(stock_feature_dates) != 20
+        or feature_calendar[-2:] != (as_of_date, trade_date)
+        or market_calendar[-1] != trade_date
+    ):
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date lookback arithmetic differs")
+
+    spans = _parse_instrument_spans(assets["instrument_universe_path"])
+    adapter = _industry_adapter(industry_authority, forbidden_roots=forbidden_roots)
+    projection_index = _IndustryProjectionIndex(adapter, calendar=stock_history_calendar)
+    security_payload = _read_json_object(assets["files"]["security_identity"], reason=REASON_SOURCE_SCHEMA_INVALID)
+    provider_payload = _read_json_object(assets["files"]["provider_absence"], reason=REASON_SOURCE_SCHEMA_INVALID)
+    try:
+        security = _SecurityResolutionIndex(
+            load_security_source_identity_manifest(
+                assets["files"]["security_identity"],
+                expected_sha256=canonical_sha256(security_payload),
+            )
+        )
+        provider_absence = load_provider_absence_manifest(
+            assets["files"]["provider_absence"],
+            expected_sha256=canonical_sha256(provider_payload),
+        )
+    except Exception as exc:
+        raise _fail(REASON_AUTHORITY_AMBIGUOUS, "single-date security/provider authority cannot be bound") from exc
+    suspension_keys = _load_suspend_keys(
+        assets["files"]["suspend_data"],
+        assets["files"]["suspend_manifest"],
+        calendar=stock_history_calendar,
+        expected_release_cutoff=assets["release_cutoff"],
+        expected_universe_key=assets["universe_key"],
+    )
+
+    work_root = Path(work_parent).resolve()
+    try:
+        work_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _fail(REASON_SOURCE_COMPONENT_MISSING, "single-date scratch root cannot be created") from exc
+    stock_daily_inputs: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-inference-", dir=work_root) as raw_temporary:
+        month_paths = _spool_qlib_months(
+            assets["qlib_root"],
+            calendar=stock_history_calendar,
+            spans=spans,
+            spool_root=Path(raw_temporary) / "qlib-months",
+        )
+        _build_stock_fact_aggregates(
+            month_paths=month_paths,
+            assets=assets,
+            calendar=stock_history_calendar,
+            spans=spans,
+            adapter=projection_index,
+            security=security,
+            provider_absence=provider_absence,
+            suspension_keys=suspension_keys,
+            contributor_eligibility={},
+            g2a_l1_daily_output=stock_daily_inputs,
+            window_start=stock_history_calendar[0],
+            window_end=as_of_date,
+            build_feature_domain_aggregates=False,
+        )
+
+    l1_codes, _l2_codes = _canonical_sector_codes(adapter)
+    if len(l1_codes) != 31:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date canonical L1 denominator differs")
+    filtered_inputs = [row for row in stock_daily_inputs if row["source_date"] in stock_feature_dates]
+    by_key = {(row["source_date"], str(row["sector_code"])): row for row in filtered_inputs}
+    if len(by_key) != len(filtered_inputs):
+        raise _fail(REASON_DUPLICATE_KEY, "single-date stock-derived feature rows are duplicated")
+    for source_day in sorted(stock_feature_dates):
+        for sector_code in l1_codes:
+            by_key.setdefault(
+                (source_day, sector_code),
+                {
+                    "source_date": source_day,
+                    "sector_code": sector_code,
+                    "expected_non_suspended_count": 0,
+                    "breadth_valid_count": 0,
+                    "breadth_coverage": 0.0,
+                    "pit_breadth_above_ma20": None,
+                    "breadth_reason_code": "hmm_risk_rotation_industry_coverage_insufficient",
+                    "moneyflow_valid_count": 0,
+                    "moneyflow_coverage": 0.0,
+                    "moneyflow_net_amount_cny": None,
+                    "moneyflow_traded_amount_cny": None,
+                    "moneyflow_reason_code": "hmm_risk_rotation_industry_coverage_insufficient",
+                },
+            )
+    canonical_stock_inputs = [by_key[key] for key in sorted(by_key)]
+    if len(canonical_stock_inputs) != 20 * 31:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date stock-derived feature denominator differs")
+
+    published_sector_close = _published_l1_sector_close(
+        assets["sector_index_close"],
+        assets["sector_index_code_by_sector"],
+        canonical_codes=l1_codes,
+    )
+    feature_source_dates = frozenset(feature_calendar[:-1])
+    sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
+    benchmark_close = {
+        day: float(value) for day, value in assets["benchmark_close"].items() if market_start <= day <= as_of_date
+    }
+    if (
+        len(sector_close) != 61 * 31
+        or set(benchmark_close) != set(market_calendar[:-1])
+        or any((day, sector) not in sector_close for day in feature_calendar[:-1] for sector in l1_codes)
+    ):
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date price/benchmark lookback is incomplete")
+
+    try:
+        sector_names = {code: str(adapter.classification_lookup[("L1", code)]["name"]) for code in l1_codes}
+        mapping_manifest = dict(
+            adapter.mapping_manifest(
+                universe_key=assets["universe_key"],
+                source_start=stock_history_calendar[0],
+                source_end=as_of_date,
+            )
+        )
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        raise _fail(REASON_AUTHORITY_AMBIGUOUS, "single-date L1 mapping authority is incomplete") from exc
+    if any(not name.strip() for name in sector_names.values()):
+        raise _fail(REASON_AUTHORITY_AMBIGUOUS, "single-date L1 sector name is empty")
+    canonical_stock_payload = [
+        {
+            **row,
+            "source_date": row["source_date"].isoformat(),
+        }
+        for row in canonical_stock_inputs
+    ]
+    source_body = {
+        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+        "release_identity": dict(assets["release_identity"]),
+        "source_inventory_sha256": assets["inventory"]["inventory_sha256"],
+        "source_binding_manifest_sha256": assets["binding_manifest_sha256"],
+        "trade_date": trade_date.isoformat(),
+        "as_of_date": as_of_date.isoformat(),
+        "market_start": market_start.isoformat(),
+        "feature_calendar_sha256": canonical_sha256([day.isoformat() for day in feature_calendar]),
+        "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
+        "stock_feature_rows_sha256": canonical_sha256(canonical_stock_payload),
+        "sector_close_sha256": canonical_sha256(
+            [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
+        ),
+        "benchmark_close_sha256": canonical_sha256(
+            [[day.isoformat(), benchmark_close[day]] for day in sorted(benchmark_close)]
+        ),
+        "mapping_snapshot_sha256": canonical_sha256(mapping_manifest),
+        "target_columns_read": False,
+    }
+    return {
+        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+        "trade_date": trade_date,
+        "as_of_date": as_of_date,
+        "feature_calendar": feature_calendar,
+        "market_calendar": market_calendar,
+        "sector_close": sector_close,
+        "benchmark_close": benchmark_close,
+        "stock_daily_inputs": canonical_stock_inputs,
+        "sector_names": sector_names,
+        "input_hash": canonical_sha256(source_body),
+        "mapping_snapshot_hash": source_body["mapping_snapshot_sha256"],
+        "source_receipt": _receipt_from_body(source_body),
+    }
 
 
 def _require_sha256(value: Any, field: str) -> str:
@@ -4493,6 +4723,7 @@ __all__ = [
     "SOURCE_ASSET_SCHEMA_VERSION",
     "RotationL1InputBundleError",
     "build_rotation_l1_inputs_from_assets",
+    "build_rotation_l1_single_date_source_from_assets",
     "load_rotation_l1_direct_v2_source_assets",
     "load_rotation_l1_g2a_direct_v2_source_assets",
     "load_rotation_l1_source_assets",

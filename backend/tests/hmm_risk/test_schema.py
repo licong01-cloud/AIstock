@@ -74,6 +74,19 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "missing_evidence jsonb not null default" not in ddl
     assert "failed_count=0 and jsonb_array_length(missing_evidence)=0" in ddl
     assert "failed_count>0 and jsonb_array_length(missing_evidence)>0" in ddl
+    assert "create table if not exists hmm_risk.rotation_l1_prediction" in ddl
+    assert "rotation_score>'-infinity'::double precision" in ddl
+    assert "isfinite(rotation_score)" not in ddl
+    assert "advisory_status<>'available'" in ddl
+    assert "research_surface_status='not_available'" in ddl
+    assert "research_surface_status in ('not_available','available_experimental')" not in ddl
+    assert "unique (model_hash,trade_date,sector_code,revision)" in ddl
+    assert "prediction_id uuid" in ddl
+    assert "supersedes_prediction_id uuid" in ddl
+    assert "(trade_date,sector_code,revision desc)" in ddl
+    assert "development_oof_rank_ic is not null" in ddl
+    assert "development_oof_rank_ic_hac_lower is not null" in ddl
+    assert "development_oof_rank_ic_hac_upper is not null" in ddl
     assert "select *" not in ddl
 
 
@@ -154,3 +167,65 @@ def test_bootstrap_executes_every_statement_then_verifies(monkeypatch: pytest.Mo
 
     assert connection.executed == list(schema.iter_ddl())
     assert connection.verified is True
+
+
+class _RotationSchemaCursor:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = []
+            for name in schema.ROTATION_L1_PREDICTION_COLUMNS:
+                sql_type, not_null, default = schema.ROTATION_L1_PREDICTION_COLUMN_CONTRACT[name]
+                comment = f"rotation_l1_prediction.{name} exact hmm_risk_rotation_l1_prediction_v1 contract"
+                rows.append((name, sql_type, not_null, default, comment))
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            return [
+                (
+                    name,
+                    " ".join(schema.ROTATION_L1_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_rotation_l1_prediction_v1",
+                )
+                for name in sorted(schema.ROTATION_L1_PREDICTION_CONSTRAINTS)
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return ("Append-only G2-A L1 rotation prediction revisions; scores are not probabilities.",)
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_rotation_l1_lookup ON hmm_risk.rotation_l1_prediction "
+                "USING btree (trade_date, sector_code, revision DESC)",
+                "Date and sector L1 rotation revision lookup; model identity remains explicit.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RotationSchemaConnection:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.drift = drift
+
+    def cursor(self):
+        return _RotationSchemaCursor(drift=self.drift)
+
+
+def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(drift=True))

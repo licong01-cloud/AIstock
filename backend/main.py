@@ -76,6 +76,7 @@ from .routers import (
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
     dispatch,
+    hmm_risk,
     hmm_training,
     tdx_blocks,
 )
@@ -595,6 +596,7 @@ def create_app() -> FastAPI:
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")
+    app.include_router(hmm_risk.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(tdx_blocks.router, prefix="/api/v1")
     app.include_router(llm_config.router)
