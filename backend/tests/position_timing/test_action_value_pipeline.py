@@ -128,7 +128,7 @@ def test_joint_supported_policy_is_selected_only_once(tmp_path: Path) -> None:
     assert selected["unique_variable"] == "BUY_AND_HOLD"
 
 
-def test_v3_delivery_uses_new_experiment_identity_without_drifting_v2(tmp_path: Path) -> None:
+def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     historical = tmp_path / "global-n0.jsonl"
     historical.write_text('{"historical":true}\n', encoding="utf-8")
@@ -170,17 +170,44 @@ def test_v3_delivery_uses_new_experiment_identity_without_drifting_v2(tmp_path: 
     )
 
     assert result["registry"]["appended_count"] == 2
+    retry_attempt = _receipt()
+    retry_attempt["request_sha256"] = "6" * 64
+    retry_attempt["source_sha256"] = current["source_sha256"]
+    retry_attempt.pop("receipt_sha256")
+    retry_attempt["receipt_sha256"] = canonical_sha256(retry_attempt)
+    retry_request = _request(root, historical)
+    retry_request["request_sha256"] = retry_attempt["request_sha256"]
+    retry_bundle = root / "research" / "action_value_v2" / "bundles" / retry_request["request_sha256"]
+    PositionTimingArtifactStore._publish_immutable(
+        retry_bundle / "receipt.json", canonical_json_bytes(retry_attempt) + b"\n"
+    )
+    second_attempt = _deliver_completed_bundle(
+        request=retry_request,
+        bundle=retry_bundle,
+        receipt=retry_attempt,
+        global_before=global_before,
+    )
+    assert second_attempt["registry"]["appended_count"] == 2
     records = [
         json.loads(line)
         for line in (root / "research_registry" / "timing_trial_registry_v1.jsonl")
         .read_bytes()
         .splitlines()
     ]
-    assert len(records) == 4
+    assert len(records) == 6
     assert {record["research_stage"] for record in records} == {
         "POSITION_TIMING_ACTION_VALUE_V2",
-        "POSITION_TIMING_ACTION_VALUE_V3",
+        "POSITION_TIMING_ACTION_VALUE_V4",
     }
+    v4_records = [
+        record
+        for record in records
+        if record["research_stage"] == "POSITION_TIMING_ACTION_VALUE_V4"
+    ]
+    assert {
+        tuple(record["parent_lineage"])
+        for record in v4_records
+    } == {("POSITION_TIMING_ADVICE_V1", "POSITION_TIMING_ACTION_VALUE_V4")}
     assert file_reference(historical) == global_before
 
 

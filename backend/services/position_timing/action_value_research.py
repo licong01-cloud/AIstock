@@ -335,7 +335,7 @@ def build_action_value_rows(
         .max()
     )
     coverage = {
-        "schema_version": "position_timing_action_value_population_v3",
+        "schema_version": "position_timing_action_value_population_v4",
         "population_spec": {
             "start": spec.start.isoformat(),
             "end": spec.end.isoformat(),
@@ -601,7 +601,7 @@ def replay_continuous_cohorts(
         and all(item["effect_evidence"] == "SUPPORTED" for item in comparisons.values())
     )
     receipt = {
-        "schema_version": "position_timing_continuous_policy_receipt_v3",
+        "schema_version": "position_timing_continuous_policy_receipt_v4",
         "policy_id": "DAILY_ACTION_VALUE_POLICY_V2",
         "horizon_trading_days": horizon,
         "sleeve_count": int(sleeve_days["sleeve_id"].nunique()),

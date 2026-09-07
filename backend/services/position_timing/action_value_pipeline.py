@@ -48,9 +48,17 @@ from .artifact_store import PositionTimingArtifactStore
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
-REQUEST_SCHEMA = "position_timing_action_value_request_v3"
-LEGACY_REQUEST_SCHEMA = "position_timing_action_value_request_v2"
-RECEIPT_SCHEMA = "position_timing_action_value_receipt_v3"
+REQUEST_SCHEMA = "position_timing_action_value_request_v4"
+LEGACY_REQUEST_SCHEMAS = {
+    "position_timing_action_value_request_v2",
+    "position_timing_action_value_request_v3",
+}
+RECEIPT_SCHEMA = "position_timing_action_value_receipt_v4"
+RESEARCH_VERSION_BY_RECEIPT_SCHEMA = {
+    "position_timing_action_value_receipt_v2": "V2",
+    "position_timing_action_value_receipt_v3": "V3",
+    RECEIPT_SCHEMA: "V4",
+}
 PIPELINE_ID = "POSITION_TIMING_ACTION_VALUE_V2"
 
 
@@ -390,7 +398,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         raise ActionValueError("ACTION_VALUE_REQUEST_UNAVAILABLE") from exc
     identity = {key: value for key, value in request.items() if key != "request_sha256"}
     if (
-        request.get("schema_version") not in {REQUEST_SCHEMA, LEGACY_REQUEST_SCHEMA}
+        request.get("schema_version") not in {REQUEST_SCHEMA, *LEGACY_REQUEST_SCHEMAS}
         or request.get("request_sha256") != canonical_sha256(identity)
     ):
         raise ActionValueError("ACTION_VALUE_REQUEST_IDENTITY_MISMATCH")
@@ -432,12 +440,9 @@ def _bundle_manifest(root: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
     # Bundle identity is content, not the staging/final absolute directory.
     for value in files.values():
         value.pop("path", None)
+    research_version = _research_version(receipt)
     manifest = {
-        "schema_version": (
-            "position_timing_action_value_bundle_v3"
-            if receipt.get("schema_version") == RECEIPT_SCHEMA
-            else "position_timing_action_value_bundle_v2"
-        ),
+        "schema_version": f"position_timing_action_value_bundle_{research_version.lower()}",
         "request_sha256": receipt["request_sha256"],
         "receipt_sha256": receipt["receipt_sha256"],
         "files": files,
@@ -449,18 +454,19 @@ def _bundle_manifest(root: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
 def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
     receipt_path = bundle / "receipt.json"
     ref = file_reference(receipt_path)
+    research_version = _research_version(receipt)
     evidence = EvidenceReferenceV1(
-        role=(
-            "position_timing_action_value_v3_receipt"
-            if receipt.get("schema_version") == RECEIPT_SCHEMA
-            else "position_timing_action_value_v2_receipt"
-        ),
+        role=f"position_timing_action_value_{research_version.lower()}_receipt",
         artifact_uri=receipt_path.as_posix(),
         sha256=ref["sha256"],
         size_bytes=ref["size_bytes"],
     )
     joint_supported = receipt["effect_evidence"] == "SUPPORTED"
-    research_version = "V3" if receipt.get("schema_version") == RECEIPT_SCHEMA else "V2"
+    parent_lineage = (
+        ("POSITION_TIMING_ADVICE_V1", f"POSITION_TIMING_ACTION_VALUE_{research_version}")
+        if research_version == "V4"
+        else ("POSITION_TIMING_ADVICE_V1", request["request_sha256"])
+    )
     records = []
     for baseline, comparison in receipt["continuous_policy"]["comparisons"].items():
         effect = comparison["effect_evidence"]
@@ -477,7 +483,7 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
                 research_stage=f"POSITION_TIMING_ACTION_VALUE_{research_version}",
                 study_type=ResearchStudyType.LEARNABILITY_AUDIT,
                 hypothesis_family_id=f"POSITION_TIMING_ACTION_VALUE_{research_version}_TWO_BASELINES",
-                parent_lineage=("POSITION_TIMING_ADVICE_V1", request["request_sha256"]),
+                parent_lineage=parent_lineage,
                 unique_variable=baseline,
                 objective_contract=ObjectiveContract.RISK_MANAGED_ADVISORY,
                 dataset_identity=receipt["source_sha256"],
@@ -505,6 +511,13 @@ def _deliver_registry(*, request: Mapping[str, Any], bundle: Path, receipt: Mapp
         )
     registry = Path(request["timing_root"]) / "research_registry" / "timing_trial_registry_v1.jsonl"
     return AdvisoryResearchTrialRegistryV1(registry).append_batch(records)
+
+
+def _research_version(receipt: Mapping[str, Any]) -> str:
+    try:
+        return RESEARCH_VERSION_BY_RECEIPT_SCHEMA[str(receipt["schema_version"])]
+    except (KeyError, TypeError) as exc:
+        raise ActionValueError("ACTION_VALUE_RECEIPT_SCHEMA_UNSUPPORTED") from exc
 
 
 def _parse_date(value: str) -> date:
