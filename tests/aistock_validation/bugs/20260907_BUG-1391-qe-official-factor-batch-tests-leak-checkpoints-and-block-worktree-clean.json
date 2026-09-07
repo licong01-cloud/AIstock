@@ -27,11 +27,16 @@
   ],
   "expected": "The four tests write all official-factor checkpoints only below their pytest tmp_path and create no checkpoint under the source worktree.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1391-qe-official-factor-batch-tests-leak-checkpoints-and-block-worktree-clean.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/quantevolver/test_official_factor_batch_compute.py"
+      "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+      "tests/aistock_validation/bugs/20260907_BUG-1391-qe-official-factor-batch-tests-leak-checkpoints-and-block-worktree-clean.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/quantevolver/test_official_factor_batch_compute.py"
@@ -99,10 +104,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
