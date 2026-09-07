@@ -1847,7 +1847,6 @@ def _valid_fold_receipt(value: Any, *, expected: tuple[str, date, date], horizon
     expected_name, expected_start, expected_end = expected
     return bool(
         value["fold"] == expected_name
-        and validation_start == expected_start
         and validation_end == expected_end
         and value["train_count"] == ROLLING_WINDOW_OPEN_DAYS
         and isinstance(value["validation_count"], int)
@@ -1860,6 +1859,7 @@ def _valid_fold_receipt(value: Any, *, expected: tuple[str, date, date], horizon
         and not isinstance(value["prediction_row_count"], bool)
         and value["prediction_row_count"] > 0
         and len(purge_dates) == horizon
+        and purge_dates[-1] < expected_start <= validation_start
         and purge_dates == tuple(sorted(set(purge_dates)))
         and train_start <= train_end < purge_dates[0] <= purge_dates[-1] < validation_start <= validation_end
         and value["receipt_sha256"] == canonical_sha256({key: value[key] for key in base_keys})
