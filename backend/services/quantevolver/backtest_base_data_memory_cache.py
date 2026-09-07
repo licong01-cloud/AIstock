@@ -19,6 +19,7 @@ ALLOWED_BASE_DATA_FILES: tuple[str, ...] = (
     "margin_detail.h5",
     "static_factors.parquet",
 )
+SUPPLEMENTAL_DATA_FILES = ("index_factor_context.h5",)
 
 
 @dataclass
@@ -52,6 +53,7 @@ class BacktestBaseDataMemoryCache:
         *,
         hdf_reader: Callable[..., pd.DataFrame] | None = None,
         parquet_reader: Callable[..., pd.DataFrame] | None = None,
+        supplemental_data_dir: str | os.PathLike[str] | None = None,
     ) -> "BacktestBaseDataMemoryCache":
         root = Path(factor_data_dir).expanduser().resolve()
         if not root.is_dir():
@@ -59,11 +61,17 @@ class BacktestBaseDataMemoryCache:
         cache = cls(root, start_date, end_date)
         hdf_reader = hdf_reader or pd.read_hdf
         parquet_reader = parquet_reader or pd.read_parquet
-        for name in allowed_files:
-            path = (root / name).resolve()
+        inputs = [(root, name) for name in allowed_files]
+        if supplemental_data_dir is not None:
+            extra_root = Path(supplemental_data_dir).expanduser().resolve(strict=True)
+            inputs.extend((extra_root, name) for name in SUPPLEMENTAL_DATA_FILES)
+        for input_root, name in inputs:
+            path = (input_root / name).resolve()
             if not path.is_file():
+                if name in SUPPLEMENTAL_DATA_FILES:
+                    raise FileNotFoundError(f"explicit supplemental input missing: {path}")
                 continue
-            if root not in path.parents and path != root:
+            if input_root not in path.parents:
                 raise RuntimeError(f"base data path escapes factor_data_dir: {path}")
             t0 = time.time()
             if name.endswith(".h5"):
@@ -92,7 +100,7 @@ class BacktestBaseDataMemoryCache:
 
     def get(self, name_or_path: str | os.PathLike[str], *, columns: Any = None) -> pd.DataFrame:
         name = Path(str(name_or_path)).name
-        if name not in ALLOWED_BASE_DATA_FILES:
+        if name not in ALLOWED_BASE_DATA_FILES + SUPPLEMENTAL_DATA_FILES:
             raise FileNotFoundError(f"official offline factor code cannot read unknown base data file: {name}")
         entry = self.entries.get(name)
         if entry is None:
