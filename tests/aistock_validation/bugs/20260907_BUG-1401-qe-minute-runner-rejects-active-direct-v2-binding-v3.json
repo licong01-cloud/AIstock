@@ -21,6 +21,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260907-44d5da853360",
       "timestamp": "2026-09-07T14:57:16.893362Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Accepted the authoritative direct-v2 binding v3 selection identity while preserving v2 history reads, exact selection/minute SHA checks, and fail-closed rejection for unknown or mismatched bindings; focused test 26 passed and qe_sector_risk_overlay_backend 91 passed.",
+      "timestamp": "2026-09-07T15:08:00Z"
     }
   ],
   "evidence_uris": [
@@ -117,7 +123,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry -q -> 2 passed in a fresh Python process"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
