@@ -1263,6 +1263,8 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
         "backend/tests/quantevolver/test_stock_pool_sync.py",
         "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+        "backend/tests/quantevolver/test_rotation_index_factors.py",
+        "backend/tests/quantevolver/test_rotation_liquidity_factors.py",
         "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
         "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
         "backend/tests/quantevolver/test_qe_active_dataset_profile_api.py",
