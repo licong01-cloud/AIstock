@@ -1261,6 +1261,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/test_correlation_compute_independence.py",
         "backend/tests/test_factor_st_pit_metrics_cache.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
