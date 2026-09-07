@@ -4056,6 +4056,7 @@ class ConfigComposer:
             QE_RUN_STOCK_POOL_CONTENT_PARAM,
             QE_RUN_COVERAGE_RECEIPT_PARAM,
             QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+            QE_RUN_REGISTRATION_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
