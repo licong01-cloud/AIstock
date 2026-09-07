@@ -42,6 +42,9 @@ from backend.services.advisory_model_first.causal_admission_v2_contracts import 
 )
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.prediction_source import sha256_file
+from backend.services.advisory_model_first.alpha_signal_audit_pipeline import (
+    _git_command_for_worktree,
+)
 from backend.services.advisory_model_first.qe_alpha_mve_pipeline import (
     _moving_block_interval,
     _peak_rss_bytes,
@@ -543,8 +546,8 @@ def prepare_causal_admission_request(
     registry = AdvisoryResearchTrialRegistryV1(registry_path)
     records = registry.read()
     repository = Path(repository_root).resolve()
-    commit = _git(repository, "rev-parse", "HEAD")
-    dirty = _git(repository, "status", "--porcelain")
+    commit = _repository_git_commit(repository)
+    dirty = _repository_git_dirty_paths(repository)
     if dirty:
         _raise("causal Admission request repository is dirty", "ADVISORY_CAUSAL_REPOSITORY_INVALID")
     request = build_causal_admission_request(
@@ -1092,9 +1095,9 @@ def _find_existing_bundle(request: FrozenAdvisoryCausalAdmissionRequestV2) -> Pa
 
 def _verify_run_environment(request: FrozenAdvisoryCausalAdmissionRequestV2) -> None:
     repository = Path(request.repository_root)
-    if _git(repository, "rev-parse", "HEAD") != request.repository_commit:
+    if _repository_git_commit(repository) != request.repository_commit:
         _raise("causal Admission repository commit differs", "ADVISORY_CAUSAL_REPOSITORY_INVALID")
-    if _git(repository, "status", "--porcelain"):
+    if _repository_git_dirty_paths(repository):
         _raise("causal Admission repository is dirty", "ADVISORY_CAUSAL_REPOSITORY_INVALID")
     registry = _resolve_bound_path(request.registry_path)
     route = _resolve_bound_path(request.auxiliary_route_path)
@@ -1126,13 +1129,43 @@ def _load_r1_verified_sources(
     return _load_verified_sources(parent_request.model_copy(update={"evidence_refs": retained}))
 
 
-def _git(repository: Path, *args: str) -> str:
+def _repository_git_command(repository: Path) -> tuple[list[str], Path]:
+    command, root = _git_command_for_worktree(repository)
+    normalized_root = root.as_posix().lower()
+    if os.name != "nt" and normalized_root.startswith("/mnt/") and "core.autocrlf=true" not in command:
+        command = [
+            command[0],
+            "-c",
+            "core.fileMode=false",
+            "-c",
+            "core.autocrlf=true",
+            *command[1:],
+        ]
+    return command, root
+
+
+def _repository_git_commit(repository: Path) -> str:
+    command, root = _repository_git_command(repository)
+    return _run_repository_git(command, root, "rev-parse", "HEAD").strip().lower()
+
+
+def _repository_git_dirty_paths(repository: Path) -> list[str]:
+    command, root = _repository_git_command(repository)
+    output = _run_repository_git(command, root, "status", "--porcelain", "--untracked-files=all")
+    return [line[3:] if len(line) > 3 else line for line in output.splitlines() if line.strip()]
+
+
+def _run_repository_git(command: Sequence[str], root: Path, *args: str) -> str:
     import subprocess
 
-    result = subprocess.run(["git", *args], cwd=repository, text=True, capture_output=True, check=False)
+    result = subprocess.run([*command, *args], cwd=root, text=True, capture_output=True, check=False)
     if result.returncode != 0:
-        _raise("git identity command failed", "ADVISORY_CAUSAL_REPOSITORY_INVALID", stderr=result.stderr)
-    return result.stdout.strip()
+        _raise(
+            "causal Admission git identity command failed",
+            "ADVISORY_CAUSAL_REPOSITORY_INVALID",
+            stderr=result.stderr,
+        )
+    return result.stdout.rstrip("\r\n")
 
 
 def _read_json(path: Path, reason_code: str) -> Any:

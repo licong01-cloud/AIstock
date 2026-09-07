@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -18,6 +19,7 @@ from backend.services.advisory_model_first.causal_admission_v2_contracts import 
     build_causal_admission_request,
 )
 from backend.services.advisory_model_first.causal_admission_v2_pipeline import (
+    _verify_run_environment,
     apply_inner_holm_bonferroni,
     build_causal_admission_decisions,
     build_causal_admission_panel,
@@ -26,6 +28,7 @@ from backend.services.advisory_model_first.causal_admission_v2_pipeline import (
     run_chronological_predictions,
     _load_r1_verified_sources,
 )
+from backend.services.advisory_model_first.prediction_source import sha256_file
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 
 
@@ -274,3 +277,65 @@ def test_r1_rebinds_only_mutable_parent_control_evidence(monkeypatch) -> None:
 
     assert [item.role for item in observed["evidence_refs"]] == ["immutable_data"]
     assert result["parent"].__class__ is Parent
+
+
+def test_environment_gate_uses_cross_os_repository_identity(tmp_path, monkeypatch) -> None:
+    registry = tmp_path / "registry.jsonl"
+    route = tmp_path / "current_auxiliary_route.md"
+    registry.write_text("{}\n", encoding="utf-8")
+    route.write_text("# route\n", encoding="utf-8")
+    request = build_test_request(
+        repository_root=tmp_path.as_posix(),
+        repository_commit="a" * 40,
+        registry_path=registry.as_posix(),
+        registry_sha256_at_request=sha256_file(registry),
+        auxiliary_route_path=route.as_posix(),
+        auxiliary_route_sha256_at_request=sha256_file(route),
+    )
+    monkeypatch.setattr(pipeline, "_repository_git_commit", lambda _: "a" * 40)
+    monkeypatch.setattr(pipeline, "_repository_git_dirty_paths", lambda _: [])
+
+    _verify_run_environment(request)
+
+    monkeypatch.setattr(pipeline, "_repository_git_dirty_paths", lambda _: ["real-change.py"])
+    with pytest.raises(AdvisoryModelFirstError) as caught:
+        _verify_run_environment(request)
+    assert caught.value.reason_code == "ADVISORY_CAUSAL_REPOSITORY_INVALID"
+
+
+def test_canonical_windows_checkout_uses_crlf_git_normalization(monkeypatch) -> None:
+    root = Path("/mnt/f/Dev/AIstock")
+    monkeypatch.setattr(
+        pipeline,
+        "_git_command_for_worktree",
+        lambda _: (["git", "-C", root.as_posix()], root),
+    )
+    monkeypatch.setattr(pipeline.os, "name", "posix")
+
+    command, actual_root = pipeline._repository_git_command(root)
+
+    assert actual_root == root
+    assert command == [
+        "git",
+        "-c",
+        "core.fileMode=false",
+        "-c",
+        "core.autocrlf=true",
+        "-C",
+        root.as_posix(),
+    ]
+
+
+def test_repository_dirty_paths_preserve_porcelain_first_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "_repository_git_command",
+        lambda _: (["git", "-C", tmp_path.as_posix()], tmp_path),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_repository_git",
+        lambda *_: " M backend/service.py\n?? new-file.py",
+    )
+
+    assert pipeline._repository_git_dirty_paths(tmp_path) == ["backend/service.py", "new-file.py"]
