@@ -72,8 +72,8 @@
   },
   "first_seen_at": "2026-09-08T08:02:57.313304Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "50d81b8812e34765c4c9cce4ed206f2e8958da73",
+  "fixed_at": "2026-09-08T08:33:51Z",
   "github_issue_number": 4449,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4449",
   "last_seen_at": "2026-09-08T08:02:57.313304Z",
@@ -81,6 +81,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4450",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -111,6 +112,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -122,7 +124,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1408",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a478aca5a257d146",
+    "recorded_at": "2026-09-08T08:35:32.151490Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "907a0ab30cae36e30a72f63c35ba568bb41e31d9",
+    "source_merge_commit": "50d81b8812e34765c4c9cce4ed206f2e8958da73",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4450",
+    "validation_evidence": [
+      "nox -s validation_module_registry_l0 -> 8 passed",
+      "nox -s qe_read_backend -> 403 passed, 1 skipped",
+      "nox -s qe_sector_risk_overlay_backend -> 91 passed",
+      "nox -s qe_mcp_backend -> 49 passed"
+    ],
+    "validation_evidence_digest": "5516c5fe2de8616436c430d01e872f27135068dbf636f066ebdaf57ceb31303b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -131,6 +157,12 @@
     "fingerprint": "207bd62a2444854332aa88b1",
     "source_event_id": "FE-20260908-207bd62a2444"
   },
+  "validation_evidence": [
+    "nox -s validation_module_registry_l0 -> 8 passed",
+    "nox -s qe_read_backend -> 403 passed, 1 skipped",
+    "nox -s qe_sector_risk_overlay_backend -> 91 passed",
+    "nox -s qe_mcp_backend -> 49 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
