@@ -1624,6 +1624,11 @@ def _public_custom_evo_config(config: Dict[str, Any]) -> Dict[str, Any]:
         loop.pop("custom_params", None)
         loop.pop("resolved_dataset", None)
         if persisted is not None:
+            # Active-profile tasks expose the canonical semantic selector only.
+            # ``stock_pool`` is a derived compatibility path inside the frozen
+            # binding; returning both fields makes this public payload invalid
+            # when it is submitted through the same create/update contract.
+            loop.pop("stock_pool", None)
             loop["universe_selection"] = persisted["universe_selection"]
             summary = persisted["profile_summary"]
             loop["dataset_summary"] = {
