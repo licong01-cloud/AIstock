@@ -439,7 +439,7 @@ reason必须保持具体stage，不得全部压成generic unavailable；异常�
 
 ## 11. Implementation Plan（实施方案）与文件方向
 
-v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合；其预测效果未达到MBE，故不读取tail且不允许新增日度预测。下一轮只在§21获得用户精确批准后实施一个v1.4信息集候选，不重开产品平台或模型类别选型。按未来具体源码授权可连续修改：
+v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合；其预测效果未达到MBE，故不读取tail且不允许新增日度预测。§21的v1.4唯一信息集候选及其源码实施已经用户批准并完成，不重开产品平台或模型类别选型；正式24 fits、tail、数据库和运行态动作仍未执行。实施范围严格为：
 
 - `backend/services/hmm_risk/rotation_l1_gbdt.py`：仅增加§21批准后的一列feature公式、v1.4 identity和24-fit executor合同；不得改变v1.3历史执行器语义；
 - `backend/services/hmm_risk/rotation_l1_input_bundle.py`：从同一显式direct-v2 development source因果派生该列并保留typed missing；不重新导出底层数据、不读取tail；
@@ -506,7 +506,7 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；v1.3模型与产品源码已合入，正式39/39 fits终态见§20；v1.4唯一信息集候选见§21 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v13_development_39fit_postbug1400_7eff28f1_20260908/acceptance.json` | VERIFIED_V1_3_EXECUTED | user approved: v1.3 tail未读、capability/advisory仍NOT_AVAILABLE；v1.4未获批准、未实施、未运行 |
+| F-011 | 本设计D1～D5；v1.3模型与产品源码已合入，正式39/39 fits终态见§20；v1.4唯一信息集候选与已实施源码见§21 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v13_development_39fit_postbug1400_7eff28f1_20260908/acceptance.json` | VERIFIED_V1_4_IMPLEMENTED_NOT_EXECUTED | user approved: v1.3 tail未读、capability/advisory仍NOT_AVAILABLE；v1.4 D1～D6及源码实施已批准，正式24 fits、tail、数据库与runtime仍未执行 |
 | F-012 | 本设计§1.2、§8.3；read-only router与HMM-only isolation guard | `backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | VERIFIED_L1_RESEARCH_SURFACE_ISOLATION | user approved: advisory-only业务语义保持不变；无Selection/Paper/QMT/QE写路径 |
 | F-013 | `rotation_l1_prediction.py`唯一writer/repository、两个read API、真实`/hmm-risk` L1热力图与显式surface receipt；生产已承载v1.3真实OOF | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_rotation_l1_api.py`；生产19,220行/620日/31-sector及浏览器readback | VERIFIED_HISTORICAL_OOF_RESEARCH_SURFACE | user approved: `AVAILABLE_EXPERIMENTAL`不等于预测capability；v1.3未达MBE，故无新增日度预测、forward或advisory；F-013其余范围未完成 |
 
@@ -693,7 +693,7 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 
 ### 21.6 实施与直接验证清单
 
-批准后只修改现有G2-A input/model/CLI及直接测试，重点验证：t-1/t-6公式、跨节假日canonical shift、源coverage/reason传播、9/10可用规则、固定顺序/hash、v1.3/v1.4 identity互拒、10D无battery路径、24-fit上限、双fresh-process、tail禁读、旧产品行不覆盖及全部失败typed。执行changed files→ownership→module registry→test plans、HMM module、L0与F2；任何生产DML、tail或runtime动作另行授权。
+本轮已按批准边界只修改现有G2-A input/model/CLI、直接测试与本设计状态，验证：t-1/t-6公式、跨节假日canonical shift、源coverage/reason传播、9/10可用规则、固定顺序/hash、v1.3/v1.4 identity互拒、10D无battery路径、24-fit上限、双fresh-process、tail禁读、旧产品行不覆盖及全部失败typed。已执行changed files→ownership→module registry→test plans、HMM module、L0与F2；任何生产DML、tail或runtime动作仍须另行授权。
 
 ### 21.7 v1.4 DESIGN-COMPLIANCE-001预审
 

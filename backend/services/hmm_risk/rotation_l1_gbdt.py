@@ -1,4 +1,4 @@
-"""Approved G2-A v1.3 development executor for L1 sector rotation.
+"""Approved G2-A v1.4 development executor for L1 sector rotation.
 
 This module owns the model-facing, development-only contract. It consumes an
 already materialised causal panel and fits the approved target-free market
