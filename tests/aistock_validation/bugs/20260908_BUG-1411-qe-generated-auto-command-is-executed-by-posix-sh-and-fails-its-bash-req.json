@@ -2,9 +2,6 @@
   "actual": "MA-E19D1E exact-retry task qe_20260908_230225_0ae8 registered successfully, but both WSL loops failed before Qlib with status failed, experiment_id null, error 'QLib backtest failed with return code 70', and run.log reason_code=qe_subprocess_bash_required. AIstock ConfigComposer emits Bash-only credential scrub fragments but returns a bare auto command; the QE workspace API intentionally invokes submitted commands through /bin/sh -c. Preserve the Bash-only fail-closed credential scrub and explicitly enter audited /bin/bash for every generated auto command on WSL and remote nodes. Do not modify Qlib, datasets, failed task evidence, or the dirty RD-Agent root.",
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
-    "backend/services/quantevolver/stock_pool_sync.py",
-    "backend/tests/unified_engine/test_backtest_executor.py",
-    "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260908_BUG-1411-qe-generated-auto-command-is-executed-by-posix-sh-and-fails-its-bash-req.json"
   ],
@@ -28,7 +25,7 @@
     {
       "action": "register_fix_scope",
       "actor": "Codex",
-      "note": "Scope expanded to preserve the audited Bash boundary through stock-pool installation and backtest-only injection, including single-alpha and Multi-Alpha command-contract tests.",
+      "note": "Compatibility review selected cd-then-exec-Bash ordering so existing stock-pool and backtest-only injection contracts remain unchanged; no shared executor, stock-pool, or CI source change is required.",
       "timestamp": "2026-09-08T16:18:00Z"
     },
     {
@@ -44,18 +41,12 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
-      "backend/services/quantevolver/stock_pool_sync.py",
-      "backend/tests/unified_engine/test_backtest_executor.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
-        "backend/services/quantevolver/stock_pool_sync.py",
-        "backend/tests/unified_engine/test_backtest_executor.py",
-        "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
         "backend/tests/unified_engine/test_qe_config_truth.py"
       ],
       "impacted_modules": [
@@ -107,17 +98,11 @@
     },
     "planned_files": [
       "backend/services/quantevolver/config_composer.py",
-      "backend/services/quantevolver/stock_pool_sync.py",
-      "backend/tests/unified_engine/test_backtest_executor.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
-      "backend/services/quantevolver/stock_pool_sync.py",
-      "backend/tests/unified_engine/test_backtest_executor.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ]
   },

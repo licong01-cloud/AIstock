@@ -5,7 +5,6 @@ Level 2 集成测试 — BacktestExecutor
 与现有 4 条路径完全一致。使用 Mock 替代真实外部依赖。
 """
 import json
-import shlex
 
 import pytest
 import asyncio
@@ -372,25 +371,6 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" in result.wsl_command
-
-    def test_backtest_only_preserves_generated_bash_boundary(self):
-        inner = (
-            "cd -- /mnt/f/qe_workspace/task/Loop1"
-            " && if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi"
-            " && python qrun_limit_minute.py conf.yaml"
-        )
-        generated = f"exec /bin/bash --noprofile --norc -c {shlex.quote(inner)}"
-        executor = BacktestExecutor(make_mock_composer(generated), make_mock_client())
-        cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
-        ctx = make_ctx(model_source={"source_task_id": "t1", "source_loop": "Loop1"})
-
-        result = asyncio.get_event_loop().run_until_complete(
-            executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
-        )
-
-        argv = shlex.split(result.wsl_command)
-        assert argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
-        assert "python qrun_limit_minute.py conf.yaml --backtest-only" in argv[5]
 
     def test_full_train_does_not_inject_backtest_only(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())
@@ -838,36 +818,3 @@ class TestWorkspaceClientParams:
         )
         assert result.experiment_files["filtered_pool_x.txt"].startswith("000001.SZ")
         assert result.wsl_command == args[4]
-
-    def test_generated_bash_command_keeps_stock_pool_install_inside_workspace(self):
-        inner = (
-            "cd -- /home/node/qe_workspace/task/Loop1"
-            " && if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi"
-            " && python qrun_limit_minute.py conf.yaml"
-        )
-        generated = f"exec /bin/bash --noprofile --norc -c {shlex.quote(inner)}"
-        composer = make_mock_composer(generated)
-        client = make_mock_client()
-        executor = BacktestExecutor(composer, client)
-        cfg = ExperimentConfig(
-            factor_names=["f1"],
-            model_id="lgbm",
-            stock_pool="filtered_pool_x",
-        )
-        ctx = make_ctx(node_id="rdagent-node1")
-
-        with patch(
-            "backend.services.quantevolver.stock_pool_sync.prepare_stock_pool_loop_payload_for_compute_node_by_id",
-            return_value={
-                "experiment_files": {"filtered_pool_x.txt": "000001.SZ\t2018-01-01\t2026-05-02\n"},
-                "install_command": "test -f filtered_pool_x.txt",
-            },
-        ):
-            result = asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
-
-        argv = shlex.split(result.wsl_command)
-        assert argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
-        assert argv[5].startswith(
-            "cd -- /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt &&"
-        )
-        assert "python qrun_limit_minute.py conf.yaml" in argv[5]

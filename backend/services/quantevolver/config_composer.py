@@ -6314,8 +6314,8 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            inner_command = " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
-            return _wrap_qe_auto_command_in_bash(inner_command)
+            inner_command = " && ".join(core_parts)
+            return f"cd -- {quoted_wsl_path} && {_wrap_qe_auto_command_in_bash(inner_command)}"
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""

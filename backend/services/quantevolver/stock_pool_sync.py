@@ -34,7 +34,6 @@ DEFAULT_STOCK_POOL_ROOT = PROJECT_ROOT / "stock_pools"
 _FILTERED_POOL_RE = re.compile(r"^(?:filtered_pool_[A-Za-z0-9_.-]+|index_pool__[a-z0-9_]+)(?:\.txt)?$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LINUX_ABS_PATH_RE = re.compile(r"^/[A-Za-z0-9_./:@%+=,-]+$")
-_QE_BASH_EXEC_PREFIX = ("exec", "/bin/bash", "--noprofile", "--norc", "-c")
 
 
 @dataclass(frozen=True)
@@ -234,20 +233,6 @@ def inject_stock_pool_install_command(execution_command: str, install_command: s
         return command
     if not command:
         raise RuntimeError("cannot inject stock_pool install command into an empty execution command")
-
-    # Generated QE commands establish Bash themselves because the workspace
-    # service deliberately launches the submitted command via ``/bin/sh -c``.
-    # Preserve that audited boundary while inserting the stock-pool fragment
-    # into the inner command, where it still runs after ``cd`` and can read the
-    # file delivered with ``experiment_files``.
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        argv = []
-    if len(argv) == 6 and tuple(argv[:5]) == _QE_BASH_EXEC_PREFIX:
-        inner = inject_stock_pool_install_command(argv[5], install_command)
-        return " ".join([*_QE_BASH_EXEC_PREFIX, shlex.quote(inner)])
-
     first, sep, rest = command.partition(" && ")
     if sep and first.strip().startswith("cd ") and rest.strip():
         return f"{first} && {install_command} && {rest}"
