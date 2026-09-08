@@ -29,6 +29,10 @@ from backend.services.position_timing.action_value_incremental import (
     _load_request,
     _require_matched_source_coverage,
 )
+from backend.services.position_timing.action_value_research import (
+    EXOGENOUS_INITIAL_HOLDING_POLICY,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+)
 from backend.services.position_timing.contracts import canonical_sha256
 
 
@@ -200,6 +204,10 @@ def test_sector_request_allows_declared_coverage_loss_but_binds_contract(tmp_pat
         "planned_trial_count": 1,
         "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
+        "initial_holding_contract": {
+            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
+            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+        },
         "feature_contract": {
             "block_id": SW_L2_INFORMATION_BLOCK,
             "added_features": ["sw_l2_return_20d_bps", "relative_sw_l2_return_20d_bps"],

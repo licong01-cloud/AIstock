@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.19
+> 版本：v2.20
 > 日期：2026-09-09
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_009_HISTORY_REPLAY_COMPLETE_INCONCLUSIVE`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_010_DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -27,6 +27,8 @@ v2.17 已按同一冻结规格完成正式研究。前两个 request 在 core/�
 v2.18 启动 `PT-NEXT-009`，先修正这条不可识别路径的源证据而不追加因子。只读核验发现，`002211.SZ` 的两个无效 target bar（2022-05-05、2023-06-20）在本地权威表 `market.suspend_d` 均有明确 `S` 记录且次日有 `R`，但冻结 candidate 的 suspend component 对该股只含 2025-04-24；同一 64 股、2018-08-01～2026-08-31 范围内，权威表有 206 个 `S` 键、candidate 有 191 个，缺失 15 个键、涉及 14 股，candidate-only 为 0。修复只在 `position_timing` 内冻结 timing-owned、只读、内容寻址的历史停牌补充 snapshot，与 candidate 已有显式 `S` 键取并集；不得从 NaN 推断停牌，不改共享数据管线、人口、资金流公式、模型、政策或统计参数。新 source identity 以新 request 重跑原唯一资金流假设，旧 v2.17 receipt 保持不可变；本轮不是新增信息块，也不自动发布 runtime model。
 
 v2.19 回填该纠错 request 的正式历史结果。显式停牌并集消除了 `002211.SZ/TARGET_BAR_INVALID`：core/资金流从 113/114 条不对称 sleeve 恢复为同样的 115 条 sleeve、273,470 个 sleeve-day，形成 136,735 条 paired path。资金流增强相对 matched core 的日均增量点估计为 `+0.0183 bps`、95% CI `[-0.7367,+0.7494] bps`、MDE `0.7551 bps`；区间在 coverage 约束前已经跨零，且两侧仍共同保留 `688200.SH` 的 1 条 `INITIAL_HOLDING_UNAVAILABLE`，所以正式结论仍为 `INCONCLUSIVE`、selected=0。纠错证明了原 estimand 已可数值评价，但没有证明资金流块带来超额收益；不发布 runtime model，不改变 L1/L1a 或现有个股实验建议。
+
+v2.20 冻结 `PT-NEXT-010`，只修正 sector 与 corrected-moneyflow 共用的连续账户初始持仓语义，不新增因子、模型、超参或统计假设。只读核验确认 `688200.SH` 在共同起点 2021-10-08 为 PIT active、非停牌且 raw close `522.03`；失败来自 100,000 元参考资本无法在该日新买入科创板最低 200 股，而 `HOLDING_START` 本应表示窗口开始前已经存在的外生库存。新契约按起点 raw close 将参考资本归一化为整数股库存和剩余现金，不收取虚构的起点买入费用；起点后的所有订单仍使用既有 board-lot、guard 与逐腿成本。新 request/receipt identity 重放原行业和资金流假设，旧 artifact 不改写；当前仅表示设计闭合和实现执行中，不表示路径已修复、研究结论已改变或 alpha 已获支持。
 
 ## 1. Background / 背景与结论
 
@@ -67,6 +69,7 @@ v2.19 回填该纠错 request 的正式历史结果。显式停牌并集消除�
 | `EVID-L4B1-REACHABILITY` | 买入路径固定 `ON_PRICE_TRIGGER`；`risk_exit` 先固定 `target_qty=0/action=EXIT`，随后只有该 EXIT/SELL 固定 `AT_OPEN`，普通卖出同样是 `ON_PRICE_TRIGGER`。故首个 L4b-1 正式 family 只能是 risk-exit EXIT/SELL 单假设；不得用 T+1 realized branch 反推固定数量 | `backend/services/position_timing/service.py:1868`、`:1920`、`:2060`、`:2083` |
 | `EVID-L4B1-FORMAL` | 修订 request 绑定代码 `03e3db5ec53aa433bfbc3c114a3c3215d3cd3ed6` 与同一 2026-08-31 minute candidate；family count 为 1，人口为 2 张 NON_ACTION/HOLD、0 eligible，故 status `INSUFFICIENT_PROSPECTIVE_ACTION_CARDS`、SELL 为 `INSUFFICIENT_DATA/UNDERPOWERED`、selected sides 为空。receipt SHA-256 为 `6e7f7c876ae02c844a4eaed268ea31596447f3fc623d7adc0ba9b905def13b6d`；inspect 与 exact retry 通过，runtime policy/card/event/order/current route 均未写 | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/l4b1_execution_window_bundles/450f8c82300c4c86199097c9e10eb8b61113b50e068c0c7b27cde8ce00acb7f4/receipt.json`、`request.json`、`manifest.json` |
 | `EVID-SUSPENSION-GAP-AUDIT-20260908` | `002211.SZ` 的 2022-05-05、2023-06-20 在 daily Bin 为全字段 NaN、candidate suspend component 未标停牌；DEV `market.suspend_d` 两日均为 `S` 且次日为 `R`。冻结资金流人口内 DEV 权威 `S` 键 206 个、candidate 191 个，缺 15 个/涉及 14 股、candidate-only 为 0。该事实只证明 candidate 历史停牌组件不完整，不证明缺 bar 一律等于停牌 | `market.suspend_d` 只读查询；`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260905-candidate/components/suspend_d_daily_candidate_v2/suspend_d.parquet`；`components/daily_bin_candidate/features/002211.sz/*.day.bin` |
+| `EVID-HOLDING-START-ROOT-20260909` | `688200.SH` 在 2021-10-08 的 raw OHLC 完整、`pit_active=true`、`is_suspended=false`、raw close `522.03`，PIT span 自 2021-03-02 开始；`100000 / 522.03` 只能归一化为 191 股，低于科创板新 BUY 最低 200 股。现实现从 cash state 调用 `action_candidates` 形成 `HOLDING_START`，故错误把“当前新买入是否合法”当成“既有库存能否存在” | `backend/services/position_timing/action_value_research.py` 的 `_replay_one_sleeve`；`backend/services/position_timing/action_value.py` 的 `action_candidates`；`backend/execution_algos/board_lot.py`；上述 candidate 的 `688200.sh/*.day.bin` 与 `stock_universe.txt` |
 | `EVID-TDX-CONTRACT` | 批量报价上限 50，最大陈旧度 5 分钟，最大未来偏斜 30 秒 | `backend/services/simulation_data/contracts.py:47` |
 | `EVID-TDX-MINUTE` | 当前 `fetch_minute_kline_tdx` 调用无日期/count 参数的 `/api/kline-all/tdx`，取得端点完整响应后在客户端筛 `trade_date`；第一阶段不得调用 | `backend/data_service/tdx_adapter.py:191` |
 | `EVID-GUARD-DEFAULTS` | 当前 `PriceGuardPolicy` 与 `ExitGuardPolicy` 的 `rule_v1/rule_default` 默认值 | `backend/services/trading_core/price_guard.py:77`、`:81`、`:102`、`:112`；`backend/services/trading_core/exit_guard.py:28`、`:38`、`:42`、`:46`、`:50` |
@@ -856,6 +859,16 @@ source-only 人口在读取任何 action label、未来收益或策略 outcome �
 
 正式纠错结果见 `EVID-ACTION-MONEYFLOW-SUSPENSION-CORRECTED-FORMAL`。206 行显式 `S` snapshot 补齐 candidate 缺少的 15 个键后，`002211.SZ` 两个目标日被识别为停牌不成交，`TARGET_BAR_INVALID` 与两侧路径不对称均消失；core/资金流各有 115 条 sleeve 和 273,470 个 sleeve-day，136,735 条路径可配对。唯一比较点估计 `+0.0183 bps/日`，95% CI `[-0.7367,+0.7494]`，在 coverage 约束前已经不可分辨；共同的 `688200.SH/INITIAL_HOLDING_UNAVAILABLE` 继续按冻结契约保留，未通过删股处理。最终 `INCONCLUSIVE/selected=0`，本资金流 family 到此结束，不因接近零的点估计追加窗口、阈值或同族字段。
 
+### 6.11 PT-NEXT-010：外生归一化初始持仓与既有假设重放
+
+本项修正连续回放的初始账户 estimand，不是新的收益假设。`CASH_START` 仍表示从 100,000 元现金开始；`HOLDING_START` 则明确表示评价窗口开始前已经存在、在共同起点按当前市值归一化的外生库存。后者不得再从空仓调用 `action_candidates` 模拟一笔起点 BUY，因为板块最低买入数量只约束新订单，不证明已有库存能否存在。根因事实见 `EVID-HOLDING-START-ROOT-20260909`。
+
+冻结 `EXOGENOUS_NORMALIZED_HOLDING_ENDOWMENT_V1`：起点必须 PIT active、core feature 完整、非停牌且 raw close 为正；`quantity=floor(100000/start_raw_close)`，`cash=100000-quantity*start_raw_close`，使起点数量为整数且净值严格等于 100,000 元。该库存全部可卖、初始交易费用为 0；entry cost 与 `holding_age=20` 继续沿用既有冻结研究语义，不借机修改 label、exit guard 或公司行动口径。quantity 为 0、entry reference 不可用或状态不可估值时给出稳定 typed reason，不删股、不前向填价、不用未来价格。科创板低于 200 股的库存属于外生 residual holding，只能按共享规则整仓卖出；起点之后的 ADD/REDUCE/EXIT 仍唯一复用现有 board-lot、资金、price/exit guard 和逐腿成本实现。
+
+该契约完整序列化并以 `initial_holding_policy_sha256` 绑定到新版 increment request、连续回放 receipt 和外层 receipt。新 prepare 生成 v3 request，新结果使用新的 receipt identity 与 experiment identity；旧 v1/v2 request/bundle/receipt 不改写。旧已物化 bundle 继续允许 inspect 与 exact-retry，但未物化的旧 request 禁止由新代码重算，避免在旧 identity 下静默改变初始化语义。
+
+修正后只重放 `SW_L2_RELATIVE_MOMENTUM_20D_V1` 与 `MAIN_NET_FLOW_RATIO_5D_LAG1_V1` 两个已经冻结的假设：各自 population selection、历史范围、source-only coverage、特征、两个 GBDT head、唯一联合政策、公司行动/停牌源、费用、bootstrap 和阈值全部不因结果改变。重放不增加 planned trial，不追加第四个信息块；结果无论 `SUPPORTED/NEGATIVE/INCONCLUSIVE` 都完成本项工程与研究交付，但不自动发布 serving、不改变 L1/L1a/card/alert/API/UI，也不要求后端重启。
+
 ## 7. 分钟研究：既有独立审计与后续机制
 
 §7.1～§7.2 是已完成的真实 risk-exit SELL-only L4b-1 契约，不覆盖所有日频触发建议。§6.6.5/§9.7 的日频计划离线分钟回放属于执行真实性验证，不生成分钟新方向，也不修改本节历史 audit 的人口/receipt。
@@ -1024,6 +1037,12 @@ factor 只承担复权比例和源一致性校验，不能凭名称或单次变�
 
 源码、正式历史重放、bundle inspect、exact retry、N0/旧 artifact 零写入与蓝图回填均已完成。纠错 request 得到可数值评价但不支持收益的 `INCONCLUSIVE` 结论，未增加后续搜索；本项没有运行时 import 或 serving 变化，无需后端重启，也不以收益结果阻塞工程合入。
 
+### 9.13 执行中：PT-NEXT-010 初始持仓语义收口
+
+本项保持一个连续实施块：先实现 §6.11 的纯 endowment sizing 与版本化 identity，再按原规格依次重放行业和资金流。只允许修改 position-timing 自有源码、测试、蓝图与 timing-owned immutable artifacts；不拆成新服务、平台、scheduler、worker、API 或页面，也不修改共享 Trading Core、QE、HMM、Selection、Paper 或 MiniQMT。
+
+当前只完成设计与根因核验，尚未产生新版正式 receipt，因此不得宣称 `INITIAL_HOLDING_UNAVAILABLE` 已消失、行业正式分类已变为 `NEGATIVE`、资金流结论已更新或取得 alpha。实际数值、bundle identity、exact retry 和隔离 readback 将在同一版本完成后回填。
+
 ## 10. Verification Plan / 验证方案
 
 ### 10.1 文档 gate
@@ -1138,6 +1157,15 @@ git diff --check
 6. 完整 position_timing、集中 nox、F2 validator、diff check 与 DESIGN-COMPLIANCE-001 四项复核通过后才提交合入。其他模块 source diff、生产 DDL/DML/dependency/restart/serving 均为 noop；正式收益结果不作为代码合入门禁。
 7. 已执行结果：snapshot 为 206 行显式 `S`，补齐 15 个 candidate 缺失键；新 request 与旧 request 的 64 股人口、108,652/108,562 source-only coverage、feature/policy hash、59 个月度模型和训练/统计参数一致。`TARGET_BAR_INVALID` 消失，两侧均为 115 sleeves/273,470 sleeve-days，136,735 条 paired path；唯一比较 `+0.0183 bps/日`、95% CI `[-0.7367,+0.7494]`、MDE `0.7551 bps`，最终 `INCONCLUSIVE/selected=0`。bundle `BUNDLE_VALID`，exact retry 为 no-op；timing registry 16 行且全局 N0 hash 不变。见 `EVID-ACTION-MONEYFLOW-SUSPENSION-CORRECTED-FORMAL`。
 
+### 10.12 PT-NEXT-010 验证契约
+
+1. 单测固定 100,000 元与 `688200.SH/522.03` 反例：形成 191 股、292.27 元现金、起点净值 100,000 元，不虚构 BUY 或买入费；191 股只能按 residual 规则整仓退出。普通主板、quantity=0、无效起点价、缺 entry reference 与 CASH_START 不变均有覆盖。
+2. `initial_holding_policy` 必须完整序列化并 hash-bound；新 request/receipt/continuous receipt 消费同一 hash。v1/v2 已物化 bundle inspect/exact-retry 保持有效，旧未物化 request 不得在新语义下重算。
+3. 行业与资金流重放分别保持原 source-only selection、人口、日期、matched row、feature/policy、训练与统计规格；不读取结果后调参、换窗口、删股或追加 block。两个结果分别保留自己的 source/request/code/receipt identity。
+4. 回放必须报告两侧完整 path error counts/examples、sleeve/sleeve-day/paired-path 数与 coverage 分类；预期修复不得写成测试断言强迫删除其他真实 typed unavailable。
+5. 正式 bundle 各自通过 inspect 与 exact retry；timing-owned registry 只追加新 identity，全局 N0 registry/current_route 前后 hash 不变。旧 request/receipt/bundle/model/current 与 L1/L1a card/event/alert 均零写入。
+6. 完整 position_timing、集中 nox、F2 validator、diff check 与 DESIGN-COMPLIANCE-001 四项复核通过后才提交合入。生产 DDL/DML/dependency/runtime/restart 均为 noop；收益结果不作为代码合入门禁，SUPPORTED 也不在本项自动接 serving。
+
 | 轮次 | 已发现并修订的设计偏差 | 对照位置 |
 |---|---|---|
 | 1 目标/产品 | shadow 无个股闭环、自动交易禁令误伤本地模型、scope 已实现却写待实施、强制 12 字段制造依赖 | §1～§5、§6.6.2/4、§9 |
@@ -1148,6 +1176,7 @@ git diff --check
 | 6 运行安全/UI 降级 | 实验建议复用 PIT 退市上下文且缺失时逐股 typed unavailable；current pointer 反向校验 advice；同日竞态首写胜出；实验 GET 失败不隐藏 L1 | `service.py`、`action_value_runtime.py`、`test_action_value_runtime.py`、`position-timing.spec.ts` |
 | 7 历史覆盖/交付身份 | 公司行动不再右删连续路径；停牌显式不交易且不跳过其后的公司行动；分钟结构空槽与局部缺失分离；v2/v3/v4 兼容且 v4 使用稳定 family lineage，失败/旧批次不改写、旧 request 不回退 newer current | `action_value_corporate_actions.py`、`action_value_research.py`、`action_value_execution_audit.py`、`action_value_pipeline.py`、`EVID-ACTION-V4-FORMAL` |
 | 8 路径可识别性 | `TARGET_BAR_INVALID` 落到 candidate 缺失历史显式停牌键；修复冻结 DB 权威补充证据而非推断 NaN、删路径或换人口，新旧 source/experiment identity 分离；正式纠错回放恢复对称路径并得到仍跨零的数值区间 | §6.10、§9.12、§10.11、`EVID-SUSPENSION-GAP-AUDIT-20260908`、`EVID-ACTION-MONEYFLOW-SUSPENSION-CORRECTED-FORMAL` |
+| 9 初始持仓 estimand | 已有持仓不再以共同起点新 BUY 合法性判定；外生整数库存按起点市值归一化、无虚构起点费用，后续订单继续服从共享执行规则；新旧 identity 分离 | §6.11、§9.13、§10.12、`EVID-HOLDING-START-ROOT-20260909` |
 
 DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本文件，不存在另一份未同步实施计划。§10.5 的真实代码/API/UI/研究证据已经交付，但研究支持态与生产运行激活仍须按 receipt 和部署事实分别报告。
 
@@ -1184,12 +1213,13 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | 合成 L2 population 与用户人口仍偏移 | 同时报 synthetic 与 prospective deployment-weighted；不用“消除偏移”措辞 |
 | 分钟 candidate 截至 2026-08-31，晚于 cutoff 的 action-card 尚不可评价 | 记 `MINUTE_COVERAGE_PENDING`，后续月更后新建 immutable request；不影响 L1/L1a |
 | `kline-all` 放大请求 | 第一阶段零调用；第二阶段需要时才设计增量/缓存 |
+| 高价或板块最低买入量使 `HOLDING_START` 被误删 | PT-NEXT-010 将已有库存与起点新 BUY 分离；按起点市值形成外生整数库存，后续订单仍按 board-lot 执行；quantity=0 或状态不可估值继续 typed unavailable |
 
 ## 12. Rollout / Rollback / Production gates
 
 ### 12.1 蓝图与实现历史边界
 
-- 蓝图初次合入只包含 Markdown；随后首发和离线审计已分别实现，见 §9。v2.9 包含 PT-NEXT-005 覆盖修复、测试与正式历史回放；v2.10 记录 BUG-1403 的模型时钟最小修复及其再次重启边界；v2.11 记录用户重启后的 digest-bound 运行态验收；v2.12 冻结 PT-NEXT-006 单一 ATR14 增量研究；v2.13 回填同一冻结 request 的正式 `INCONCLUSIVE` 结果、不可变重试与隔离 readback；v2.14 在不读取 outcome 的前提下冻结 PT-NEXT-007 单一行业相对强弱 block、实际源覆盖、PIT/文件身份与 matched-core 假设；v2.15 回填同一冻结 request 的正式 `INCONCLUSIVE` 结果、覆盖约束前负区间、不可变重试与隔离 readback；v2.16 在不读取 outcome 的前提下冻结 PT-NEXT-008 单一 T-1 五日主力净流入强度 block、canonical CNY 单位、完整文件身份、实际覆盖与 matched-core 假设；v2.17 回填同一规格的正式 `INCONCLUSIVE/ASYMMETRIC_POLICY_PATH_UNAVAILABLE` 结果，以空点估计/区间保留不可识别性，不取路径交集；v2.18 冻结显式停牌补充源与纠错重放契约；v2.19 回填纠错后的对称路径、数值区间和仍为 `INCONCLUSIVE` 的正式结论。各版均不以源码测试、coverage 或累计点估计代替收益支持证据。
+- 蓝图初次合入只包含 Markdown；随后首发和离线审计已分别实现，见 §9。v2.9 包含 PT-NEXT-005 覆盖修复、测试与正式历史回放；v2.10 记录 BUG-1403 的模型时钟最小修复及其再次重启边界；v2.11 记录用户重启后的 digest-bound 运行态验收；v2.12 冻结 PT-NEXT-006 单一 ATR14 增量研究；v2.13 回填同一冻结 request 的正式 `INCONCLUSIVE` 结果、不可变重试与隔离 readback；v2.14 在不读取 outcome 的前提下冻结 PT-NEXT-007 单一行业相对强弱 block、实际源覆盖、PIT/文件身份与 matched-core 假设；v2.15 回填同一冻结 request 的正式 `INCONCLUSIVE` 结果、覆盖约束前负区间、不可变重试与隔离 readback；v2.16 在不读取 outcome 的前提下冻结 PT-NEXT-008 单一 T-1 五日主力净流入强度 block、canonical CNY 单位、完整文件身份、实际覆盖与 matched-core 假设；v2.17 回填同一规格的正式 `INCONCLUSIVE/ASYMMETRIC_POLICY_PATH_UNAVAILABLE` 结果，以空点估计/区间保留不可识别性，不取路径交集；v2.18 冻结显式停牌补充源与纠错重放契约；v2.19 回填纠错后的对称路径、数值区间和仍为 `INCONCLUSIVE` 的正式结论；v2.20 冻结外生归一化初始持仓及行业/资金流原假设重放，当前实现与正式证据待同版本回填。各版均不以源码测试、coverage 或累计点估计代替收益支持证据。
 - `production_ddl_gate=noop`。
 - `production_dependency_gate=noop`；仓库与 `AIstock-CI` 已有 `lightgbm==4.6.0`，本任务未安装或升级依赖。
 - `runtime_activation=passed`；仅指 BUG-1403 修复已由精确 identity 与业务探针确认加载，不改变模型研究与 serving 状态。
@@ -1255,6 +1285,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-037 | PT-NEXT-007 | HARD | 只检验 `SW_L2_RELATIVE_MOMENTUM_20D_V1` 一个冻结 block；历史 PIT 行业源完整 hash-bound、当前行业独立 20 日序列、source-only 覆盖抽样与 matched-core 单 trial；无 runtime serving、其他模块零修改 |
 | F-038 | PT-NEXT-008 | HARD | 只检验 `MAIN_NET_FLOW_RATIO_5D_LAG1_V1` 一个冻结 block；canonical CNY、5 个连续全局交易日、T-1 保守 available-at、source-only 覆盖抽样与 matched-core 单 trial；无 runtime serving、其他模块零修改 |
 | F-039 | PT-NEXT-009 | HARD | 只以 DB 显式 `S` 冻结 timing-owned 停牌补充 snapshot 并纠错重放原资金流假设；不从 NaN 推断、不取路径交集、不换人口/模型/参数；新旧 source/experiment identity 分离，其他模块零修改 |
+| F-040 | PT-NEXT-010 | HARD | `HOLDING_START` 使用 hash-bound 外生归一化整数库存而非起点新 BUY；起点净值守恒、无虚构费用，后续订单仍服从共享 board-lot/guard/cost；以新 identity 重放原行业与资金流假设，不加因子、不改其他模块或 runtime |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1301,6 +1332,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-037 | §6.8 冻结行业 block、candidate-local 行业 reader、现有 single-block pipeline 参数化与隔离边界 | `backend/tests/position_timing/test_action_value_sector.py`；`test_action_value_incremental.py`；§6.8；§9.10；§10.9；`EVID-SW-L2-SOURCE-20260908`；`EVID-ACTION-SW-L2-INCREMENT-FORMAL`；bundle inspect 与 exact retry | ACTION_VALUE_SW_L2_INCREMENT_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-038 | §6.9 冻结资金流 block、candidate-local moneyflow reader、现有 single-block pipeline 复用与隔离边界 | `backend/tests/position_timing/test_action_value_moneyflow.py`；`test_action_value_incremental.py`；§6.9；§9.11；§10.10；`EVID-MONEYFLOW-SOURCE-20260908`；`EVID-MONEYFLOW-FAILED-ATTEMPTS`；`EVID-ACTION-MONEYFLOW-INCREMENT-FORMAL`；bundle inspect 与 exact retry | ACTION_VALUE_MONEYFLOW_INCREMENT_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-039 | §6.10 timing-owned suspension snapshot、increment request source binding 与 bounded path error context | `backend/tests/position_timing/test_action_value_suspensions.py`；`backend/tests/position_timing/test_action_value_research.py`；`backend/tests/position_timing/test_action_value_incremental.py`；§10.11；`EVID-SUSPENSION-GAP-AUDIT-20260908`；`EVID-ACTION-MONEYFLOW-SUSPENSION-CORRECTED-FORMAL`；bundle inspect 与 exact retry | ACTION_VALUE_SUSPENSION_SOURCE_CORRECTION_FORMAL_VERIFIED_INCONCLUSIVE | none |
+| F-040 | §6.11 `EXOGENOUS_NORMALIZED_HOLDING_ENDOWMENT_V1`、v3 request identity、旧 artifact 兼容与双重放边界 | §10.12；`EVID-HOLDING-START-ROOT-20260909`；`backend/tests/position_timing/test_action_value_research.py`；`backend/tests/position_timing/test_action_value_incremental.py`；`python -m pytest backend/tests/position_timing -q`；正式双 receipt 尚待本轮回填 | DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 

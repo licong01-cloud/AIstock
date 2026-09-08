@@ -35,6 +35,8 @@ from backend.services.position_timing.action_value_incremental import (
 )
 from backend.services.position_timing.action_value_model import fit_local_model
 from backend.services.position_timing.action_value_research import (
+    EXOGENOUS_INITIAL_HOLDING_POLICY,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
     ActionValuePopulationSpec,
     build_action_value_rows,
 )
@@ -276,6 +278,10 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
         "planned_trial_count": 1,
         "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
+        "initial_holding_contract": {
+            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
+            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+        },
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
             "added_features": ["atr14_sma_bps"],
@@ -303,11 +309,28 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     legacy["schema_version"] = "position_timing_action_value_increment_request_v1"
     legacy.pop("source_correction")
     legacy.pop("suspension_snapshot")
+    legacy.pop("initial_holding_contract")
     legacy["request_sha256"] = canonical_sha256(
         {key: value for key, value in legacy.items() if key != "request_sha256"}
     )
     path.write_text(json.dumps(legacy), encoding="utf-8")
     assert _load_request(path)["schema_version"].endswith("_v1")
+    legacy_v2 = json.loads(json.dumps(request))
+    legacy_v2["schema_version"] = "position_timing_action_value_increment_request_v2"
+    legacy_v2.pop("initial_holding_contract")
+    legacy_v2["request_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy_v2.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(legacy_v2), encoding="utf-8")
+    assert _load_request(path)["schema_version"].endswith("_v2")
+    tampered = json.loads(json.dumps(request))
+    tampered["initial_holding_contract"]["policy_sha256"] = "f" * 64
+    tampered["request_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ActionValueError, match="INCREMENT_REQUEST_IDENTITY_MISMATCH"):
+        _load_request(path)
     request["planned_trial_count"] = 2
     path.write_text(json.dumps(request), encoding="utf-8")
     with pytest.raises(ActionValueError, match="INCREMENT_REQUEST_IDENTITY_MISMATCH"):
@@ -324,6 +347,10 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
         "planned_trial_count": 1,
         "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
+        "initial_holding_contract": {
+            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
+            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+        },
         "timing_root": timing_root.as_posix(),
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
@@ -354,6 +381,7 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
         "request_sha256": request["request_sha256"],
         "information_block": ATR14_INFORMATION_BLOCK,
         "feature_spec_sha256": ATR14_FEATURE_SPEC_SHA256,
+        "initial_holding_policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
         "source_sha256": "a" * 64,
         "effect_evidence": "INCONCLUSIVE",
     }
@@ -394,7 +422,7 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
     assert second_registry["duplicate_noop_count"] == 1
     assert first_registry["registry_sha256"] == second_registry["registry_sha256"]
     assert len(records) == 1
-    assert records[0].experiment_id.endswith("_explicit_suspension_source_v2")
+    assert records[0].experiment_id.endswith("_exogenous_holding_endowment_v3")
     assert records[0].planned_trial_count == 1
     assert records[0].selected_trial_count == 0
 
