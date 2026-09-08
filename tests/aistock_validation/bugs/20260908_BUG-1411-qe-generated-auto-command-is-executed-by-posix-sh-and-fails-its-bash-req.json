@@ -31,7 +31,7 @@
     {
       "action": "validation_passed",
       "actor": "Codex",
-      "note": "Final related tests and required nox plans passed; fresh WSL /bin/sh launch entered audited Bash, preserved post-cd injection ordering, printed qe_bash_wrapper_ok, and exited 0 at source commit 64e2b0ed0.",
+      "note": "After safe-sync with origin/main, final related tests and required nox plans passed; fresh WSL /bin/sh launch entered audited Bash after workspace cd, printed qe_bash_wrapper_ok, and exited 0 at source merge commit fc5a545fd.",
       "timestamp": "2026-09-08T16:32:00Z"
     }
   ],
@@ -133,8 +133,8 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "Fresh pytest and nox processes imported tracked source at commit 64e2b0ed0 and passed the single-alpha, Multi-Alpha, stock-pool, backtest-only, QE read, and sector-risk command-contract matrix.",
-      "A fresh WSL Ubuntu process launched the tracked generated command through /bin/sh, entered /bin/bash --noprofile --norc, ran the injected fragment after cd, printed qe_bash_wrapper_ok, and exited 0."
+      "Fresh pytest and nox processes imported tracked source at merge commit fc5a545fd and passed ConfigComposer 174/174, validation L0 8/8, sector-risk 91/91, and QE read 410/410 with one pre-existing skip.",
+      "A fresh WSL Ubuntu process launched the tracked cd-then-exec generated command through /bin/sh, entered /bin/bash --noprofile --norc before the credential scrub, printed qe_bash_wrapper_ok, and exited 0."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
