@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1403",
-  "closed_at": null,
+  "closed_at": "2026-09-08T02:52:32.012578Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -156,10 +156,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp\\issue_workflow\\BUG-1403\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1403",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "930e9b7bdf6a899861db65f4e47bb4ee8cb9808861fb78d0da9f9e26f119c0f6",
+      "contract_digest": "712a1ed3a5784c23b236b5ad6b294ee93156b2126ea241e7ffa8a0d394e92030",
+      "expected_identity": "6918c0e2ed91e5c2f2c667ece879172e4d9fbdbd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-08T02:51:43.970289Z",
+      "mode": "read_only",
+      "observed_identity": "6918c0e2ed91e5c2f2c667ece879172e4d9fbdbd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8a5abbf31e4eada72f066ac5fe8d9ac4c1ec2dcbdc6f56725f6674f868539630",
+      "receipt_sha256": "2ac554419cd4202c401be854f4d0d25464b8f67ffeaec6e07e9fe09c0f90896b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a660572a00e4460e930ecd21fd122735a064e7c4fe3d81bf0e289891c8b38552",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -192,7 +214,7 @@
     ],
     "validation_evidence_digest": "44f5516b8bf4c6ab49774cb996be09ad438a8d62798d8134d8aeb17328f1040d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "position_timing"
   ],
@@ -204,7 +226,10 @@
   "validation_evidence": [
     "validation-receipt: id=59dd1186486f3119 commit=279844a104388bd32b0fee6263f0b1c5ebb8f70e kind=nox plan=position_timing_backend status=passed command=`python -m nox -s position_timing_backend` result=`passed: compile and 165 tests in AIstock environment`",
     "validation-receipt: id=a28de47fbcd17cbe commit=279844a104388bd32b0fee6263f0b1c5ebb8f70e kind=nox plan=position_timing_first_release status=passed command=`rtk nox -s position_timing_first_release` result=`passed: compile, 165 backend tests, TypeScript, lint, production build, 2 Playwright tests`",
-    "validation-receipt: id=4beb57541f5a4658 commit=279844a104388bd32b0fee6263f0b1c5ebb8f70e kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`"
+    "validation-receipt: id=4beb57541f5a4658 commit=279844a104388bd32b0fee6263f0b1c5ebb8f70e kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`",
+    "python -m nox -s position_timing_backend -> passed: compile and 165 tests in AIstock environment",
+    "rtk nox -s position_timing_first_release -> passed: compile, 165 backend tests, TypeScript, lint, production build, 2 Playwright tests",
+    "rtk nox -s validation_module_registry_l0 -> passed: 8 tests, ownership 14/14 mapped"
   ],
   "verification_budget": {
     "budget": "standard",
