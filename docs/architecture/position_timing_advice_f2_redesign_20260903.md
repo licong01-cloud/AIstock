@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.11
+> 版本：v2.12
 > 日期：2026-09-08
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_005_RUNTIME_LOADED_BUG_1403_RUNTIME_VERIFIED`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_006_SINGLE_BLOCK_DESIGN_FROZEN`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -15,6 +15,8 @@
 2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。该次 GET evidence 读到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。
 
 `PT-NEXT-004` 已实现日频 action-value 训练、连续策略评价、本地模型、特定持仓/显式自选的个股影子建议和同页展示。其首份正式不可变 request `84ec7d52f7813c0407245828fb49614518fa1a2efbc4a476e84152076d9f4e13` 绑定干净提交 `6e168ac8c5a28ec648ea985f7e3bf1439594c453`；receipt `089639c674ba42eb78f0e886030e4c071bf66824e4a8a787b7eab5e9d3441cdb` 的联合结论为 `INCONCLUSIVE`。`PT-NEXT-005` 随后按“历史因果回放主证据、prospective 非阻塞旁证”闭合公司行动、停牌连续路径和分钟覆盖内审计；最终权威 v4 request `209ca2652c9b13d65719c237b8d8e0b0fe0536426f447b57794b88169ff1fba2` 绑定干净提交 `babf87636394fa563e9111f6ce2900f4d4def765`，receipt `d38017163e942dc8f4d86cfc879bccd80e1dc264f94f0f590160fecc5db4efb5` 仍为 `INCONCLUSIVE`。v3 与较早 v4 正式 bundle 保留为已被最终 v4 取代的历史证据；最终 v4 增加跨停牌决策日的公司行动连续性、同版本多次研究的稳定 experiment identity，以及旧 request 重放不得回退 newer current 的单调交付，不改变冻结样本、特征、模型或统计 family。因此模型继续只作为 `EXPERIMENTAL_MODEL_ADVICE` 研究影子，不接管正式 L1 卡或提醒，不发布 serving policy。2026-09-08 第一次用户重启后，`/api/v1/runtime-identity` 读回 `60e44adcfbbf5e3826cac739ef76b7881b338247`，规则卡成功生成决策日 2026-09-07、目标日 2026-09-08 的两张 `HOLD`；同次物化暴露 BUG-1403：交易日 20:00 前 action-value 时钟错误选择当天，导致错过前一日物化后返回 `DECISION_CUTOFF_NOT_REACHED`。v2.10 只修正这个已跨过 cutoff 的决策日选择，不改变 v1、研究结论或模型。修复由 PR `#4429` 合入提交 `6918c0e2ed91e5c2f2c667ece879172e4d9fbdbd`；第二次用户重启后的只读 receipt 已精确读回该 identity，health 与 468 条 intents collection 业务语义均通过，BUG-1403 由 PR `#4431` 完成 close-sync。v2.11 仅记录该运行态闭环；数据库、生产 DDL/DML、自动交易和全局 N0 控制面均未改变。
+
+v2.12 冻结 `PT-NEXT-006` 的首个且唯一可选信息块 `ATR14_SMA_GAP_RANGE_V1`。选择只依据既有不可变日频源、PIT 可重建性、机制互补性与不读取结果的 coverage：固定 64 只、2018-08-01～2026-08-31 的 source-only 探针中，core-complete 与追加 ATR 后 complete 均为 91,009 个 session，未读取 label/return outcome。正式研究只比较“同一 matched population 上 core+ATR 联合政策”与“重新训练的同规格 core-only 联合政策”一个假设；不遍历其他技术指标，不等待 HMM/最新交易日，不接运行时卡片、提醒或 serving。
 
 ## 1. Background / 背景与结论
 
@@ -773,6 +775,18 @@ v2 每个交易日固定 `decision_as_of=T 20:00 Asia/Shanghai`、服务 T+1。�
 
 多智能体只做可选解释，输入为卡片/结构化事实/source refs 只读副本，输出 schema-bound 摘要并绑定 model/prompt/source/as-of hash，标 `EXPERIMENTAL_CONTEXT`。不调用当前有副作用 `/analysis/stock`、不写 `app.analysis_records`、不用 trend mock；Agent 一致意见不算独立统计证据，不将自由文本分数送入核心模型。未来可用小型手工成交记录/导入核对实际建议收益，但不接自动交易、不新建券商账本；当前所有 policy outcome 仍不是用户实际成交回报。
 
+### 6.7 PT-NEXT-006：单一 ATR14 信息块增量研究
+
+本项只增加一个离线研究变体，不把候选目录变成搜索空间。冻结 block id 为 `ATR14_SMA_GAP_RANGE_V1`，唯一新增字段为 `atr14_sma_bps`；在与 core 相同的复权一致价格基准上，`TR_t=max(H_t-L_t, |H_t-C_{t-1}|, |L_t-C_{t-1}|)`，`atr14_sma_bps=SMA14(TR_t)/C_t×10000`。必须连续具备 14 个 true-range observation，不 forward-fill，不用未来值；`H/L/C` 与 `C_{t-1}` 均先使用当日已冻结 adjustment factor 转到同一经济价格尺度。字段位于既有 market core 之后、state/action 字段之前；公式、顺序、block id 和 spec hash 写入 request/receipt。
+
+选择依据在读取任何研究收益前固定：ATR14 同时吸收隔夜跳空和日内波幅，机制上补充既有 close-to-close 20 日波动与单日 range；它只消费 `DailyCandidate` 已绑定的 OHLC/factor/calendar，不要求行业、资金流、筹码、事件、HMM 或新数据库服务。source-only coverage probe 固定原 v4 的 seed、64-symbol population 与日期范围，`core_complete=91009`、`core_plus_atr_complete=91009`、`outcomes_read=false`；该 coverage 只证明可运行，不证明有效。
+
+正式 estimand 只有一个：同一 request 内，以相同 symbol/date/action-conditioned 标签、公司行动、成本、可交易性、月度 walk-forward、LightGBM 参数和连续 sleeve，分别重新训练 core-only 与 core+ATR 两个双 head，然后按 `(sleeve_id, valuation_date)` 配对比较两者的政策 wealth 增量。统计以交易日先聚合的一条 paired series 为单位，25 日 circular block、5,000 次、seed `20260908`、95% interval、`economic_threshold_bps=0.0`；lower>0 为 `SUPPORTED`、upper<=0 为 `NEGATIVE`、其余 `INCONCLUSIVE`。两个 head 是一个增强政策，不拆成两个 trial；trial count 固定为 1。分 action/holding-age/regime 仅 diagnostic，不据其结果改字段、公式、阈值或模型。
+
+实现限于 `backend/services/position_timing/**`、`backend/tests/position_timing/**` 与本蓝图，复用现有 timing-owned artifact store 和 research registry；禁止修改 QE、Selection、Advisory、Watchlist、Paper、MiniQMT、HMM、共享数据服务或数据库。新 request/bundle 写 `research/action_value_incremental_v1/**`，旧 v4 request/bundle/model/current/serving、正式 card/event/alert、全局 N0 与既有模块零写入。exact retry 命中同一不可变 bundle，不重复追加 trial；代码/data/request identity 改变即生成新 request，不能覆盖旧结果。
+
+本项不实现 optional runtime model、页面或 API，也不创建 scheduler/worker/新 CI lane。`SUPPORTED` 仅说明该冻结 block 在本次历史 estimand 中有正增量，后续才可用新的模块内版本把相同特征构建接到特定持仓/自选的实验建议；`NEGATIVE/INCONCLUSIVE` 作为完成的研究结论保留，不改变当前 core v4、L1/L1a 或产品可用性。其他候选 block 继续是未来独立 request，不因本项结果自动启动。
+
 ## 7. 分钟研究：既有独立审计与后续机制
 
 §7.1～§7.2 是已完成的真实 risk-exit SELL-only L4b-1 契约，不覆盖所有日频触发建议。§6.6.5/§9.7 的日频计划离线分钟回放属于执行真实性验证，不生成分钟新方向，也不修改本节历史 audit 的人口/receipt。
@@ -907,6 +921,10 @@ N3 只回答 `ALPHA_RANKING`；不得用 N3 否决 L4b-1，也不得用未来执
 
 2026-09-08 第一次重启后运行身份精确匹配 `60e44adcfbbf5e3826cac739ef76b7881b338247`。v1 规则卡正常物化为决策日 2026-09-07、目标日 2026-09-08 的两张 `HOLD`，但 action-value 影子建议错误返回 `DECISION_CUTOFF_NOT_REACHED`。根因是 `_resolve_action_value_clock` 在交易日 20:00 前仍选择当天，而不是最近一个已经跨过 20:00 cutoff 的交易日。BUG-1403 采用单函数修复：20:00 前使用 `previous_trading_day`，20:00 起使用当天，非交易日使用 `latest_completed_trading_day`；新增 before/at-cutoff/weekend 三态测试，v1 15:00 时钟、历史研究、模型、策略和 artifact 均不改。修复由 PR `#4429` 合入 `6918c0e2ed91e5c2f2c667ece879172e4d9fbdbd`。第二次用户重启后的 `aistock_post_restart_verify_receipt_v1` 精确匹配该 identity，health、identity 与 intents 三项探针全部通过；业务探针返回 468 条 collection，receipt SHA-256 为 `2ac554419cd4202c401be854f4d0d25464b8f67ffeaec6e07e9fe09c0f90896b`，close-sync PR `#4431` 已合入。该运行闭环只证明修复加载和 API 契约健康，不改变 `INCONCLUSIVE` 研究结论，也不产生 serving policy。
 
+### 9.9 执行中：PT-NEXT-006 单块增量研究
+
+一个实施块完成设计、代码、历史回放和证据交付，不再拆为数据平台、训练平台或运行时子阶段：先冻结 source-only coverage 与 `ATR14_SMA_GAP_RANGE_V1`，再在同一模块实现可显式选择的 feature contract 和独立 immutable CLI，最后执行一次 core+ATR 对 matched core 的历史 paired replay。任何外部数据/模块缺口只形成转交需求，不在本窗口改码。本项完成标准是 bundle 可 inspect/exact retry、trial 只计一次、研究分类如实、隔离与旧 core 回归通过；不是必须得到正收益，也不是等待最新交易日。
+
 公司行动源只读复用 DEV `market.dividend`，在 `REPEATABLE READ / readonly` 事务中冻结 timing-owned、内容寻址、不可变 snapshot；request 绑定 snapshot 的 path/hash/size。只消费 `div_proc=实施`、`imp_ann_date` 不晚于除权日且经济字段能确定性收敛的记录。`cash_div` 按本地 DDL 契约作为账户税后现金，`cash_div_tax` 仅保留为税前参考价字段；送转按 `stk_div=stk_bo_rate+stk_co_rate` 形成数量乘数。现金先按行动前股数计入，再变更数量和 entry cost；新增股份上市日晚于除权日时，除权日只保留原可卖股数。数据没有投资者级零股分配规则，故账户级小数权益统一向下取整、不虚构现金补偿，并在 receipt 报告影响行数和最大丢弃股数；这是一项保守可复现假设，不宣称券商账户级绝对精确。
 
 factor 只承担复权比例和源一致性校验，不能凭名称或单次变化推断公司行动。固定源诊断表明 10 bps 以上的正常变化均可绑定已实施分红送转，阈值只用于识别“没有事件绑定的重大源变化”，不参与模型或收益选择；已知配股等当前源未覆盖的行动 typed unavailable。停牌造成的 OHLC/factor 缺失不再丢弃整条 sleeve：该日显式 `UNAVAILABLE`、不下动作，估值沿用最近可用原始价格，数据恢复后继续同一现金/持仓路径；非停牌、PIT 有效区间内的因子缺失仍使对应路径覆盖降级。
@@ -987,6 +1005,15 @@ git diff --check
 5. `test_action_value_pipeline.py` 验证旧 v2/v3 与当前 v4 兼容、v4 同版本不同 request 共用稳定 family lineage 但保持不同 trial identity、旧 request 不回退 newer current、delivery failure typed、timing 自有 registry 幂等与全局 N0 零写入。
 6. 新 request/receipt/population/continuous schemas 为 v4，分钟 execution audit schema 为 v3；旧 v2/v3 bundle 仍可 inspect/exact read，不改写旧 request/receipt。正式 request、bundle 与 final model identity 见 `EVID-ACTION-V4-FORMAL`；独立 inspect 与 exact retry 已通过，retry 时 timing 自有 registry/current 哈希不变，全局 N0 始终不变。
 
+### 10.8 PT-NEXT-006 验证契约
+
+1. 公式测试覆盖 adjustment-consistent OHLC、隔夜 gap、14 个完整 observation、缺失不 forward-fill、字段顺序与 feature/policy hash 分离；默认 core contract/hash 与旧模型 reader 保持不变。
+2. 相同 action labels 与 matched row identity 下，core-only 和 core+ATR 使用相同 cutoff、训练参数与可用时钟；optional 缺失 typed，不允许运行时删列或退回 core 后仍冒充增强模型。
+3. 连续 replay 在相同 `(sleeve_id, valuation_date)` 配对，先按日期聚合后做唯一一次 block inference；不把两个 head、两条旧基线或 diagnostic slice 增计为 trial。
+4. request/receipt/manifest 绑定代码、candidate、corporate-action snapshot、feature contract、policy 与参数；exact retry 不重复 registry，tamper/identity/source drift fail closed。
+5. 隔离测试证明只写 timing-owned `research/action_value_incremental_v1` 与 timing registry；旧 action-value v4/current/model、cards/events/alerts、N0、DB 和其他模块保持不变。
+6. 正式运行优先固定历史回放，不等待 HMM、当日卡或 prospective 样本；结果无论 `SUPPORTED/NEGATIVE/INCONCLUSIVE` 都不得自动发布 serving 或改变 L1/L1a。
+
 | 轮次 | 已发现并修订的设计偏差 | 对照位置 |
 |---|---|---|
 | 1 目标/产品 | shadow 无个股闭环、自动交易禁令误伤本地模型、scope 已实现却写待实施、强制 12 字段制造依赖 | §1～§5、§6.6.2/4、§9 |
@@ -1037,7 +1064,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 
 ### 12.1 蓝图与实现历史边界
 
-- 蓝图初次合入只包含 Markdown；随后首发和离线审计已分别实现，见 §9。v2.9 包含 PT-NEXT-005 覆盖修复、测试与正式历史回放；v2.10 记录 BUG-1403 的模型时钟最小修复及其再次重启边界；v2.11 记录用户重启后的 digest-bound 运行态验收，不以源码测试代替生产 identity/API 证据。
+- 蓝图初次合入只包含 Markdown；随后首发和离线审计已分别实现，见 §9。v2.9 包含 PT-NEXT-005 覆盖修复、测试与正式历史回放；v2.10 记录 BUG-1403 的模型时钟最小修复及其再次重启边界；v2.11 记录用户重启后的 digest-bound 运行态验收；v2.12 冻结 PT-NEXT-006 单一 ATR14 增量研究，不以源码测试或 coverage 代替收益证据。
 - `production_ddl_gate=noop`。
 - `production_dependency_gate=noop`；仓库与 `AIstock-CI` 已有 `lightgbm==4.6.0`，本任务未安装或升级依赖。
 - `runtime_activation=passed`；仅指 BUG-1403 修复已由精确 identity 与业务探针确认加载，不改变模型研究与 serving 状态。
@@ -1099,6 +1126,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-033 | PT-NEXT-004 | HARD | 新模型/研究/正式建议只写 timing-owned 版本化路径；旧 L2/L4b-1/card/event 不改写，N0/既有模块零写入及零反向依赖 |
 | F-034 | PT-NEXT-004/005 | HARD | 验证闭环、时序/收益/执行真实性/隔离与支持态；代码完成、证据支持、上线状态分开；不新增平台门禁 |
 | F-035 | PT-NEXT-005 | HARD | 历史 PIT 回放为模型/策略主证据，prospective 仅作并行旁证且不阻研发；公司行动 snapshot 与 v4 request/receipt hash-bound，分钟只在真实覆盖内抽样 |
+| F-036 | PT-NEXT-006 | HARD | 只检验 `ATR14_SMA_GAP_RANGE_V1` 一个冻结 block；同 request 重训 matched core 并做一条 paired policy 增量推断；own immutable artifact/registry、无 runtime serving、其他模块零修改 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1141,6 +1169,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-033 | `action_value_pipeline.py` timing-owned request/bundle/model/registry/current；runtime 独立 model_advice path | `backend/tests/position_timing/test_action_value_pipeline.py`；`backend/tests/position_timing/test_action_value_runtime.py`；formal exact retry、全局 N0 hash readback与 BUG-1403 runtime receipt summary | ACTION_VALUE_V2_ISOLATION_AND_RUNTIME_LOAD_VERIFIED | none |
 | F-034 | §10.5 直接测试、formal receipt、分钟审计及本轮重复复核 | `backend/tests/position_timing/test_action_value_execution_audit.py`；`python -m pytest backend/tests/position_timing -q`；F2 validator；BUG-1403 runtime receipt summary | ACTION_VALUE_V2_ENGINEERING_AND_RUNTIME_VERIFIED_RESEARCH_INCONCLUSIVE | none |
 | F-035 | `action_value_pipeline.py` v4 request 与稳定 family lineage；`action_value_corporate_actions.py` immutable DB snapshot；coverage-first minute audit | `backend/tests/position_timing/test_action_value_corporate_actions.py`；`test_action_value_research.py`；`test_action_value_execution_audit.py`；`test_action_value_pipeline.py`；§10.7；`EVID-ACTION-V4-FORMAL` | ACTION_VALUE_V4_HISTORY_FIRST_FORMAL_VERIFIED_INCONCLUSIVE | none |
+| F-036 | `ATR14_SMA_GAP_RANGE_V1` 冻结公式、单 block feature contract、matched core incremental pipeline 与隔离边界 | `backend/tests/position_timing/test_action_value_incremental.py`；§6.7；§9.9；§10.8；source-only coverage `91009/91009`、`outcomes_read=false`；正式代码/receipt 待本实施块完成后回填 | DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
@@ -1149,4 +1178,4 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 3. **禁止改变业务逻辑**：实现日频模型闭环、同股净超额目标、core-first、前向训练、连续回补和本地推断；不修改共享 defaults、旧 v1 卡/receipt 或既有模块。新版本只产生人工实验建议，不允许自动交易；因没有联合支持，没有发布 serving policy，也不改变当日或未来 L1 正式卡。
 4. **禁止私增门禁审批**：无样本/MDE、最低金额、HMM/事件、券商核验、sealed holdout 或人工审批阻断。因果/数量/身份错误只阻止对应无效计算或提醒；收益支持控制证据措辞与正式模型政策，不阻断研究、实验分析和 L1 发布。只分两个后续实施块，不新增平台或部署审批链；L4b-2 仍范围外。
 
-结论：首发规则能力已上线；L2 v1 无入选模型，L4b-1 无 eligible prospective action-card。PT-NEXT-004/005 已完成工程与两次权威离线研究迭代，并能对持仓/显式自选生成逐股实验建议；最终 v4 已闭合公司行动连续回放、停牌连续性、覆盖内分钟审计与重复研究交付身份，但两个主比较的校正区间仍跨零，联合结论为 `INCONCLUSIVE`，selected 为 0，故没有可称为 alpha 的支持证据，也不发布正式模型策略。历史研究不等待 HMM 或最新交易日，不建模型平台；下一研究项只能按冻结单块增量另建 request，不能在本次 family 内事后搜索。production DDL/DML/dependency 均为 noop；BUG-1403 源码、用户重启后的生产加载、只读 identity/API 验收及 close-sync 均已完成，且不改变模型支持态。
+结论：首发规则能力已上线；L2 v1 无入选模型，L4b-1 无 eligible prospective action-card。PT-NEXT-004/005 已完成工程与两次权威离线研究迭代，并能对持仓/显式自选生成逐股实验建议；最终 v4 已闭合公司行动连续回放、停牌连续性、覆盖内分钟审计与重复研究交付身份，但两个主比较的校正区间仍跨零，联合结论为 `INCONCLUSIVE`，selected 为 0，故没有可称为 alpha 的支持证据，也不发布正式模型策略。PT-NEXT-006 已在看收益前冻结为一个 ATR14 block 对 matched core 的独立 request，历史研究不等待 HMM 或最新交易日，不建模型平台、不开多 block 搜索。production DDL/DML/dependency 均为 noop；BUG-1403 源码、用户重启后的生产加载、只读 identity/API 验收及 close-sync 均已完成，且不改变模型支持态。

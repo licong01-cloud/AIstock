@@ -23,16 +23,17 @@ from .action_value import (
     ActionPlan,
     ActionValueError,
     BPS,
-    FEATURE_ORDER,
-    MARKET_FEATURES,
+    CORE_INFORMATION_BLOCK,
     PositionState,
     action_candidates,
     apply_fill,
     cutoff_on,
     daily_fill,
+    feature_contract,
     leg_fee,
     market_features,
     money,
+    policy_sha256_for,
     state_features,
 )
 from .action_value_data import BENCHMARK, DailyCandidate
@@ -115,6 +116,7 @@ def build_action_value_rows(
     spec: ActionValuePopulationSpec,
     *,
     corporate_actions: CorporateActionBook | None = None,
+    information_block: str = CORE_INFORMATION_BLOCK,
 ) -> ActionValueRows:
     """Build two action-conditioned supervised heads without hindsight selection.
 
@@ -125,6 +127,7 @@ def build_action_value_rows(
     material factor changes without a matching event remain unavailable.
     """
 
+    market_feature_names, feature_order, feature_spec_sha256 = feature_contract(information_block)
     symbols = deterministic_symbols(candidate.symbols, limit=spec.symbol_limit, seed=spec.seed)
     action_book = corporate_actions or CorporateActionBook.empty()
     benchmark_bars = candidate.bars(BENCHMARK)
@@ -150,7 +153,7 @@ def build_action_value_rows(
     }
     for symbol in symbols:
         bars = candidate.bars(symbol)
-        features = market_features(bars, benchmark)
+        features = market_features(bars, benchmark, information_block=information_block)
         for ordinal in indexes[:: spec.review_stride]:
             if ordinal < 30 or ordinal + spec.primary_horizon >= len(calendar):
                 continue
@@ -233,6 +236,7 @@ def build_action_value_rows(
                         corporate_actions=action_book,
                         calendar_dates=calendar_dates,
                         target_fractional_share_discarded=entry_fractional,
+                        market_feature_names=market_feature_names,
                     )
                 except ActionValueError as exc:
                     if not exc.code.startswith("CORPORATE_ACTION_"):
@@ -303,6 +307,7 @@ def build_action_value_rows(
                         corporate_actions=action_book,
                         calendar_dates=calendar_dates,
                         target_fractional_share_discarded=held_fractional,
+                        market_feature_names=market_feature_names,
                     )
                 except ActionValueError as exc:
                     if not exc.code.startswith("CORPORATE_ACTION_"):
@@ -355,6 +360,15 @@ def build_action_value_rows(
         "counts": counts,
         "objective_counts": rows.groupby("objective").size().astype(int).to_dict(),
     }
+    if information_block != CORE_INFORMATION_BLOCK:
+        coverage.update(
+            {
+                "schema_version": "position_timing_action_value_population_optional_v1",
+                "information_block": information_block,
+                "feature_order": feature_order,
+                "feature_spec_sha256": feature_spec_sha256,
+            }
+        )
     coverage["coverage_sha256"] = canonical_sha256(coverage)
     return ActionValueRows(rows=rows, coverage=coverage)
 
@@ -366,9 +380,11 @@ def walk_forward_action_values(
     source_sha256: str,
     request_sha256: str,
     source_commit: str,
+    information_block: str = CORE_INFORMATION_BLOCK,
 ) -> WalkForwardResult:
     """Fit at monthly cutoffs and score only rows available afterward."""
 
+    _, feature_order, feature_spec_sha256 = feature_contract(information_block)
     windows = monthly_training_windows(calendar)
     predictions: list[pd.DataFrame] = []
     models: list[LocalActionModel] = []
@@ -390,13 +406,14 @@ def walk_forward_action_values(
                 source_sha256=source_sha256,
                 request_sha256=request_sha256,
                 source_commit=source_commit,
+                information_block=information_block,
             )
         except ActionValueError as exc:
             if exc.code == "TRAINING_OBJECTIVE_UNAVAILABLE":
                 continue
             raise
         values = model.predict(
-            validation.loc[:, FEATURE_ORDER],
+            validation.loc[:, feature_order],
             validation["objective"].tolist(),
             decision_as_of=max(window["available_at"], pd.Timestamp(validation["decision_as_of"].max()).to_pydatetime()),
         )
@@ -425,6 +442,13 @@ def walk_forward_action_values(
         "model_hashes": [model.metadata["model_sha256"] for model in models],
         "warning": "ACTION_CONDITIONED_OOF_DIAGNOSTIC_NOT_CONTINUOUS_POLICY_RETURN",
     }
+    if information_block != CORE_INFORMATION_BLOCK:
+        diagnostics.update(
+            {
+                "information_block": information_block,
+                "feature_spec_sha256": feature_spec_sha256,
+            }
+        )
     diagnostics["diagnostic_sha256"] = canonical_sha256(diagnostics)
     return WalkForwardResult(frame, tuple(models), diagnostics)
 
@@ -439,6 +463,7 @@ def replay_continuous_cohorts(
     bootstrap_samples: int = 5000,
     block_sessions: int = 25,
     seed: int = 20260907,
+    information_block: str = CORE_INFORMATION_BLOCK,
 ) -> ContinuousReplayResult:
     """Replay one continuous OOT sleeve per symbol and initial state.
 
@@ -450,6 +475,7 @@ def replay_continuous_cohorts(
 
     if horizon != PRIMARY_HORIZON or bootstrap_samples <= 0 or block_sessions <= 0:
         raise ActionValueError("CONTINUOUS_REPLAY_SPEC_DRIFT")
+    market_feature_names, _, feature_spec_sha256 = feature_contract(information_block)
     ordered_models = sorted(models, key=lambda item: item.metadata["available_at"])
     action_book = corporate_actions or CorporateActionBook.empty()
     if not ordered_models or len(set(symbols)) != len(symbols):
@@ -470,7 +496,8 @@ def replay_continuous_cohorts(
     benchmark = candidate.bars(BENCHMARK)["close"]
     bars_by_symbol = {symbol: candidate.bars(symbol) for symbol in symbols}
     features_by_symbol = {
-        symbol: market_features(bars, benchmark) for symbol, bars in bars_by_symbol.items()
+        symbol: market_features(bars, benchmark, information_block=information_block)
+        for symbol, bars in bars_by_symbol.items()
     }
     rows: list[dict[str, Any]] = []
     excluded = {
@@ -523,6 +550,7 @@ def replay_continuous_cohorts(
                     models=ordered_models,
                     initial_state=initial_state,
                     corporate_actions=action_book,
+                    information_block=information_block,
                 )
                 excluded["corporate_action_applied_sleeve_days"] += len(
                     {
@@ -632,6 +660,16 @@ def replay_continuous_cohorts(
         "censoring_policy": "NO_SILENT_CENSOR_TYPED_PATH_UNAVAILABLE",
         "coverage_can_support_policy": not unresolved_paths,
     }
+    if information_block != CORE_INFORMATION_BLOCK:
+        receipt.update(
+            {
+                "schema_version": "position_timing_continuous_policy_receipt_optional_v1",
+                "policy_sha256": policy_sha256_for(information_block),
+                "information_block": information_block,
+                "market_features": market_feature_names,
+                "feature_spec_sha256": feature_spec_sha256,
+            }
+        )
     receipt["receipt_sha256"] = canonical_sha256(receipt)
     return ContinuousReplayResult(sleeve_days=sleeve_days, daily_comparisons=daily, receipt=receipt)
 
@@ -691,6 +729,7 @@ def _action_row(
     corporate_actions: CorporateActionBook,
     calendar_dates: Sequence[date],
     target_fractional_share_discarded: Decimal,
+    market_feature_names: Sequence[str],
 ) -> dict[str, Any] | None:
     fill = daily_fill(
         plan,
@@ -736,7 +775,7 @@ def _action_row(
         "baseline_fractional_share_discarded": float(
             target_fractional_share_discarded + baseline_future_fractional
         ),
-        **{name: float(market[name]) for name in MARKET_FEATURES},
+        **{name: float(market[name]) for name in market_feature_names},
         **state_features(state, plan),
     }
 
@@ -846,6 +885,7 @@ def _replay_one_sleeve(
     models: Sequence[LocalActionModel],
     initial_state: str,
     corporate_actions: CorporateActionBook,
+    information_block: str,
 ) -> list[dict[str, Any]]:
     from .action_value_advice import decide_stock_day
 
@@ -970,9 +1010,10 @@ def _replay_one_sleeve(
                     target_state=policy_target_state,
                     target_reference=target_reference,
                     current_market=features.iloc[decision_ordinal],
+                    information_block=information_block,
                 )
             except ActionValueError as exc:
-                if exc.code != "CURRENT_CORE_FEATURE_UNAVAILABLE":
+                if exc.code not in {"CURRENT_CORE_FEATURE_UNAVAILABLE", "CURRENT_OPTIONAL_FEATURE_UNAVAILABLE"}:
                     raise
                 decision_input_status = "UNAVAILABLE"
                 decision_reason = exc.code

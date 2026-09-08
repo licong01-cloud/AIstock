@@ -35,6 +35,8 @@ TZ = ZoneInfo("Asia/Shanghai")
 ZERO = Decimal(0)
 BPS = Decimal(10000)
 EXPOSURES = (Decimal(0), Decimal(".25"), Decimal(".5"), Decimal(1))
+CORE_INFORMATION_BLOCK = "CORE_ONLY"
+ATR14_INFORMATION_BLOCK = "ATR14_SMA_GAP_RANGE_V1"
 MARKET_FEATURES = (
     "return_1d_bps", "return_3d_bps", "return_5d_bps", "return_20d_bps",
     "close_to_ema20_bps", "ema20_slope_10d_bps", "realized_vol_20d_bps",
@@ -42,6 +44,7 @@ MARKET_FEATURES = (
     "volume_ratio_5d_to_20d", "relative_csi300_return_20d_bps",
     "csi300_return_20d_bps", "csi300_vol_20d_bps",
 )
+ATR14_MARKET_FEATURES = MARKET_FEATURES + ("atr14_sma_bps",)
 STATE_FEATURES = (
     "holding_exposure", "cash_fraction", "action_fraction", "log1p_capital_cny",
     "estimated_leg_cost_bps", "holding_age", "holding_age_missing",
@@ -60,6 +63,18 @@ FEATURE_SPEC = {
     "benchmark": "000300.SH_PRICE_INDEX_NO_STOCK_FACTOR",
 }
 FEATURE_SPEC_SHA256 = canonical_sha256(FEATURE_SPEC)
+ATR14_FEATURE_ORDER = ATR14_MARKET_FEATURES + STATE_FEATURES
+ATR14_FEATURE_SPEC = {
+    **FEATURE_SPEC,
+    "schema": "position_timing_core_plus_atr14_sma_features_v1",
+    "feature_order": ATR14_FEATURE_ORDER,
+    "optional_blocks": (ATR14_INFORMATION_BLOCK,),
+    "atr14_sma_bps": (
+        "SMA14_MAX(ADJ_HIGH-ADJ_LOW,ABS(ADJ_HIGH-PREV_ADJ_CLOSE),"
+        "ABS(ADJ_LOW-PREV_ADJ_CLOSE))/ADJ_CLOSE*10000_NO_FORWARD_FILL"
+    ),
+}
+ATR14_FEATURE_SPEC_SHA256 = canonical_sha256(ATR14_FEATURE_SPEC)
 
 
 class ActionValueError(ValueError):
@@ -108,7 +123,20 @@ def normalize_export_bars(frame: pd.DataFrame, *, benchmark: bool = False) -> pd
     return result
 
 
-def market_features(bars: pd.DataFrame, benchmark: pd.Series) -> pd.DataFrame:
+def feature_contract(information_block: str = CORE_INFORMATION_BLOCK) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    if information_block == CORE_INFORMATION_BLOCK:
+        return MARKET_FEATURES, FEATURE_ORDER, FEATURE_SPEC_SHA256
+    if information_block == ATR14_INFORMATION_BLOCK:
+        return ATR14_MARKET_FEATURES, ATR14_FEATURE_ORDER, ATR14_FEATURE_SPEC_SHA256
+    raise ActionValueError("INFORMATION_BLOCK_UNSUPPORTED", information_block=information_block)
+
+
+def market_features(
+    bars: pd.DataFrame,
+    benchmark: pd.Series,
+    *,
+    information_block: str = CORE_INFORMATION_BLOCK,
+) -> pd.DataFrame:
     """Trailing-only features on an already reindexed global trading calendar.
 
     Missing sessions are not dropped/forward-filled. Source adapters must keep
@@ -151,7 +179,23 @@ def market_features(bars: pd.DataFrame, benchmark: pd.Series) -> pd.DataFrame:
     out["csi300_vol_20d_bps"] = index_close.pct_change(fill_method=None).rolling(
         20, min_periods=20
     ).std(ddof=1) * 10000
-    return out.loc[:, MARKET_FEATURES].replace([np.inf, -np.inf], np.nan)
+    market_names, _, _ = feature_contract(information_block)
+    if information_block == ATR14_INFORMATION_BLOCK:
+        adjusted_high = b["high"] * b["factor"]
+        adjusted_low = b["low"] * b["factor"]
+        previous_adjusted_close = close.shift(1)
+        true_range = pd.concat(
+            (
+                adjusted_high - adjusted_low,
+                (adjusted_high - previous_adjusted_close).abs(),
+                (adjusted_low - previous_adjusted_close).abs(),
+            ),
+            axis=1,
+        ).max(axis=1, skipna=False)
+        out["atr14_sma_bps"] = (
+            true_range.rolling(14, min_periods=14).mean() / close * 10000
+        )
+    return out.loc[:, market_names].replace([np.inf, -np.inf], np.nan)
 
 
 @dataclass(frozen=True)
@@ -423,3 +467,10 @@ POLICY_IDENTITY = {
     "fill_policy": "DAILY_SHARED_GUARD_CONSERVATIVE_V2",
 }
 POLICY_SHA256 = canonical_sha256(POLICY_IDENTITY)
+
+
+def policy_sha256_for(information_block: str = CORE_INFORMATION_BLOCK) -> str:
+    _, _, feature_spec_sha256 = feature_contract(information_block)
+    if information_block == CORE_INFORMATION_BLOCK:
+        return POLICY_SHA256
+    return canonical_sha256({**POLICY_IDENTITY, "feature_spec_sha256": feature_spec_sha256})
