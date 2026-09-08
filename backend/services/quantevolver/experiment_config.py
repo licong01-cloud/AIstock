@@ -50,18 +50,24 @@ _QE_RISK_POLICY_RUNTIME_KEYS = {
     "quote_universe_codes",
 }
 
+QE_CONTROL_PLANE_METADATA_KEYS = frozenset(
+    {
+        # These fields belong to task/registry/UI readback. They must remain
+        # persisted, but Qlib model and strategy constructors must never
+        # receive them as executable kwargs.
+        "_qe_run_registration",
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    }
+)
+
 QE_RUNTIME_METADATA_KEYS = frozenset(
     {
         "archive_policy",
         "archive_reason",
         "archive_allow_override",
-        # Registered single-run provenance belongs to the control plane.  It
-        # must remain persisted for UI/history readback, but Qlib strategy
-        # constructors must never receive it as executable kwargs.
-        "qe_mcp_provenance",
-        "qe_factor_sources",
-        "qe_pending_task_source",
-        "qe_pending_created_by",
         "random_seed",
         "seed",
         "loop_seed",
@@ -70,7 +76,7 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
         "numpy_seed",
         "ensemble",
     }
-)
+) | (QE_CONTROL_PLANE_METADATA_KEYS - {"_qe_run_registration"})
 
 SEED_ENSEMBLE_LEVELS = frozenset({"score", "portfolio"})
 SEED_ENSEMBLE_AGGS = frozenset({"mean", "rank_mean", "median"})
