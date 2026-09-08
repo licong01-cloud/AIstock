@@ -11,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PLAN_CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
 
 ALLOWED_COMMAND_KEYS: dict[str, str] = {
+    "nox_factor_research_backend": "factor_research_backend",
+    "nox_factor_research_dev_db": "factor_research_dev_db",
     "nox_l0": "l0",
     "nox_guardrail_changed_files": "guardrail_changed_files",
     "nox_validation_coverage_backend": "validation_coverage_backend",

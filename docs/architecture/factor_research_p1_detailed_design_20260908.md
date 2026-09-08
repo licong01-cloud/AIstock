@@ -245,6 +245,10 @@ run 在本次输出目录保存轻量 `execution.json/result.json` 作为进程�
 
 归属建议挂在现有 `factor_library`，不是创建新的大型业务模块。新增路径的 ownership/test plan 精确登记由相应 workflow owner 执行或在已批准范围内补充；仅新文件未被现有 catalog 覆盖时补登记，不宽泛调整 `quantevolver/**` 的所有权。
 
+实现登记采用 `factor_library.research` 验证子边界，只匹配本 P1 新路径，避免把研究 DEV 测试扩散到所有现有 factor_library 改动。它只是现有 catalog 中的测试路由，不增加业务服务/平台；普通 CI 与真实 DEV 计划分开，其他因子/QE 文件所有权不变。
+
+2026-09-08 用户补充授权：将 `docs/standards/aistock_runtime_targets_v1.yaml` 加入精确写入范围，仅把 `scripts/factor_research.py` 登记为独立 CLI 的 non-runtime source。不改变五个 backend 新文件的 catalog 推断、任何 runtime target 或通配规则，不推导进程操作权限。
+
 实际实现按 changed files → ownership → module registry → test plans 选择最小验证；P1 不直接修改 `backend/services/quantevolver/**`、`qe_archive/**`、`research_assistant/**`、`research_pipeline/**`、对应 routers 和它们的 migration。发现缺口提需求。
 
 runtime_impact 按最终 catalog 推导，不因 CLI-only 擅自降级 backend Python；若要求 backend-main 重启由用户执行。尽量通过独立 CLI 实现，避免引入必须常驻的新服务；客户端同步仅精确受影响入口，沿现有流程处理。
@@ -325,22 +329,22 @@ P1 工作按“一次实现、必要失败节点重测、最终小矩阵验收�
 
 F-101 三阶段快速落地；F-102 独立方法与客户端入口；F-103 复用决策与副作用识别；F-104 两表任务/历史；F-105 幂等与并发恢复；F-106 CLI 发现与只读；F-107 候选执行与纯指标；F-108 结果恢复与历史保护；F-109 精确所有权/需求交接；F-110 DEV/生产/回滚；F-111 两类真实案例与测试；F-112 无复杂平台/新门禁及真实交付状态。
 
-本次用户批准先详细设计，再实施；下表仅审查设计覆盖，未来实施需将相应条目绑定实际源码、测试和 DB 读回，不能以文档矩阵冒充功能完成。
+用户批准先详细设计再实施；下表已更新为 P1 实施验收，源码/DEV 验证、CI、生产应用分别报告。历史设计 PR 的结构通过不作为实现验收证据。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | §1–2 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#plan | 用户批准设计先行 | 用户批准分阶段实施；仅文档 |
-| F-102 | §4 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#method | 用户批准设计先行 | 用户批准分阶段实施；方法正文/skill 属 P1 |
-| F-103 | §3 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#discovery | 用户批准设计先行 | 用户批准分阶段实施；未运行业务计算 |
-| F-104 | §5.1–5.2 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#database | 用户批准设计先行 | 用户批准分阶段实施；未执行 DDL |
-| F-105 | §5.3 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#database | 用户批准设计先行 | 用户批准分阶段实施；需 DEV 实测 |
-| F-106 | §6 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#cli | 用户批准设计先行 | 用户批准分阶段实施；新命令尚未实现 |
-| F-107 | §6.1/6.3 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#cli | 用户批准设计先行 | 用户批准分阶段实施；不复制指标计算 |
-| F-108 | §6.2 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#cli | 用户批准设计先行 | 用户批准分阶段实施；结果恢复非重跑 |
-| F-109 | §7/9 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#handoff | 用户批准设计先行 | 用户批准分阶段实施；owner 需求不代表已交付 |
-| F-110 | §8 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#migration | 用户批准设计先行 | 用户批准分阶段实施；生产另授权 |
-| F-111 | §10 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#validation | 用户批准设计先行 | 用户批准分阶段实施；小样本不替代全量研究 |
-| F-112 | §2/11/13 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#risks | 用户批准设计先行 | 用户批准分阶段实施；只交付详细设计 |
+| F-101 | §1–2，独立 CLI 与研究模块 | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#plan | 已验证 P1 范围 | 无 |
+| F-102 | docs/analysis/factor_research_methodology.md；两个名称的 repo skills/commands | artifact: docs/operations/factor_research_delivery.md | 正文与入口审核通过 | 用户批准范围：profile 同步交单一 owner，未安装 |
+| F-103 | backend/services/factor_research/runner.py、service.py | test: backend/tests/factor_research/fresh_process_smoke.py | 已验证 | 无 |
+| F-104 | backend/migrations/factor_research_p1_20260908.sql；repository.py | test: backend/tests/factor_research/test_repository_dev.py | DEV 两表/23 列及注释读回通过 | 用户批准范围：生产应用另授权 |
+| F-105 | backend/services/factor_research/repository.py | test: backend/tests/factor_research/test_repository_dev.py | DEV 幂等/并发/回滚测试通过 | 无 |
+| F-106 | scripts/factor_research.py；service.py | test: backend/tests/factor_research/test_contracts.py | 七命令已实现；真实案例新进程读回通过 | 无 |
+| F-107 | backend/services/factor_research/runner.py | test: backend/tests/factor_research/fresh_process_smoke.py | Windows/WSL 子进程和指标测试通过 | 用户批准范围：仅候选基础评价，相关性增量属于后续 owner 需求 |
+| F-108 | backend/services/factor_research/service.py | test: backend/tests/factor_research/test_recovery.py；backend/tests/factor_research/test_repository_dev.py | 文件/数据库登记失败可恢复，已验证不重算 | 无 |
+| F-109 | 精确 ownership/module/test plan/nox/runtime catalog；§9 handoff | test: backend/tests/factor_research/test_contracts.py::test_runtime_registration_is_exact_cli_only；artifact: tmp/handoff/factor-research-p1/ci-selection-all.json | 本地测试路由和 runtime 精确登记验证通过 | 无 |
+| F-110 | 三个精确 SQL 文件；repository.py | test: backend/tests/factor_research/test_repository_dev.py | DEV 验证通过 | 用户批准范围：生产另授权；有历史保留，不执行删除型回滚 |
+| F-111 | backend/tests/factor_research/dev_cases.py | artifact: X:/AIstock_factor_research/p1-validation-20260908/cases-7cfe6914-a26b-4735-9be0-b267e81adff8.json | 两案例入 DEV 并读回通过 | 用户批准范围：仅功能验证；40 股无停牌样本不证明全市场 alpha |
+| F-112 | 本文边界、方法正文和全部 changed files | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#risks | 已验证未引入复杂平台或新业务门禁；准确记录交付状态 | 无 |
 
 ## 13. Production gates 与本次状态
 
@@ -366,6 +370,50 @@ F-101 三阶段快速落地；F-102 独立方法与客户端入口；F-103 复�
 | 禁止新增门禁审批 | §2、§6、§8–9、§11 不新增冻结/哈希、资源阈值、固定淘汰线或审批平台；数据库幂等仅实现已批准历史正确性 | 设计符合；未修改任何运行配置或工作流规则 |
 
 F2 结构校验结果为 12 项索引、12 行矩阵、warnings=0；最终文件检查及 commit-bound CI 以本设计 PR 为准。结构验证不代替实施和数据库验收。
+
+### P1 实施检查点（2026-09-08，尚未合入）
+
+v1.1 设计通过 PR #4442 合入，merge commit 为 `72b66f33c3acc03eab3a18184b551cd51430f128`。后续实现位于独立分支 `feature/factor-research-p1-implementation-20260908`；上文“仅文档”状态记录设计 PR，§12 矩阵已更新为实施证据；两者均不代表生产启用。
+
+- 已实现独立方法正文、研究入口、保留旧名称的交付入口及同源 Claude commands；未安装或覆盖活动 profile。
+- 已实现两表研究历史、七个 CLI 子命令、候选子进程、既有指标引擎适配、只读因子库上下文及 attach 恢复。不写官方因子状态或指标，不修改 QE/数仓业务。
+- 既有 DEV `aistock_dev:5433` 已执行本模块迁移，新增两表、23 列及注释；七个数据库测试及一个真实 DEV 失败恢复测试通过。生产仅只读查询，未执行 DDL/DML。空表回滚脚本尚未实际执行，不删除已保存研究历史来制造回滚证据。
+- Windows 定向测试 19 passed，内置 fresh-process 测试 2 passed；WSL Python 3.10 fresh-process 测试 2 passed。WSL 缺少 pytest，未安装，也不宣称 WSL pytest 已执行。
+- 真实案例 A：DEV task `87f6f91c-e17e-4148-ac39-b65c83c7705b`，40 股票候选计算及结果记录完成。DEV 停牌源为空，样本通过生产只读查询确认窗口内无停牌；因此该案例不证明停牌覆盖或全市场有效性。
+- 真实案例 B：DEV task `6f156fcf-d015-4777-806d-f46b41817a92`，读取既有因子 `m_downside_semivariance_shift_10d_60d` 的实际指标并记录诊断上下文；未修改其可用状态，不将诊断记录当作淘汰结论。
+- 产物仅在 `X:/AIstock_factor_research/p1-validation-20260908`；未重导出或修改现有数据集。模块 registry 测试 8 passed，L0 blocking=0，py_compile 和 diff 检查通过。
+
+两轮实现审核修复了未知请求字段被忽略、空候选结果可 attach、读取已不存在指标列等真实问题，并验证因果截断、跨股票隔离、并发幂等和失败恢复。四项设计复核：未以功能样本代替正式研究交付；错误和恢复状态明确；没有跨模块业务修改；没有新增资源、冻结或自动淘汰门禁。但完整实施验收仍未结束，不能以这些局部结果声称合入就绪。
+
+此前将 `unexecuted_test_blocked` 归因于分类器的判断不正确。经流水线窗口复核，现行规范要求普通计划实际收集新增测试，DEV 计划另外执行；根因是本 P1 nox/测试配置遗漏。没有登记流水线 BUG，也没有修改分类器。
+
+### P1 测试计划修复与复核（2026-09-08）
+
+第一轮：DEV 文件使用模块级 `AISTOCK_DEV_DB_E2E=1` 授权保护，普通计划明确覆盖为 `0` 并清空 DEV env-file，只收集并跳过数据库测试；专用计划仍 `runner_enabled=false`，调用时要求显式 DEV env-file 并启用授权。增加测试证明继承的授权值不会穿透普通计划、未授权执行不会连接数据库、专用计划缺 env-file 不会伪造通过。全量 26 个 changed files 的 classifier 为 `targeted_ci_required/workflow_gate=passed`，未覆盖测试和未映射代码均为 0。
+
+第二轮：修复测试重复加载 noxfile 导致的注册告警；发现并通过 RED→GREEN 修复“计算已完成但 attach.json 写入失败”遗漏。现在返回 `computed_not_recorded`、真实 result_path 及 attachment 请求，文件没有落成时 attach_path 为 null，不要求重新计算。
+
+最终本地小矩阵：普通计划 23 passed、8 skipped（DEV 测试被收集但不连接数据库）；DEV 专用计划 8 passed；Windows/WSL fresh-process 各 2 passed；nox 环境合同 17 passed；registry 8 passed；Ruff、py_compile 通过，L0 blocking=0。DEV 新进程确认案例 A revision=4/completed，案例 B revision=2/active，23 列均有注释。未重跑真实案例计算，未改生产数据库、数据集或进程。
+
+四项 DESIGN-COMPLIANCE-001：完整 P1 能力有真实数据库与候选证据，但不将未完成 runtime/PR 状态声称完整交付；错误与恢复不静默；未修改业务模块或评价语义；新增的测试授权隔离实现现行 CI 数据库安全规范，不是新增业务门禁。以上均为本窗口顺序实质审核，不冒称其他 agent 已审核。
+
+当时剩余精确项为新 CLI 缺少 runtime 登记。用户随后明确授权加入精确文件范围，完成情况见下一节；旧 unknown 不再代表当前分类结果。
+
+### 授权范围补充后的最终本地复核（2026-09-08）
+
+仅在 `docs/standards/aistock_runtime_targets_v1.yaml` 的 `non_runtime_source_paths` 增加 `scripts/factor_research.py` 一行。对比原 catalog 的完整 YAML 结构，除该条目外完全一致；未更改 classifier、target、probe、通配规则或后端登记。
+
+第一轮补充回归先 RED（没有登记），增加精确条目后 GREEN。测试同时证明新 CLI 为 none、五个 backend 文件仍为 backend-main、未登记相似脚本仍为 unknown。第二轮重新计算全部 27 个实际 changed files：`runtime_impact=backend`、`target_ids=[backend-main]`，observed impacts 包含 backend/client/database/none；原 unknown 已消除。整体不是 none，后端重启 owner 仍为 user。源码分类不等于运行身份验证；本任务为 feature，空 BUG record 不能作为其正式重启 receipt。
+
+本轮验证：普通计划 24 passed、8 skipped；Windows fresh-process 2 passed；runtime catalog 精确登记/拒绝别名等定向测试 4 passed；registry 8 passed；Ruff、diff 检查通过；L0 blocking=0。全部 changed files 的测试路由为 passed，未覆盖测试和未映射代码均为 0。前轮 DEV 8 passed 和 WSL 2 passed 的代码行为未被本次 catalog 登记改变，本轮未重复数据库写入或真实案例计算。
+
+DESIGN-COMPLIANCE-001 四项补充审核：仅关闭已获准的精确登记缺口，不把源码/样本冒充上线；没有吞错或默认分类；完整 catalog 对照证明未调整其他业务/后端语义；未新增业务门禁或扩大授权。F-109 的本地缺口已关闭。提交/PR、最终 HEAD 的完整 CI、客户端同步、生产两表迁移和用户重启仍为独立待执行事项，不使用设计 PR 的 CI 代替实现 PR 证据。
+
+用户随后授权本 P1 实现提交、创建 PR 与合入。交付遵循已批准的设计范围，最终 source HEAD/merge SHA/CI 由实现 PR 提供；上文“尚未提交/尚未创建 PR”均为对应检查点的历史状态。此次源码授权不包含生产两表 migration/DML、profile 安装、清理或进程操作。
+
+实现 PR #4448 首次 CI 暴露 `test_validation_catalog_integrity.py` 的计划数量快照仍为新增前 61/15。本地复现后，作为本 P1 两个计划的必要集成修正，精确补充该测试文件范围，只将 controlled_runner/delegated 计数更新为 62/16，其他断言、规则和计划不变；该断言重新通过前不合入。此为本任务配置配套遗漏，不登记流水线 BUG、不降低校验强度。最终 CI 以修正后的 PR HEAD 为准。
+
+完整 catalog 检查进一步发现两个新增 command_key 未在 `backend/services/validation/plan_catalog.py` 登记。作为同一测试计划的必要配套，精确补充该文件范围，仅新增 `nox_factor_research_backend → factor_research_backend` 和 `nox_factor_research_dev_db → factor_research_dev_db` 两个固定映射，不改变任何旧映射、命令执行器或 DEV runner 禁用语义。现有 `/hmm-risk` UI target 缺失告警与本任务无关，不跨模块修改。
 
 ### v1.1 复用与 skill 修订审核
 

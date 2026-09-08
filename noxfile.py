@@ -2729,6 +2729,31 @@ def validation_coverage_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def factor_research_backend(session: nox.Session) -> None:
+    """Collect all research tests with DEV writes explicitly disabled, even if inherited."""
+    session.run(
+        "python", "-m", "pytest",
+        "backend/tests/factor_research/test_contracts.py",
+        "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
+    )
+    session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
+                env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True)
+
+
+@nox.session(venv_backend="none")
+def factor_research_dev_db(session: nox.Session) -> None:
+    """Explicit existing DEV validation, excluded from ordinary source CI."""
+    if not os.environ.get("FACTOR_RESEARCH_DEV_ENV_FILE"):
+        session.error("Explicit FACTOR_RESEARCH_DEV_ENV_FILE required for existing DEV validation")
+    session.run(
+        "python", "-m", "pytest", "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}), external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def platform_api_backend(session: nox.Session) -> None:
     """Run shared Platform API contracts without starting a backend process."""
     session.run(
