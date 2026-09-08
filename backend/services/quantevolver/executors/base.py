@@ -29,6 +29,7 @@ class ExecutionContext(BaseModel):
     submission_source_execution_id: str | None = None
     submission_source_claim_id: str | None = None
     submission_node_capacity: int | None = None
+    submission_consumer_id: str = "qe_mainline"
 
 
 class ExecutionResult(BaseModel):

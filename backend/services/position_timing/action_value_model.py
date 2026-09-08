@@ -17,8 +17,9 @@ import numpy as np
 import pandas as pd
 
 from .action_value import (
-    ActionValueError, FEATURE_ORDER, FEATURE_SPEC_SHA256, MARKET_FEATURES,
-    POLICY_SHA256, TZ, cutoff_on, require_causal,
+    ActionValueError, CORE_INFORMATION_BLOCK, FEATURE_ORDER,
+    FEATURE_SPEC_SHA256, POLICY_SHA256, TZ, cutoff_on,
+    feature_contract, policy_sha256_for, require_causal,
 )
 from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import POSITION_TIMING_L2_RESEARCH_CONTRACT_V1, canonical_json_bytes, canonical_sha256, validate_sha256
@@ -47,8 +48,14 @@ def _lightgbm():
         raise ActionValueError("MODEL_DEPENDENCY_UNAVAILABLE", dependency="lightgbm==4.6.0") from exc
 
 
-def numeric_matrix(frame: pd.DataFrame, medians: Mapping[str, float] | None = None) -> tuple[pd.DataFrame, dict[str, float]]:
-    if tuple(frame.columns) != FEATURE_ORDER:
+def numeric_matrix(
+    frame: pd.DataFrame,
+    medians: Mapping[str, float] | None = None,
+    *,
+    feature_order: Sequence[str] = FEATURE_ORDER,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    feature_order = tuple(feature_order)
+    if tuple(frame.columns) != feature_order:
         raise ActionValueError("FEATURE_ORDER_MISMATCH")
     matrix = frame.apply(pd.to_numeric, errors="raise").replace([np.inf, -np.inf], np.nan)
     for field, mask in (("holding_age", "holding_age_missing"), ("unrealized_return_bps", "entry_cost_missing")):
@@ -65,16 +72,21 @@ def numeric_matrix(frame: pd.DataFrame, medians: Mapping[str, float] | None = No
             if not matrix[mask].eq(1).all():
                 raise ActionValueError("STRUCTURAL_MISSING_MASK_INVALID", field=field)
             values[field] = 0.0  # missing feature, not a fabricated source observation
-        medians = {name: float(values[name]) for name in FEATURE_ORDER}
-    if set(medians) != set(FEATURE_ORDER) or not all(np.isfinite(value) for value in medians.values()):
+        medians = {name: float(values[name]) for name in feature_order}
+    if set(medians) != set(feature_order) or not all(np.isfinite(value) for value in medians.values()):
         raise ActionValueError("PREPROCESSOR_IDENTITY_INVALID")
     return matrix.fillna(dict(medians)), dict(medians)
 
 
-def training_rows_asof(rows: pd.DataFrame, cutoff: datetime) -> pd.DataFrame:
+def training_rows_asof(
+    rows: pd.DataFrame,
+    cutoff: datetime,
+    *,
+    feature_order: Sequence[str] = FEATURE_ORDER,
+) -> pd.DataFrame:
     if cutoff.tzinfo is None:
         raise ActionValueError("TRAINING_CUTOFF_NAIVE")
-    required = {"decision_as_of", "label_available_at", "objective", "net_action_value_bps", *FEATURE_ORDER}
+    required = {"decision_as_of", "label_available_at", "objective", "net_action_value_bps", *feature_order}
     if not required.issubset(rows):
         raise ActionValueError("TRAINING_SCHEMA_MISSING", missing=sorted(required - set(rows)))
     # utc=True alone would silently interpret naive timestamps as UTC.
@@ -108,16 +120,35 @@ class LocalActionModel:
             require_causal(self.published_at, decision_as_of, field="model.published_at")
         if len(frame) != len(objectives) or not set(objectives).issubset(HEADS):
             raise ActionValueError("PREDICTION_OBJECTIVE_INVALID")
-        # A missing entire current core window is not repaired by training medians.
-        if len(frame) and not np.isfinite(frame.loc[:, MARKET_FEATURES].to_numpy(dtype=float)).all():
-            raise ActionValueError("CURRENT_CORE_FEATURE_UNAVAILABLE")
+        information_block = self.metadata.get("information_block", CORE_INFORMATION_BLOCK)
+        market_features, feature_order, feature_spec_sha256 = feature_contract(information_block)
+        if (
+            tuple(self.metadata.get("feature_order", ())) != feature_order
+            or self.metadata.get("feature_spec_sha256") != feature_spec_sha256
+            or self.metadata.get("policy_sha256") != policy_sha256_for(information_block)
+        ):
+            raise ActionValueError("MODEL_FEATURE_OR_POLICY_IDENTITY_MISMATCH")
+        if tuple(frame.columns) != feature_order:
+            raise ActionValueError("FEATURE_ORDER_MISMATCH")
+        # A missing current source feature is not repaired by training medians.
+        if len(frame) and not np.isfinite(frame.loc[:, market_features].to_numpy(dtype=float)).all():
+            code = (
+                "CURRENT_CORE_FEATURE_UNAVAILABLE"
+                if information_block == CORE_INFORMATION_BLOCK
+                else "CURRENT_OPTIONAL_FEATURE_UNAVAILABLE"
+            )
+            raise ActionValueError(code, information_block=information_block)
         result = np.empty(len(frame), dtype=float)
         objective_array = np.asarray(objectives)
         for head in HEADS:
             indexes = np.flatnonzero(objective_array == head)
             if not len(indexes):
                 continue
-            matrix, _ = numeric_matrix(frame.iloc[indexes], self.metadata["heads"][head]["medians"])
+            matrix, _ = numeric_matrix(
+                frame.iloc[indexes],
+                self.metadata["heads"][head]["medians"],
+                feature_order=feature_order,
+            )
             result[indexes] = self.boosters[head].predict(matrix, num_threads=1)
         if not np.isfinite(result).all():
             raise ActionValueError("MODEL_PREDICTION_NON_FINITE")
@@ -125,8 +156,9 @@ class LocalActionModel:
 
 
 def fit_local_model(rows: pd.DataFrame, *, cutoff: datetime, available_at: datetime,
-                    source_sha256: str, request_sha256: str, source_commit: str,
-                    temporal_mode: str = "HISTORICAL_REPLAY") -> LocalActionModel:
+                     source_sha256: str, request_sha256: str, source_commit: str,
+                     temporal_mode: str = "HISTORICAL_REPLAY",
+                     information_block: str = CORE_INFORMATION_BLOCK) -> LocalActionModel:
     require_causal(cutoff, available_at, field="training.cutoff")
     for value in (source_sha256, request_sha256):
         validate_sha256(value, field="model source identity")
@@ -134,12 +166,14 @@ def fit_local_model(rows: pd.DataFrame, *, cutoff: datetime, available_at: datet
         raise ActionValueError("MODEL_CODE_IDENTITY_INVALID")
     if temporal_mode not in {"HISTORICAL_REPLAY", "LIVE_FINAL_FIT"}:
         raise ActionValueError("MODEL_TEMPORAL_MODE_INVALID")
+    market_features, feature_order, feature_spec_sha256 = feature_contract(information_block)
+    policy_sha256 = policy_sha256_for(information_block)
     lightgbm = _lightgbm()
-    training = training_rows_asof(rows, cutoff)
+    training = training_rows_asof(rows, cutoff, feature_order=feature_order)
     heads, boosters = {}, {}
     for head in HEADS:
         selected = training.loc[training.objective.eq(head)]
-        matrix, medians = numeric_matrix(selected.loc[:, FEATURE_ORDER])
+        matrix, medians = numeric_matrix(selected.loc[:, feature_order], feature_order=feature_order)
         estimator = lightgbm.LGBMRegressor(**estimator_parameters())
         estimator.fit(matrix, selected.net_action_value_bps.to_numpy(dtype=float))
         boosters[head] = estimator.booster_
@@ -151,14 +185,21 @@ def fit_local_model(rows: pd.DataFrame, *, cutoff: datetime, available_at: datet
             "text_sha256": hashlib.sha256(model_text.encode("utf-8")).hexdigest(),
         }
     metadata = {
-        "schema_version": MODEL_SCHEMA, "feature_order": FEATURE_ORDER,
-        "feature_spec_sha256": FEATURE_SPEC_SHA256, "policy_sha256": POLICY_SHA256,
+        "schema_version": MODEL_SCHEMA, "feature_order": feature_order,
+        "feature_spec_sha256": feature_spec_sha256, "policy_sha256": policy_sha256,
         "source_sha256": source_sha256, "request_sha256": request_sha256,
         "source_commit": source_commit, "training_cutoff": cutoff.isoformat(),
         "available_at": available_at.isoformat(), "temporal_mode": temporal_mode,
         "package_version": lightgbm.__version__, "heads": heads,
         "interpretation": "MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE",
     }
+    if information_block != CORE_INFORMATION_BLOCK:
+        metadata.update(
+            {
+                "information_block": information_block,
+                "required_market_features": market_features,
+            }
+        )
     if temporal_mode == "LIVE_FINAL_FIT":
         completed = datetime.now(TZ)
         require_causal(cutoff, completed, field="training.cutoff")

@@ -25,10 +25,12 @@ from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
 from .qe_run_registry import (
+    QE_RUN_DEFAULT_CONSUMER,
     QE_RUN_REGISTRATION_PARAM,
     PlannedQELoop,
     QERunRegistry,
     attach_qe_planned_loop_registration,
+    normalize_qe_run_consumer_id,
 )
 from .qe_resource_phase_service import (
     GPU_LEASE_BUSY_REASON,
@@ -63,6 +65,11 @@ from ..strategy_package.workspace_policy import (
 logger = logging.getLogger(__name__)
 
 QE_RESOURCE_MONITORING_DISABLED_REASON = "QE_RESOURCE_MONITORING_DISABLED"
+
+
+def _consumer_id_from_registration(value: Any) -> str:
+    registration = value if isinstance(value, dict) else {}
+    return normalize_qe_run_consumer_id(registration.get("consumer_id"))
 
 
 def normalize_long_trend_profile_id(value: Any) -> str | None:
@@ -5827,6 +5834,7 @@ class AutoEvolutionScheduler:
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
         long_trend_profile_id: Optional[str] = None,
+        consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
         created_by_type: str = "scheduler",
         created_by_name: Optional[str] = None,
         purpose: str = "research",
@@ -5848,6 +5856,7 @@ class AutoEvolutionScheduler:
         effective_long_trend_profile_id = normalize_long_trend_profile_id(
             long_trend_profile_id
         )
+        effective_consumer_id = normalize_qe_run_consumer_id(consumer_id)
         if phase_pipeline_enabled:
             QEResourcePhaseService().ensure_schema_ready()
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
@@ -5898,6 +5907,7 @@ class AutoEvolutionScheduler:
             attach_qe_planned_loop_registration(
                 loop_cfg,
                 run_kind="custom_evolution_loop",
+                consumer_id=effective_consumer_id,
                 source_type=created_by_type,
                 created_by_name=created_by_name,
                 purpose=purpose,
@@ -5991,6 +6001,7 @@ class AutoEvolutionScheduler:
                 )
                 for index, loop_cfg in enumerate(loops_config, start=1)
             ],
+            consumer_id=effective_consumer_id,
             source_type=created_by_type,
             created_by_name=created_by_name,
             purpose=purpose,
@@ -7417,6 +7428,9 @@ class AutoEvolutionScheduler:
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=submission_source_execution_id,
                 submission_source_claim_id=submission_source_claim_id,
+                submission_consumer_id=_consumer_id_from_registration(
+                    planned_registration
+                ),
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -7460,6 +7474,9 @@ class AutoEvolutionScheduler:
                     submission_source_kind="qe_evolution_loop",
                     submission_source_execution_id=submission_source_execution_id,
                     submission_source_claim_id=submission_source_claim_id,
+                    submission_consumer_id=_consumer_id_from_registration(
+                        planned_registration
+                    ),
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
