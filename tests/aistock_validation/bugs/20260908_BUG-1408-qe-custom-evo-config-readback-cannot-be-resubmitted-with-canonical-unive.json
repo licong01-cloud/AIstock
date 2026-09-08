@@ -92,7 +92,7 @@
     "fresh_process_evidence": [
       "fresh pytest process: backend/tests/quantevolver/test_qe_universe_comparison.py -> 5 passed; active-profile readback emits only canonical universe_selection, legacy stock_pool remains readable, and independent dual-input creation remains HTTP 400 fail-closed",
       "fresh pytest process: universe comparison, active dataset profile, registered submission, and MCP domain matrix -> 67 passed",
-      "fresh nox process: qe_read_backend -> 402 passed, 1 skipped; validation_module_registry_l0 -> 8 passed",
+      "fresh nox process at final source state: qe_read_backend -> 403 passed, 1 skipped; validation_module_registry_l0 -> 8 passed",
       "fresh nox process: qe_sector_risk_overlay_backend -> 91 passed; qe_mcp_backend -> 49 passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
