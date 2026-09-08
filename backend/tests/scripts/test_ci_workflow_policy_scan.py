@@ -237,6 +237,25 @@ def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     assert final_verdict["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
     assert "workflow_validation=${WORKFLOW_TEST_RESULT}" in final_verdict["run"]
     assert "workflow_policy=${WORKFLOW_POLICY_RESULT}" in final_verdict["run"]
+    assert 'failures+=("dev_db=' not in final_verdict["run"]
+    assert "### External DEV database validation" in final_verdict["run"]
+    assert "does not run database DDL/DML" in final_verdict["run"]
+
+
+def test_dev_db_requirement_cannot_be_reintroduced_as_ci_lane_failure(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                'echo "### External DEV database validation"',
+                'failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")',
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["existing_dev_database_lane_reference"] is False
 
 
 def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path) -> None:
