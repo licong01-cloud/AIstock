@@ -464,6 +464,14 @@ def _paired_policy_comparison(
     optional_column: str = "atr14_policy_wealth_cny",
     estimand: str = "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY_DAILY_BPS",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compare bounded research paths with one vectorized one-to-one join.
+
+    Each input has at most one BUY_AND_HOLD row per (sleeve_id, valuation_date);
+    duplicate checks plus ``validate="one_to_one"`` prevent row multiplication.
+    The frozen 64-symbol research population is currently about 270k rows per
+    side, so a second batching or distributed-join layer is not justified.
+    """
+
     keys = ["sleeve_id", "valuation_date"]
     core = core_sleeves.loc[
         core_sleeves["baseline"].eq("BUY_AND_HOLD"),
