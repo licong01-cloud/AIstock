@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from bisect import bisect_right
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 import hashlib
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -52,6 +52,23 @@ TERMINAL_MAX_DEFER = 5
 DEFAULT_REVIEW_STRIDE = 10
 DEFAULT_SYMBOL_LIMIT = 64
 UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS = Decimal("10")
+LEGACY_INITIAL_HOLDING_POLICY_ID = "EXECUTABLE_BUY_AT_CONTINUOUS_START_V0"
+EXOGENOUS_INITIAL_HOLDING_POLICY_ID = "EXOGENOUS_NORMALIZED_HOLDING_ENDOWMENT_V1"
+EXOGENOUS_INITIAL_HOLDING_POLICY = {
+    "policy_id": EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+    "estimand": "PRE_EXISTING_POSITION_MARKED_TO_COMMON_CONTINUOUS_START",
+    "quantity": "FLOOR_REFERENCE_CAPITAL_DIVIDED_BY_START_RAW_CLOSE_INTEGER_SHARES",
+    "cash": "REFERENCE_CAPITAL_MINUS_QUANTITY_TIMES_START_RAW_CLOSE",
+    "sellable": "ALL_INITIAL_SHARES",
+    "initial_trade": "NONE",
+    "initial_fee_cny": "0",
+    "entry_reference": "RAW_CLOSE_AT_START_MINUS_PRIMARY_HORIZON",
+    "holding_age": PRIMARY_HORIZON,
+    "post_start_execution": "SHARED_BOARD_LOT_GUARD_AND_COMPONENT_COST",
+}
+EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256 = canonical_sha256(
+    EXOGENOUS_INITIAL_HOLDING_POLICY
+)
 
 
 @dataclass(frozen=True)
@@ -465,6 +482,7 @@ def replay_continuous_cohorts(
     block_sessions: int = 25,
     seed: int = 20260907,
     information_block: str = CORE_INFORMATION_BLOCK,
+    initial_holding_policy_id: str = LEGACY_INITIAL_HOLDING_POLICY_ID,
 ) -> ContinuousReplayResult:
     """Replay one continuous OOT sleeve per symbol and initial state.
 
@@ -476,6 +494,11 @@ def replay_continuous_cohorts(
 
     if horizon != PRIMARY_HORIZON or bootstrap_samples <= 0 or block_sessions <= 0:
         raise ActionValueError("CONTINUOUS_REPLAY_SPEC_DRIFT")
+    if initial_holding_policy_id not in {
+        LEGACY_INITIAL_HOLDING_POLICY_ID,
+        EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+    }:
+        raise ActionValueError("INITIAL_HOLDING_POLICY_UNSUPPORTED")
     market_feature_names, _, feature_spec_sha256 = feature_contract(information_block)
     ordered_models = sorted(models, key=lambda item: item.metadata["available_at"])
     action_book = corporate_actions or CorporateActionBook.empty()
@@ -553,6 +576,7 @@ def replay_continuous_cohorts(
                     initial_state=initial_state,
                     corporate_actions=action_book,
                     information_block=information_block,
+                    initial_holding_policy_id=initial_holding_policy_id,
                 )
                 excluded["corporate_action_applied_sleeve_days"] += len(
                     {
@@ -640,7 +664,11 @@ def replay_continuous_cohorts(
         and all(item["effect_evidence"] == "SUPPORTED" for item in comparisons.values())
     )
     receipt = {
-        "schema_version": "position_timing_continuous_policy_receipt_v4",
+        "schema_version": (
+            "position_timing_continuous_policy_receipt_v5"
+            if initial_holding_policy_id == EXOGENOUS_INITIAL_HOLDING_POLICY_ID
+            else "position_timing_continuous_policy_receipt_v4"
+        ),
         "policy_id": "DAILY_ACTION_VALUE_POLICY_V2",
         "horizon_trading_days": horizon,
         "sleeve_count": int(sleeve_days["sleeve_id"].nunique()),
@@ -674,11 +702,22 @@ def replay_continuous_cohorts(
     if information_block != CORE_INFORMATION_BLOCK:
         receipt.update(
             {
-                "schema_version": "position_timing_continuous_policy_receipt_optional_v1",
+                "schema_version": (
+                    "position_timing_continuous_policy_receipt_optional_v2"
+                    if initial_holding_policy_id == EXOGENOUS_INITIAL_HOLDING_POLICY_ID
+                    else "position_timing_continuous_policy_receipt_optional_v1"
+                ),
                 "policy_sha256": policy_sha256_for(information_block),
                 "information_block": information_block,
                 "market_features": market_feature_names,
                 "feature_spec_sha256": feature_spec_sha256,
+            }
+        )
+    if initial_holding_policy_id == EXOGENOUS_INITIAL_HOLDING_POLICY_ID:
+        receipt.update(
+            {
+                "initial_holding_policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
+                "initial_holding_policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
             }
         )
     receipt["receipt_sha256"] = canonical_sha256(receipt)
@@ -921,6 +960,7 @@ def _replay_one_sleeve(
     initial_state: str,
     corporate_actions: CorporateActionBook,
     information_block: str,
+    initial_holding_policy_id: str,
 ) -> list[dict[str, Any]]:
     from .action_value_advice import decide_stock_day
 
@@ -934,12 +974,32 @@ def _replay_one_sleeve(
         l1_state = cash_state
         buy_hold_complete = False
     elif initial_state == "HOLDING_START":
-        full = max(plan.delta for plan in action_candidates(symbol, cash_state, reference))
-        if full <= 0:
-            raise ActionValueError("INITIAL_HOLDING_UNAVAILABLE")
-        cash = REFERENCE_CAPITAL_CNY - reference * full
-        entry = money(bars.iloc[start_ordinal - PRIMARY_HORIZON]["close"])
-        policy_state = PositionState(full, full, cash, REFERENCE_CAPITAL_CNY, entry, PRIMARY_HORIZON)
+        if initial_holding_policy_id == EXOGENOUS_INITIAL_HOLDING_POLICY_ID:
+            if bool(bars.iloc[start_ordinal].get("is_suspended")):
+                raise ActionValueError(
+                    "INITIAL_HOLDING_REFERENCE_UNAVAILABLE",
+                    symbol=symbol,
+                )
+            entry = _available_raw_close(bars.iloc[start_ordinal - PRIMARY_HORIZON])
+            policy_state = initial_holding_endowment(
+                symbol=symbol,
+                reference=reference,
+                entry_reference=entry,
+            )
+        else:
+            full = max(plan.delta for plan in action_candidates(symbol, cash_state, reference))
+            if full <= 0:
+                raise ActionValueError("INITIAL_HOLDING_UNAVAILABLE")
+            cash = REFERENCE_CAPITAL_CNY - reference * full
+            entry = money(bars.iloc[start_ordinal - PRIMARY_HORIZON]["close"])
+            policy_state = PositionState(
+                full,
+                full,
+                cash,
+                REFERENCE_CAPITAL_CNY,
+                entry,
+                PRIMARY_HORIZON,
+            )
         buy_hold_state = policy_state
         l1_state = policy_state
         buy_hold_complete = True
@@ -1175,6 +1235,42 @@ def _replay_one_sleeve(
                 }
             )
     return output
+
+
+def initial_holding_endowment(
+    *,
+    symbol: str,
+    reference: Decimal,
+    entry_reference: Decimal | None,
+    capital: Decimal = REFERENCE_CAPITAL_CNY,
+) -> PositionState:
+    """Create a normalized pre-existing inventory without fabricating a BUY.
+
+    Board-lot rules apply to orders after the common start.  The endowment is
+    existing integer inventory, so a sub-minimum residual is valid but can only
+    be fully sold by the shared execution rules.
+    """
+
+    if not capital.is_finite() or capital <= 0:
+        raise ActionValueError("REFERENCE_CAPITAL_INVALID", symbol=symbol)
+    if not reference.is_finite() or reference <= 0:
+        raise ActionValueError("INITIAL_HOLDING_REFERENCE_UNAVAILABLE", symbol=symbol)
+    if entry_reference is None or not entry_reference.is_finite() or entry_reference <= 0:
+        raise ActionValueError("INITIAL_ENTRY_REFERENCE_UNAVAILABLE", symbol=symbol)
+    quantity = int((capital / reference).to_integral_value(rounding=ROUND_FLOOR))
+    if quantity <= 0:
+        raise ActionValueError("INITIAL_HOLDING_UNAVAILABLE", symbol=symbol)
+    cash = capital - reference * quantity
+    if cash < 0 or cash >= reference:
+        raise ActionValueError("INITIAL_HOLDING_NORMALIZATION_INVALID", symbol=symbol)
+    return PositionState(
+        quantity=quantity,
+        sellable=quantity,
+        cash=cash,
+        capital=capital,
+        entry_cost=entry_reference,
+        holding_age=PRIMARY_HORIZON,
+    )
 
 
 def _roll_state_to_decision(state: PositionState) -> PositionState:

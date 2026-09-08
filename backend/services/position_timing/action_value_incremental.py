@@ -51,6 +51,9 @@ from .action_value_moneyflow import MoneyflowAugmentedCandidate
 from .action_value_sector import SectorAugmentedCandidate
 from .action_value_pipeline import _clean_repository_commit
 from .action_value_research import (
+    EXOGENOUS_INITIAL_HOLDING_POLICY,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
     REFERENCE_CAPITAL_CNY,
     ActionValuePopulationSpec,
     circular_block_interval,
@@ -69,9 +72,13 @@ from .contracts import canonical_json_bytes, canonical_sha256
 
 
 PIPELINE_ID = "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
-REQUEST_SCHEMA = "position_timing_action_value_increment_request_v2"
-LEGACY_REQUEST_SCHEMAS = {"position_timing_action_value_increment_request_v1"}
-RECEIPT_SCHEMA = "position_timing_action_value_increment_receipt_v1"
+REQUEST_SCHEMA = "position_timing_action_value_increment_request_v3"
+LEGACY_REQUEST_SCHEMAS = {
+    "position_timing_action_value_increment_request_v1",
+    "position_timing_action_value_increment_request_v2",
+}
+RECEIPT_SCHEMA = "position_timing_action_value_increment_receipt_v2"
+LEGACY_RECEIPT_SCHEMA = "position_timing_action_value_increment_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_action_value_increment_bundle_v1"
 ARTIFACT_FOLDER = "action_value_incremental_v1"
 BOOTSTRAP_SAMPLES = 5_000
@@ -239,6 +246,10 @@ def prepare_increment_request(
             "feature_spec_sha256": feature_contract(CORE_INFORMATION_BLOCK)[2],
             "policy_sha256": policy_sha256_for(CORE_INFORMATION_BLOCK),
         },
+        "initial_holding_contract": {
+            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
+            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+        },
         "population_spec": {
             "start": population_start.isoformat(),
             "end": population_end.isoformat(),
@@ -304,6 +315,9 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
             "registry": registry,
             "global_registry_observation": _global_observation(global_before, global_registry),
         }
+
+    if request["schema_version"] != REQUEST_SCHEMA:
+        raise ActionValueError("LEGACY_INCREMENT_REQUEST_REPLAY_UNSUPPORTED")
 
     if _clean_repository_commit(Path(request["repository_root"])) != request["repository_commit"]:
         raise ActionValueError("ACTION_VALUE_CODE_IDENTITY_MISMATCH")
@@ -392,6 +406,7 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "bootstrap_samples": BOOTSTRAP_SAMPLES,
         "block_sessions": BOOTSTRAP_BLOCK_SESSIONS,
         "seed": BOOTSTRAP_SEED,
+        "initial_holding_policy_id": EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
     }
     core_replay = replay_continuous_cohorts(
         models=core_forward.models,
@@ -441,6 +456,7 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "feature_spec_sha256": feature_contract(profile.information_block)[2],
         "augmented_policy_sha256": policy_sha256_for(profile.information_block),
         "matched_core_policy_sha256": policy_sha256_for(CORE_INFORMATION_BLOCK),
+        "initial_holding_policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
         "planned_trial_count": 1,
         "generated_trial_count": 1,
         "evaluated_trial_count": 1,
@@ -648,12 +664,22 @@ def inspect_increment_bundle(bundle: Path) -> dict[str, Any]:
             raise ActionValueError("INCREMENT_BUNDLE_FILE_IDENTITY_MISMATCH", file=name)
     _load_request(bundle / "request.json")
     receipt_identity = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    expected_receipt_schema = (
+        RECEIPT_SCHEMA
+        if request.get("schema_version") == REQUEST_SCHEMA
+        else LEGACY_RECEIPT_SCHEMA
+    )
     if (
-        receipt.get("schema_version") != RECEIPT_SCHEMA
+        receipt.get("schema_version") != expected_receipt_schema
         or receipt.get("request_sha256") != request.get("request_sha256")
         or receipt.get("information_block") != profile.information_block
         or receipt.get("feature_spec_sha256") != feature_contract(profile.information_block)[2]
         or receipt.get("receipt_sha256") != canonical_sha256(receipt_identity)
+        or (
+            request.get("schema_version") == REQUEST_SCHEMA
+            and receipt.get("initial_holding_policy_sha256")
+            != EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256
+        )
     ):
         raise ActionValueError("INCREMENT_RECEIPT_IDENTITY_MISMATCH")
     return {"manifest": manifest, "request": request, "receipt": receipt}
@@ -766,11 +792,7 @@ def _deliver_registry(
     record = build_trial_record(
         experiment_id=_experiment_id(request, profile),
         attempt_id=request["request_sha256"][:24],
-        research_stage=(
-            "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V2"
-            if request.get("schema_version") == REQUEST_SCHEMA
-            else "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
-        ),
+        research_stage=_research_stage(request),
         study_type=ResearchStudyType.LEARNABILITY_AUDIT,
         hypothesis_family_id="POSITION_TIMING_ACTION_VALUE_OPTIONAL_BLOCK_V1",
         parent_lineage=("POSITION_TIMING_ADVICE_V1", "POSITION_TIMING_ACTION_VALUE_V4"),
@@ -807,8 +829,19 @@ def _deliver_registry(
 
 def _experiment_id(request: Mapping[str, Any], profile: IncrementProfile) -> str:
     if request.get("schema_version") == REQUEST_SCHEMA:
+        return f"{profile.experiment_id}_exogenous_holding_endowment_v3"
+    if request.get("schema_version") == "position_timing_action_value_increment_request_v2":
         return f"{profile.experiment_id}_explicit_suspension_source_v2"
     return profile.experiment_id
+
+
+def _research_stage(request: Mapping[str, Any]) -> str:
+    schema_version = request.get("schema_version")
+    if schema_version == REQUEST_SCHEMA:
+        return "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V3"
+    if schema_version == "position_timing_action_value_increment_request_v2":
+        return "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V2"
+    return "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
 
 
 def _global_observation(before: Mapping[str, Any], path: Path) -> dict[str, Any]:
@@ -912,10 +945,11 @@ def _load_request(path: Path) -> dict[str, Any]:
     matched = request.get("matched_core_contract") or {}
     training = request.get("training_spec") or {}
     population = request.get("population_spec") or {}
+    initial_holding = request.get("initial_holding_contract") or {}
     expected_selection = _selection_contract(profile)
     schema_version = request.get("schema_version")
     corrected_source_contract = (
-        schema_version in LEGACY_REQUEST_SCHEMAS
+        schema_version == "position_timing_action_value_increment_request_v1"
         or (
             request.get("source_correction") == "EXPLICIT_DB_SUSPENSION_UNION_V1"
             and isinstance(request.get("suspension_snapshot"), Mapping)
@@ -924,9 +958,18 @@ def _load_request(path: Path) -> dict[str, Any]:
             and "size_bytes" in request["suspension_snapshot"]
         )
     )
+    initial_holding_contract = (
+        schema_version in LEGACY_REQUEST_SCHEMAS
+        or (
+            initial_holding.get("policy") == EXOGENOUS_INITIAL_HOLDING_POLICY
+            and initial_holding.get("policy_sha256")
+            == EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256
+        )
+    )
     if (
         schema_version not in {REQUEST_SCHEMA, *LEGACY_REQUEST_SCHEMAS}
         or not corrected_source_contract
+        or not initial_holding_contract
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("information_block") not in PROFILES
         or request.get("planned_trial_count") != 1
