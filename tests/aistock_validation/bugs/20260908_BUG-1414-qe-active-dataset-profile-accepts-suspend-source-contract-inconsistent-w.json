@@ -31,7 +31,7 @@
     {
       "action": "validation_passed",
       "actor": "Codex",
-      "note": "Fresh processes passed the 43-test active-profile/direct-v2 matrix, qe_read_backend 411/411 with one pre-existing skip, validation ownership 8/8, lint, compile, and diff checks. The real 20260907-v2 profile is rejected at validation with qe_dataset_component_identity_mismatch before experiment submission.",
+      "note": "Fresh processes imported source commit 31edfd5b1 and passed the 43-test active-profile/direct-v2 matrix, qe_read_backend 411/411 with one pre-existing skip, validation ownership 8/8, sector-risk 91/91, MCP 49/49, lint, compile, and diff checks. The real 20260907-v2 profile is rejected at validation with qe_dataset_component_identity_mismatch before experiment submission.",
       "timestamp": "2026-09-08T20:05:00Z"
     }
   ],
@@ -133,7 +133,8 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "Fresh AIstock Python and nox processes imported the tracked QE active-profile validator, passed the 43-test focused matrix and qe_read_backend 411/411, and rejected the real mismatched 20260907-v2 profile before activation."
+      "Fresh AIstock Python and nox processes imported the tracked QE active-profile validator, passed the 43-test focused matrix and qe_read_backend 411/411, and rejected the real mismatched 20260907-v2 profile before activation.",
+      "Fresh AIstock Python and nox processes imported source commit 31edfd5b1, passed the focused and QE read matrices, and rejected the real mismatched 20260907-v2 active profile before activation."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
