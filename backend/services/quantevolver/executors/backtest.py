@@ -420,4 +420,5 @@ class BacktestExecutor(BaseExecutor):
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
             requested_node_capacity=ctx.submission_node_capacity,
+            consumer_id=ctx.submission_consumer_id,
         )

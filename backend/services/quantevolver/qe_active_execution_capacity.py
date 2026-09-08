@@ -28,6 +28,7 @@ from .qe_execution_reservation import (
     QEExecutionReservationToken,
     SourceClaim,
 )
+from .qe_run_registry import QE_RUN_DEFAULT_CONSUMER, normalize_qe_run_consumer_id
 from .qe_workspace_client import (
     QEWorkspaceSubmissionContractError,
     QEWorkspaceSubmissionInspection,
@@ -103,8 +104,10 @@ class QEWorkspaceSubmissionSource:
     record_waiting_capacity: CapacityWaitRecorder
     requested_node_capacity: int | None = None
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
+    consumer_id: str = QE_RUN_DEFAULT_CONSUMER
 
     def __post_init__(self) -> None:
+        normalize_qe_run_consumer_id(self.consumer_id)
         lease_seconds = int(self.lease_seconds)
         if not 1 <= lease_seconds <= MAX_RESTART_SAFE_LEASE_SECONDS:
             raise QEWorkspaceSubmissionCoordinatorError(
@@ -1014,6 +1017,7 @@ class QEWorkspaceSubmissionCoordinator:
         qe_task_id: str,
         qe_loop_id: str,
         submission_intent_hash: str,
+        consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
     ) -> QEExecutionCapacityObservation:
         """Return a read-only admission snapshot for a durable waiting source."""
 
@@ -1021,6 +1025,7 @@ class QEWorkspaceSubmissionCoordinator:
             node_id,
             requested_node_capacity,
         )
+        capacity = self._effective_consumer_capacity(capacity, consumer_id)
         spec = QEExecutionReservationSpec(
             node_id=self._capacity_service.canonical_node_id(node_id),
             source_kind=source_kind,
@@ -1055,9 +1060,13 @@ class QEWorkspaceSubmissionCoordinator:
     ) -> QEWorkspaceSubmissionOutcome:
         self._validate_payload(payload)
         self._repository.preflight_schema(raise_on_error=True)
-        capacity = self._capacity_service.resolve_node_capacity(
+        physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
             source.requested_node_capacity,
+        )
+        capacity = self._effective_consumer_capacity(
+            physical_capacity,
+            source.consumer_id,
         )
         capacity_node_id = self._capacity_service.canonical_node_id(source.node_id)
         spec = QEExecutionReservationSpec(
@@ -1084,6 +1093,11 @@ class QEWorkspaceSubmissionCoordinator:
                     queued,
                     detail={
                         "reason_code": "qe_capacity_node_queue_only",
+                        "consumer_id": normalize_qe_run_consumer_id(
+                            source.consumer_id
+                        ),
+                        "physical_node_capacity": physical_capacity,
+                        "effective_consumer_capacity": capacity,
                         "diagnostics": [
                             dict(item) for item in queue_only_diagnostics
                         ],
@@ -1098,7 +1112,19 @@ class QEWorkspaceSubmissionCoordinator:
             record_waiting_capacity=source.record_waiting_capacity,
         )
         if not acquired.acquired:
-            return self._capacity_wait_outcome(payload, spec, acquired)
+            return self._capacity_wait_outcome(
+                payload,
+                spec,
+                acquired,
+                detail={
+                    "reason_code": "qe_execution_capacity_full",
+                    "consumer_id": normalize_qe_run_consumer_id(
+                        source.consumer_id
+                    ),
+                    "physical_node_capacity": physical_capacity,
+                    "effective_consumer_capacity": capacity,
+                },
+            )
 
         reservation = dict(acquired.reservation or {})
         if not reservation:
@@ -1528,6 +1554,13 @@ class QEWorkspaceSubmissionCoordinator:
                 **dict(detail or {}),
             },
         )
+
+    @staticmethod
+    def _effective_consumer_capacity(node_capacity: int, consumer_id: str) -> int:
+        consumer = normalize_qe_run_consumer_id(consumer_id)
+        if consumer == "advisory":
+            return min(int(node_capacity), 1)
+        return int(node_capacity)
 
     def _unknown_outcome(
         self,

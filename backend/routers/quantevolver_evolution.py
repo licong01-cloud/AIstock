@@ -1512,6 +1512,11 @@ class CustomEvolutionCreateRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+    consumer_id: str = Field(
+        "qe_mainline",
+        pattern="^(qe_mainline|advisory)$",
+        description="QE business consumer",
+    )
     created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型")
     created_by_name: Optional[str] = Field(None, description="创建来源名称")
     purpose: str = Field("research", pattern="^(research|validation)$")
@@ -1968,6 +1973,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             clone_from_task_id=req.clone_from_task_id,
             auto_start=req.auto_start,
             long_trend_profile_id=req_long_trend_profile_id,
+            consumer_id=req.consumer_id,
             created_by_type=req.created_by_type,
             created_by_name=req.created_by_name,
             purpose=req.purpose,

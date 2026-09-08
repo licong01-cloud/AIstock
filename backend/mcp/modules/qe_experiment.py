@@ -76,6 +76,13 @@ def _require_purpose(purpose: str) -> str:
     return normalized
 
 
+def _require_consumer_id(consumer_id: str) -> str:
+    normalized = str(consumer_id).strip().lower()
+    if normalized not in {"qe_mainline", "advisory"}:
+        raise ValueError("consumer_id must be qe_mainline or advisory")
+    return normalized
+
+
 def _require_positive_loop_index(loop_index: int) -> int:
     parsed = int(loop_index)
     if parsed < 1:
@@ -409,6 +416,7 @@ def register(registry: "ModuleRegistry") -> None:
         created_from: str | None = None,
         created_to: str | None = None,
         source_type: str | None = None,
+        consumer_id: str | None = None,
         run_kind: str | None = None,
         purpose: str | None = None,
         status: str | None = None,
@@ -432,6 +440,11 @@ def register(registry: "ModuleRegistry") -> None:
                 "created_from": created_from,
                 "created_to": created_to,
                 "source_type": source_type,
+                "consumer_id": (
+                    _require_consumer_id(consumer_id)
+                    if consumer_id not in (None, "")
+                    else None
+                ),
                 "run_kind": run_kind,
                 "purpose": purpose,
                 "status": status,
@@ -482,12 +495,13 @@ def register(registry: "ModuleRegistry") -> None:
         return _validate_experiment_config(template_kind, config_json or {}, include_normalized=include_normalized)
 
     @registry.mcp.tool(name="qe_single_experiment_create_pending")
-    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None, purpose: str = "research") -> Any:
+    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None, purpose: str = "research", consumer_id: str = "qe_mainline") -> Any:
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         normalized_config["created_by_type"] = "mcp"
         normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
         normalized_config["source_context_json"] = source_context_json
         normalized_config["purpose"] = _require_purpose(purpose)
+        normalized_config["consumer_id"] = _require_consumer_id(consumer_id)
         return client.post("/quantevolver/experiments/pending", normalized_config)
 
     @registry.mcp.tool(name="qe_single_experiment_get_config")
@@ -557,7 +571,7 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
-    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False, purpose: str = "research") -> Any:
+    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False, purpose: str = "research", consumer_id: str = "qe_mainline") -> Any:
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
             {
@@ -586,6 +600,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "created_by_type": "mcp",
                 "created_by_name": "mcp_gateway",
                 "purpose": _require_purpose(purpose),
+                "consumer_id": _require_consumer_id(consumer_id),
             },
         )
 
