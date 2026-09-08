@@ -37,6 +37,7 @@ BPS = Decimal(10000)
 EXPOSURES = (Decimal(0), Decimal(".25"), Decimal(".5"), Decimal(1))
 CORE_INFORMATION_BLOCK = "CORE_ONLY"
 ATR14_INFORMATION_BLOCK = "ATR14_SMA_GAP_RANGE_V1"
+SW_L2_INFORMATION_BLOCK = "SW_L2_RELATIVE_MOMENTUM_20D_V1"
 MARKET_FEATURES = (
     "return_1d_bps", "return_3d_bps", "return_5d_bps", "return_20d_bps",
     "close_to_ema20_bps", "ema20_slope_10d_bps", "realized_vol_20d_bps",
@@ -75,6 +76,23 @@ ATR14_FEATURE_SPEC = {
     ),
 }
 ATR14_FEATURE_SPEC_SHA256 = canonical_sha256(ATR14_FEATURE_SPEC)
+SW_L2_MARKET_FEATURES = MARKET_FEATURES + (
+    "sw_l2_return_20d_bps",
+    "relative_sw_l2_return_20d_bps",
+)
+SW_L2_FEATURE_ORDER = SW_L2_MARKET_FEATURES + STATE_FEATURES
+SW_L2_FEATURE_SPEC = {
+    **FEATURE_SPEC,
+    "schema": "position_timing_core_plus_sw_l2_relative_momentum_features_v1",
+    "feature_order": SW_L2_FEATURE_ORDER,
+    "optional_blocks": (SW_L2_INFORMATION_BLOCK,),
+    "sw_l2_return_20d_bps": (
+        "CURRENT_PIT_L2_INDEPENDENT_CLOSE_T/CLOSE_T_MINUS_20_MINUS_1_TIMES_10000_NO_FORWARD_FILL"
+    ),
+    "relative_sw_l2_return_20d_bps": "RETURN_20D_BPS_MINUS_SW_L2_RETURN_20D_BPS",
+    "l2_code_usage": "PIT_JOIN_KEY_ONLY_NOT_MODEL_FEATURE",
+}
+SW_L2_FEATURE_SPEC_SHA256 = canonical_sha256(SW_L2_FEATURE_SPEC)
 
 
 class ActionValueError(ValueError):
@@ -128,6 +146,8 @@ def feature_contract(information_block: str = CORE_INFORMATION_BLOCK) -> tuple[t
         return MARKET_FEATURES, FEATURE_ORDER, FEATURE_SPEC_SHA256
     if information_block == ATR14_INFORMATION_BLOCK:
         return ATR14_MARKET_FEATURES, ATR14_FEATURE_ORDER, ATR14_FEATURE_SPEC_SHA256
+    if information_block == SW_L2_INFORMATION_BLOCK:
+        return SW_L2_MARKET_FEATURES, SW_L2_FEATURE_ORDER, SW_L2_FEATURE_SPEC_SHA256
     raise ActionValueError("INFORMATION_BLOCK_UNSUPPORTED", information_block=information_block)
 
 
@@ -195,6 +215,12 @@ def market_features(
         out["atr14_sma_bps"] = (
             true_range.rolling(14, min_periods=14).mean() / close * 10000
         )
+    elif information_block == SW_L2_INFORMATION_BLOCK:
+        if "sw_l2_return_20d_bps" not in bars:
+            raise ActionValueError("SW_L2_FEATURE_SOURCE_MISSING")
+        sector_return = pd.to_numeric(bars["sw_l2_return_20d_bps"], errors="coerce")
+        out["sw_l2_return_20d_bps"] = sector_return
+        out["relative_sw_l2_return_20d_bps"] = out["return_20d_bps"] - sector_return
     return out.loc[:, market_names].replace([np.inf, -np.inf], np.nan)
 
 

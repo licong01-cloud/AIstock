@@ -231,12 +231,31 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
         "information_block": ATR14_INFORMATION_BLOCK,
+        "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "feature_contract": {
+            "block_id": ATR14_INFORMATION_BLOCK,
+            "added_features": ["atr14_sma_bps"],
+            "feature_order": ATR14_FEATURE_ORDER,
+            "feature_spec_sha256": ATR14_FEATURE_SPEC_SHA256,
+            "policy_sha256": policy_sha256_for(ATR14_INFORMATION_BLOCK),
+        },
+        "matched_core_contract": {
+            "information_block": CORE_INFORMATION_BLOCK,
+            "feature_order": FEATURE_ORDER,
+            "feature_spec_sha256": FEATURE_SPEC_SHA256,
+            "policy_sha256": POLICY_SHA256,
+        },
+        "training_spec": {
+            "main_comparison": "CORE_PLUS_ATR14_MINUS_MATCHED_CORE",
+            "economic_threshold_bps": 0.0,
+        },
+        "population_spec": {"selection": "SHA256_SEED_SYMBOL_SOURCE_ONLY"},
     }
     request["request_sha256"] = canonical_sha256(request)
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request), encoding="utf-8")
-    assert _load_request(path) == request
+    assert canonical_sha256(_load_request(path)) == canonical_sha256(request)
     request["planned_trial_count"] = 2
     path.write_text(json.dumps(request), encoding="utf-8")
     with pytest.raises(ActionValueError, match="INCREMENT_REQUEST_IDENTITY_MISMATCH"):
@@ -249,14 +268,38 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
         "information_block": ATR14_INFORMATION_BLOCK,
+        "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
         "timing_root": timing_root.as_posix(),
-        "population_spec": {"start": "2024-01-02", "end": "2024-12-31"},
+        "feature_contract": {
+            "block_id": ATR14_INFORMATION_BLOCK,
+            "added_features": ["atr14_sma_bps"],
+            "feature_order": ATR14_FEATURE_ORDER,
+            "feature_spec_sha256": ATR14_FEATURE_SPEC_SHA256,
+            "policy_sha256": policy_sha256_for(ATR14_INFORMATION_BLOCK),
+        },
+        "matched_core_contract": {
+            "information_block": CORE_INFORMATION_BLOCK,
+            "feature_order": FEATURE_ORDER,
+            "feature_spec_sha256": FEATURE_SPEC_SHA256,
+            "policy_sha256": POLICY_SHA256,
+        },
+        "training_spec": {
+            "main_comparison": "CORE_PLUS_ATR14_MINUS_MATCHED_CORE",
+            "economic_threshold_bps": 0.0,
+        },
+        "population_spec": {
+            "start": "2024-01-02",
+            "end": "2024-12-31",
+            "selection": "SHA256_SEED_SYMBOL_SOURCE_ONLY",
+        },
     }
     request["request_sha256"] = canonical_sha256(request)
     receipt = {
         "schema_version": RECEIPT_SCHEMA,
         "request_sha256": request["request_sha256"],
+        "information_block": ATR14_INFORMATION_BLOCK,
+        "feature_spec_sha256": ATR14_FEATURE_SPEC_SHA256,
         "source_sha256": "a" * 64,
         "effect_evidence": "INCONCLUSIVE",
     }

@@ -40,6 +40,7 @@ def test_registered_history_summary_keeps_business_identity_and_progress() -> No
     assert item["factor_count"] == 18
     assert item["canonical_status"] == "running"
     assert item["registration_summary"]["source_type"] == "mcp"
+    assert item["registration_summary"]["consumer_id"] == "qe_mainline"
     assert item["registration_summary"]["dataset_release_id"] == "qe-20260831"
     assert item["registration_summary"]["execution_algo"] == "TWAP"
     assert item["progress_summary"]["counts"]["failed"] == 1
@@ -72,6 +73,7 @@ def test_history_business_filters_are_parameterized_and_exclude_internal_ids() -
             "created_from": "2026-08-01",
             "created_to": "2026-08-31",
             "source_type": "mcp",
+            "consumer_id": "advisory",
             "run_kind": "custom_evolution",
             "purpose": "research",
             "status": "completed",
@@ -88,11 +90,13 @@ def test_history_business_filters_are_parameterized_and_exclude_internal_ids() -
     assert "experiment_id" not in sql
     assert "workspace_path" not in sql
     assert "custom_params->'_qe_run_registration'" in sql
+    assert "COALESCE" in sql and "consumer_id" in sql
     assert "run_kind" in sql
     assert "factor_names" in sql
     assert "ILIKE" in sql
     assert params[0] == "2026-08-01"
     assert "qe-full-v2-20260831" in params
+    assert "advisory" in params
     assert '["CSI300"]' in params
     assert ["completed", "success", "succeeded"] in params
 
