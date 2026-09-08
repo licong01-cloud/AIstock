@@ -114,6 +114,25 @@ def test_read_cursor_is_enforced_readonly(repo):
         assert cur.fetchone()["transaction_read_only"] == "on"
 
 
+def test_quality_real_dev_inventory_and_record_readback(repo):
+    from backend.services.factor_research.models import json_object
+    from backend.services.factor_research.quality_repository import quality_report
+
+    result = quality_report(repo, as_of="2026-08-31", history_start="2025-01-01", recent_start="2026-07-01")
+    with repo.cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM public.aistock_factor_catalog")
+        count = cur.fetchone()["n"]
+    assert result["summary"]["total"] == count
+    assert result["summary"]["reviewed"] + result["summary"]["pending"] == count
+    assert not result["official_writes"]
+    req, _ = create(repo)
+    saved = repo.record(update(req["task_id"], record_type="result", payload={"quality": json_object(result)}))
+    assert saved["applied"]
+    assert repo.record(update(req["task_id"], revision=2, payload={"scope": "DEV only"}))["applied"]
+    actual = repo.show(req["task_id"])
+    assert actual["records"][1]["payload_json"]["quality"] == json_object(result)
+
+
 def test_computed_result_recovers_on_real_dev_without_reexecution(repo, monkeypatch, tmp_path):
     import json
     import pandas as pd

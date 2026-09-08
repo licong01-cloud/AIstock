@@ -36,7 +36,7 @@ def configure(env_file: Path, target: str):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
-    for command in ("create", "list", "show", "record", "context", "run", "attach"):
+    for command in ("create", "list", "show", "record", "context", "run", "attach", "quality"):
         item = sub.add_parser(command)
         item.add_argument("--env-file", type=Path, required=True)
         item.add_argument("--target", choices=("dev", "production"), required=True,
@@ -60,6 +60,11 @@ def parser():
             item.add_argument("--factor", action="append", required=True)
             item.add_argument("--start-date", required=True, help="Metrics calculated_at / correlation as_of_date lower bound")
             item.add_argument("--end-date", required=True)
+        elif command == "quality":
+            item.add_argument("--factor", action="append")
+            item.add_argument("--as-of", required=True)
+            item.add_argument("--history-start", required=True)
+            item.add_argument("--recent-start", required=True)
     return result
 
 
@@ -93,6 +98,14 @@ def dispatch(args):
     if args.command == "show":
         data = repo.show(args.task_id, before_revision=args.before_revision, limit=args.limit)
         return response(result=data, task_id=args.task_id, revision=data["task"]["revision"])
+    if args.command == "quality":
+        from backend.services.factor_research.quality_repository import quality_report
+        report = quality_report(repo, as_of=args.as_of, history_start=args.history_start,
+                                recent_start=args.recent_start, names=args.factor)
+        report["database_target"] = target
+        if args.format == "summary":
+            report = {key: value for key, value in report.items() if key != "factors"}
+        return response(result=report)
     return response(result=service.context(args.factor, start_date=args.start_date, end_date=args.end_date,
                                            limit=args.limit, offset=args.offset))
 
