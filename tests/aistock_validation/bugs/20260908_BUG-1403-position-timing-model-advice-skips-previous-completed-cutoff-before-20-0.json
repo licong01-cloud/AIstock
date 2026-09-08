@@ -1,0 +1,285 @@
+{
+  "actual": "At 2026-09-08 09:41 Asia/Shanghai, POST /api/v1/position-timing/materialize generated the 2026-09-07 rule card but model_advice_materialization_status was DECISION_CUTOFF_NOT_REACHED because the model clock selected 2026-09-08.",
+  "allowed_write_scope": [
+    "backend/services/position_timing/service.py",
+    "backend/tests/position_timing/test_api.py",
+    "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+    "tests/aistock_validation/bugs/20260908_BUG-1403-position-timing-model-advice-skips-previous-completed-cutoff-before-20-0.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1403",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T01:42:58.214250Z",
+  "description": "At 2026-09-08 09:41 Asia/Shanghai, POST /api/v1/position-timing/materialize generated the 2026-09-07 rule card but model_advice_materialization_status was DECISION_CUTOFF_NOT_REACHED because the model clock selected 2026-09-08.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-895680efaf58",
+      "timestamp": "2026-09-08T01:42:58.214250Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime identity 60e44adcfbbf5e3826cac739ef76b7881b338247; backend/services/position_timing/service.py:2614-2631; blueprint section 6.6.2"
+  ],
+  "expected": "Before 20:00 on a trading day, resolve the latest decision trade date whose 20:00 cutoff has passed; at or after 20:00, resolve the current trading day. Non-trading days resolve the latest completed trading day. Keep v1 15:00 card clock unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_api.py",
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+      "tests/aistock_validation/bugs/20260908_BUG-1403-position-timing-model-advice-skips-previous-completed-cutoff-before-20-0.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_api.py",
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+      "tests/aistock_validation/bugs/20260908_BUG-1403-position-timing-model-advice-skips-previous-completed-cutoff-before-20-0.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/position_timing/service.py",
+        "backend/tests/position_timing/test_api.py",
+        "docs/architecture/position_timing_advice_f2_redesign_20260903.md"
+      ],
+      "impacted_modules": [
+        "position_timing",
+        "platform.api",
+        "portfolio_management",
+        "watchlist",
+        "frontend_common"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/position_timing/service.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_api.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/position_timing/service.py",
+        "backend/tests/position_timing/test_api.py",
+        "docs/architecture/position_timing_advice_f2_redesign_20260903.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_api.py",
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_api.py",
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md"
+    ]
+  },
+  "first_seen_at": "2026-09-08T01:42:58.214250Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4427,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4427",
+  "last_seen_at": "2026-09-08T01:42:58.214250Z",
+  "module": "position_timing",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Invoke-RestMethod -Method Post http://127.0.0.1:8001/api/v1/position-timing/materialize",
+  "required_verification": [
+    "l0",
+    "position_timing_backend",
+    "position_timing_first_release"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/position-timing/intents",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh AIstock Python process: backend/tests/position_timing/test_api.py passed 4 tests, including pre-cutoff, exact-cutoff, and non-trading-day action-value clock cases; position_timing_first_release then passed 165 backend tests and 2 Playwright tests"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "position_timing"
+  ],
+  "title": "Position timing model advice skips previous completed cutoff before 20:00",
+  "trigger_condition": {
+    "fingerprint": "895680efaf5849cba2480ca2",
+    "source_event_id": "FE-20260908-895680efaf58"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "position_timing",
+        "position_timing_first_release"
+      ],
+      "plans": [
+        "position_timing_backend",
+        "position_timing_first_release"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "position_timing",
+          "position_timing_first_release"
+        ],
+        "plans": [
+          "position_timing_backend",
+          "position_timing_first_release"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
