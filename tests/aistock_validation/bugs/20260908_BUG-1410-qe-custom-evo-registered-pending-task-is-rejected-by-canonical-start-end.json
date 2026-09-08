@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1410",
-  "closed_at": null,
+  "closed_at": "2026-09-08T18:21:10.145310Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -104,10 +104,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1410\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1410",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "2ed317858e3b52699140531e8533830977f946f37967c2f1e646dcc0d60b86b0",
+      "contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+      "expected_identity": "f1ca639e153b77351d7b7909b646334e288459d5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-08T18:18:18.522657Z",
+      "mode": "read_only",
+      "observed_identity": "a0339b5ad6016f46057be41fc6442ffe221e19c0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c89377e2f7afd9db2260915b91a2b06a44db5c9fd2eb2aece4dec1fc1d7aeb04",
+      "receipt_sha256": "c3de0ba86b4fedce9d3d80ec5570a7c4f087e3d90176940e21dcf031a09c7b4f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a16aa51d4bfdfe1e5af57b7e1d5c73369c868220b18d565d5500941944f4c339",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -142,7 +164,7 @@
     ],
     "validation_evidence_digest": "4bc811b0082e1139c9244fb8ae562abe84e900dda551c2ad64830749cae8f223"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -156,7 +178,8 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
     "python -m nox -s qe_read_backend -> 410 passed, 1 skipped",
     "python -m nox -s qe_sector_risk_overlay_backend -> 91 passed",
-    "python -m nox -s qe_mcp_backend -> 49 passed"
+    "python -m nox -s qe_mcp_backend -> 49 passed",
+    "post-restart-verify BUG-1410 backend-main -> verified"
   ],
   "verification_budget": {
     "budget": "standard",
