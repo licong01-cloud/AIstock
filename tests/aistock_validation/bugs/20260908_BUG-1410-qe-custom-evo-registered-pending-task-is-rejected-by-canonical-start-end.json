@@ -1,6 +1,10 @@
 {
   "actual": "A newly created registered custom_evo task reserves its planned qe_evolution_loops rows with status=pending. _custom_evo_start_state_from_rows counts every pending row as already started, so the canonical custom-evo/run endpoint returns HTTP 409 and tells callers to resume even though the task has never been submitted. Evidence: task qe_20260908_230225_0ae8, current_loop=0, task status=pending, two reserved pending loop rows, canonical start rejected with '2 loop rows already exist'. Preserve durable pre-registration and fail closed for genuinely submitted/queued/running/terminal attempts; do not edit the failed evidence task.",
   "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/quantevolver/test_qe_registered_submission.py",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
     "tests/aistock_validation/bugs/20260908_BUG-1410-qe-custom-evo-registered-pending-task-is-rejected-by-canonical-start-end.json"
   ],
   "assigned_agent": null,
@@ -19,14 +23,25 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260908-8a9e0d9c7a68",
       "timestamp": "2026-09-08T15:20:08.454172Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "Scope expanded to the custom_evo start-state service, canonical start route, and their focused registration and mutation-route contract tests.",
+      "timestamp": "2026-09-08T15:36:02.053624Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ],
+    "changed_files_source": "planned_scope_expansion",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +50,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ]
   },
   "first_seen_at": "2026-09-08T15:20:08.454190Z",
   "fix_branch": null,
@@ -54,9 +79,12 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend",
+    "qe_mcp_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
