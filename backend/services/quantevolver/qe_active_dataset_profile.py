@@ -594,8 +594,40 @@ def validate_controller_snapshot(profile: QEActiveDatasetProfile) -> None:
         index / "index_daily.h5",
         str(components["index_pins"]["sha256"]),
     )
-    _require_pinned_file(suspend / "meta.json", str(components["suspend_pins"]["metadata_sha256"]))
-    _require_pinned_file(suspend / "suspend_d.parquet", str(components["suspend_pins"]["parquet_sha256"]))
+    suspend_pins = components["suspend_pins"]
+    suspend_meta_path = suspend / "meta.json"
+    _require_pinned_file(suspend_meta_path, str(suspend_pins["metadata_sha256"]))
+    _require_pinned_file(suspend / "suspend_d.parquet", str(suspend_pins["parquet_sha256"]))
+    try:
+        suspend_meta = json.loads(suspend_meta_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _fail(
+            "qe_dataset_component_identity_mismatch",
+            "pinned suspend metadata is not valid UTF-8 JSON",
+        ) from exc
+    if not isinstance(suspend_meta, Mapping):
+        raise _fail(
+            "qe_dataset_component_identity_mismatch",
+            "pinned suspend metadata must be an object",
+        )
+    expected_suspend_identity = {
+        "schema_version": str(suspend_pins["schema_version"]),
+        "component": "suspend_d",
+        "start": str(components["factor_meta"]["start"]),
+        "end": profile.cutoff.isoformat(),
+        "universe_key": str(components["factor_meta"]["universe_key"]),
+        "source_table": str(suspend_pins["source_contract"]),
+        "suspend_type": "S",
+    }
+    for field, expected in expected_suspend_identity.items():
+        if suspend_meta.get(field) != expected:
+            raise _fail(
+                "qe_dataset_component_identity_mismatch",
+                f"suspend metadata {field} differs from the active profile",
+                field=field,
+                actual=suspend_meta.get(field),
+                expected=expected,
+            )
     for pool_id, item in profile.universes.items():
         path = (
             day / "instruments" / str(item["filename"])
