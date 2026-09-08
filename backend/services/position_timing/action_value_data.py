@@ -17,7 +17,14 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-from .action_value import ActionValueError, MARKET_FEATURES, cutoff_on, market_features, normalize_export_bars
+from .action_value import (
+    CORE_INFORMATION_BLOCK,
+    ActionValueError,
+    cutoff_on,
+    feature_contract,
+    market_features,
+    normalize_export_bars,
+)
 from .contracts import canonical_sha256
 
 
@@ -117,23 +124,37 @@ class DailyCandidate:
         result["available_at"] = [cutoff_on(day.date()) for day in self.calendar]
         return result
 
-    def coverage(self, symbols: Sequence[str] | None = None) -> dict[str, Any]:
+    def coverage(
+        self,
+        symbols: Sequence[str] | None = None,
+        *,
+        information_block: str = CORE_INFORMATION_BLOCK,
+    ) -> dict[str, Any]:
         selected = tuple(symbols) if symbols is not None else self.symbols
         if not selected or len(set(selected)) != len(selected):
             raise ActionValueError("RESEARCH_POPULATION_INVALID")
         benchmark = self.bars(BENCHMARK).close
+        core_market_features, _, _ = feature_contract(CORE_INFORMATION_BLOCK)
+        market_feature_names, feature_order, feature_spec_sha256 = feature_contract(information_block)
         counts: dict[str, dict[str, Any]] = {}
         for symbol in selected:
             bars = self.bars(symbol)
-            features = market_features(bars, benchmark)
+            features = market_features(bars, benchmark, information_block=information_block)
             eligible = bars.pit_active
+            complete_core = eligible & features.loc[:, core_market_features].notna().all(axis=1)
+            complete_selected = eligible & features.notna().all(axis=1)
             counts[symbol] = {
                 "pit_sessions": int(eligible.sum()),
-                "complete_core_sessions": int((eligible & features.notna().all(axis=1)).sum()),
-                "feature_nonmissing": {name: int(features.loc[eligible, name].notna().sum()) for name in MARKET_FEATURES},
+                "complete_core_sessions": int(complete_core.sum()),
+                "feature_nonmissing": {
+                    name: int(features.loc[eligible, name].notna().sum())
+                    for name in market_feature_names
+                },
                 "factor_change_sessions": int((bars.factor.pct_change(fill_method=None).abs() > 1e-6).sum()),
             }
-        return {
+            if information_block != CORE_INFORMATION_BLOCK:
+                counts[symbol]["complete_selected_feature_sessions"] = int(complete_selected.sum())
+        payload = {
             "schema_version": "position_timing_core_source_coverage_v2",
             "symbols": selected, "calendar_start": self.calendar[0].date().isoformat(),
             "calendar_end": self.calendar[-1].date().isoformat(), "coverage": counts,
@@ -142,6 +163,17 @@ class DailyCandidate:
             "historical_ingestion_timestamps_verified": False,
             "optional_blocks": [], "outcomes_read": False,
         }
+        if information_block != CORE_INFORMATION_BLOCK:
+            payload.update(
+                {
+                    "schema_version": "position_timing_optional_source_coverage_v1",
+                    "information_block": information_block,
+                    "feature_order": feature_order,
+                    "feature_spec_sha256": feature_spec_sha256,
+                    "optional_blocks": [information_block],
+                }
+            )
+        return payload
 
     def publish_coverage(self, *, timing_root: Path) -> Path:
         """Full population, source-only preflight; not a training/effect receipt."""

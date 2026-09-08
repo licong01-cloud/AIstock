@@ -14,9 +14,9 @@ from typing import Any
 import pandas as pd
 
 from .action_value import (
-    ActionPlan, ActionValueError, FEATURE_ORDER, MARKET_FEATURES, POLICY_SHA256,
-    PositionState, action_candidates, choose_action, cutoff_on, market_features,
-    money, risk_exit_plan, state_features,
+    ActionPlan, ActionValueError, CORE_INFORMATION_BLOCK,
+    PositionState, action_candidates, choose_action, cutoff_on, feature_contract,
+    market_features, money, policy_sha256_for, risk_exit_plan, state_features,
 )
 from .action_value_model import HEADS, LocalActionModel
 
@@ -47,11 +47,12 @@ def action_name(state: PositionState, delta: int) -> str:
 
 def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
                      benchmark: pd.Series, decision_as_of: datetime,
-                     model: LocalActionModel | None, max_exposure: Decimal = Decimal(1),
-                     delist_risk: bool = False,
-                     target_state: PositionState | None = None,
-                     target_reference: Decimal | None = None,
-                     current_market: pd.Series | None = None) -> DailyActionDecision:
+                      model: LocalActionModel | None, max_exposure: Decimal = Decimal(1),
+                      delist_risk: bool = False,
+                      target_state: PositionState | None = None,
+                      target_reference: Decimal | None = None,
+                      current_market: pd.Series | None = None,
+                      information_block: str = CORE_INFORMATION_BLOCK) -> DailyActionDecision:
     """Do not substitute zero predictions, invent entry cost, or read future bars.
 
     Caller validates snapshot source/PIT identities. Current required core gaps
@@ -71,6 +72,8 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
         raise ActionValueError("TARGET_RAW_REFERENCE_INVALID")
     if not Decimal(0) <= max_exposure <= 1:
         raise ActionValueError("ACTION_BUDGET_INVALID")
+    market_feature_names, feature_order, _ = feature_contract(information_block)
+    policy_sha256 = policy_sha256_for(information_block)
     if delist_risk and not planning_state.quantity:
         plan = ActionPlan(symbol, 0, planning_reference)
         return DailyActionDecision(
@@ -80,7 +83,7 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
             plan,
             "FROZEN_RULE_RISK_OVERRIDE",
             None,
-            POLICY_SHA256,
+            policy_sha256,
             (),
             ("TERMINAL_LISTING_BUY_BLOCKED",),
         )
@@ -93,9 +96,11 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
             else ActionPlan(symbol, 0, planning_reference)
         )
         return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, translated.delta), translated,
-                                   "FROZEN_RULE_RISK_OVERRIDE", None, POLICY_SHA256, (), ("RISK_EXIT_OVERRIDE",))
+                                   "FROZEN_RULE_RISK_OVERRIDE", None, policy_sha256, (), ("RISK_EXIT_OVERRIDE",))
     if model is None:
         raise ActionValueError("MODEL_UNAVAILABLE_RULE_FALLBACK")
+    if model.metadata.get("information_block", CORE_INFORMATION_BLOCK) != information_block:
+        raise ActionValueError("MODEL_INFORMATION_BLOCK_MISMATCH")
     if current_market is not None:
         try:
             current_market_date = pd.Timestamp(current_market.name).date()
@@ -103,32 +108,49 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
             raise ActionValueError("CURRENT_CORE_FEATURE_DATE_INVALID") from exc
         if current_market_date != decision_as_of.date():
             raise ActionValueError("CURRENT_CORE_FEATURE_DATE_MISMATCH")
-    current = current_market if current_market is not None else market_features(bars, benchmark).iloc[-1]
-    if not set(MARKET_FEATURES).issubset(current.index):
-        raise ActionValueError("CURRENT_CORE_FEATURE_SCHEMA_INVALID")
-    current = current.loc[list(MARKET_FEATURES)]
+    current = (
+        current_market
+        if current_market is not None
+        else market_features(bars, benchmark, information_block=information_block).iloc[-1]
+    )
+    if not set(market_feature_names).issubset(current.index):
+        code = (
+            "CURRENT_CORE_FEATURE_SCHEMA_INVALID"
+            if information_block == CORE_INFORMATION_BLOCK
+            else "CURRENT_OPTIONAL_FEATURE_SCHEMA_INVALID"
+        )
+        raise ActionValueError(code, information_block=information_block)
+    current = current.loc[list(market_feature_names)]
     if current.isna().any():
-        raise ActionValueError("CURRENT_CORE_FEATURE_UNAVAILABLE",
-                               features=[name for name in MARKET_FEATURES if pd.isna(current[name])])
+        code = (
+            "CURRENT_CORE_FEATURE_UNAVAILABLE"
+            if information_block == CORE_INFORMATION_BLOCK
+            else "CURRENT_OPTIONAL_FEATURE_UNAVAILABLE"
+        )
+        raise ActionValueError(
+            code,
+            information_block=information_block,
+            features=[name for name in market_feature_names if pd.isna(current[name])],
+        )
     plans = action_candidates(symbol, planning_state, planning_reference, max_exposure=max_exposure)
     actionable = [plan for plan in plans if plan.delta]
     values = {0: 0.0}
     if actionable:
         frame = pd.DataFrame([{**current.to_dict(), **state_features(planning_state, plan)} for plan in actionable],
-                             columns=FEATURE_ORDER)
+                             columns=feature_order)
         objectives = [HEADS[0] if plan.delta > 0 else HEADS[1] for plan in actionable]
         predictions = model.predict(frame, objectives, decision_as_of=decision_as_of)
         values.update({plan.delta: float(value) for plan, value in zip(actionable, predictions)})
     else:
         # Validate model identity/time even when no executable quantity exists.
-        model.predict(pd.DataFrame(columns=FEATURE_ORDER), [], decision_as_of=decision_as_of)
+        model.predict(pd.DataFrame(columns=feature_order), [], decision_as_of=decision_as_of)
     selected = choose_action(plans, [values[plan.delta] for plan in plans])
     candidates = tuple({"action": action_name(planning_state, plan.delta),
                         "planned_delta_qty": plan.delta, "estimated_net_action_value_bps": values[plan.delta],
                         "objective": HEADS[0] if plan.delta > 0 else HEADS[1] if plan.delta < 0 else "NO_ACTION"}
                        for plan in plans)
     return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, selected.delta), selected,
-                               "LOCAL_MODEL_ESTIMATE", model.metadata["model_sha256"], POLICY_SHA256, candidates,
+                               "LOCAL_MODEL_ESTIMATE", model.metadata["model_sha256"], policy_sha256, candidates,
                                ("MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE",))
 
 
