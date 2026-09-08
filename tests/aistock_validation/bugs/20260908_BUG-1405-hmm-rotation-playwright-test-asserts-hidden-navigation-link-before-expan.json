@@ -27,11 +27,16 @@
   ],
   "expected": "The Playwright acceptance opens the HMM navigation group, verifies the active link, and validates the real 31-sector rotation surface without route mocking.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/tests/hmm-risk/hmm-risk.spec.ts",
+      "tests/aistock_validation/bugs/20260908_BUG-1405-hmm-rotation-playwright-test-asserts-hidden-navigation-link-before-expan.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "frontend/tests/hmm-risk/hmm-risk.spec.ts"
+      "frontend/tests/hmm-risk/hmm-risk.spec.ts",
+      "tests/aistock_validation/bugs/20260908_BUG-1405-hmm-rotation-playwright-test-asserts-hidden-navigation-link-before-expan.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/tests/hmm-risk/hmm-risk.spec.ts"
@@ -88,10 +93,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
