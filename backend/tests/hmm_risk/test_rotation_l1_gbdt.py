@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
 from datetime import date
 import json
+from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -27,7 +30,7 @@ def _bundle(*, missing: bool = False) -> dict[str, object]:
     day = np.repeat(np.arange(len(calendar), dtype=np.float64), len(sectors))
     rank = np.tile(np.linspace(-1.0, 1.0, len(sectors)), len(calendar))
     data = {}
-    for feature_index, feature in enumerate(subject.CONTINUOUS_FEATURES, start=1):
+    for feature_index, feature in enumerate(subject.V14_CONTINUOUS_FEATURES, start=1):
         data[feature] = rank * feature_index + np.sin(day / (9.0 + feature_index))
     data["target_5d"] = rank + 0.8 * np.sin(day / 7.0 + rank * 6.0)
     data["target_10d"] = rank + 0.8 * np.cos(day / 11.0 + rank * 5.0)
@@ -37,8 +40,8 @@ def _bundle(*, missing: bool = False) -> dict[str, object]:
     for horizon in subject.HORIZONS:
         frame[f"target_{horizon}d_mature"] = True
     if missing:
-        frame.loc[(calendar[-20], sectors[0]), subject.CONTINUOUS_FEATURES[:2]] = np.nan
-        for column in subject.CONTINUOUS_FEATURES[:2]:
+        frame.loc[(calendar[-20], sectors[0]), subject.V14_CONTINUOUS_FEATURES[:2]] = np.nan
+        for column in subject.V14_CONTINUOUS_FEATURES[:2]:
             frame.loc[(calendar[-20], sectors[0]), f"reason__{column}"] = "test_missing"
     return {
         "schema_version": subject.INPUT_SCHEMA_VERSION,
@@ -54,49 +57,6 @@ def _bundle(*, missing: bool = False) -> dict[str, object]:
             "tail_mature_date_sha256": "d" * 64,
         },
     }
-
-
-def _battery_report(*, selected_horizon: int = 10, power_status: str = "INSUFFICIENT") -> dict[str, object]:
-    bundle = _bundle()
-    market_receipts = []
-    for index in range(5):
-        receipt_body = {
-            "schema_version": "hmm_risk_rotation_l1_market_context_a_v1",
-            "fold_index": index,
-            "target_accessed": False,
-        }
-        market_receipts.append({**receipt_body, "receipt_sha256": subject.canonical_sha256(receipt_body)})
-    horizons = {}
-    for horizon in subject.HORIZONS:
-        horizons[str(horizon)] = {
-            "forward_power": {
-                "status": power_status,
-                "tail_mature_decision_count": bundle["identity"]["tail_mature_decision_counts"][str(horizon)],
-                "tail_outcome_accessed": False,
-            }
-        }
-    body = {
-        "schema_version": "hmm_risk_rotation_l1_g2a_battery_v1",
-        "contract_version": subject.CONTRACT_VERSION,
-        "runtime_identity": {"test_runtime": True},
-        "producer_commit": "e" * 40,
-        "input_identity": bundle["identity"],
-        "fit_count": 15,
-        "ridge_fit_count": 10,
-        "market_fit_count": 5,
-        "fit_progress": {"planned": 15, "started": 15, "completed": 15, "failed": 0, "active_fit": None},
-        "market_context_receipts": market_receipts,
-        "horizons": horizons,
-        "selection": {
-            "selected_horizon": selected_horizon,
-            "model_class": "RIDGE_COMPARATOR",
-            "gbdt_horizon_optimality_not_claimed": True,
-        },
-        "tail_accessed": False,
-        "model_write_performed": False,
-        "database_write_performed": False,
-    }
-    return {**body, "receipt_sha256": subject.canonical_sha256(body)}
 
 
 def test_materialised_panel_uses_t_minus_one_features_and_future_only_for_target() -> None:
@@ -129,8 +89,9 @@ def test_materialised_panel_uses_t_minus_one_features_and_future_only_for_target
     row = panel.loc[(decision, sectors[0])]
     assert row["pit_breadth_above_ma20"] == 0.75
     assert row["moneyflow_intensity_20d"] == pytest.approx(0.1)
-    assert np.isfinite(row[list(subject.CONTINUOUS_FEATURES)].to_numpy(dtype=np.float64)).all()
-    assert all(row[f"reason__{feature}"] is None for feature in subject.CONTINUOUS_FEATURES)
+    assert row["moneyflow_intensity_delta_5d"] == pytest.approx(0.0)
+    assert np.isfinite(row[list(subject.V14_CONTINUOUS_FEATURES)].to_numpy(dtype=np.float64)).all()
+    assert all(row[f"reason__{feature}"] is None for feature in subject.V14_CONTINUOUS_FEATURES)
     assert bool(row["target_5d_mature"])
     original_feature = row["relative_momentum_5d"]
     changed_close = dict(sector_close)
@@ -157,6 +118,9 @@ def test_materialised_panel_preserves_missing_moneyflow_and_market_context() -> 
             "pit_breadth_above_ma20": 0.5,
             "moneyflow_net_amount_cny": (None if day == calendar[55] and sector == sectors[0] else 1.0),
             "moneyflow_traded_amount_cny": 10.0,
+            "moneyflow_reason_code": (
+                "hmm_risk_rotation_provider_absence" if day == calendar[55] and sector == sectors[0] else None
+            ),
         }
         for day in calendar
         for sector in sectors
@@ -168,7 +132,56 @@ def test_materialised_panel_preserves_missing_moneyflow_and_market_context() -> 
         stock_daily_inputs=stock,
     )
     assert np.isnan(panel.loc[(calendar[60], sectors[0]), "moneyflow_intensity_20d"])
-    assert panel.loc[(calendar[60], sectors[0]), "reason__moneyflow_intensity_20d"]
+    assert np.isnan(panel.loc[(calendar[60], sectors[0]), "moneyflow_intensity_delta_5d"])
+    assert (
+        panel.loc[(calendar[60], sectors[0]), "reason__moneyflow_intensity_delta_5d"]
+        == "hmm_risk_rotation_provider_absence"
+    )
+
+
+def test_moneyflow_delta_uses_canonical_t_minus_one_and_t_minus_six_endpoints() -> None:
+    calendar = tuple(pd.bdate_range("2025-01-02", periods=50).date)
+    sectors = tuple(f"80{index:04d}" for index in range(31))
+    sector_close = {(day, sector): 100.0 + index for index, day in enumerate(calendar) for sector in sectors}
+    benchmark = {day: 200.0 + index for index, day in enumerate(calendar)}
+    stock = [
+        {
+            "source_date": day,
+            "sector_code": sector,
+            "pit_breadth_above_ma20": 0.5,
+            "moneyflow_net_amount_cny": float(day_index + 1),
+            "moneyflow_traded_amount_cny": 100.0,
+        }
+        for day_index, day in enumerate(calendar)
+        for sector in sectors
+    ]
+    panel = subject.build_materialised_panel(
+        calendar=calendar,
+        sector_close=sector_close,
+        benchmark_close=benchmark,
+        stock_daily_inputs=stock,
+    )
+    decision_index = 35
+    expected_current = sum(range(16, 36)) / 2000.0
+    expected_lagged = sum(range(11, 31)) / 2000.0
+    assert panel.loc[(calendar[decision_index], sectors[0]), "moneyflow_intensity_delta_5d"] == pytest.approx(
+        expected_current - expected_lagged
+    )
+
+    mutated = [dict(item) for item in stock]
+    for item in mutated:
+        if item["source_date"] == calendar[decision_index]:
+            item["moneyflow_net_amount_cny"] = 1e9
+    changed = subject.build_materialised_panel(
+        calendar=calendar,
+        sector_close=sector_close,
+        benchmark_close=benchmark,
+        stock_daily_inputs=mutated,
+    )
+    assert (
+        changed.loc[(calendar[decision_index], sectors[0]), "moneyflow_intensity_delta_5d"]
+        == panel.loc[(calendar[decision_index], sectors[0]), "moneyflow_intensity_delta_5d"]
+    )
 
 
 def test_validate_input_bundle_rejects_unknown_schema_and_partial_denominator() -> None:
@@ -183,12 +196,55 @@ def test_validate_input_bundle_rejects_unknown_schema_and_partial_denominator() 
         subject.validate_input_bundle(partial)
 
 
+def test_validate_input_bundle_rejects_v13_identity_and_low_delta_coverage() -> None:
+    stale = dict(_bundle())
+    stale["schema_version"] = "hmm_risk_rotation_l1_g2a_input_bundle_v1"
+    with pytest.raises(subject.RotationL1G2AError, match="envelope"):
+        subject.validate_input_bundle(stale)
+
+    insufficient = dict(_bundle())
+    insufficient["panel"] = insufficient["panel"].copy()
+    dates = _calendar()[:160]
+    insufficient["panel"].loc[(list(dates), slice(None)), "moneyflow_intensity_delta_5d"] = np.nan
+    insufficient["panel"].loc[(list(dates), slice(None)), "reason__moneyflow_intensity_delta_5d"] = (
+        "hmm_risk_rotation_moneyflow_history_incomplete"
+    )
+    with pytest.raises(subject.RotationL1G2AError, match="moneyflow delta coverage") as caught:
+        subject.validate_input_bundle(insufficient)
+    assert caught.value.reason_code == subject.REASON_FEATURE
+
+
+def test_v14_gbdt_row_requires_market_and_eight_of_nine_continuous_features() -> None:
+    frame, _calendar_value, _sectors, _benchmark = subject.validate_input_bundle(_bundle())
+    ranked = subject.cross_section_rank_features(frame, continuous_features=subject.V14_CONTINUOUS_FEATURES)
+    ranked["market_regime_sign"] = 1.0
+    identity = ranked.index[0]
+    ranked.loc[identity, subject.V14_CONTINUOUS_FEATURES[:1]] = np.nan
+    assert bool(
+        subject._eligible_rows(
+            ranked,
+            ridge=False,
+            continuous_features=subject.V14_CONTINUOUS_FEATURES,
+            minimum_valid_continuous_features=8,
+        ).loc[identity]
+    )
+    ranked.loc[identity, subject.V14_CONTINUOUS_FEATURES[1:2]] = np.nan
+    assert not bool(
+        subject._eligible_rows(
+            ranked,
+            ridge=False,
+            continuous_features=subject.V14_CONTINUOUS_FEATURES,
+            minimum_valid_continuous_features=8,
+        ).loc[identity]
+    )
+
+
 def test_validate_input_bundle_rejects_nan_without_reason_and_maturity_drift() -> None:
     bundle = _bundle(missing=True)
     missing_reason = dict(bundle)
     missing_reason["panel"] = bundle["panel"].copy()
     identity = missing_reason["panel"].index[-20 * 31]
-    feature = subject.CONTINUOUS_FEATURES[0]
+    feature = subject.V14_CONTINUOUS_FEATURES[0]
     missing_reason["panel"].loc[identity, f"reason__{feature}"] = None
     with pytest.raises(subject.RotationL1G2AError, match="validity/reason"):
         subject.validate_input_bundle(missing_reason)
@@ -243,46 +299,53 @@ def test_market_context_features_use_only_t_minus_one_and_three_prior_returns() 
 
 def test_cross_section_rank_preserves_nan_and_market_sign() -> None:
     frame, calendar, _sectors, _benchmark = subject.validate_input_bundle(_bundle(missing=True))
-    ranked = subject.cross_section_rank_features(frame)
-    assert int(ranked.loc[:, list(subject.CONTINUOUS_FEATURES)].isna().sum().sum()) == 2
-    finite = ranked[subject.CONTINUOUS_FEATURES[2]].dropna()
-    assert finite.between(-0.5, 0.5).all()
     first_day = calendar[0]
-    first_cross_section = ranked.loc[(first_day, slice(None)), subject.CONTINUOUS_FEATURES[2]]
+    frame.loc[(first_day, slice(None)), "moneyflow_intensity_delta_5d"] = np.arange(
+        subject.CANONICAL_SECTOR_COUNT, dtype=np.float64
+    )
+    ranked = subject.cross_section_rank_features(frame, continuous_features=subject.V14_CONTINUOUS_FEATURES)
+    assert int(ranked.loc[:, list(subject.V14_CONTINUOUS_FEATURES)].isna().sum().sum()) == 2
+    finite = ranked[subject.V14_CONTINUOUS_FEATURES[2]].dropna()
+    assert finite.between(-0.5, 0.5).all()
+    first_cross_section = ranked.loc[(first_day, slice(None)), subject.V14_CONTINUOUS_FEATURES[2]]
     assert float(first_cross_section.min()) == pytest.approx(-0.5)
     assert float(first_cross_section.max()) == pytest.approx(0.5)
+    delta_cross_section = ranked.loc[(first_day, slice(None)), "moneyflow_intensity_delta_5d"]
+    assert float(delta_cross_section.min()) == pytest.approx(-0.5)
+    assert float(delta_cross_section.max()) == pytest.approx(0.5)
 
 
-def test_ridge_battery_uses_both_horizons_without_tail_or_model_write() -> None:
-    report = subject.run_ridge_battery(_bundle(), producer_commit="e" * 40, runtime_validator=_test_runtime)
-    assert report["fit_count"] == 15
-    assert report["market_fit_count"] == 5
-    assert set(report["horizons"]) == {"5", "10"}
-    assert report["selection"]["selected_horizon"] in {5, 10}
-    assert report["selection"]["model_class"] == "RIDGE_COMPARATOR"
-    assert report["tail_accessed"] is False
-    assert report["model_write_performed"] is False
-    assert report["producer_commit"] == "e" * 40
-    assert report["fit_progress"] == {
-        "planned": 15,
-        "started": 15,
-        "completed": 15,
-        "failed": 0,
-        "active_fit": None,
-    }
-    assert all(
-        report["horizons"][str(horizon)]["forward_power"]["status"] in {"INSUFFICIENT", "SUFFICIENT", "UNAVAILABLE"}
-        for horizon in subject.HORIZONS
+def test_v14_forbids_a_new_ridge_battery() -> None:
+    with pytest.raises(subject.RotationL1G2AError, match="forbids a new battery") as caught:
+        subject.run_ridge_battery(_bundle(), producer_commit="e" * 40, runtime_validator=_test_runtime)
+    assert caught.value.reason_code == subject.REASON_HORIZON
+
+
+def test_v14_cli_has_no_battery_subcommand_and_plans_exactly_24_fits() -> None:
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(["battery-child"])
+    assert cli._parent_fit_progress(Path("missing"))["planned"] == 24
+
+
+def test_v14_parent_validates_frozen_v13_reference_before_creating_output(tmp_path, monkeypatch) -> None:
+    invalid_reference = tmp_path / "invalid-v13-process.json"
+    invalid_reference.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "_ensure_external_new_directory",
+        lambda _path: pytest.fail("output must not be created before v1.3 reference validation"),
+    )
+    args = SimpleNamespace(
+        v13_process_file=invalid_reference,
+        output_root=tmp_path / "output",
+        input_root=tmp_path / "input",
+        producer_commit="e" * 40,
     )
 
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        cli._run_parent(args)
 
-def test_battery_readback_rejects_power_or_producer_identity_drift() -> None:
-    report = _battery_report()
-    report["horizons"]["10"]["forward_power"]["status"] = "PENDING_INSUFFICIENT_POWER"
-    body = {key: value for key, value in report.items() if key != "receipt_sha256"}
-    report["receipt_sha256"] = subject.canonical_sha256(body)
-    with pytest.raises(subject.RotationL1G2AError, match="power receipt"):
-        subject.validate_battery_report(report, expected_identity=_bundle()["identity"])
+    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
 
 
 def test_formal_runtime_fails_closed_before_fit_when_thread_environment_is_missing(
@@ -295,22 +358,24 @@ def test_formal_runtime_fails_closed_before_fit_when_thread_environment_is_missi
 
 
 def test_cli_child_failure_persists_typed_receipt(tmp_path) -> None:
-    output = tmp_path / "battery.json"
+    output = tmp_path / "fresh_process_1.json"
     assert (
         cli.main(
             [
-                "battery-child",
+                "model-child",
                 "--input-root",
                 str(tmp_path / "missing-input"),
                 "--output-file",
                 str(output),
+                "--process-index",
+                "1",
                 "--producer-commit",
                 "e" * 40,
             ]
         )
         == 2
     )
-    failure = json.loads((tmp_path / "battery.failure.json").read_text(encoding="utf-8"))
+    failure = json.loads((tmp_path / "fresh_process_1.failure.json").read_text(encoding="utf-8"))
     assert failure["reason_code"] == subject.REASON_INPUT
     assert failure["contract_version"] == subject.CONTRACT_VERSION
     assert failure["fit_success_claimed"] is False
@@ -320,7 +385,6 @@ def test_cli_child_failure_persists_typed_receipt(tmp_path) -> None:
 
 
 def test_parent_fit_progress_aggregates_success_failure_and_not_started(tmp_path) -> None:
-    cli._write_once(tmp_path / "battery.json", _battery_report())
     child_error = subject.RotationL1G2AError(
         subject.REASON_LEAF,
         "leaf failed",
@@ -342,12 +406,12 @@ def test_parent_fit_progress_aggregates_success_failure_and_not_started(tmp_path
 
     progress = cli._parent_fit_progress(tmp_path)
 
-    assert progress["planned"] == 39
-    assert progress["started"] == 17
-    assert progress["completed"] == 17
+    assert progress["planned"] == 24
+    assert progress["started"] == 2
+    assert progress["completed"] == 2
     assert progress["failed"] == 0
-    assert [item["status"] for item in progress["components"]] == ["complete", "failed", "not_started"]
-    assert [item["readback_valid"] for item in progress["components"]] == [True, True, True]
+    assert [item["status"] for item in progress["components"]] == ["failed", "not_started"]
+    assert [item["readback_valid"] for item in progress["components"]] == [True, True]
 
 
 def test_parent_rejects_tampered_child_failure_receipt(tmp_path) -> None:
@@ -389,21 +453,48 @@ class _FakeEstimator:
         self.booster_ = _FakeBooster()
 
     def fit(self, features: pd.DataFrame, target: pd.Series) -> "_FakeEstimator":
+        assert tuple(features.columns) == subject.V14_FEATURES
+        ranked_values = features.loc[:, list(subject.V14_CONTINUOUS_FEATURES)].to_numpy(dtype=np.float64)
+        assert np.nanmin(ranked_values) >= -0.5
+        assert np.nanmax(ranked_values) <= 0.5
         self._mean = float(target.mean())
         return self
 
     def predict(self, features: pd.DataFrame, pred_leaf: bool = False, pred_contrib: bool = False) -> np.ndarray:
-        score = features[subject.CONTINUOUS_FEATURES[0]].fillna(0.0).to_numpy(dtype=np.float64) + self._mean
+        score = features[subject.V14_CONTINUOUS_FEATURES[0]].fillna(0.0).to_numpy(dtype=np.float64) + self._mean
         if pred_leaf:
             # Seven leaves, each spanning all dates in this synthetic rank panel.
-            leaf = np.floor((features[subject.CONTINUOUS_FEATURES[0]].to_numpy() + 0.5) * 7).clip(0, 6)
+            leaf = np.floor((features[subject.V14_CONTINUOUS_FEATURES[0]].to_numpy() + 0.5) * 7).clip(0, 6)
             return np.tile(leaf.reshape(-1, 1), (1, 240))
         if pred_contrib:
-            result = np.zeros((len(features), len(subject.FEATURES) + 1), dtype=np.float64)
-            result[:, 0] = features[subject.CONTINUOUS_FEATURES[0]].fillna(0.0)
+            result = np.zeros((len(features), len(subject.V14_FEATURES) + 1), dtype=np.float64)
+            result[:, 0] = features[subject.V14_CONTINUOUS_FEATURES[0]].fillna(0.0)
             result[:, -1] = self._mean
             return result
         return score
+
+
+def _as_v13_reference(child: dict[str, object]) -> dict[str, object]:
+    legacy = copy.deepcopy(child)
+    payload = legacy["reproducibility_payload"]
+    payload["contract_version"] = subject.V13_CONTRACT_VERSION
+    payload.pop("horizon_authority")
+    payload.pop("horizon_authority_sha256")
+    payload.pop("delta_feature_coverage")
+    payload["battery_receipt_sha256"] = "f" * 64
+    payload["input_identity"]["feature_contract_sha256"] = "9" * 64
+    for fold in payload["folds"]:
+        fold["feature_contributions"]["shape"][1] = len(subject.V13_FEATURES) + 1
+    for row in payload["oof_prediction_rows"]:
+        if row["feature_contributions"] is not None:
+            row["feature_contributions"].pop(8)
+    payload["oof_prediction_rows_sha256"] = subject.canonical_sha256(payload["oof_prediction_rows"])
+    legacy["schema_version"] = subject.V13_PROCESS_SCHEMA_VERSION
+    legacy["reproducibility_payload_sha256"] = subject.canonical_sha256(payload)
+    legacy["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in legacy.items() if key != "report_sha256"}
+    )
+    return legacy
 
 
 def _leaf_distribution(*, sparse_tree_count: int, sparse_date_count: int) -> tuple[object, pd.DataFrame, pd.Index]:
@@ -463,14 +554,14 @@ def test_leaf_date_coverage_rejects_any_leaf_below_derived_ten_day_floor() -> No
 def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=2,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
@@ -484,11 +575,14 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
         "active_fit": None,
     }
     assert first["reproducibility_payload"]["profile"]["n_estimators"] == 240
+    assert first["reproducibility_payload"]["selected_horizon"] == 10
+    assert first["reproducibility_payload"]["horizon_authority"] == subject.HORIZON_AUTHORITY
+    assert first["reproducibility_payload"]["delta_feature_coverage"]["minimum_coverage"] == 0.90
     assert first["reproducibility_payload_sha256"] == second["reproducibility_payload_sha256"]
     fold_hashes = {fold["model_sha256"] for fold in first["reproducibility_payload"]["folds"]}
     assert fold_hashes
     assert {row["model_hash"] for row in first["reproducibility_payload"]["oof_prediction_rows"]} <= fold_hashes
-    acceptance = subject.close_processes(first, second)
+    acceptance = subject.close_processes(first, second, v13_reference=_as_v13_reference(first))
     assert acceptance["research_surface_status"] == "NOT_AVAILABLE"
     assert acceptance["rotation_l1_capability_status"] == "NOT_AVAILABLE"
     assert acceptance["research_product_compute_conditions_satisfied"] is True
@@ -496,22 +590,44 @@ def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> N
     assert acceptance["model_effect_tail_access_eligible"] is True
     assert acceptance["forward_power_status"] == "INSUFFICIENT"
     assert acceptance["tail_accessed"] is False
+    assert acceptance["paired_v13_diagnostic"]["binding_gate_applied"] is False
+    assert acceptance["paired_v13_diagnostic"]["common_date_count"] > 0
+    assert "moneyflow_intensity_delta_5d" in acceptance["paired_v13_diagnostic"]["contributions"]["v1_4"]
+
+
+def test_v14_closure_keeps_existing_v13_process_receipts_readable() -> None:
+    children = [
+        subject.run_gbdt_process(
+            _bundle(),
+            producer_commit="e" * 40,
+            process_index=index,
+            estimator_factory=_FakeEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    children = [_as_v13_reference(child) for child in children]
+
+    acceptance = subject.close_processes(*children)
+
+    assert acceptance["contract_version"] == subject.V13_CONTRACT_VERSION
+    assert acceptance["schema_version"] == subject.V13_ACCEPTANCE_SCHEMA_VERSION
+    assert acceptance["battery_receipt_sha256"] == "f" * 64
+    assert "horizon_authority" not in acceptance
 
 
 def test_close_processes_accepts_holiday_aligned_validation_window_start() -> None:
     bundle = _bundle()
     holiday_dates = set(pd.bdate_range("2025-10-01", "2025-10-08").date)
     panel = bundle["panel"]
-    bundle["panel"] = panel.loc[
-        ~panel.index.get_level_values("trade_date").isin(holiday_dates)
-    ].copy()
+    bundle["panel"] = panel.loc[~panel.index.get_level_values("trade_date").isin(holiday_dates)].copy()
     bundle["benchmark_close"] = {
         day: value for day, value in bundle["benchmark_close"].items() if day not in holiday_dates
     }
     children = [
         subject.run_gbdt_process(
             bundle,
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=index,
             estimator_factory=_FakeEstimator,
             runtime_validator=_test_runtime,
@@ -522,7 +638,7 @@ def test_close_processes_accepts_holiday_aligned_validation_window_start() -> No
     fold = children[0]["reproducibility_payload"]["folds"][4]
     assert fold["purge_dates"][-1] == "2025-09-30"
     assert fold["validation_start"] == "2025-10-09"
-    acceptance = subject.close_processes(*children)
+    acceptance = subject.close_processes(*children, v13_reference=_as_v13_reference(children[0]))
 
     assert acceptance["status"] == "development_complete"
     assert acceptance["tail_accessed"] is False
@@ -531,14 +647,14 @@ def test_close_processes_accepts_holiday_aligned_validation_window_start() -> No
 def test_close_processes_rejects_rehashed_stale_leaf_contract() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=2,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
@@ -560,7 +676,7 @@ def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
     children = [
         subject.run_gbdt_process(
             _bundle(),
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=index,
             estimator_factory=_FakeEstimator,
             runtime_validator=_test_runtime,
@@ -602,7 +718,7 @@ def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
 def test_close_processes_rejects_empty_purge_dates_with_typed_failure() -> None:
     child = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
@@ -641,14 +757,14 @@ def test_close_processes_rejects_empty_purge_dates_with_typed_failure() -> None:
 def test_close_processes_rejects_rehashed_oof_fold_model_lineage_drift() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=2,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
@@ -672,7 +788,7 @@ def test_close_processes_rejects_rehashed_oof_as_of_calendar_drift() -> None:
     children = [
         subject.run_gbdt_process(
             _bundle(),
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=index,
             estimator_factory=_FakeEstimator,
             runtime_validator=_test_runtime,
@@ -699,14 +815,14 @@ def test_close_processes_rejects_rehashed_oof_as_of_calendar_drift() -> None:
 def test_close_processes_rejects_existing_model_hash_from_the_wrong_fold() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=2,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
@@ -734,7 +850,7 @@ def test_close_processes_rejects_rehashed_partial_oof_cross_section() -> None:
     children = [
         subject.run_gbdt_process(
             _bundle(),
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=index,
             estimator_factory=_FakeEstimator,
             runtime_validator=_test_runtime,
@@ -766,7 +882,7 @@ def test_gbdt_process_fails_closed_on_leaf_date_collapse() -> None:
     with pytest.raises(subject.RotationL1G2AError) as caught:
         subject.run_gbdt_process(
             _bundle(),
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=1,
             estimator_factory=Collapsed,
             runtime_validator=_test_runtime,
@@ -791,7 +907,7 @@ def test_gbdt_fit_failure_records_active_fit_and_failed_count() -> None:
     with pytest.raises(subject.RotationL1G2AError) as caught:
         subject.run_gbdt_process(
             _bundle(),
-            battery_report=_battery_report(),
+            producer_commit="e" * 40,
             process_index=1,
             estimator_factory=FitFailed,
             runtime_validator=_test_runtime,
@@ -824,14 +940,14 @@ def test_state_projection_keeps_boundary_tie_neutral_without_index_fallback() ->
 def test_close_processes_rejects_different_payload_hashes() -> None:
     first = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=1,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
-        battery_report=_battery_report(),
+        producer_commit="e" * 40,
         process_index=2,
         estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
