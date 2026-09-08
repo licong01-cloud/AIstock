@@ -30,10 +30,16 @@
       "actor": "Codex",
       "note": "Scope expanded to preserve the audited Bash boundary through stock-pool installation and backtest-only injection, including single-alpha and Multi-Alpha command-contract tests.",
       "timestamp": "2026-09-08T16:18:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "Codex",
+      "note": "Final related tests and required nox plans passed; fresh WSL /bin/sh launch entered audited Bash, preserved post-cd injection ordering, printed qe_bash_wrapper_ok, and exited 0 at source commit 64e2b0ed0.",
+      "timestamp": "2026-09-08T16:32:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every generated auto command must explicitly enter audited /bin/bash before the Bash-only credential scrub, while manual commands remain unchanged and stock-pool/backtest-only injections preserve workspace ordering and quoting on WSL and remote nodes.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -141,7 +147,10 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh pytest and nox processes imported tracked source at commit 64e2b0ed0 and passed the single-alpha, Multi-Alpha, stock-pool, backtest-only, QE read, and sector-risk command-contract matrix.",
+      "A fresh WSL Ubuntu process launched the tracked generated command through /bin/sh, entered /bin/bash --noprofile --norc, ran the injected fragment after cd, printed qe_bash_wrapper_ok, and exited 0."
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
