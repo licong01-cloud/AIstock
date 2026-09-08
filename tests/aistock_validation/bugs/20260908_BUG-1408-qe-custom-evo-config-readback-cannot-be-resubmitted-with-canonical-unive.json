@@ -40,12 +40,18 @@
   ],
   "expected": "The public custom-evo config readback emits one canonical universe selector for active-profile tasks and can be resubmitted without weakening rejection of independently supplied conflicting stock_pool and universe_selection fields.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1408-qe-custom-evo-config-readback-cannot-be-resubmitted-with-canonical-unive.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/routers/quantevolver_evolution.py",
-      "backend/tests/quantevolver/test_qe_universe_comparison.py"
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1408-qe-custom-evo-config-readback-cannot-be-resubmitted-with-canonical-unive.json"
     ],
-    "changed_files_source": "registered_scope_expansion",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -86,22 +92,27 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
     "fresh_process_evidence": [
       "fresh pytest process: backend/tests/quantevolver/test_qe_universe_comparison.py -> 5 passed; active-profile readback emits only canonical universe_selection, legacy stock_pool remains readable, and independent dual-input creation remains HTTP 400 fail-closed",
       "fresh pytest process: universe comparison, active dataset profile, registered submission, and MCP domain matrix -> 67 passed",
       "fresh nox process at final source state: qe_read_backend -> 403 passed, 1 skipped; validation_module_registry_l0 -> 8 passed",
-      "fresh nox process: qe_sector_risk_overlay_backend -> 91 passed; qe_mcp_backend -> 49 passed"
+      "fresh nox process: qe_sector_risk_overlay_backend -> 91 passed; qe_mcp_backend -> 49 passed",
+      "pytest backend/tests/quantevolver/test_qe_universe_comparison.py in fresh process at final source state -> 5 passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
