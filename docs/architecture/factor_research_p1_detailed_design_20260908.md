@@ -1,6 +1,6 @@
 # 因子演进实施计划与 P1 详细设计
 
-日期：2026-09-08；版本：1.0；设计级别：F2；本轮交付：文档，不实施代码或数据库操作。
+日期：2026-09-08；版本：1.1；设计级别：F2；当前修订交付：文档。用户授权文档合入后开始 P1 代码实施，生产迁移/激活仍单独授权。
 
 上位设计：[因子研发与质量演进蓝图](factor_research_evolution_blueprint_20260908.md)，已合入 PR #4435。本设计细化其 P1，不改变三阶段范围、不迁移 QE 业务语义、不引入新平台。文档合入只确认设计交付，后续源码、DEV、生产应用分别报告与授权。
 
@@ -85,7 +85,28 @@ P1 新评价绑定当前数据集的 `aistock_equity_pit_canonical_v2`：已核�
 
 拟新增 repo-owned `.codex/skills/factor-research/SKILL.md` 与 `.claude/commands/factor-research.md` 两个薄入口，引用同一方法正文和 CLI `--help`。名称为规划，当前不存在该新工具。不修改 AGENTS.md，不重装所有 profile，不复制个人 skill 内容为第二份权威。
 
-流程为：查数据库中的相关任务 → 创建/继续任务 → 读取必要上下文 → 形成研究卡 → 执行/登记 → 解读结果 → 更新下一步。旧 `develop-factor` 如参与正式入库，只按其归属和受控流程调整；不得从个人 profile 的旧筛选规则静默覆盖本方法，也不在本窗口擅自修订其他模块/客户端 owner 文件。
+流程为：查数据库中的相关任务 → 创建/继续任务 → 读取必要上下文 → 形成研究卡 → 执行/登记 → 解读结果 → 更新下一步。`factor-research` 是研究组织入口，`develop-factor` 保留原名称作为研发兼容/正式交付入口；二者引用同一方法正文，不维护两个评价政策。正式交付沿用现有工具，不由研究 CLI 复制入库写入器。
+
+### 4.3 现有 skill 的升级与复用清单
+
+当前 `develop-factor` 位于客户端 profile，非 repo 已跟踪权威。本轮只读核对表明：其所依托的 `ManualFactorService.save_factor` 已保存源码、catalog 和 asset_path，并调用分类；官方指标与评级也有现有服务。不能把这些既有能力重新开发一遍，也不能把旧 skill 中所有命令视为当前有效。
+
+| 内容 | P1 处理 |
+|---|---|
+| 命名、单列 MultiIndex 输出、无未来信息、按股票隔离、量纲/字段、合理向量化 | 保留为方法正文中的技术规范；旧模板的长表 rolling/pct_change 需明确分股，示例不得串股 |
+| catalog/源码关联、官方独立指标、分类/评级、相关性工具 | 复用既有能力；只核对精确调用/返回，不改业务源码；分别报告成功和缺失 |
+| `/factors/manual/save` | 旧说明已漂移；当前实际入库路由为 `/api/v1/quantevolver/factors/manual` |
+| `batch-compute-metrics-unified` | 当前为兼容入口，转官方 writer；正式交付说明优先指向 `/api/v1/quantevolver/official-evaluation/compute` |
+| 固定数据根、旧截止日期、旧 RD-Agent writer 描述 | 改为显式实际输入与现行单写源；不回落旧数据；不在 skill 放凭据 |
+| dropna 和缺失 | 区分输出格式与评价覆盖；保留缺失/暖启动说明，不通过删行伪造完整覆盖 |
+| 永久 P_fail、每批必须 5–10 个、固定 IC/相关性自动淘汰线 | 改为有用途/样本/周期条件的经验；不自动改 is_available，不因固定阈值淘汰 |
+| 历史窗口反复用于研发筛选 | 标注 research_feedback，不能继续声称独立样本外验证 |
+
+P1 增加 repo-owned `.codex/skills/develop-factor/SKILL.md` 与 `.claude/commands/develop-factor.md` 兼容薄入口，以及 `docs/operations/factor_research_delivery.md` 作为唯一正式交付操作参考。该参考只引用既有业务入口，列出保存、官方评价、分类/评级、相关性各自副作用与结果读回；不提供通配 SQL 淘汰、直接覆盖同名因子或绕过正式 writer 的备用路径。
+
+个人 profile 同名入口的替换交现有单一 client-sync owner，按明确目标和现有流程处理；先确认现有同步工具支持这些业务入口，不支持则交 owner 补齐，不在研究模块私建安装器。不得扫描/覆盖所有用户配置或修改其他活动窗口。实施验收分别报告 repo 入口完成与客户端同步状态，未同步不能声称所有窗口已切换。旧入口用户继续使用熟悉名称时也应读同一方法论，不允许旧硬阈值悄悄重新生效。
+
+研究候选始终不调用 save/full-pipeline。正式入库/更新及因子可用位变更只有明确批准后执行；LLM 分类返回空、指标失败或相关性无有效样本都不能被“保存成功”掩盖。同名保存当前会覆盖代码，因此交付前明确是新因子还是获准版本更新，保护活跃消费者和历史引用；能力缺口提交 owner，不在 P1 重写业务。
 
 方法论可独立演进，任务/尝试记录具体版本与代码引用。更新方法不自动重算旧研究，也不改变旧结论的原始适用条件。研究事实不写入用户个人模型记忆充当数据库替代品。
 
@@ -206,12 +227,14 @@ run 在本次输出目录保存轻量 `execution.json/result.json` 作为进程�
 <a id="files"></a>
 ## 7. 拟实施文件范围与模块所有权
 
-本轮只新增本文，归属 `docs.architecture`。下表为后续 P1 实施包规划，不是本次已经改动的文件，也不自动授权其他 owner 的代码。
+本次 v1.1 修订只修改本文，归属 `docs.architecture`。下表为后续 P1 实施包规划，不是文档 PR 已经改动的文件，也不自动授权其他 owner 的代码。
 
 | 规划位置 | 职责 |
 |---|---|
 | `docs/analysis/factor_research_methodology.md` | 独立方法正文 |
 | `.codex/skills/factor-research/SKILL.md`、`.claude/commands/factor-research.md` | 客户端薄入口，走现有受控流程 |
+| `.codex/skills/develop-factor/SKILL.md`、`.claude/commands/develop-factor.md` | 保留旧名称的兼容/交付入口，引用同一方法，不修改 profile 文件 |
+| `docs/operations/factor_research_delivery.md` | 复用现有因子库工具的单一操作参考，不另造 writer |
 | `backend/services/factor_research/models.py` | 明确请求/记录形状、错误，不另建框架 |
 | `backend/services/factor_research/repository.py` | 两表的短事务、查询和幂等 |
 | `backend/services/factor_research/service.py` | 请求编排、候选记录、只读上下文 |
@@ -270,6 +293,7 @@ DEV 顺序：preflight → 建表 → 真实创建/更新/并发/失败恢复/�
 | 候选形状/时序 | 多列、重复索引、空值、截断前缀、跨股票边界 | 不静默取首列/最后重复；无未来或串股票计算 |
 | 共享指标一致 | 同一候选/上下文直接调用引擎与 adapter 对照，另测不同 universe/范围的连续请求与尾部未成熟标签 | 数值一致；不复用错误上下文；暖启动不计入信号评价；标签/窗口/覆盖元数据保留 |
 | 既有业务保护 | 精确检查本任务输出和目标表；测试中阻止其他写入路径 | 不改数据集、catalog、metrics、QE/数仓配置 |
+| 新旧入口一致 | repo 两个名称及 Codex/Claude 入口的引用检查，结合现行 API/服务源码 | 同一方法/交付参考；旧名称仍可发现；不含失效路由、旧 writer、凭据、固定自动淘汰规则 |
 
 数据库测试在既有 DEV 真库执行，不以 sqlite/mock 代替；mock 只用于确定性失败注入。Windows 当前 Python 与已存在的 WSL Python 3.10 环境 fresh-process 验证；缺少依赖报告，不自行安装。不声明模拟测试证明全部生产行为。
 
@@ -283,7 +307,7 @@ DEV 顺序：preflight → 建表 → 真实创建/更新/并发/失败恢复/�
 
 ### 10.3 本轮文档验证
 
-仅本文，docs-fast-new，`docs.architecture`。至少两轮实质审核修订；UTF-8、引用/锚点、`git diff --check`；复用 `python scripts/aistock_feature_workflow.py validate --design docs/architecture/factor_research_p1_detailed_design_20260908.md --tier F2`。最终 HEAD 的 CI verdict 通过后按用户授权合入。文档结构通过不是实施或数据库验证通过。
+仅本文，初版 docs-fast-new，v1.1 为 docs-fast-update，归属 `docs.architecture`。至少两轮实质审核修订；UTF-8、引用/锚点、`git diff --check`；复用 `python scripts/aistock_feature_workflow.py validate --design docs/architecture/factor_research_p1_detailed_design_20260908.md --tier F2`。最终 HEAD 的 CI verdict 通过后按用户授权合入。文档结构通过不是实施或数据库验证通过。
 
 <a id="risks"></a>
 ## 11. 风险、剩余确认与快速落地约束
@@ -322,7 +346,7 @@ F-101 三阶段快速落地；F-102 独立方法与客户端入口；F-103 复�
 
 `production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`client_install=noop`、`runtime_impact=none`、`production_activation=false`、`process_control=false`。本轮仅文档无需重启。未来代码实际 runtime contract 按 catalog 推导，不能沿用本轮 none。
 
-用户已授权本设计审核、提交、PR 与合入；未授权本轮代码实现、数据库迁移、因子入生产、实验或清理。主仓同步与工作树清理分别报告，不删除其他窗口文件。
+用户已授权本修订审核、提交、PR 与合入，随后开始 P1 代码实施。本文 PR 本身仅文档；后续实现使用新工作树，生产迁移、因子入生产、服务重启与清理不由设计合入推导。主仓同步与工作树清理分别报告，不删除其他窗口文件。
 
 ## 14. 审核记录
 
@@ -342,3 +366,9 @@ F-101 三阶段快速落地；F-102 独立方法与客户端入口；F-103 复�
 | 禁止新增门禁审批 | §2、§6、§8–9、§11 不新增冻结/哈希、资源阈值、固定淘汰线或审批平台；数据库幂等仅实现已批准历史正确性 | 设计符合；未修改任何运行配置或工作流规则 |
 
 F2 结构校验结果为 12 项索引、12 行矩阵、warnings=0；最终文件检查及 commit-bound CI 以本设计 PR 为准。结构验证不代替实施和数据库验收。
+
+### v1.1 复用与 skill 修订审核
+
+第一轮：对照已核实旧 skill 与现行路由/ManualFactorService，补充保留的技术规范、实际保存/官方评价入口、历史经验的条件化处理和双入口单方法职责，消除“新建 skill 等于重做因子库”的歧义。
+
+第二轮：复核客户端归属与副作用，补充“现有同步工具未支持业务入口则交 owner”以防私造安装器；明确保存成功不代表分类/指标全部成功、同名保存会覆盖代码，研究流程不调用正式写入口；修正 v1.1 文档更新与随后代码实施的授权/状态表述。按四项 DESIGN-COMPLIANCE-001 复核：未缩减数据库闭环交付，未保留静默成功或固定淘汰规则，未跨模块改业务，未增加门禁。本文设计范围无剩余阻断 finding；仅为本窗口顺序审核，不冒称独立复核。
