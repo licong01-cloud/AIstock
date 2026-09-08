@@ -6424,6 +6424,9 @@ def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() ->
     assert failed_retry.failed_count == 1
     retry_payload = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json
     assert retry_payload["local_sim_retry_diagnostics"]["stage"] == "LOCAL_SIM_MARKET_DATA_UNAVAILABLE"
+    assert retry_payload["broker_called"] is False
+    assert retry_payload["submitted_intents"] == 0
+    assert retry_payload["failed_intents"] == len(plan.intents)
 
     paper_repo = InMemoryPaperTradingV2Repository()
     scheduler.context_provider = StaticSimulationRunContextProvider(
@@ -6447,9 +6450,15 @@ def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() ->
     assert recovered.results[0].status == "SUBMITTED"
     assert latest_run.status == SimulationDailyRunStatus.SUCCEEDED
     assert latest_run.execution_plan_id == plan.plan_id
+    assert latest_run.run_payload_json["broker_called"] is True
+    assert latest_run.run_payload_json["submitted_intents"] == len(plan.intents)
+    assert latest_run.run_payload_json["failed_intents"] == 0
     assert "submit_failure" not in latest_run.run_payload_json
     assert "local_sim_retry_diagnostics" not in latest_run.run_payload_json
     assert paper_repo.list_fills_for_run(latest_run.run_id)
+    detail = SimulationRuntimeOpsService(repository=repo).get_run_detail(latest_run.run_id)
+    assert detail["run"]["stage_counts"]["submitted_intents"] == len(plan.intents)
+    assert detail["run"]["stage_counts"]["failed_intents"] == 0
 
 
 def _legacy_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
