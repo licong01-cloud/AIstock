@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1406",
-  "closed_at": null,
+  "closed_at": "2026-09-08T04:13:38.743634Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -131,8 +131,8 @@
   },
   "first_seen_at": "2026-09-08T03:33:53.927792Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+  "fixed_at": "2026-09-08T04:05:50Z",
   "github_issue_number": 4436,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4436",
   "last_seen_at": "2026-09-08T03:33:53.927792Z",
@@ -140,6 +140,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4438",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -167,9 +168,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1406\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1406",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "930e9b7bdf6a899861db65f4e47bb4ee8cb9808861fb78d0da9f9e26f119c0f6",
+      "contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+      "expected_identity": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-08T04:12:08.024037Z",
+      "mode": "read_only",
+      "observed_identity": "d92389f615c4692ee5e543f97ec679bce4ca33b0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "03db91fb7a6c50e5ea0bdc9c7537c001fbb3a5e28e0b2157db8cb6b9fe2a2fe8",
+      "receipt_sha256": "67e784ba0328932cd910cd90eb2fb9ef1f5ce7744e416655e5355a15904fd0a9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "372b5d3d59d43e58071299b8c48af32d6e209a50a6cbafdbeab13a94688ae525",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -179,7 +203,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1406",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "df0b45be9fb9a99d",
+    "recorded_at": "2026-09-08T04:07:58.835980Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "824c16b8564ee086cedcae0927cb9fc20df200d9",
+    "source_merge_commit": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4438",
+    "validation_evidence": [
+      "validation-receipt: id=cfb0605be66d18bb commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters` result=`passed: 8 tests; ownership files=14 mapped=14`",
+      "validation-receipt: id=7888cc619ffb8089 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend --no-error-on-missing-interpreters` result=`passed: 398 passed, 1 skipped`",
+      "validation-receipt: id=d27778f8acc3b0ae commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`python -m nox -s qe_sector_risk_overlay_backend --no-error-on-missing-interpreters` result=`passed: 91 passed`",
+      "validation-receipt: id=e5fd1f2ae4caea19 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_mcp_backend status=passed command=`python -m nox -s qe_mcp_backend --no-error-on-missing-interpreters` result=`passed: 49 passed`"
+    ],
+    "validation_evidence_digest": "c0df4a61940e9bd376046283788683ef53f40d650a8fb2882dda69726741e121"
+  },
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -188,6 +236,13 @@
     "fingerprint": "75eef3c061a38c37776ea125",
     "source_event_id": "FE-20260908-75eef3c061a3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=cfb0605be66d18bb commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters` result=`passed: 8 tests; ownership files=14 mapped=14`",
+    "validation-receipt: id=7888cc619ffb8089 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend --no-error-on-missing-interpreters` result=`passed: 398 passed, 1 skipped`",
+    "validation-receipt: id=d27778f8acc3b0ae commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`python -m nox -s qe_sector_risk_overlay_backend --no-error-on-missing-interpreters` result=`passed: 91 passed`",
+    "validation-receipt: id=e5fd1f2ae4caea19 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_mcp_backend status=passed command=`python -m nox -s qe_mcp_backend --no-error-on-missing-interpreters` result=`passed: 49 passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1406 --target backend-main --expected-identity 0f017b97ef6b077592d7ca11db690bebb2dbbaee --timeout-seconds 20 --output-format summary -> passed: workflow_gate=verified post_restart_effective_gate=passed runtime_identity_match=true"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
