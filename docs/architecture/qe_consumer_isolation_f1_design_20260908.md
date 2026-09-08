@@ -95,10 +95,10 @@ QE 已统一登记 single、custom/strategy/auto evolution 与 Multi-Alpha 运�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | F-001 | `qe_run_registry.py` consumer contract | `backend/tests/quantevolver/test_qe_registered_submission.py` | PASS | none |
-| F-002 | QE API/MCP/evolution/Multi-Alpha adapters | `backend/tests/mcp/test_domain_modules.py`; `backend/tests/unified_engine/test_qe_runtime_first_pending_routes.py`; `backend/tests/unified_engine/test_custom_evo_mutation_routes.py` | PASS | none |
+| F-002 | QE API/MCP/evolution/Multi-Alpha adapters | `backend/tests/mcp/test_domain_modules.py`; `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/unified_engine/test_custom_evo_mutation_routes.py` | PASS | none |
 | F-003 | history filter/summary, QE history UI and ConfigComposer boundary | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `backend/tests/quantevolver/test_qe_registered_submission.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | PASS | none |
-| F-004 | `qe_active_execution_capacity.py` | `backend/tests/multi_alpha/test_qe_submission_coordinator.py` | PASS | none |
-| F-005 | defaulted request/registration and existing path regressions | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/unified_engine/test_qe_runtime_first_pending_routes.py` | PASS | none |
+| F-004 | `qe_active_execution_capacity.py` | `backend/tests/quantevolver/test_qe_registered_submission.py` | PASS | none |
+| F-005 | defaulted request/registration and existing path regressions | `backend/tests/quantevolver/test_qe_registered_submission.py` | PASS | none |
 | F-006 | changed-file and production-gate audit | `python -m nox -s validation_module_registry_l0`; `python -m nox -s guardrail_changed_files` | PASS | none |
 
 ## Risks / Failure Modes / 风险

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from backend.routers import quantevolver as quantevolver_router
 from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
 from backend.services.quantevolver import node_execution as node_execution_module
@@ -24,6 +25,9 @@ from backend.services.quantevolver.experiment_config import (
 )
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
 from backend.services.quantevolver.node_execution import QENodePreflightError, preflight_qe_node
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEWorkspaceSubmissionCoordinator,
+)
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
     PlannedQELoop,
@@ -588,6 +592,41 @@ def test_advisory_consumer_is_distinct_from_source_and_purpose() -> None:
     assert registration["consumer_id"] == "advisory"
     assert registration["source_type"] == "mcp"
     assert registration["purpose"] == "research"
+
+
+def test_single_pending_create_forwards_advisory_consumer(monkeypatch) -> None:
+    captured = {}
+
+    def fake_generate(req):
+        captured["request"] = req
+        return {"experiment_id": "exp-advisory"}
+
+    monkeypatch.setattr(quantevolver_router, "generate_config", fake_generate)
+    req = quantevolver_router.SingleExperimentPendingCreateRequest(
+        factor_names=["alpha_a"],
+        model_id="model_lgbm_v1",
+        custom_params={"random_seed": 42},
+        consumer_id="advisory",
+    )
+
+    result = quantevolver_router.create_pending_experiment(req)
+
+    assert result["operation"] == "create_pending"
+    assert captured["request"].consumer_id == "advisory"
+    assert (
+        captured["request"].custom_params["qe_mcp_provenance"]["consumer_id"]
+        == "advisory"
+    )
+
+
+def test_advisory_effective_capacity_is_one_and_mainline_capacity_is_unchanged() -> None:
+    effective = QEWorkspaceSubmissionCoordinator._effective_consumer_capacity
+
+    assert effective(4, "qe_mainline") == 4
+    assert effective(4, "advisory") == 1
+    assert effective(1, "advisory") == 1
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        effective(4, "unknown")
 
 
 def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
