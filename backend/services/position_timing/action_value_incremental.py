@@ -8,7 +8,7 @@ automatic-trading path.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 import json
 import os
@@ -60,12 +60,17 @@ from .action_value_research import (
     replay_continuous_cohorts,
     walk_forward_action_values,
 )
+from .action_value_suspensions import (
+    SuspensionSnapshotBook,
+    freeze_suspension_snapshot,
+)
 from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
 PIPELINE_ID = "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
-REQUEST_SCHEMA = "position_timing_action_value_increment_request_v1"
+REQUEST_SCHEMA = "position_timing_action_value_increment_request_v2"
+LEGACY_REQUEST_SCHEMAS = {"position_timing_action_value_increment_request_v1"}
 RECEIPT_SCHEMA = "position_timing_action_value_increment_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_action_value_increment_bundle_v1"
 ARTIFACT_FOLDER = "action_value_incremental_v1"
@@ -179,8 +184,6 @@ def prepare_increment_request(
         review_stride=review_stride,
     )
     selected_symbols = deterministic_symbols(candidate.symbols, limit=symbol_limit, seed=spec.seed)
-    source_coverage = _source_coverage(candidate, selected_symbols, profile)
-    _require_matched_source_coverage(source_coverage, information_block=profile.information_block)
     if not historical_registry.is_file():
         raise ActionValueError("HISTORICAL_REGISTRY_UNAVAILABLE")
 
@@ -199,7 +202,18 @@ def prepare_increment_request(
             end=population_end,
             timing_root=timing_root,
         )
+        suspension_path = freeze_suspension_snapshot(
+            connection,
+            symbols=selected_symbols,
+            start=population_start,
+            end=population_end,
+            timing_root=timing_root,
+        )
     corporate_action_ref = file_reference(corporate_action_path)
+    suspension_ref = file_reference(suspension_path)
+    candidate, _ = _apply_suspension_snapshot(candidate, suspension_path)
+    source_coverage = _source_coverage(candidate, selected_symbols, profile)
+    _require_matched_source_coverage(source_coverage, information_block=profile.information_block)
     request = {
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
@@ -250,6 +264,8 @@ def prepare_increment_request(
         },
         "source_coverage": source_coverage,
         "corporate_action_snapshot": corporate_action_ref,
+        "suspension_snapshot": suspension_ref,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "historical_registry": file_reference(historical_registry),
         "historical_registry_context_count": len(
             AdvisoryResearchTrialRegistryV1(historical_registry).read()
@@ -301,6 +317,22 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
     )
     if selected_symbols != expected_symbols:
         raise ActionValueError("INCREMENT_POPULATION_SELECTION_MISMATCH")
+    suspensions = None
+    if request["schema_version"] == REQUEST_SCHEMA:
+        suspension_ref = request.get("suspension_snapshot")
+        if not isinstance(suspension_ref, Mapping) or "path" not in suspension_ref:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_NOT_BOUND")
+        suspension_path = Path(str(suspension_ref["path"]))
+        if file_reference(suspension_path) != suspension_ref:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_REFERENCE_MISMATCH")
+        candidate, suspensions = _apply_suspension_snapshot(candidate, suspension_path)
+        expected_suspension_scope = (
+            tuple(sorted(selected_symbols)),
+            date.fromisoformat(request["population_spec"]["start"]),
+            date.fromisoformat(request["population_spec"]["end"]),
+        )
+        if (suspensions.symbols, suspensions.start, suspensions.end) != expected_suspension_scope:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_SCOPE_MISMATCH")
     source_coverage = _source_coverage(candidate, selected_symbols, profile)
     if canonical_sha256(source_coverage) != canonical_sha256(request["source_coverage"]):
         raise ActionValueError("INCREMENT_SOURCE_COVERAGE_IDENTITY_MISMATCH")
@@ -329,6 +361,8 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "source_coverage_sha256": source_coverage["source_sha256"],
         "corporate_action_snapshot_sha256": corporate_actions.snapshot_sha256,
     }
+    if suspensions is not None:
+        source_identity["suspension_snapshot_sha256"] = suspensions.snapshot_sha256
     derived_identity = {
         "population_coverage_sha256": augmented.coverage["coverage_sha256"],
         "matched_row_identity_sha256": _matched_row_identity(augmented.rows),
@@ -424,6 +458,8 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "global_registry_written": False,
         "database_written": False,
     }
+    if request.get("source_correction"):
+        receipt["source_correction"] = request["source_correction"]
     if profile.information_block == ATR14_INFORMATION_BLOCK:
         receipt["atr14_walk_forward"] = optional_forward.diagnostics
         receipt["atr14_continuous"] = optional_replay.receipt
@@ -728,9 +764,13 @@ def _deliver_registry(
     else:
         result_class, decision_use = ResearchResultClass.EXPLORATORY, DecisionUse.NAVIGATION_ONLY
     record = build_trial_record(
-        experiment_id=profile.experiment_id,
+        experiment_id=_experiment_id(request, profile),
         attempt_id=request["request_sha256"][:24],
-        research_stage="POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1",
+        research_stage=(
+            "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V2"
+            if request.get("schema_version") == REQUEST_SCHEMA
+            else "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
+        ),
         study_type=ResearchStudyType.LEARNABILITY_AUDIT,
         hypothesis_family_id="POSITION_TIMING_ACTION_VALUE_OPTIONAL_BLOCK_V1",
         parent_lineage=("POSITION_TIMING_ADVICE_V1", "POSITION_TIMING_ACTION_VALUE_V4"),
@@ -763,6 +803,12 @@ def _deliver_registry(
             "TIMING_INCREMENT_REGISTRY_DELIVERY_FAILED",
             reason_code=exc.reason_code,
         ) from exc
+
+
+def _experiment_id(request: Mapping[str, Any], profile: IncrementProfile) -> str:
+    if request.get("schema_version") == REQUEST_SCHEMA:
+        return f"{profile.experiment_id}_explicit_suspension_source_v2"
+    return profile.experiment_id
 
 
 def _global_observation(before: Mapping[str, Any], path: Path) -> dict[str, Any]:
@@ -799,6 +845,21 @@ def _research_candidate(
     if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
         return MoneyflowAugmentedCandidate.open(candidate)
     return candidate
+
+
+def _apply_suspension_snapshot(
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    snapshot_path: Path,
+) -> tuple[
+    DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    SuspensionSnapshotBook,
+]:
+    book = SuspensionSnapshotBook.open(snapshot_path)
+    base = candidate.base if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)) else candidate
+    augmented_base = book.apply(base, snapshot_path=snapshot_path)
+    if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)):
+        return replace(candidate, base=augmented_base), book
+    return augmented_base, book
 
 
 def _source_coverage(
@@ -852,8 +913,20 @@ def _load_request(path: Path) -> dict[str, Any]:
     training = request.get("training_spec") or {}
     population = request.get("population_spec") or {}
     expected_selection = _selection_contract(profile)
+    schema_version = request.get("schema_version")
+    corrected_source_contract = (
+        schema_version in LEGACY_REQUEST_SCHEMAS
+        or (
+            request.get("source_correction") == "EXPLICIT_DB_SUSPENSION_UNION_V1"
+            and isinstance(request.get("suspension_snapshot"), Mapping)
+            and "path" in request["suspension_snapshot"]
+            and "sha256" in request["suspension_snapshot"]
+            and "size_bytes" in request["suspension_snapshot"]
+        )
+    )
     if (
-        request.get("schema_version") != REQUEST_SCHEMA
+        schema_version not in {REQUEST_SCHEMA, *LEGACY_REQUEST_SCHEMAS}
+        or not corrected_source_contract
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("information_block") not in PROFILES
         or request.get("planned_trial_count") != 1

@@ -198,6 +198,8 @@ def test_sector_request_allows_declared_coverage_loss_but_binds_contract(tmp_pat
         "information_block": SW_L2_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_SW_L2_RELATIVE_MOMENTUM_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "feature_contract": {
             "block_id": SW_L2_INFORMATION_BLOCK,
             "added_features": ["sw_l2_return_20d_bps", "relative_sw_l2_return_20d_bps"],

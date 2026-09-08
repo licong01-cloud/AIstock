@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from backend.services.position_timing.action_value import TZ
+from backend.services.position_timing.action_value import (
+    TZ,
+    ActionValueError,
+    Fill,
+    PositionState,
+)
 from backend.services.position_timing.action_value_corporate_actions import (
     CorporateAction,
     CorporateActionBook,
 )
 from backend.services.position_timing.action_value_research import (
+    _apply_replay_fill,
     ActionValuePopulationSpec,
     build_action_value_rows,
     replay_continuous_cohorts,
@@ -19,6 +26,28 @@ from backend.services.position_timing.action_value_research import (
     walk_forward_action_values,
 )
 from backend.services.position_timing.contracts import canonical_sha256
+
+
+def test_unknown_replay_fill_reports_bounded_path_identity() -> None:
+    state = PositionState(0, 0, Decimal("100000"), Decimal("100000"))
+
+    with pytest.raises(ActionValueError, match="PATH_VALUATION_UNKNOWN") as caught:
+        _apply_replay_fill(
+            state,
+            Fill("UNKNOWN", reason="TARGET_BAR_INVALID"),
+            symbol="002211.SZ",
+            path_role="POLICY",
+            decision_trade_date=date(2022, 4, 29),
+            target_trade_date=date(2022, 5, 5),
+        )
+
+    assert caught.value.details == {
+        "reason": "TARGET_BAR_INVALID",
+        "symbol": "002211.SZ",
+        "path_role": "POLICY",
+        "decision_trade_date": "2022-04-29",
+        "target_trade_date": "2022-05-05",
+    }
 
 
 class FakeCandidate:
