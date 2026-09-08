@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
@@ -17,6 +18,7 @@ from backend.services.quantevolver.config_composer import (
     RDAGENT_DEFAULT_DATA_SPLIT,
 )
 from backend.services.quantevolver.experiment_config import (
+    QE_CONTROL_PLANE_METADATA_KEYS,
     QE_RUNTIME_METADATA_KEYS,
     split_qe_runtime_metadata,
 )
@@ -157,9 +159,182 @@ def test_registered_control_metadata_uses_canonical_runtime_metadata_contract() 
 
     executable, metadata = split_qe_runtime_metadata(params)
 
+    assert registered_keys <= QE_CONTROL_PLANE_METADATA_KEYS
+    assert QE_RUN_REGISTRATION_PARAM in QE_CONTROL_PLANE_METADATA_KEYS
     assert registered_keys <= QE_RUNTIME_METADATA_KEYS
+    assert QE_RUN_REGISTRATION_PARAM not in QE_RUNTIME_METADATA_KEYS
     assert executable == {"topk": 20}
     assert set(metadata) == registered_keys
+
+
+def _compose_registration_contract_yaml(custom_params: dict) -> str:
+    return ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params=custom_params,
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+
+@pytest.mark.parametrize(
+    ("path_name", "custom_params"),
+    [
+        (
+            "registered_single",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="single",
+                source_type="ui",
+                purpose="research",
+            ),
+        ),
+        (
+            "registered_pending_single",
+            {
+                **attach_qe_run_registration(
+                    {"topk": 20},
+                    run_kind="single",
+                    source_type="mcp",
+                    purpose="research",
+                ),
+                "qe_mcp_provenance": {"created_by_name": "Advisory"},
+                "qe_factor_sources": {"alpha_a": "official"},
+                "qe_pending_task_source": "mcp",
+                "qe_pending_created_by": "Advisory",
+            },
+        ),
+        (
+            "custom_evo",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="custom_evolution_loop",
+                source_type="agent",
+                purpose="research",
+            ),
+        ),
+        (
+            "multi_alpha",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="multi_alpha_loop",
+                source_type="scheduler",
+                purpose="validation",
+            ),
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_registration_metadata_does_not_change_standard_execution_yaml(
+    path_name: str,
+    custom_params: dict,
+) -> None:
+    del path_name
+    baseline = _compose_registration_contract_yaml({"topk": 20})
+
+    assert _compose_registration_contract_yaml(custom_params) == baseline
+
+
+@pytest.mark.parametrize("catalog_owner", ["portfolio_config", "default_kwargs"])
+def test_database_custom_strategy_preserves_catalog_owned_ensemble_only(
+    catalog_owner: str,
+) -> None:
+    catalog_ensemble = {"mode": "catalog_owned", "members": ["alpha_a", "alpha_b"]}
+    portfolio_kwargs = {"topk": 20}
+    default_kwargs = {}
+    catalog_params = {
+        "ensemble": catalog_ensemble,
+        QE_RUN_REGISTRATION_PARAM: {"must_not": "execute"},
+        "qe_mcp_provenance": {"must_not": "execute"},
+    }
+    if catalog_owner == "portfolio_config":
+        portfolio_kwargs.update(catalog_params)
+    else:
+        default_kwargs.update(catalog_params)
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "database_custom_ensemble",
+            "source_code": "class DatabaseCustomEnsembleStrategy:\n    pass\n",
+            "portfolio_config": {
+                "class": "DatabaseCustomEnsembleStrategy",
+                "kwargs": portfolio_kwargs,
+            },
+            "default_kwargs": default_kwargs,
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={
+            "ensemble": {"enabled": True, "seeds": [42, 2026]},
+            QE_RUN_REGISTRATION_PARAM: {"schema_version": "qe_run_registration_v1"},
+            "qe_mcp_provenance": {"created_by_name": "Advisory"},
+        },
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    strategy_kwargs = yaml.safe_load(yaml_text)["port_analysis_config"]["strategy"]["kwargs"]
+    assert strategy_kwargs["ensemble"] == catalog_ensemble
+    assert QE_RUN_REGISTRATION_PARAM not in strategy_kwargs
+    assert "qe_mcp_provenance" not in strategy_kwargs
+
+
+def test_database_custom_strategy_does_not_accept_caller_owned_runtime_ensemble() -> None:
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "database_custom_without_ensemble",
+            "source_code": "class DatabaseCustomStrategy:\n    pass\n",
+            "portfolio_config": {
+                "class": "DatabaseCustomStrategy",
+                "kwargs": {"topk": 20},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={"ensemble": {"enabled": True, "seeds": [42, 2026]}},
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    strategy_kwargs = yaml.safe_load(yaml_text)["port_analysis_config"]["strategy"]["kwargs"]
+    assert "ensemble" not in strategy_kwargs
 
 
 def test_registered_control_metadata_remains_in_persisted_custom_params(monkeypatch) -> None:
