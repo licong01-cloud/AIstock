@@ -2616,8 +2616,13 @@ class PositionTimingService:
 
         try:
             status = self.dependencies.calendar_service.status(as_of_date=now.date())
-            if status.get("is_trading_day"):
+            if status.get("is_trading_day") and now.time() >= time(20, 0):
                 decision_date = now.date()
+            elif status.get("is_trading_day"):
+                previous = status.get("previous_trading_day")
+                if not previous:
+                    raise ActionValueError("DECISION_TRADE_DATE_UNAVAILABLE")
+                decision_date = date.fromisoformat(str(previous))
             else:
                 latest = status.get("latest_completed_trading_day")
                 if not latest:
