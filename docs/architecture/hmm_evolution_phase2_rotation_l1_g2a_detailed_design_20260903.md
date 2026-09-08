@@ -3,7 +3,7 @@
 > **设计层级**：F2
 > **文档版本**：v1.4.0（v1.3真实终态回填 + v1.4唯一信息集候选送审）
 > **日期**：2026-09-08
-> **状态**：`V1_3_PRODUCTION_RESEARCH_SURFACE_ACTIVE_V1_4_PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`
+> **状态**：`V1_3_PRODUCTION_RESEARCH_SURFACE_ACTIVE_V1_4_USER_APPROVED_IMPLEMENTED_NOT_EXECUTED`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.46
 > **终极目标**：在同一个G2-A闭环内交付真实日度L1板块轮动预测、最小repository/read API和真实`/hmm-risk` L1热力图，而不是只交付模型、fit、artifact、receipt或market regime页面。
 > **历史2026-09-04批准边界（叶20日规则已被下述v1.3取代）**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
@@ -15,7 +15,7 @@
 
 ---
 
-> **2026-09-08修订边界**：v1.3结果、产品与运行状态只按真实readback更新；§10.1仍是已执行v1.3的不可变合同。§21提出的v1.4只增加一个development选出的因果moneyflow变化率特征，全部精确值均为`PROPOSED_PENDING_USER_APPROVAL`；本次文档提交/合入不授权源码、24 fits、tail、数据库或运行态动作。
+> **2026-09-08修订边界**：v1.3结果、产品与运行状态只按真实readback更新；§10.1仍是已执行v1.3的不可变合同。用户已明确批准§21的G2A-V14-D1～D6精确合同及源码实施；实现只增加一个development选出的因果moneyflow变化率特征，并保持正式24 fits、tail、数据库与运行态动作未执行。
 
 ## 0. 背景、权威、现状与批准边界
 
@@ -27,7 +27,7 @@
 4. 旧P2-3A～P2-4、HR1、RW1保持不可变终态，不重跑、不调参、不复用已消费窗口；
 5. 不建设通用feature/evidence/training平台，不并行模型，不单独产品化market regime。
 
-v1.3目标方向、页首历史合同及§10.1全部精确值均已获用户批准并已执行到§20所列终态。§21的v1.4精确值尚未获批。文档通过F2 validator只证明设计结构和状态边界闭合，不等于v1.4源码、实验、tail读取、数据库或runtime动作已获授权或已经完成。
+v1.3目标方向、页首历史合同及§10.1全部精确值均已获用户批准并已执行到§20所列终态。§21的v1.4精确值与源码实施已获批准并实现；正式24 fits、tail读取、数据库写入和runtime activation仍未执行，也不由源码完成状态推导。
 
 ## 1. Scope、Non-goals与术语
 
@@ -632,11 +632,11 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 - 在已消费development面板上，仅比较三个预先限定的因果变化率表达。`moneyflow_intensity_delta_5d`在1,094个有效日期的单变量mean daily Rank IC为`0.03405157`、正向月份比例为`0.65454545`；`breadth_delta_5d`为`0.01664688`；`momentum_curve_5_20`为`-0.00196715`；
 - 这只是选择下一唯一信息集候选的development证据，不是OOF模型效果、tail证据或promotion gate。不得继续扩大变换列表、搜索lookback或按结果删除其他列。
 
-## 21. G2-A v1.4唯一信息集候选（全部待用户批准）
+## 21. G2-A v1.4唯一信息集候选（D1～D6已获用户批准）
 
 ### 21.1 目标、边界与唯一假设
 
-v1.4只检验一个假设：**资金流强度的短期变化率比静态20日水平提供更直接的轮动方向信息，且可在不更换模型类、不扩大数据源的前提下提高10D横截面预测。** 本节全部为`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。本次文档合入只保存决策包，不批准、实施或运行它。
+v1.4只检验一个假设：**资金流强度的短期变化率比静态20日水平提供更直接的轮动方向信息，且可在不更换模型类、不扩大数据源的前提下提高10D横截面预测。** 用户已明确批准本节D1～D6精确合同及源码实施；源码完成不等于正式24 fits、tail读取、数据库写入或runtime activation已经执行。
 
 保持不变：product presentation/estimation universe=L1、raw 10D relative-return target、t-1/PIT、五fold/504日rolling、purge=10、embargo=0、MARKET-CONTEXT-A、LightGBM 4.6.0完整profile、MBE 0.02、coverage/state projection、research/tail双门、forward三分支、advisory-only及既有repository/API/UI合同。禁止tail、grid、第二seed、early stopping、结果后换列或第二candidate。
 
@@ -684,12 +684,12 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 
 | decision | 精确建议 | 状态 |
 |---|---|---|
-| G2A-V14-D1 | 唯一方向为现有信息集增加一个moneyflow变化率，不换模型类/target/universe | `PROPOSED_PENDING_USER_APPROVAL` |
-| G2A-V14-D2 | §21.2固定公式、10列顺序、t-1/t-6因果边界与typed missing | `PROPOSED_PENDING_USER_APPROVAL` |
-| G2A-V14-D3 | 同一已消费development与同release direct-v2重建独立v1.4 bundle；tail禁读 | `PROPOSED_PENDING_USER_APPROVAL` |
-| G2A-V14-D4 | 冻结10D、同GBDT/MARKET-CONTEXT-A、双fresh-process共24 fits | `PROPOSED_PENDING_USER_APPROVAL` |
-| G2A-V14-D5 | MBE/research/tail/forward/product合同不变；paired增量仅诊断 | `PROPOSED_PENDING_USER_APPROVAL` |
-| G2A-V14-D6 | 一次终态；失败不自动开v1.5，成功也只获得tail资格 | `PROPOSED_PENDING_USER_APPROVAL` |
+| G2A-V14-D1 | 唯一方向为现有信息集增加一个moneyflow变化率，不换模型类/target/universe | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D2 | §21.2固定公式、10列顺序、t-1/t-6因果边界与typed missing | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D3 | 同一已消费development与同release direct-v2重建独立v1.4 bundle；tail禁读 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D4 | 冻结10D、同GBDT/MARKET-CONTEXT-A、双fresh-process共24 fits | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D5 | MBE/research/tail/forward/product合同不变；paired增量仅诊断 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D6 | 一次终态；失败不自动开v1.5，成功也只获得tail资格 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
 
 ### 21.6 实施与直接验证清单
 
@@ -700,14 +700,16 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 1. **无简化交付**：仍须完整五fold、双fresh-process、31-sector与原产品合同；单变量诊断不冒充candidate通过。
 2. **无静默错误**：变化率两端、coverage、日期连续性、identity及非有限值均typed fail closed。
 3. **无业务逻辑迁移**：只增加一个L1输入表达；target、horizon、模型、MBE、tail、状态和advisory隔离均不变。
-4. **无未经批准门禁**：§21全部仍pending；paired improvement、贡献和月度统计仅诊断，不新增promotion gate或人工审批。
+4. **无未经批准门禁**：§21的D1～D6已获用户明确批准；paired improvement、贡献和月度统计仍仅为诊断，不新增promotion gate或人工审批。
 
-## 22. 2026-09-08文档正式审核与修订结论
+## 22. 2026-09-08批准前文档正式审核与修订结论（历史）
+
+本节记录D1～D6批准前的文档审核，当时的`pending`与“未授权源码”结论已由§21的后续用户批准取代，不是当前状态。
 
 ### 22.1 第一轮：事实、状态与验收矩阵
 
 - 对照正式acceptance、两个fresh-process child、product validation receipt及生产readback，修正蓝图/本文残留的`0/39`、无DDL、无真实API/UI等过期当前态；旧段落只在带明确历史日期的小节保留；
-- 发现Design Acceptance Matrix使用validator不识别的自定义状态、证据未使用可验证路径、gap未标明用户批准边界；已改为`VERIFIED_*`的实际v1.3状态、具体test/artifact引用，并明确“user approved仅指v1.3，v1.4仍pending”；
+- 发现Design Acceptance Matrix使用validator不识别的自定义状态、证据未使用可验证路径、gap未标明用户批准边界；当时已改为`VERIFIED_*`的实际v1.3状态、具体test/artifact引用，并明确“user approved仅指v1.3，v1.4仍pending”；该状态后来已由§21批准取代；
 - 两份F2 validator复跑均为PASS、warnings=0。
 
 ### 22.2 第二轮：模型、因果与防退化
@@ -727,6 +729,6 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 1. **禁止简化交付：PASS**。v1.4仍要求完整五fold、双fresh-process、31-sector、leaf/coverage和既有产品合同；单变量归因不是验收。
 2. **禁止静默错误：PASS**。新增feature两端、日期、coverage、identity、NaN及产品切换均fail closed，无0/前值/neutral/旧模型fallback。
 3. **禁止改变业务逻辑：PASS**。终极目标仍为真实L1未来相对强弱预测；target、10D、GBDT、market、MBE、tail、状态与advisory隔离不变。
-4. **禁止未经确认的门禁和审批：PASS**。v1.4六项全部明确pending；没有把诊断统计变成promotion gate，也没有新增人工运行审批。
+4. **禁止未经确认的门禁和审批：PASS**。当时v1.4六项全部明确pending；后续§21批准没有把诊断统计变成promotion gate，也没有新增人工运行审批。
 
-结论：文档本身满足提交/合入标准；该结论不批准v1.4、不授权源码、24 fits、tail、数据库、runtime或进程控制。
+历史结论：当时文档本身满足提交/合入标准，但尚未批准v1.4或授权源码。当前授权边界以§21为准；正式24 fits、tail、数据库、runtime与进程控制仍未授权或执行。
