@@ -31,15 +31,22 @@
   ],
   "expected": "A heterogeneous Nightly run creates or updates at most a bounded number of independently deduplicated module-group Issues; single-group behavior remains compatible, synthetic payloads remain blocked, and automatic BUG promotion is deferred clearly when multiple Issues are produced.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_failure_issue_summary.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_ci_failure_issue_summary.py",
       ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_failure_issue_summary.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ci_failure_issue_summary.py",
@@ -166,10 +173,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
