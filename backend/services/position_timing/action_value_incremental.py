@@ -36,6 +36,8 @@ from .action_value import (
     CORE_INFORMATION_BLOCK,
     FEATURE_ORDER,
     MARKET_FEATURES,
+    MONEYFLOW_INFORMATION_BLOCK,
+    MONEYFLOW_MARKET_FEATURES,
     SW_L2_INFORMATION_BLOCK,
     SW_L2_MARKET_FEATURES,
     TZ,
@@ -45,6 +47,7 @@ from .action_value import (
 )
 from .action_value_corporate_actions import CorporateActionBook, freeze_corporate_action_snapshot
 from .action_value_data import DailyCandidate, file_reference
+from .action_value_moneyflow import MoneyflowAugmentedCandidate
 from .action_value_sector import SectorAugmentedCandidate
 from .action_value_pipeline import _clean_repository_commit
 from .action_value_research import (
@@ -113,9 +116,20 @@ SW_L2_PROFILE = IncrementProfile(
     evidence_role="position_timing_action_value_sw_l2_increment_receipt",
     experiment_id="position_timing_action_value_sw_l2_relative_momentum_20d_v1",
 )
+MONEYFLOW_PROFILE = IncrementProfile(
+    information_block=MONEYFLOW_INFORMATION_BLOCK,
+    added_features=tuple(name for name in MONEYFLOW_MARKET_FEATURES if name not in MARKET_FEATURES),
+    hypothesis="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
+    main_comparison="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_MINUS_MATCHED_CORE",
+    estimand="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY_DAILY_BPS",
+    artifact_prefix="moneyflow_5d_lag1",
+    evidence_role="position_timing_action_value_moneyflow_5d_lag1_increment_receipt",
+    experiment_id="position_timing_action_value_main_net_flow_ratio_5d_lag1_v1",
+)
 PROFILES = {
     ATR14_PROFILE.information_block: ATR14_PROFILE,
     SW_L2_PROFILE.information_block: SW_L2_PROFILE,
+    MONEYFLOW_PROFILE.information_block: MONEYFLOW_PROFILE,
 }
 
 
@@ -221,11 +235,7 @@ def prepare_increment_request(
             "terminal_max_defer": spec.terminal_max_defer,
             "reference_capital_cny": str(spec.reference_capital_cny),
             "selected_symbols": selected_symbols,
-            "selection": (
-                "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
-                if profile.information_block == SW_L2_INFORMATION_BLOCK
-                else "SHA256_SEED_SYMBOL_SOURCE_ONLY"
-            ),
+            "selection": _selection_contract(profile),
         },
         "training_spec": {
             "initial_sessions": 756,
@@ -718,20 +728,26 @@ def _matched_row_identity(rows: pd.DataFrame) -> str:
 def _research_candidate(
     candidate: DailyCandidate,
     profile: IncrementProfile,
-) -> DailyCandidate | SectorAugmentedCandidate:
+) -> DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate:
     if profile.information_block == SW_L2_INFORMATION_BLOCK:
         return SectorAugmentedCandidate.open(candidate)
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        return MoneyflowAugmentedCandidate.open(candidate)
     return candidate
 
 
 def _source_coverage(
-    candidate: DailyCandidate | SectorAugmentedCandidate,
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
     symbols: Sequence[str],
     profile: IncrementProfile,
 ) -> dict[str, Any]:
     if profile.information_block == SW_L2_INFORMATION_BLOCK:
         if not isinstance(candidate, SectorAugmentedCandidate):
             raise ActionValueError("SW_L2_RESEARCH_SOURCE_INVALID")
+        return candidate.coverage(symbols)
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        if not isinstance(candidate, MoneyflowAugmentedCandidate):
+            raise ActionValueError("MONEYFLOW_RESEARCH_SOURCE_INVALID")
         return candidate.coverage(symbols)
     if not isinstance(candidate, DailyCandidate):
         raise ActionValueError("ATR14_RESEARCH_SOURCE_INVALID")
@@ -770,11 +786,7 @@ def _load_request(path: Path) -> dict[str, Any]:
     matched = request.get("matched_core_contract") or {}
     training = request.get("training_spec") or {}
     population = request.get("population_spec") or {}
-    expected_selection = (
-        "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
-        if profile.information_block == SW_L2_INFORMATION_BLOCK
-        else "SHA256_SEED_SYMBOL_SOURCE_ONLY"
-    )
+    expected_selection = _selection_contract(profile)
     if (
         request.get("schema_version") != REQUEST_SCHEMA
         or request.get("pipeline_id") != PIPELINE_ID
@@ -797,6 +809,14 @@ def _load_request(path: Path) -> dict[str, Any]:
     ):
         raise ActionValueError("INCREMENT_REQUEST_IDENTITY_MISMATCH")
     return request
+
+
+def _selection_contract(profile: IncrementProfile) -> str:
+    if profile.information_block == SW_L2_INFORMATION_BLOCK:
+        return "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        return "SHA256_SEED_MONEYFLOW_SOURCE_COVERAGE_ONLY"
+    return "SHA256_SEED_SYMBOL_SOURCE_ONLY"
 
 
 def _parse_date(value: str) -> date:

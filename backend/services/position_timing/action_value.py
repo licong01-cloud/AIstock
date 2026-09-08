@@ -38,6 +38,7 @@ EXPOSURES = (Decimal(0), Decimal(".25"), Decimal(".5"), Decimal(1))
 CORE_INFORMATION_BLOCK = "CORE_ONLY"
 ATR14_INFORMATION_BLOCK = "ATR14_SMA_GAP_RANGE_V1"
 SW_L2_INFORMATION_BLOCK = "SW_L2_RELATIVE_MOMENTUM_20D_V1"
+MONEYFLOW_INFORMATION_BLOCK = "MAIN_NET_FLOW_RATIO_5D_LAG1_V1"
 MARKET_FEATURES = (
     "return_1d_bps", "return_3d_bps", "return_5d_bps", "return_20d_bps",
     "close_to_ema20_bps", "ema20_slope_10d_bps", "realized_vol_20d_bps",
@@ -93,6 +94,21 @@ SW_L2_FEATURE_SPEC = {
     "l2_code_usage": "PIT_JOIN_KEY_ONLY_NOT_MODEL_FEATURE",
 }
 SW_L2_FEATURE_SPEC_SHA256 = canonical_sha256(SW_L2_FEATURE_SPEC)
+MONEYFLOW_MARKET_FEATURES = MARKET_FEATURES + ("main_net_flow_ratio_5d_lag1_bps",)
+MONEYFLOW_FEATURE_ORDER = MONEYFLOW_MARKET_FEATURES + STATE_FEATURES
+MONEYFLOW_FEATURE_SPEC = {
+    **FEATURE_SPEC,
+    "schema": "position_timing_core_plus_main_net_flow_ratio_5d_lag1_features_v1",
+    "feature_order": MONEYFLOW_FEATURE_ORDER,
+    "optional_blocks": (MONEYFLOW_INFORMATION_BLOCK,),
+    "main_net_flow_ratio_5d_lag1_bps": (
+        "SHIFT_ONE_GLOBAL_TRADING_SESSION(SUM_5D(LG_BUY_AMT+ELG_BUY_AMT-"
+        "LG_SELL_AMT-ELG_SELL_AMT)/SUM_5D(DAILY_AMOUNT)*10000)_NO_FORWARD_FILL"
+    ),
+    "moneyflow_unit_contract": "tushare_moneyflow_shares_yuan_v1",
+    "availability_policy": "T_MINUS_1_GLOBAL_SESSION_END_OF_DAY_CONSERVATIVE",
+}
+MONEYFLOW_FEATURE_SPEC_SHA256 = canonical_sha256(MONEYFLOW_FEATURE_SPEC)
 
 
 class ActionValueError(ValueError):
@@ -148,6 +164,8 @@ def feature_contract(information_block: str = CORE_INFORMATION_BLOCK) -> tuple[t
         return ATR14_MARKET_FEATURES, ATR14_FEATURE_ORDER, ATR14_FEATURE_SPEC_SHA256
     if information_block == SW_L2_INFORMATION_BLOCK:
         return SW_L2_MARKET_FEATURES, SW_L2_FEATURE_ORDER, SW_L2_FEATURE_SPEC_SHA256
+    if information_block == MONEYFLOW_INFORMATION_BLOCK:
+        return MONEYFLOW_MARKET_FEATURES, MONEYFLOW_FEATURE_ORDER, MONEYFLOW_FEATURE_SPEC_SHA256
     raise ActionValueError("INFORMATION_BLOCK_UNSUPPORTED", information_block=information_block)
 
 
@@ -221,6 +239,12 @@ def market_features(
         sector_return = pd.to_numeric(bars["sw_l2_return_20d_bps"], errors="coerce")
         out["sw_l2_return_20d_bps"] = sector_return
         out["relative_sw_l2_return_20d_bps"] = out["return_20d_bps"] - sector_return
+    elif information_block == MONEYFLOW_INFORMATION_BLOCK:
+        if "main_net_flow_ratio_5d_lag1_bps" not in bars:
+            raise ActionValueError("MONEYFLOW_FEATURE_SOURCE_MISSING")
+        out["main_net_flow_ratio_5d_lag1_bps"] = pd.to_numeric(
+            bars["main_net_flow_ratio_5d_lag1_bps"], errors="coerce"
+        )
     return out.loc[:, market_names].replace([np.inf, -np.inf], np.nan)
 
 
