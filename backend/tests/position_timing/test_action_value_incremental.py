@@ -223,6 +223,9 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     }
     with pytest.raises(ActionValueError, match="INCREMENT_OPTIONAL_COVERAGE_LOSS"):
         _require_matched_source_coverage(coverage)
+    assert canonical_sha256({"feature_order": ("a", "b")}) == canonical_sha256(
+        json.loads(json.dumps({"feature_order": ("a", "b")}))
+    )
 
     request = {
         "schema_version": REQUEST_SCHEMA,

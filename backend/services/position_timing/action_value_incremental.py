@@ -220,7 +220,7 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         selected_symbols,
         information_block=ATR14_INFORMATION_BLOCK,
     )
-    if source_coverage != request["source_coverage"]:
+    if canonical_sha256(source_coverage) != canonical_sha256(request["source_coverage"]):
         raise ActionValueError("INCREMENT_SOURCE_COVERAGE_IDENTITY_MISMATCH")
     _require_matched_source_coverage(source_coverage)
     corporate_action_ref = request["corporate_action_snapshot"]
