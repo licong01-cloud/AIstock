@@ -1,10 +1,36 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers.position_timing import get_position_timing_service, router
-from conftest import CHINA_TZ
+from conftest import CHINA_TZ, FakeCalendar
+
+
+def test_action_value_clock_uses_latest_elapsed_20h_cutoff(service_factory) -> None:
+    before_cutoff = service_factory(now=datetime(2026, 9, 3, 9, 41, tzinfo=CHINA_TZ))
+    assert before_cutoff._resolve_action_value_clock(before_cutoff._now()) == (
+        date(2026, 9, 2),
+        datetime(2026, 9, 2, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 3),
+    )
+
+    at_cutoff = service_factory(now=datetime(2026, 9, 3, 20, 0, tzinfo=CHINA_TZ))
+    assert at_cutoff._resolve_action_value_clock(at_cutoff._now()) == (
+        date(2026, 9, 3),
+        datetime(2026, 9, 3, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 4),
+    )
+
+    weekend = service_factory(
+        now=datetime(2026, 9, 5, 9, 41, tzinfo=CHINA_TZ),
+        calendar=FakeCalendar(today=date(2026, 9, 5), is_trading_day=False),
+    )
+    assert weekend._resolve_action_value_clock(weekend._now()) == (
+        date(2026, 9, 4),
+        datetime(2026, 9, 4, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 7),
+    )
 
 
 def test_block_one_get_endpoints_do_not_create_timing_artifacts(service_factory) -> None:
