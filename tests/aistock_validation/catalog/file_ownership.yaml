@@ -1,5 +1,21 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: factor_research_p1
+    priority: 132
+    include:
+      - backend/services/factor_research/**
+      - backend/tests/factor_research/**
+      - backend/migrations/factor_research_p1_20260908*.sql
+      - scripts/factor_research.py
+      - .codex/skills/factor-research/SKILL.md
+      - .codex/skills/develop-factor/SKILL.md
+      - .claude/commands/factor-research.md
+      - .claude/commands/develop-factor.md
+    primary_module: factor_library.research
+    impact_modules: []
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Exact P1 research sub-boundary; avoids requiring research DB tests for unrelated factor or QE changes.
   - rule_id: position_timing_advice
     priority: 131
     include:
