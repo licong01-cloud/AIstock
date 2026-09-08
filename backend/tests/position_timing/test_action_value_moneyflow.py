@@ -18,7 +18,6 @@ from backend.services.position_timing.action_value import (
     MONEYFLOW_FEATURE_ORDER,
     MONEYFLOW_FEATURE_SPEC_SHA256,
     MONEYFLOW_INFORMATION_BLOCK,
-    ActionValueError,
     feature_contract,
     market_features,
     policy_sha256_for,
