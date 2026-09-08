@@ -3060,8 +3060,8 @@ def build_rotation_l1_inputs_from_assets(
         ):
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "G2-A direct-v2 components are incomplete")
         from backend.services.hmm_risk.rotation_l1_gbdt import (
-            CONTINUOUS_FEATURES,
             INPUT_SCHEMA_VERSION,
+            V14_CONTINUOUS_FEATURES as CONTINUOUS_FEATURES,
             build_materialised_panel,
         )
 
@@ -3077,11 +3077,19 @@ def build_rotation_l1_inputs_from_assets(
             stock_daily_inputs=g2a_l1_daily,
         )
         feature_contract = {
+            "contract_version": "hmm_risk_rotation_l1_g2a_v1_4",
             "feature_names": list(CONTINUOUS_FEATURES),
             "source_end": SOURCE_END.isoformat(),
             "as_of_policy": "decision_t_reads_through_t_minus_1",
             "target_horizons": [5, 10],
             "stock_feature_coverage": "count>=5 and 10*valid>=9*expected_non_suspended",
+            "moneyflow_intensity_delta_5d": {
+                "formula": "m20(t)-m20(t-5 canonical open days)",
+                "left_source_end": "t-1",
+                "right_source_end": "t-6",
+                "missing_policy": "nan_with_most_specific_source_reason",
+                "minimum_fold_and_development_coverage": 0.90,
+            },
         }
         tail_dates_by_horizon = {
             str(horizon): [

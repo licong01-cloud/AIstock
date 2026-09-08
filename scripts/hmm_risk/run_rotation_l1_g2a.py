@@ -1,8 +1,9 @@
-"""Build and execute the approved G2-A v1.3 development contract.
+"""Build and execute the approved G2-A v1.4 development contract.
 
-The parent mode launches the 15-fit battery and both 12-fit model processes as
-fresh Python processes.  This CLI never reads the sealed tail, a database, or a
-runtime service.
+The parent mode launches exactly two 12-fit model processes as fresh Python
+processes.  Horizon 10D is frozen by the approved v1.3 authority; this CLI has
+no battery path and never reads the sealed tail, a database, or a runtime
+service.
 """
 
 from __future__ import annotations
@@ -38,8 +39,7 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
     close_processes,
     read_input_bundle,
     run_gbdt_process,
-    run_ridge_battery,
-    validate_battery_report,
+    validate_v13_process_reference,
     write_input_bundle,
 )
 from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
@@ -63,6 +63,23 @@ def _write_once(path: Path, value: dict[str, Any]) -> None:
         handle.write(canonical_json_bytes(value) + b"\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _load_v13_reference(path: Path) -> dict[str, Any]:
+    if not path.is_absolute() or path.is_symlink():
+        raise RuntimeError("v1.3 process reference must be an absolute regular file")
+    resolved = path.resolve(strict=True)
+    if not resolved.is_file():
+        raise RuntimeError("v1.3 process reference must be an absolute regular file")
+    try:
+        resolved.relative_to(ROOT.resolve(strict=True))
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("v1.3 process reference must be outside the repository")
+    value = _load_object(resolved)
+    validate_v13_process_reference(value)
+    return value
 
 
 def _failure(
@@ -95,7 +112,7 @@ def _failure(
 
 def _parent_fit_progress(output: Path) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
-    for name in ("battery", "fresh_process_1", "fresh_process_2"):
+    for name in ("fresh_process_1", "fresh_process_2"):
         success_path = output / f"{name}.json"
         failure_path = output / f"{name}.failure.json"
         progress: Any = None
@@ -112,7 +129,7 @@ def _parent_fit_progress(output: Path) -> dict[str, Any]:
             payload = _load_object(failure_path)
             progress = payload.get("fit_progress")
             status = "failed"
-        expected_planned = 15 if name == "battery" else 12
+        expected_planned = 12
         if status == "not_started":
             progress = {
                 "planned": expected_planned,
@@ -151,7 +168,7 @@ def _parent_fit_progress(output: Path) -> dict[str, Any]:
             }
         components.append({"component": name, "status": status, "readback_valid": readback_valid, **progress})
     body = {
-        "planned": 39,
+        "planned": 24,
         "started": sum(int(item["started"]) for item in components),
         "completed": sum(int(item["completed"]) for item in components),
         "failed": sum(int(item["failed"]) for item in components),
@@ -194,25 +211,11 @@ def _build_input(args: argparse.Namespace) -> int:
     return 0
 
 
-def _battery_child(args: argparse.Namespace) -> int:
-    bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
-    _write_once(args.output_file, run_ridge_battery(bundle, producer_commit=args.producer_commit))
-    return 0
-
-
 def _model_child(args: argparse.Namespace) -> int:
     bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
-    battery = _load_object(args.battery_file)
-    validate_battery_report(battery, expected_identity=bundle["identity"])
-    if battery.get("producer_commit") != args.producer_commit:
-        raise RotationL1G2AError(
-            REASON_INPUT,
-            "battery producer commit differs from the model request",
-            stage="model-child",
-        )
     report = run_gbdt_process(
         bundle,
-        battery_report=battery,
+        producer_commit=args.producer_commit,
         process_index=args.process_index,
     )
     _write_once(args.output_file, report)
@@ -272,18 +275,9 @@ def _run_child(command: list[str], failure_path: Path) -> None:
 
 
 def _run_parent(args: argparse.Namespace) -> int:
+    v13_reference = _load_v13_reference(args.v13_process_file)
     output = _ensure_external_new_directory(args.output_root)
-    battery_path = output / "battery.json"
     try:
-        _run_child(
-            _child_command(
-                "battery-child",
-                input_root=args.input_root,
-                output_file=battery_path,
-                producer_commit=args.producer_commit,
-            ),
-            output / "battery.failure.json",
-        )
         child_paths = (output / "fresh_process_1.json", output / "fresh_process_2.json")
         for index, child_path in enumerate(child_paths, start=1):
             _run_child(
@@ -292,11 +286,15 @@ def _run_parent(args: argparse.Namespace) -> int:
                     input_root=args.input_root,
                     output_file=child_path,
                     producer_commit=args.producer_commit,
-                    extra=["--battery-file", str(battery_path), "--process-index", str(index)],
+                    extra=["--process-index", str(index)],
                 ),
                 output / f"fresh_process_{index}.failure.json",
             )
-        acceptance = close_processes(_load_object(child_paths[0]), _load_object(child_paths[1]))
+        acceptance = close_processes(
+            _load_object(child_paths[0]),
+            _load_object(child_paths[1]),
+            v13_reference=v13_reference,
+        )
         _write_once(output / "acceptance.json", acceptance)
     except Exception as exc:
         parent_failure = output / "parent.failure.json"
@@ -312,7 +310,7 @@ def _run_parent(args: argparse.Namespace) -> int:
             {
                 "status": "development_complete",
                 "output_root": str(output),
-                "fit_count": 39,
+                "fit_count": 24,
                 "acceptance_sha256": acceptance["acceptance_sha256"],
                 "tail_accessed": False,
             },
@@ -334,15 +332,11 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--input-root", type=Path, required=True)
     run.add_argument("--output-root", type=Path, required=True)
+    run.add_argument("--v13-process-file", type=Path, required=True)
     run.add_argument("--producer-commit", required=True)
-    battery = subparsers.add_parser("battery-child")
-    battery.add_argument("--input-root", type=Path, required=True)
-    battery.add_argument("--output-file", type=Path, required=True)
-    battery.add_argument("--producer-commit", required=True)
     child = subparsers.add_parser("model-child")
     child.add_argument("--input-root", type=Path, required=True)
     child.add_argument("--output-file", type=Path, required=True)
-    child.add_argument("--battery-file", type=Path, required=True)
     child.add_argument("--process-index", type=int, choices=(1, 2), required=True)
     child.add_argument("--producer-commit", required=True)
     return parser
@@ -353,13 +347,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.mode == "build-input":
             return _build_input(args)
-        if args.mode == "battery-child":
-            return _battery_child(args)
         if args.mode == "model-child":
             return _model_child(args)
         return _run_parent(args)
     except Exception as exc:
-        if args.mode in {"battery-child", "model-child"}:
+        if args.mode == "model-child":
             failure_path = args.output_file.with_name(f"{args.output_file.stem}.failure.json")
             if not failure_path.exists():
                 _write_once(failure_path, _failure(exc, stage=args.mode))
