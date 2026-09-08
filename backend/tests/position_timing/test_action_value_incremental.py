@@ -209,6 +209,27 @@ def test_paired_increment_uses_one_common_sleeve_day_series() -> None:
     )
 
 
+def test_paired_increment_reports_bounded_path_identity_differences() -> None:
+    core = pd.DataFrame(
+        [{"sleeve_id": "core-only", "valuation_date": date(2026, 1, 2), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+    optional = pd.DataFrame(
+        [{"sleeve_id": "optional-only", "valuation_date": date(2026, 1, 5), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+
+    with pytest.raises(ActionValueError, match="INCREMENT_POLICY_PATH_IDENTITY_MISMATCH") as caught:
+        _paired_policy_comparison(core, optional)
+
+    assert caught.value.details == {
+        "core_only_count": 1,
+        "optional_only_count": 1,
+        "core_only_sleeves": ["core-only"],
+        "optional_only_sleeves": ["optional-only"],
+        "core_only_dates": ["2026-01-02"],
+        "optional_only_dates": ["2026-01-05"],
+    }
+
+
 def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     coverage = {
         "information_block": ATR14_INFORMATION_BLOCK,

@@ -369,12 +369,22 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         information_block=profile.information_block,
         **replay_args,
     )
-    paired_daily, comparison = _paired_policy_comparison(
-        core_replay.sleeve_days,
-        optional_replay.sleeve_days,
-        optional_column=f"{profile.artifact_prefix}_policy_wealth_cny",
-        estimand=profile.estimand,
-    )
+    try:
+        paired_daily, comparison = _paired_policy_comparison(
+            core_replay.sleeve_days,
+            optional_replay.sleeve_days,
+            optional_column=f"{profile.artifact_prefix}_policy_wealth_cny",
+            estimand=profile.estimand,
+        )
+    except ActionValueError as exc:
+        if exc.code != "INCREMENT_POLICY_PATH_IDENTITY_MISMATCH":
+            raise
+        raise ActionValueError(
+            exc.code,
+            **exc.details,
+            core_excluded=core_replay.receipt["excluded"],
+            optional_excluded=optional_replay.receipt["excluded"],
+        ) from exc
     coverage_support = bool(
         core_replay.receipt["coverage_can_support_policy"]
         and optional_replay.receipt["coverage_can_support_policy"]
@@ -470,7 +480,17 @@ def _paired_policy_comparison(
     except pd.errors.MergeError as exc:
         raise ActionValueError("INCREMENT_POLICY_PATH_IDENTITY_MISMATCH") from exc
     if not paired["_merge"].eq("both").all():
-        raise ActionValueError("INCREMENT_POLICY_PATH_IDENTITY_MISMATCH")
+        core_only = paired.loc[paired["_merge"].eq("left_only"), keys]
+        optional_only = paired.loc[paired["_merge"].eq("right_only"), keys]
+        raise ActionValueError(
+            "INCREMENT_POLICY_PATH_IDENTITY_MISMATCH",
+            core_only_count=int(len(core_only)),
+            optional_only_count=int(len(optional_only)),
+            core_only_sleeves=sorted(core_only["sleeve_id"].astype(str).unique())[:10],
+            optional_only_sleeves=sorted(optional_only["sleeve_id"].astype(str).unique())[:10],
+            core_only_dates=sorted(core_only["valuation_date"].astype(str).unique())[:10],
+            optional_only_dates=sorted(optional_only["valuation_date"].astype(str).unique())[:10],
+        )
     paired = paired.drop(columns="_merge").sort_values(keys).reset_index(drop=True)
     paired["wealth_difference_cny"] = (
         paired[optional_column] - paired["core_policy_wealth_cny"]
