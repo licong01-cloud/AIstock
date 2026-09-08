@@ -2164,6 +2164,15 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
             except ValueError as exc:
                 raise_http_seed_error(exc)
+        claim = scheduler.claim_custom_evo_start(task_id)
+        if not claim.get("claimed"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"custom_evo task {task_id} could not be claimed for its first start. "
+                    f"reason={claim.get('start_reason')}"
+                ),
+            )
         background_tasks.add_task(
             scheduler.submit_custom_evo_all_loops,
             task_id,

@@ -37,6 +37,162 @@ from backend.services.quantevolver.qe_run_registry import (
     build_qe_run_registration,
     normalize_qe_run_consumer_id,
 )
+from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
+
+def test_custom_evo_planned_pending_rows_remain_startable() -> None:
+    state = AutoEvolutionScheduler()._custom_evo_start_state_from_rows(
+        {
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        [
+            {
+                "loop_index": 1,
+                "status": "pending",
+                "experiment_id": None,
+                "config_json": {"_qe_run_registration": {"task_id": "task-a"}},
+            },
+            {
+                "loop_index": 2,
+                "status": "pending",
+                "experiment_id": None,
+                "config_json": {"_qe_run_registration": {"task_id": "task-a"}},
+            },
+        ],
+    )
+
+    assert state["startable"] is True
+    assert state["editable"] is True
+    assert state["resume_allowed"] is False
+    assert state["submitted_loop_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"status": "running", "experiment_id": None, "config_json": {}},
+        {
+            "status": "pending",
+            "experiment_id": "task-a_L1",
+            "config_json": {},
+        },
+        {
+            "status": "pending",
+            "experiment_id": None,
+            "config_json": {"execution_manifest": {"task_id": "task-a"}},
+        },
+        {
+            "status": "pending",
+            "experiment_id": None,
+            "config_json": "{not-json",
+        },
+    ],
+)
+def test_custom_evo_pending_or_active_submission_evidence_stays_nonstartable(row) -> None:
+    state = AutoEvolutionScheduler()._custom_evo_start_state_from_rows(
+        {
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        [{"loop_index": 1, **row}],
+    )
+
+    assert state["startable"] is False
+    assert state["resume_allowed"] is True
+    assert state["submitted_loop_count"] == 1
+
+
+class _CustomEvoStartClaimCursor:
+    def __init__(self, state):
+        self.state = state
+        self.rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(str(sql).split())
+        self.rows = []
+        if normalized.startswith("SELECT * FROM qe_evolution_tasks"):
+            self.rows = [dict(self.state["task"])]
+        elif normalized.startswith("SELECT loop_index, loop_id, status"):
+            self.rows = [dict(row) for row in self.state["loops"]]
+        elif normalized.startswith("UPDATE qe_evolution_tasks SET status = 'running'"):
+            task = self.state["task"]
+            if (
+                task["task_type"] == "custom_evo"
+                and task["status"] == "pending"
+                and task["current_loop"] == 0
+            ):
+                task["status"] = "running"
+                self.rows = [{"task_id": params[0]}]
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class _CustomEvoStartClaimConnection:
+    def __init__(self, state):
+        self.state = state
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def cursor(self, *_args, **_kwargs):
+        return _CustomEvoStartClaimCursor(self.state)
+
+    def commit(self):
+        self.state["commits"] += 1
+
+
+def test_custom_evo_start_claim_is_atomic_and_single_use(monkeypatch) -> None:
+    state = {
+        "task": {
+            "task_id": "task-a",
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        "loops": [
+            {
+                "loop_index": 1,
+                "loop_id": "task-a_Loop1",
+                "status": "pending",
+                "node_id": "wsl2-5080",
+                "experiment_id": None,
+                "config_json": {QE_RUN_REGISTRATION_PARAM: {"task_id": "task-a"}},
+                "updated_at": None,
+            }
+        ],
+        "commits": 0,
+    }
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_evolution_service.get_conn",
+        lambda: _CustomEvoStartClaimConnection(state),
+    )
+    scheduler = AutoEvolutionScheduler()
+
+    first = scheduler.claim_custom_evo_start("task-a")
+    second = scheduler.claim_custom_evo_start("task-a")
+
+    assert first["claimed"] is True
+    assert state["task"]["status"] == "running"
+    assert second["claimed"] is False
+    assert second["startable"] is False
+    assert "status is running" in second["start_reason"]
+    assert state["commits"] == 2
 
 
 class _WorkspaceConfigClient:
