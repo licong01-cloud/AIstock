@@ -21,6 +21,7 @@ type HistoryFilters = {
   created_from: string;
   created_to: string;
   source_type: string;
+  consumer_id: string;
   run_kind: string;
   alpha_mode: string;
   purpose: string;
@@ -36,7 +37,7 @@ type HistoryFilters = {
 };
 
 const EMPTY_HISTORY_FILTERS: HistoryFilters = {
-  created_from: "", created_to: "", source_type: "", run_kind: "", alpha_mode: "", purpose: "", status: "",
+  created_from: "", created_to: "", source_type: "", consumer_id: "", run_kind: "", alpha_mode: "", purpose: "", status: "",
   node_id: "", model: "", factor: "", dataset_release: "", universe_pool: "",
   execution_algo: "", archive_status: "", query: "",
 };
@@ -90,6 +91,7 @@ type Experiment = {
   registration_summary?: {
     run_kind?: string;
     source_type?: string;
+    consumer_id?: string;
     purpose?: string;
     node_id?: string;
     dataset_release_id?: string;
@@ -934,6 +936,9 @@ export default function ExperimentsPage() {
           <select aria-label="创建入口" value={historyFilters.source_type} onChange={e => updateHistoryFilter("source_type", e.target.value)}>
             <option value="">全部来源</option><option value="ui">UI</option><option value="mcp">Codex/Claude MCP</option><option value="scheduler">调度器</option><option value="agent">Agent</option>
           </select>
+          <select aria-label="业务消费者" value={historyFilters.consumer_id} onChange={e => updateHistoryFilter("consumer_id", e.target.value)}>
+            <option value="">全部消费者</option><option value="qe_mainline">QE 主线</option><option value="advisory">荐股</option>
+          </select>
           <select aria-label="实验类型" value={historyFilters.run_kind} onChange={e => updateHistoryFilter("run_kind", e.target.value)}>
             <option value="">全部类型</option><option value="single">单次实验</option><option value="custom_evolution">自定义演进</option><option value="strategy_evolution">策略演进</option><option value="auto_evolution">自动演进</option><option value="multi_alpha">多 Alpha</option>
           </select>
@@ -1150,6 +1155,7 @@ export default function ExperimentsPage() {
                   {exp.registration_summary && (
                     <div>
                       <strong>登记:</strong> {exp.registration_summary.source_type || "-"}
+                      {" / "}{exp.registration_summary.consumer_id || "qe_mainline"}
                       {" / "}{exp.registration_summary.purpose || "research"}
                       {" / 节点 "}{exp.registration_summary.node_id || "-"}
                     </div>

@@ -227,6 +227,11 @@ class GenerateConfigRequest(BaseModel):
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
     parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
+    consumer_id: str = Field(
+        "qe_mainline",
+        pattern="^(qe_mainline|advisory)$",
+        description="QE business consumer: qe_mainline or advisory",
+    )
     created_by_type: Optional[str] = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型: ui/mcp/scheduler/agent")
     created_by_name: Optional[str] = Field(None, description="创建来源名称")
     purpose: str = Field("research", pattern="^(research|validation)$")
@@ -3107,6 +3112,7 @@ def generate_config(req: GenerateConfigRequest):
         provenance.update(
             {
                 "created_by_type": req.created_by_type or "ui",
+                "consumer_id": req.consumer_id,
                 "purpose": req.purpose,
             }
         )
@@ -3209,6 +3215,7 @@ def generate_config(req: GenerateConfigRequest):
                 active_dataset_profile=active_profile,
                 universe_selection=req.universe_selection,
                 registration_context={
+                    "consumer_id": req.consumer_id,
                     "source_type": req.created_by_type or "ui",
                     "created_by_name": req.created_by_name,
                     "purpose": req.purpose,
@@ -3370,6 +3377,7 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
     provenance = {
         "runtime_first": True,
         "created_by_type": req.created_by_type or "mcp",
+        "consumer_id": req.consumer_id,
         "created_by_name": req.created_by_name,
         "source_context_json": req.source_context_json,
         "provenance": req.provenance,
@@ -3402,6 +3410,11 @@ def list_experiments(
     created_from: Optional[str] = Query(None, description="Created at or after this ISO date/time"),
     created_to: Optional[str] = Query(None, description="Created on or before this ISO date"),
     source_type: Optional[str] = Query(None, description="ui, mcp, scheduler, or agent"),
+    consumer_id: Optional[str] = Query(
+        None,
+        pattern="^(qe_mainline|advisory)$",
+        description="qe_mainline or advisory",
+    ),
     run_kind: Optional[str] = Query(None, description="single, custom evolution, strategy evolution, auto evolution, or multi-alpha"),
     purpose: Optional[str] = Query(None, description="research or validation"),
     status: Optional[str] = Query(None, description="Canonical QE status"),
@@ -3428,6 +3441,7 @@ def list_experiments(
                 "created_from": created_from,
                 "created_to": created_to,
                 "source_type": source_type,
+                "consumer_id": consumer_id,
                 "run_kind": run_kind,
                 "purpose": purpose,
                 "status": status,
@@ -6967,6 +6981,10 @@ async def _run_multi_alpha_experiment(
     submitted_nodes: list[dict] = []
     waiting_nodes: list[dict] = []
     submission_coordinator = QEWorkspaceSubmissionCoordinator()
+    multi_alpha_consumer_id = str(
+        (_cp.get("_qe_run_registration") or {}).get("consumer_id")
+        or "qe_mainline"
+    )
 
     if is_distributed:
         # ── 分布式：各节点独立提交 ────────────────────────────
@@ -7026,6 +7044,7 @@ async def _run_multi_alpha_experiment(
                 owner_id=qe_submission_owner_id(),
                 claim_source=claim_source,
                 record_waiting_capacity=record_waiting,
+                consumer_id=multi_alpha_consumer_id,
             )
             client = QEWorkspaceClient.for_node(n_id)
             try:
@@ -7166,6 +7185,7 @@ async def _run_multi_alpha_experiment(
             owner_id=qe_submission_owner_id(),
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
+            consumer_id=multi_alpha_consumer_id,
         )
         client = QEWorkspaceClient.for_node(only_node_id)
         async with client:
@@ -7337,6 +7357,15 @@ async def _run_experiment_unified(
             require_fixed_seed=True,
             submission_source_kind="qe_experiment",
             submission_source_execution_id=experiment_id,
+            submission_consumer_id=str(
+                _parse_json_object(
+                    _parse_json_object(exp_record.get("custom_params")).get(
+                        "_qe_run_registration"
+                    )
+                )
+                .get("consumer_id")
+                or "qe_mainline"
+            ),
         )
 
         from ..services.quantevolver.qe_run_registry import QERunRegistry

@@ -12,6 +12,8 @@ import json
 import math
 from typing import Any, Mapping
 
+from .qe_run_registry import qe_registration_summary
+
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "ic": ("ic", "IC"),
     "icir": ("icir", "ICIR"),
@@ -647,7 +649,7 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
     if metrics:
         item["metrics_summary"] = metrics
     custom_params = _mapping(row.get("custom_params"))
-    registration = _mapping(custom_params.get("_qe_run_registration"))
+    registration = qe_registration_summary(custom_params.get("_qe_run_registration"))
     if registration:
         item["registration_summary"] = registration
     artifact_retention = _mapping(custom_params.get("_qe_artifact_retention"))
