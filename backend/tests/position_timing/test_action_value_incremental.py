@@ -28,6 +28,7 @@ from backend.services.position_timing.action_value_incremental import (
     _deliver_registry,
     _load_request,
     _paired_policy_comparison,
+    _path_identity_inconclusive,
     _publish_bundle,
     _require_matched_source_coverage,
     inspect_increment_bundle,
@@ -204,6 +205,46 @@ def test_paired_increment_uses_one_common_sleeve_day_series() -> None:
     assert daily["incremental_net_value_cny"].tolist() == [0.0, 20.0, 40.0]
     assert comparison["planned_trial_count"] == 1
     assert comparison["paired_path_rows"] == 6
+    assert comparison["comparison_sha256"] == canonical_sha256(
+        {key: value for key, value in comparison.items() if key != "comparison_sha256"}
+    )
+
+
+def test_paired_increment_reports_bounded_path_identity_differences() -> None:
+    core = pd.DataFrame(
+        [{"sleeve_id": "core-only", "valuation_date": date(2026, 1, 2), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+    optional = pd.DataFrame(
+        [{"sleeve_id": "optional-only", "valuation_date": date(2026, 1, 5), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+
+    with pytest.raises(ActionValueError, match="INCREMENT_POLICY_PATH_IDENTITY_MISMATCH") as caught:
+        _paired_policy_comparison(core, optional)
+
+    assert caught.value.details == {
+        "core_only_count": 1,
+        "optional_only_count": 1,
+        "core_only_sleeves": ["core-only"],
+        "optional_only_sleeves": ["optional-only"],
+        "core_only_dates": ["2026-01-02"],
+        "optional_only_dates": ["2026-01-05"],
+    }
+
+
+def test_path_identity_mismatch_is_inconclusive_without_intersection_estimate() -> None:
+    empty, comparison = _path_identity_inconclusive(
+        estimand="FROZEN_ESTIMAND",
+        differences={"core_only_count": 10, "optional_only_count": 0},
+        core_excluded={"path_unknown": 1},
+        optional_excluded={"path_unknown": 2},
+    )
+
+    assert empty.empty
+    assert comparison["effect_evidence"] == "INCONCLUSIVE"
+    assert comparison["effect_reason_code"] == "ASYMMETRIC_POLICY_PATH_UNAVAILABLE"
+    assert comparison["daily_mean_incremental_bps"] is None
+    assert comparison["interval_bps"] is None
+    assert comparison["path_identity_status"] == "MISMATCH_NO_INTERSECTION_ESTIMATE"
     assert comparison["comparison_sha256"] == canonical_sha256(
         {key: value for key, value in comparison.items() if key != "comparison_sha256"}
     )
