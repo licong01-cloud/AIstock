@@ -28,12 +28,18 @@
   ],
   "expected": "After a LocalSIM broker snapshot is durably committed, broker_called=true, submitted_intents equals persisted plan orders, and failed_intents=0; terminal success must not expose stale failure counters.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/persistence.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1407-localsim-terminal-success-retains-stale-failed-intents-after-retry.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_execution/localsim/persistence.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1407-localsim-terminal-success-retains-stale-failed-intents-after-retry.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/persistence.py",
@@ -111,11 +117,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest and nox processes loaded the task worktree LocalSIM persistence source and passed direct retry/wait/partial coverage plus l0, validation_module_registry_l0, platform_api_backend, and simulation_core_l2; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
