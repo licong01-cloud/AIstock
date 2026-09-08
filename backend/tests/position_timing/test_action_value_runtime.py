@@ -35,7 +35,7 @@ def _published_research(root: Path) -> str:
     model = fit_local_model(
         _training_rows(),
         cutoff=cutoff_on(date(2024, 3, 29)),
-        available_at=datetime.now(TZ),
+        available_at=cutoff_on(date(2024, 3, 29)),
         source_sha256="1" * 64,
         request_sha256="2" * 64,
         source_commit="a" * 40,
@@ -110,7 +110,7 @@ def _snapshot(calendar: tuple[date, ...], symbols: list[str], captured_at: datet
 def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     model_sha256 = _published_research(root)
-    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    calendar = tuple(pd.bdate_range(end="2099-09-08", periods=80).date)
     decision_as_of = cutoff_on(calendar[-1])
     now = decision_as_of.replace(hour=20, minute=5)
     symbols = ["000001.SZ", "600000.SH"]
@@ -120,7 +120,7 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
         now=now,
         decision_date=calendar[-1],
         decision_as_of=decision_as_of,
-        target_date=date(2026, 9, 9),
+        target_date=date(2099, 9, 9),
         calendar=calendar,
         members=(
             {
@@ -167,7 +167,7 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
         now=now,
         decision_date=calendar[-1],
         decision_as_of=decision_as_of,
-        target_date=date(2026, 9, 9),
+        target_date=date(2099, 9, 9),
         calendar=calendar,
         members=(),
         snapshot_loader=None,
@@ -179,7 +179,7 @@ def test_materializes_per_stock_experimental_advice_without_cards_or_alerts(tmp_
 def test_missing_delist_context_is_typed_per_stock_unavailable(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     _published_research(root)
-    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    calendar = tuple(pd.bdate_range(end="2099-09-08", periods=80).date)
     decision_as_of = cutoff_on(calendar[-1])
     snapshot = _snapshot(calendar, ["000001.SZ"], decision_as_of)
 
@@ -188,7 +188,7 @@ def test_missing_delist_context_is_typed_per_stock_unavailable(tmp_path: Path) -
         now=decision_as_of,
         decision_date=calendar[-1],
         decision_as_of=decision_as_of,
-        target_date=date(2026, 9, 9),
+        target_date=date(2099, 9, 9),
         calendar=calendar,
         members=(
             {
@@ -211,7 +211,7 @@ def test_missing_delist_context_is_typed_per_stock_unavailable(tmp_path: Path) -
 def test_current_pointer_must_match_the_hash_bound_advice(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     _published_research(root)
-    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    calendar = tuple(pd.bdate_range(end="2099-09-08", periods=80).date)
     decision_as_of = cutoff_on(calendar[-1])
     snapshot = _snapshot(calendar, ["000001.SZ"], decision_as_of)
     materialize_model_advice(
@@ -219,7 +219,7 @@ def test_current_pointer_must_match_the_hash_bound_advice(tmp_path: Path) -> Non
         now=decision_as_of,
         decision_date=calendar[-1],
         decision_as_of=decision_as_of,
-        target_date=date(2026, 9, 9),
+        target_date=date(2099, 9, 9),
         calendar=calendar,
         members=(
             {
@@ -251,13 +251,13 @@ def test_daily_publish_is_first_writer_wins_for_concurrent_request_metadata(
 ) -> None:
     root = tmp_path / "timing"
     first = {
-        "decision_trade_date": "2026-09-08",
-        "created_at": "2026-09-08T20:00:01+08:00",
+        "decision_trade_date": "2099-09-08",
+        "created_at": "2099-09-08T20:00:01+08:00",
     }
     first["advice_sha256"] = canonical_sha256(first)
     second = {
-        "decision_trade_date": "2026-09-08",
-        "created_at": "2026-09-08T20:00:02+08:00",
+        "decision_trade_date": "2099-09-08",
+        "created_at": "2099-09-08T20:00:02+08:00",
     }
     second["advice_sha256"] = canonical_sha256(second)
 
@@ -267,21 +267,21 @@ def test_daily_publish_is_first_writer_wins_for_concurrent_request_metadata(
     assert created is True
     assert retry_created is False
     assert selected == retry == first
-    assert len(tuple((root / "model_advice_v2" / "2026-09-08").glob("advice-*.json"))) == 1
+    assert len(tuple((root / "model_advice_v2" / "2099-09-08").glob("advice-*.json"))) == 1
 
 
 def test_get_is_read_only_and_before_cutoff_does_not_capture(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     assert current_model_advice(timing_root=root, now=datetime.now(TZ))["status"] == "NO_MODEL_ADVICE"
     assert not root.exists()
-    calendar = tuple(pd.bdate_range(end="2026-09-08", periods=80).date)
+    calendar = tuple(pd.bdate_range(end="2099-09-08", periods=80).date)
     calls = []
     result = materialize_model_advice(
         timing_root=root,
         now=cutoff_on(calendar[-1]).replace(hour=19),
         decision_date=calendar[-1],
         decision_as_of=cutoff_on(calendar[-1]),
-        target_date=date(2026, 9, 9),
+        target_date=date(2099, 9, 9),
         calendar=calendar,
         members=(),
         snapshot_loader=lambda *_: calls.append(1),

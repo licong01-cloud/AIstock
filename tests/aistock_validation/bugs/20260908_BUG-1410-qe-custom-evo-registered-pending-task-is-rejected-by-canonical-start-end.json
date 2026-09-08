@@ -1,0 +1,256 @@
+{
+  "actual": "A newly created registered custom_evo task reserves its planned qe_evolution_loops rows with status=pending. _custom_evo_start_state_from_rows counts every pending row as already started, so the canonical custom-evo/run endpoint returns HTTP 409 and tells callers to resume even though the task has never been submitted. Evidence: task qe_20260908_230225_0ae8, current_loop=0, task status=pending, two reserved pending loop rows, canonical start rejected with '2 loop rows already exist'. Preserve durable pre-registration and fail closed for genuinely submitted/queued/running/terminal attempts; do not edit the failed evidence task.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/quantevolver/test_qe_registered_submission.py",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+    "tests/aistock_validation/bugs/20260908_BUG-1410-qe-custom-evo-registered-pending-task-is-rejected-by-canonical-start-end.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1410",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T15:20:08.454190Z",
+  "description": "A newly created registered custom_evo task reserves its planned qe_evolution_loops rows with status=pending. _custom_evo_start_state_from_rows counts every pending row as already started, so the canonical custom-evo/run endpoint returns HTTP 409 and tells callers to resume even though the task has never been submitted. Evidence: task qe_20260908_230225_0ae8, current_loop=0, task status=pending, two reserved pending loop rows, canonical start rejected with '2 loop rows already exist'. Preserve durable pre-registration and fail closed for genuinely submitted/queued/running/terminal attempts; do not edit the failed evidence task.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-8a9e0d9c7a68",
+      "timestamp": "2026-09-08T15:20:08.454172Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "Scope expanded to the custom_evo start-state service, canonical start route, and their focused registration and mutation-route contract tests.",
+      "timestamp": "2026-09-08T15:36:02.053624Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ],
+    "changed_files_source": "planned_scope_expansion",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "backend/tests/unified_engine/test_custom_evo_mutation_routes.py"
+    ]
+  },
+  "first_seen_at": "2026-09-08T15:20:08.454190Z",
+  "fix_branch": null,
+  "fix_commit": "f1ca639e153b77351d7b7909b646334e288459d5",
+  "fixed_at": "2026-09-08T15:51:20Z",
+  "github_issue_number": 4457,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4457",
+  "last_seen_at": "2026-09-08T15:20:08.454190Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4458",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend",
+    "qe_mcp_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "Fresh pytest and nox processes imported the final tracked backend source and verified planned pending rows, atomic single-use start claim, canonical route rejection on a lost claim, and all required QE backend plans.",
+      "Fresh pytest and nox processes imported final tracked backend source at HEAD 5faa58c30 and verified planned pending rows, atomic single-use claim, route rejection, and the complete required QE backend plan matrix."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1410",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a5d4ef08751917db",
+    "recorded_at": "2026-09-08T15:52:52.270949Z",
+    "runtime_contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5779576fdfe072dcf62754e7b394fd564896febc",
+    "source_merge_commit": "f1ca639e153b77351d7b7909b646334e288459d5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4458",
+    "validation_evidence": [
+      "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q -> 58 passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed",
+      "python -m nox -s qe_read_backend -> 410 passed, 1 skipped",
+      "python -m nox -s qe_sector_risk_overlay_backend -> 91 passed",
+      "python -m nox -s qe_mcp_backend -> 49 passed"
+    ],
+    "validation_evidence_digest": "4bc811b0082e1139c9244fb8ae562abe84e900dda551c2ad64830749cae8f223"
+  },
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom_evo registered pending task is rejected by canonical start endpoint",
+  "trigger_condition": {
+    "fingerprint": "8a9e0d9c7a68cccdd97bacd7",
+    "source_event_id": "FE-20260908-8a9e0d9c7a68"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q -> 58 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 410 passed, 1 skipped",
+    "python -m nox -s qe_sector_risk_overlay_backend -> 91 passed",
+    "python -m nox -s qe_mcp_backend -> 49 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

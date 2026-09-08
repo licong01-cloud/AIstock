@@ -28,6 +28,7 @@ from backend.services.position_timing.action_value_incremental import (
     _deliver_registry,
     _load_request,
     _paired_policy_comparison,
+    _path_identity_inconclusive,
     _publish_bundle,
     _require_matched_source_coverage,
     inspect_increment_bundle,
@@ -209,6 +210,46 @@ def test_paired_increment_uses_one_common_sleeve_day_series() -> None:
     )
 
 
+def test_paired_increment_reports_bounded_path_identity_differences() -> None:
+    core = pd.DataFrame(
+        [{"sleeve_id": "core-only", "valuation_date": date(2026, 1, 2), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+    optional = pd.DataFrame(
+        [{"sleeve_id": "optional-only", "valuation_date": date(2026, 1, 5), "baseline": "BUY_AND_HOLD", "policy_wealth_cny": 100_000}]
+    )
+
+    with pytest.raises(ActionValueError, match="INCREMENT_POLICY_PATH_IDENTITY_MISMATCH") as caught:
+        _paired_policy_comparison(core, optional)
+
+    assert caught.value.details == {
+        "core_only_count": 1,
+        "optional_only_count": 1,
+        "core_only_sleeves": ["core-only"],
+        "optional_only_sleeves": ["optional-only"],
+        "core_only_dates": ["2026-01-02"],
+        "optional_only_dates": ["2026-01-05"],
+    }
+
+
+def test_path_identity_mismatch_is_inconclusive_without_intersection_estimate() -> None:
+    empty, comparison = _path_identity_inconclusive(
+        estimand="FROZEN_ESTIMAND",
+        differences={"core_only_count": 10, "optional_only_count": 0},
+        core_excluded={"path_unknown": 1},
+        optional_excluded={"path_unknown": 2},
+    )
+
+    assert empty.empty
+    assert comparison["effect_evidence"] == "INCONCLUSIVE"
+    assert comparison["effect_reason_code"] == "ASYMMETRIC_POLICY_PATH_UNAVAILABLE"
+    assert comparison["daily_mean_incremental_bps"] is None
+    assert comparison["interval_bps"] is None
+    assert comparison["path_identity_status"] == "MISMATCH_NO_INTERSECTION_ESTIMATE"
+    assert comparison["comparison_sha256"] == canonical_sha256(
+        {key: value for key, value in comparison.items() if key != "comparison_sha256"}
+    )
+
+
 def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     coverage = {
         "information_block": ATR14_INFORMATION_BLOCK,
@@ -233,6 +274,8 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
         "information_block": ATR14_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
             "added_features": ["atr14_sma_bps"],
@@ -256,6 +299,15 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request), encoding="utf-8")
     assert canonical_sha256(_load_request(path)) == canonical_sha256(request)
+    legacy = json.loads(json.dumps(request))
+    legacy["schema_version"] = "position_timing_action_value_increment_request_v1"
+    legacy.pop("source_correction")
+    legacy.pop("suspension_snapshot")
+    legacy["request_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert _load_request(path)["schema_version"].endswith("_v1")
     request["planned_trial_count"] = 2
     path.write_text(json.dumps(request), encoding="utf-8")
     with pytest.raises(ActionValueError, match="INCREMENT_REQUEST_IDENTITY_MISMATCH"):
@@ -270,6 +322,8 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
         "information_block": ATR14_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "timing_root": timing_root.as_posix(),
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
@@ -340,6 +394,7 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
     assert second_registry["duplicate_noop_count"] == 1
     assert first_registry["registry_sha256"] == second_registry["registry_sha256"]
     assert len(records) == 1
+    assert records[0].experiment_id.endswith("_explicit_suspension_source_v2")
     assert records[0].planned_trial_count == 1
     assert records[0].selected_trial_count == 0
 

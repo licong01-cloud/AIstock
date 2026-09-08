@@ -8,7 +8,7 @@ automatic-trading path.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 import json
 import os
@@ -36,6 +36,8 @@ from .action_value import (
     CORE_INFORMATION_BLOCK,
     FEATURE_ORDER,
     MARKET_FEATURES,
+    MONEYFLOW_INFORMATION_BLOCK,
+    MONEYFLOW_MARKET_FEATURES,
     SW_L2_INFORMATION_BLOCK,
     SW_L2_MARKET_FEATURES,
     TZ,
@@ -45,6 +47,7 @@ from .action_value import (
 )
 from .action_value_corporate_actions import CorporateActionBook, freeze_corporate_action_snapshot
 from .action_value_data import DailyCandidate, file_reference
+from .action_value_moneyflow import MoneyflowAugmentedCandidate
 from .action_value_sector import SectorAugmentedCandidate
 from .action_value_pipeline import _clean_repository_commit
 from .action_value_research import (
@@ -57,12 +60,17 @@ from .action_value_research import (
     replay_continuous_cohorts,
     walk_forward_action_values,
 )
+from .action_value_suspensions import (
+    SuspensionSnapshotBook,
+    freeze_suspension_snapshot,
+)
 from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
 PIPELINE_ID = "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
-REQUEST_SCHEMA = "position_timing_action_value_increment_request_v1"
+REQUEST_SCHEMA = "position_timing_action_value_increment_request_v2"
+LEGACY_REQUEST_SCHEMAS = {"position_timing_action_value_increment_request_v1"}
 RECEIPT_SCHEMA = "position_timing_action_value_increment_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_action_value_increment_bundle_v1"
 ARTIFACT_FOLDER = "action_value_incremental_v1"
@@ -113,9 +121,20 @@ SW_L2_PROFILE = IncrementProfile(
     evidence_role="position_timing_action_value_sw_l2_increment_receipt",
     experiment_id="position_timing_action_value_sw_l2_relative_momentum_20d_v1",
 )
+MONEYFLOW_PROFILE = IncrementProfile(
+    information_block=MONEYFLOW_INFORMATION_BLOCK,
+    added_features=tuple(name for name in MONEYFLOW_MARKET_FEATURES if name not in MARKET_FEATURES),
+    hypothesis="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
+    main_comparison="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_MINUS_MATCHED_CORE",
+    estimand="CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY_DAILY_BPS",
+    artifact_prefix="moneyflow_5d_lag1",
+    evidence_role="position_timing_action_value_moneyflow_5d_lag1_increment_receipt",
+    experiment_id="position_timing_action_value_main_net_flow_ratio_5d_lag1_v1",
+)
 PROFILES = {
     ATR14_PROFILE.information_block: ATR14_PROFILE,
     SW_L2_PROFILE.information_block: SW_L2_PROFILE,
+    MONEYFLOW_PROFILE.information_block: MONEYFLOW_PROFILE,
 }
 
 
@@ -165,8 +184,6 @@ def prepare_increment_request(
         review_stride=review_stride,
     )
     selected_symbols = deterministic_symbols(candidate.symbols, limit=symbol_limit, seed=spec.seed)
-    source_coverage = _source_coverage(candidate, selected_symbols, profile)
-    _require_matched_source_coverage(source_coverage, information_block=profile.information_block)
     if not historical_registry.is_file():
         raise ActionValueError("HISTORICAL_REGISTRY_UNAVAILABLE")
 
@@ -185,7 +202,18 @@ def prepare_increment_request(
             end=population_end,
             timing_root=timing_root,
         )
+        suspension_path = freeze_suspension_snapshot(
+            connection,
+            symbols=selected_symbols,
+            start=population_start,
+            end=population_end,
+            timing_root=timing_root,
+        )
     corporate_action_ref = file_reference(corporate_action_path)
+    suspension_ref = file_reference(suspension_path)
+    candidate, _ = _apply_suspension_snapshot(candidate, suspension_path)
+    source_coverage = _source_coverage(candidate, selected_symbols, profile)
+    _require_matched_source_coverage(source_coverage, information_block=profile.information_block)
     request = {
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
@@ -221,11 +249,7 @@ def prepare_increment_request(
             "terminal_max_defer": spec.terminal_max_defer,
             "reference_capital_cny": str(spec.reference_capital_cny),
             "selected_symbols": selected_symbols,
-            "selection": (
-                "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
-                if profile.information_block == SW_L2_INFORMATION_BLOCK
-                else "SHA256_SEED_SYMBOL_SOURCE_ONLY"
-            ),
+            "selection": _selection_contract(profile),
         },
         "training_spec": {
             "initial_sessions": 756,
@@ -240,6 +264,8 @@ def prepare_increment_request(
         },
         "source_coverage": source_coverage,
         "corporate_action_snapshot": corporate_action_ref,
+        "suspension_snapshot": suspension_ref,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "historical_registry": file_reference(historical_registry),
         "historical_registry_context_count": len(
             AdvisoryResearchTrialRegistryV1(historical_registry).read()
@@ -291,6 +317,22 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
     )
     if selected_symbols != expected_symbols:
         raise ActionValueError("INCREMENT_POPULATION_SELECTION_MISMATCH")
+    suspensions = None
+    if request["schema_version"] == REQUEST_SCHEMA:
+        suspension_ref = request.get("suspension_snapshot")
+        if not isinstance(suspension_ref, Mapping) or "path" not in suspension_ref:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_NOT_BOUND")
+        suspension_path = Path(str(suspension_ref["path"]))
+        if file_reference(suspension_path) != suspension_ref:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_REFERENCE_MISMATCH")
+        candidate, suspensions = _apply_suspension_snapshot(candidate, suspension_path)
+        expected_suspension_scope = (
+            tuple(sorted(selected_symbols)),
+            date.fromisoformat(request["population_spec"]["start"]),
+            date.fromisoformat(request["population_spec"]["end"]),
+        )
+        if (suspensions.symbols, suspensions.start, suspensions.end) != expected_suspension_scope:
+            raise ActionValueError("SUSPENSION_SNAPSHOT_SCOPE_MISMATCH")
     source_coverage = _source_coverage(candidate, selected_symbols, profile)
     if canonical_sha256(source_coverage) != canonical_sha256(request["source_coverage"]):
         raise ActionValueError("INCREMENT_SOURCE_COVERAGE_IDENTITY_MISMATCH")
@@ -319,6 +361,8 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "source_coverage_sha256": source_coverage["source_sha256"],
         "corporate_action_snapshot_sha256": corporate_actions.snapshot_sha256,
     }
+    if suspensions is not None:
+        source_identity["suspension_snapshot_sha256"] = suspensions.snapshot_sha256
     derived_identity = {
         "population_coverage_sha256": augmented.coverage["coverage_sha256"],
         "matched_row_identity_sha256": _matched_row_identity(augmented.rows),
@@ -359,12 +403,22 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         information_block=profile.information_block,
         **replay_args,
     )
-    paired_daily, comparison = _paired_policy_comparison(
-        core_replay.sleeve_days,
-        optional_replay.sleeve_days,
-        optional_column=f"{profile.artifact_prefix}_policy_wealth_cny",
-        estimand=profile.estimand,
-    )
+    try:
+        paired_daily, comparison = _paired_policy_comparison(
+            core_replay.sleeve_days,
+            optional_replay.sleeve_days,
+            optional_column=f"{profile.artifact_prefix}_policy_wealth_cny",
+            estimand=profile.estimand,
+        )
+    except ActionValueError as exc:
+        if exc.code != "INCREMENT_POLICY_PATH_IDENTITY_MISMATCH":
+            raise
+        paired_daily, comparison = _path_identity_inconclusive(
+            estimand=profile.estimand,
+            differences=exc.details,
+            core_excluded=core_replay.receipt["excluded"],
+            optional_excluded=optional_replay.receipt["excluded"],
+        )
     coverage_support = bool(
         core_replay.receipt["coverage_can_support_policy"]
         and optional_replay.receipt["coverage_can_support_policy"]
@@ -404,6 +458,8 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
         "global_registry_written": False,
         "database_written": False,
     }
+    if request.get("source_correction"):
+        receipt["source_correction"] = request["source_correction"]
     if profile.information_block == ATR14_INFORMATION_BLOCK:
         receipt["atr14_walk_forward"] = optional_forward.diagnostics
         receipt["atr14_continuous"] = optional_replay.receipt
@@ -444,6 +500,14 @@ def _paired_policy_comparison(
     optional_column: str = "atr14_policy_wealth_cny",
     estimand: str = "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY_DAILY_BPS",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compare bounded research paths with one vectorized one-to-one join.
+
+    Each input has at most one BUY_AND_HOLD row per (sleeve_id, valuation_date);
+    duplicate checks plus ``validate="one_to_one"`` prevent row multiplication.
+    The frozen 64-symbol research population is currently about 270k rows per
+    side, so a second batching or distributed-join layer is not justified.
+    """
+
     keys = ["sleeve_id", "valuation_date"]
     core = core_sleeves.loc[
         core_sleeves["baseline"].eq("BUY_AND_HOLD"),
@@ -460,7 +524,17 @@ def _paired_policy_comparison(
     except pd.errors.MergeError as exc:
         raise ActionValueError("INCREMENT_POLICY_PATH_IDENTITY_MISMATCH") from exc
     if not paired["_merge"].eq("both").all():
-        raise ActionValueError("INCREMENT_POLICY_PATH_IDENTITY_MISMATCH")
+        core_only = paired.loc[paired["_merge"].eq("left_only"), keys]
+        optional_only = paired.loc[paired["_merge"].eq("right_only"), keys]
+        raise ActionValueError(
+            "INCREMENT_POLICY_PATH_IDENTITY_MISMATCH",
+            core_only_count=int(len(core_only)),
+            optional_only_count=int(len(optional_only)),
+            core_only_sleeves=sorted(core_only["sleeve_id"].astype(str).unique())[:10],
+            optional_only_sleeves=sorted(optional_only["sleeve_id"].astype(str).unique())[:10],
+            core_only_dates=sorted(core_only["valuation_date"].astype(str).unique())[:10],
+            optional_only_dates=sorted(optional_only["valuation_date"].astype(str).unique())[:10],
+        )
     paired = paired.drop(columns="_merge").sort_values(keys).reset_index(drop=True)
     paired["wealth_difference_cny"] = (
         paired[optional_column] - paired["core_policy_wealth_cny"]
@@ -511,6 +585,43 @@ def _paired_policy_comparison(
     }
     comparison["comparison_sha256"] = canonical_sha256(comparison)
     return daily, comparison
+
+
+def _path_identity_inconclusive(
+    *,
+    estimand: str,
+    differences: Mapping[str, Any],
+    core_excluded: Mapping[str, Any],
+    optional_excluded: Mapping[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Retain asymmetric paths without estimating on a selected intersection."""
+
+    comparison = {
+        "estimand": estimand,
+        "daily_mean_incremental_bps": None,
+        "period_cumulative_incremental_bps": None,
+        "interval_level": 0.95,
+        "interval_bps": None,
+        "mde_bps": None,
+        "economic_threshold_bps": 0.0,
+        "effect_evidence": "INCONCLUSIVE",
+        "effect_reason_code": "ASYMMETRIC_POLICY_PATH_UNAVAILABLE",
+        "power_status": "NOT_COMPUTABLE",
+        "power_reason_code": "MATCHED_POLICY_PATH_IDENTITY_UNAVAILABLE",
+        "effective_trading_days": 0,
+        "sleeve_count": 0,
+        "paired_path_rows": 0,
+        "planned_trial_count": 1,
+        "path_identity_status": "MISMATCH_NO_INTERSECTION_ESTIMATE",
+        "path_identity_differences": dict(differences),
+        "core_excluded": dict(core_excluded),
+        "optional_excluded": dict(optional_excluded),
+    }
+    comparison["comparison_sha256"] = canonical_sha256(comparison)
+    empty = pd.DataFrame(
+        columns=("valuation_date", "incremental_net_value_cny", "sleeve_count", "incremental_net_value_bps")
+    )
+    return empty, comparison
 
 
 def inspect_increment_bundle(bundle: Path) -> dict[str, Any]:
@@ -653,9 +764,13 @@ def _deliver_registry(
     else:
         result_class, decision_use = ResearchResultClass.EXPLORATORY, DecisionUse.NAVIGATION_ONLY
     record = build_trial_record(
-        experiment_id=profile.experiment_id,
+        experiment_id=_experiment_id(request, profile),
         attempt_id=request["request_sha256"][:24],
-        research_stage="POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1",
+        research_stage=(
+            "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V2"
+            if request.get("schema_version") == REQUEST_SCHEMA
+            else "POSITION_TIMING_ACTION_VALUE_SINGLE_BLOCK_V1"
+        ),
         study_type=ResearchStudyType.LEARNABILITY_AUDIT,
         hypothesis_family_id="POSITION_TIMING_ACTION_VALUE_OPTIONAL_BLOCK_V1",
         parent_lineage=("POSITION_TIMING_ADVICE_V1", "POSITION_TIMING_ACTION_VALUE_V4"),
@@ -690,6 +805,12 @@ def _deliver_registry(
         ) from exc
 
 
+def _experiment_id(request: Mapping[str, Any], profile: IncrementProfile) -> str:
+    if request.get("schema_version") == REQUEST_SCHEMA:
+        return f"{profile.experiment_id}_explicit_suspension_source_v2"
+    return profile.experiment_id
+
+
 def _global_observation(before: Mapping[str, Any], path: Path) -> dict[str, Any]:
     after = file_reference(path)
     return {
@@ -718,20 +839,41 @@ def _matched_row_identity(rows: pd.DataFrame) -> str:
 def _research_candidate(
     candidate: DailyCandidate,
     profile: IncrementProfile,
-) -> DailyCandidate | SectorAugmentedCandidate:
+) -> DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate:
     if profile.information_block == SW_L2_INFORMATION_BLOCK:
         return SectorAugmentedCandidate.open(candidate)
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        return MoneyflowAugmentedCandidate.open(candidate)
     return candidate
 
 
+def _apply_suspension_snapshot(
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    snapshot_path: Path,
+) -> tuple[
+    DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    SuspensionSnapshotBook,
+]:
+    book = SuspensionSnapshotBook.open(snapshot_path)
+    base = candidate.base if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)) else candidate
+    augmented_base = book.apply(base, snapshot_path=snapshot_path)
+    if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)):
+        return replace(candidate, base=augmented_base), book
+    return augmented_base, book
+
+
 def _source_coverage(
-    candidate: DailyCandidate | SectorAugmentedCandidate,
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
     symbols: Sequence[str],
     profile: IncrementProfile,
 ) -> dict[str, Any]:
     if profile.information_block == SW_L2_INFORMATION_BLOCK:
         if not isinstance(candidate, SectorAugmentedCandidate):
             raise ActionValueError("SW_L2_RESEARCH_SOURCE_INVALID")
+        return candidate.coverage(symbols)
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        if not isinstance(candidate, MoneyflowAugmentedCandidate):
+            raise ActionValueError("MONEYFLOW_RESEARCH_SOURCE_INVALID")
         return candidate.coverage(symbols)
     if not isinstance(candidate, DailyCandidate):
         raise ActionValueError("ATR14_RESEARCH_SOURCE_INVALID")
@@ -770,13 +912,21 @@ def _load_request(path: Path) -> dict[str, Any]:
     matched = request.get("matched_core_contract") or {}
     training = request.get("training_spec") or {}
     population = request.get("population_spec") or {}
-    expected_selection = (
-        "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
-        if profile.information_block == SW_L2_INFORMATION_BLOCK
-        else "SHA256_SEED_SYMBOL_SOURCE_ONLY"
+    expected_selection = _selection_contract(profile)
+    schema_version = request.get("schema_version")
+    corrected_source_contract = (
+        schema_version in LEGACY_REQUEST_SCHEMAS
+        or (
+            request.get("source_correction") == "EXPLICIT_DB_SUSPENSION_UNION_V1"
+            and isinstance(request.get("suspension_snapshot"), Mapping)
+            and "path" in request["suspension_snapshot"]
+            and "sha256" in request["suspension_snapshot"]
+            and "size_bytes" in request["suspension_snapshot"]
+        )
     )
     if (
-        request.get("schema_version") != REQUEST_SCHEMA
+        schema_version not in {REQUEST_SCHEMA, *LEGACY_REQUEST_SCHEMAS}
+        or not corrected_source_contract
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("information_block") not in PROFILES
         or request.get("planned_trial_count") != 1
@@ -797,6 +947,14 @@ def _load_request(path: Path) -> dict[str, Any]:
     ):
         raise ActionValueError("INCREMENT_REQUEST_IDENTITY_MISMATCH")
     return request
+
+
+def _selection_contract(profile: IncrementProfile) -> str:
+    if profile.information_block == SW_L2_INFORMATION_BLOCK:
+        return "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
+    if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
+        return "SHA256_SEED_MONEYFLOW_SOURCE_COVERAGE_ONLY"
+    return "SHA256_SEED_SYMBOL_SOURCE_ONLY"
 
 
 def _parse_date(value: str) -> date:

@@ -1624,6 +1624,11 @@ def _public_custom_evo_config(config: Dict[str, Any]) -> Dict[str, Any]:
         loop.pop("custom_params", None)
         loop.pop("resolved_dataset", None)
         if persisted is not None:
+            # Active-profile tasks expose the canonical semantic selector only.
+            # ``stock_pool`` is a derived compatibility path inside the frozen
+            # binding; returning both fields makes this public payload invalid
+            # when it is submitted through the same create/update contract.
+            loop.pop("stock_pool", None)
             loop["universe_selection"] = persisted["universe_selection"]
             summary = persisted["profile_summary"]
             loop["dataset_summary"] = {
@@ -2159,6 +2164,15 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
             except ValueError as exc:
                 raise_http_seed_error(exc)
+        claim = scheduler.claim_custom_evo_start(task_id)
+        if not claim.get("claimed"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"custom_evo task {task_id} could not be claimed for its first start. "
+                    f"reason={claim.get('start_reason')}"
+                ),
+            )
         background_tasks.add_task(
             scheduler.submit_custom_evo_all_loops,
             task_id,
