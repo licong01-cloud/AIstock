@@ -29,13 +29,20 @@
   ],
   "expected": "Before 20:00 on a trading day, resolve the latest decision trade date whose 20:00 cutoff has passed; at or after 20:00, resolve the current trading day. Non-trading days resolve the latest completed trading day. Keep v1 15:00 card clock unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_api.py",
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+      "tests/aistock_validation/bugs/20260908_BUG-1403-position-timing-model-advice-skips-previous-completed-cutoff-before-20-0.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/position_timing/service.py",
       "backend/tests/position_timing/test_api.py",
-      "docs/architecture/position_timing_advice_f2_redesign_20260903.md"
+      "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+      "tests/aistock_validation/bugs/20260908_BUG-1403-position-timing-model-advice-skips-previous-completed-cutoff-before-20-0.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/position_timing/service.py",
@@ -142,14 +149,15 @@
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "planned_target_ids": [
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
