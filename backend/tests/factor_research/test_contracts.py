@@ -197,7 +197,7 @@ raise SystemExit(pytest.main(['backend/tests/factor_research/test_repository_dev
              "PYTHONIOENCODING": "utf-8"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert b"8 skipped" in result.stdout
+    assert b"9 skipped" in result.stdout
 
 
 def test_runtime_registration_is_exact_cli_only():
