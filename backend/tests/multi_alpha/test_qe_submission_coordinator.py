@@ -232,13 +232,15 @@ def _payload() -> QEWorkspaceSubmissionPayload:
 def _source(
     payload: QEWorkspaceSubmissionPayload,
     *,
+    node_id: str = "wsl2-5080",
     requested_node_capacity: int | None = None,
+    consumer_id: str = "qe_mainline",
 ) -> tuple[QEWorkspaceSubmissionSource, dict[str, Any]]:
     evidence: dict[str, Any] = {"claimed": 0, "waiting": 0}
     intent_hash = submission_intent_hash_for_source(
         source_kind="qe_evolution_loop",
         source_execution_id="qe_task_1_Loop1",
-        node_id="wsl2-5080",
+        node_id=node_id,
         task_id=payload.task_id,
         loop_id=payload.loop_id,
     )
@@ -257,12 +259,13 @@ def _source(
         QEWorkspaceSubmissionSource(
             source_kind="qe_evolution_loop",
             source_execution_id="qe_task_1_Loop1",
-            node_id="wsl2-5080",
+            node_id=node_id,
             submission_intent_hash=intent_hash,
             owner_id="worker_1",
             claim_source=claim_source,
             record_waiting_capacity=waiting,
             requested_node_capacity=requested_node_capacity,
+            consumer_id=consumer_id,
         ),
         evidence,
     )
@@ -283,6 +286,69 @@ def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError):
         service.resolve_node_capacity("rdagent-node1", 0)
+
+
+def test_advisory_uses_one_effective_slot_while_mainline_keeps_node_capacity() -> None:
+    payload = _payload()
+    advisory, _evidence = _source(
+        payload,
+        node_id="rdagent-node1",
+        consumer_id="advisory",
+    )
+    mainline = replace(advisory, consumer_id="qe_mainline")
+
+    advisory_repository = FakeReservationRepository()
+    coordinator = QEWorkspaceSubmissionCoordinator(
+        reservation_repository=advisory_repository
+    )
+    asyncio.run(
+        coordinator.submit(
+            client=FakeWorkspaceClient(payload, advisory.submission_intent_hash),
+            source=advisory,
+            payload=payload,
+        )
+    )
+    assert advisory_repository.reserve_calls[0]["node_capacity"] == 1
+
+    mainline_repository = FakeReservationRepository()
+    coordinator = QEWorkspaceSubmissionCoordinator(
+        reservation_repository=mainline_repository
+    )
+    asyncio.run(
+        coordinator.submit(
+            client=FakeWorkspaceClient(payload, mainline.submission_intent_hash),
+            source=mainline,
+            payload=payload,
+        )
+    )
+    assert mainline_repository.reserve_calls[0]["node_capacity"] == 4
+
+
+def test_advisory_waits_when_any_node_reservation_is_active() -> None:
+    payload = _payload()
+    source, evidence = _source(
+        payload,
+        node_id="rdagent-node1",
+        consumer_id="advisory",
+    )
+    repository = FakeReservationRepository(acquired=False, active_count=1)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(
+        coordinator.submit(
+            client=FakeWorkspaceClient(payload, source.submission_intent_hash),
+            source=source,
+            payload=payload,
+        )
+    )
+
+    assert outcome.waiting_capacity is True
+    assert outcome.node_capacity == 1
+    assert evidence["node_capacity"] == 1
+    assert outcome.detail["reason_code"] == "qe_execution_capacity_full"
+    assert outcome.detail["consumer_id"] == "advisory"
+    assert outcome.detail["physical_node_capacity"] == 4
+    assert outcome.detail["effective_consumer_capacity"] == 1
 
 
 def test_submission_lease_is_bounded_for_first_minute_restart_takeover() -> None:

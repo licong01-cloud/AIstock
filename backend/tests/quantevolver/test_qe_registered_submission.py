@@ -31,6 +31,7 @@ from backend.services.quantevolver.qe_run_registry import (
     QERunRegistryError,
     attach_qe_run_registration,
     build_qe_run_registration,
+    normalize_qe_run_consumer_id,
 )
 
 
@@ -551,6 +552,7 @@ def test_registration_summary_is_portable_and_complete() -> None:
     )
 
     assert registration["source_type"] == "mcp"
+    assert registration["consumer_id"] == "qe_mainline"
     assert registration["purpose"] == "research"
     assert registration["dataset_release_id"] == "qe-20260831"
     assert registration["universe_pool_ids"] == ["000300.SH"]
@@ -569,6 +571,23 @@ def test_registration_rejects_unknown_purpose() -> None:
         build_qe_run_registration(run_kind="single", purpose="smoke")
     with pytest.raises(QERunRegistryError, match="qe_run_source_type_invalid"):
         build_qe_run_registration(run_kind="single", source_type="unknown-runner")
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        normalize_qe_run_consumer_id("unknown-consumer")
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        normalize_qe_run_consumer_id("")
+
+
+def test_advisory_consumer_is_distinct_from_source_and_purpose() -> None:
+    registration = build_qe_run_registration(
+        run_kind="custom_evolution",
+        consumer_id="advisory",
+        source_type="mcp",
+        purpose="research",
+    )
+
+    assert registration["consumer_id"] == "advisory"
+    assert registration["source_type"] == "mcp"
+    assert registration["purpose"] == "research"
 
 
 def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
@@ -715,6 +734,7 @@ def test_single_and_task_reservations_are_read_back_before_dispatch() -> None:
             PlannedQELoop(2, "rdagent-node1", {"factor_list": ["f2"], "model_id": "LGBModel"}),
         ],
         source_type="mcp",
+        consumer_id="advisory",
         purpose="validation",
     )
 
@@ -722,6 +742,12 @@ def test_single_and_task_reservations_are_read_back_before_dispatch() -> None:
     assert sorted(state["loops"]) == [("task-1", 1), ("task-1", 2)]
     assert state["loops"][("task-1", 1)]["status"] == "pending"
     assert state["loops"][("task-1", 2)]["config_json"][QE_RUN_REGISTRATION_PARAM]["purpose"] == "validation"
+    assert (
+        state["loops"][("task-1", 2)]["config_json"][QE_RUN_REGISTRATION_PARAM][
+            "consumer_id"
+        ]
+        == "advisory"
+    )
     assert (
         state["loops"][("task-1", 2)]["config_json"]["custom_params"][
             QE_RUN_REGISTRATION_PARAM
@@ -812,7 +838,11 @@ def _engine_for_order_test():
     engine.composer = object()
     engine.active_dataset_profile = None
     engine.parent_custom_params = {}
-    engine.registration_context = {"source_type": "mcp", "purpose": "research"}
+    engine.registration_context = {
+        "consumer_id": "advisory",
+        "source_type": "mcp",
+        "purpose": "research",
+    }
     engine.parent_multi_alpha_id = None
     return engine, group
 
@@ -944,6 +974,10 @@ def test_multi_alpha_reserves_parent_and_children_before_materialization(monkeyp
         def reserve_multi_alpha(self, **kwargs):
             assert kwargs["parent_experiment_id"] == "qe-multi"
             assert kwargs["assignments"] == [assignment]
+            assert (
+                kwargs["custom_params"][QE_RUN_REGISTRATION_PARAM]["consumer_id"]
+                == "advisory"
+            )
             order.append("reserved")
 
     def fail_after_reservation(*_args, **_kwargs):

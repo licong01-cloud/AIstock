@@ -55,6 +55,31 @@ def test_single_pending_create_rejects_multi_alpha_payload():
     assert "only supports single" in str(exc.value.detail)
 
 
+def test_single_pending_create_forwards_advisory_consumer(monkeypatch):
+    captured = {}
+
+    def fake_generate(req):
+        captured["request"] = req
+        return {"experiment_id": "exp-advisory"}
+
+    monkeypatch.setattr(qt, "generate_config", fake_generate)
+    req = qt.SingleExperimentPendingCreateRequest(
+        factor_names=["alpha_a"],
+        model_id="model_lgbm_v1",
+        custom_params={"random_seed": 42},
+        consumer_id="advisory",
+    )
+
+    result = qt.create_pending_experiment(req)
+
+    assert result["operation"] == "create_pending"
+    assert captured["request"].consumer_id == "advisory"
+    assert (
+        captured["request"].custom_params["qe_mcp_provenance"]["consumer_id"]
+        == "advisory"
+    )
+
+
 def test_single_pending_edit_preserves_mcp_provenance_and_factor_sources(monkeypatch):
     existing = {
         "experiment_id": "exp_pending",

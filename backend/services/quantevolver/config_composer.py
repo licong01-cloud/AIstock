@@ -76,6 +76,7 @@ from .qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
     QERunRegistry,
     attach_qe_run_registration,
+    normalize_qe_run_consumer_id,
 )
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -133,6 +134,13 @@ def _qe_history_filter_sql(
         params.append(list(aliases))
 
     add_text("source_type", f"{registration}->>'source_type'")
+    consumer_id = str(values.get("consumer_id") or "").strip()
+    if consumer_id:
+        consumer_id = normalize_qe_run_consumer_id(consumer_id)
+        clauses.append(
+            f"COALESCE({registration}->>'consumer_id', 'qe_mainline') = %s"
+        )
+        params.append(consumer_id)
     add_text("run_kind", f"{registration}->>'run_kind'")
     add_text("purpose", f"{registration}->>'purpose'")
     add_text("alpha_mode", f"COALESCE({alias}.alpha_mode, 'single')")

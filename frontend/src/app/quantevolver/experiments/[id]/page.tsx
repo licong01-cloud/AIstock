@@ -307,7 +307,7 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
 
         <Section title="统一登记与运行证据">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 13 }}>
-            <div>来源：{registration.source_type || "legacy"} / {registration.purpose || "未登记"}</div>
+            <div>来源：{registration.source_type || "legacy"} / {registration.consumer_id || "qe_mainline"} / {registration.purpose || "未登记"}</div>
             <div>节点：{registration.node_id || customParams.execution_node_id || "-"}</div>
             <div>数据版本：{registration.dataset_release_id || "-"}</div>
             <div>数据截止：{registration.dataset_cutoff || "-"}</div>
