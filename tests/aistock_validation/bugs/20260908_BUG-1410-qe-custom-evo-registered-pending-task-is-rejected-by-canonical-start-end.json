@@ -92,7 +92,8 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "Fresh pytest and nox processes imported the final tracked backend source and verified planned pending rows, atomic single-use start claim, canonical route rejection on a lost claim, and all required QE backend plans."
+      "Fresh pytest and nox processes imported the final tracked backend source and verified planned pending rows, atomic single-use start claim, canonical route rejection on a lost claim, and all required QE backend plans.",
+      "Fresh pytest and nox processes imported final tracked backend source at HEAD 5faa58c30 and verified planned pending rows, atomic single-use claim, route rejection, and the complete required QE backend plan matrix."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
