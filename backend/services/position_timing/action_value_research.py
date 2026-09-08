@@ -24,6 +24,7 @@ from .action_value import (
     ActionValueError,
     BPS,
     CORE_INFORMATION_BLOCK,
+    Fill,
     PositionState,
     action_candidates,
     apply_fill,
@@ -883,6 +884,30 @@ def _has_unbound_material_factor_change(
     return False
 
 
+def _apply_replay_fill(
+    state: PositionState,
+    fill: Fill,
+    *,
+    symbol: str,
+    path_role: str,
+    decision_trade_date: date,
+    target_trade_date: date,
+) -> PositionState:
+    try:
+        return apply_fill(state, fill)
+    except ActionValueError as exc:
+        if exc.code != "PATH_VALUATION_UNKNOWN":
+            raise
+        raise ActionValueError(
+            exc.code,
+            **exc.details,
+            symbol=symbol,
+            path_role=path_role,
+            decision_trade_date=decision_trade_date.isoformat(),
+            target_trade_date=target_trade_date.isoformat(),
+        ) from exc
+
+
 def _replay_one_sleeve(
     *,
     symbol: str,
@@ -1044,13 +1069,27 @@ def _replay_one_sleeve(
             sellable=policy_target_state.sellable,
             full_exit=(-policy_plan.delta == policy_target_state.quantity),
         )
-        policy_state = apply_fill(policy_target_state, policy_fill)
+        policy_state = _apply_replay_fill(
+            policy_target_state,
+            policy_fill,
+            symbol=symbol,
+            path_role="POLICY",
+            decision_trade_date=calendar_dates[decision_ordinal],
+            target_trade_date=calendar_dates[target_ordinal],
+        )
 
         if not buy_hold_complete and decision_input_status == "AVAILABLE":
             candidates = action_candidates(symbol, buy_hold_target_state, target_reference)
             plan = max(candidates, key=lambda item: item.delta)
             fill = daily_fill(plan, bars.iloc[target_ordinal], sellable=buy_hold_target_state.sellable)
-            buy_hold_state = apply_fill(buy_hold_target_state, fill)
+            buy_hold_state = _apply_replay_fill(
+                buy_hold_target_state,
+                fill,
+                symbol=symbol,
+                path_role="BUY_AND_HOLD",
+                decision_trade_date=calendar_dates[decision_ordinal],
+                target_trade_date=calendar_dates[target_ordinal],
+            )
             buy_hold_complete = buy_hold_state.quantity > 0
         else:
             buy_hold_state = buy_hold_target_state
@@ -1070,14 +1109,19 @@ def _replay_one_sleeve(
                 else None
             )
         if l1_plan is not None:
-            l1_state = apply_fill(
-                l1_target_state,
-                daily_fill(
+            l1_fill = daily_fill(
                     l1_plan,
                     bars.iloc[target_ordinal],
                     sellable=l1_target_state.sellable,
                     full_exit=(-l1_plan.delta == l1_target_state.quantity),
-                ),
+                )
+            l1_state = _apply_replay_fill(
+                l1_target_state,
+                l1_fill,
+                symbol=symbol,
+                path_role="FROZEN_L1_V1",
+                decision_trade_date=calendar_dates[decision_ordinal],
+                target_trade_date=calendar_dates[target_ordinal],
             )
         else:
             l1_state = l1_target_state

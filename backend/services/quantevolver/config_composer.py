@@ -308,6 +308,18 @@ def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
     return shlex.quote(text)
 
 
+def _wrap_qe_auto_command_in_bash(command: str) -> str:
+    """Enter the audited Bash runtime before any QE credential scrub runs.
+
+    QE workspace APIs intentionally launch submitted strings through
+    ``/bin/sh -c``. Generated auto commands contain Bash-only fail-closed
+    credential isolation, so the command itself must establish Bash rather
+    than relying on the workspace launcher's outer shell.
+    """
+
+    return f"exec /bin/bash --noprofile --norc -c {shlex.quote(command)}"
+
+
 def _qe_subprocess_credential_scrub_command() -> str:
     """Load the shared scrub helper after ConfigComposer initialization.
 
@@ -6302,7 +6314,8 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
+            inner_command = " && ".join(core_parts)
+            return f"cd -- {quoted_wsl_path} && {_wrap_qe_auto_command_in_bash(inner_command)}"
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""

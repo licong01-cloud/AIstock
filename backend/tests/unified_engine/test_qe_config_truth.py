@@ -1,5 +1,6 @@
 
 import json
+import shlex
 import sys
 import asyncio
 import base64
@@ -4426,6 +4427,11 @@ def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatc
         node_id="wsl2-5080",
         prediction_store_base_url="http://prediction-store:9000",
     )
+    cd_command, launch_command = full_command.split(" && ", 1)
+    assert shlex.split(cd_command) == ["cd", "--", "/tmp/qe-host-safe"]
+    launch_argv = shlex.split(launch_command)
+    assert launch_argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    assert launch_argv[5].startswith('if [ -z "${BASH_VERSION:-}" ]')
     scrub_marker = "for __qe_credvar in $(compgen -e)"
     scrub_positions = [
         index for index in range(len(full_command)) if full_command.startswith(scrub_marker, index)
@@ -4466,6 +4472,21 @@ def test_auto_remote_command_does_not_apply_local_wsl_thread_cap():
     assert "export OMP_NUM_THREADS=4" not in core_parts
     assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
 
+    command = composer._generate_wsl_command(
+        "/tmp/qe-remote",
+        mode="auto",
+        node_id="rdagent-node1",
+        factor_cache_dir="/home/lc999/data/factor_values",
+    )
+    _cd_command, launch_command = command.split(" && ", 1)
+    assert shlex.split(launch_command)[:5] == [
+        "exec",
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "-c",
+    ]
+
 
 @pytest.mark.parametrize(
     "workspace_path",
@@ -4484,9 +4505,12 @@ def test_qe_wsl_command_shell_quotes_workspace_path(workspace_path: str):
         node_id="wsl2-5080",
     )
 
-    assert command.startswith("cd -- ")
-    assert f"cd -- {workspace_path}" not in command
-    assert " && if [ -z \"${BASH_VERSION:-}\" ]" in command
+    cd_command, launch_command = command.split(" && ", 1)
+    assert shlex.split(cd_command) == ["cd", "--", workspace_path]
+    launch_argv = shlex.split(launch_command)
+    assert launch_argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    inner_command = launch_argv[5]
+    assert inner_command.startswith('if [ -z "${BASH_VERSION:-}" ]')
 
 
 def test_qe_wsl_command_rejects_multiline_workspace_path():
@@ -4739,6 +4763,28 @@ def test_remote_stock_pool_install_command_is_injected_after_cd():
 
     assert command.startswith("cd /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt &&")
     assert "conda activate env && python qrun_limit_minute.py conf.yaml" in command
+
+
+def test_remote_stock_pool_install_preserves_generated_bash_boundary():
+    inner = "if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi && python qrun_limit_minute.py conf.yaml"
+    generated = (
+        "cd -- /home/node/qe_workspace/task/Loop1"
+        f" && exec /bin/bash --noprofile --norc -c {shlex.quote(inner)}"
+    )
+
+    command = inject_stock_pool_install_command(
+        generated,
+        "test -f filtered_pool_x.txt",
+    )
+
+    before_bash, bash_tail = command.split(" && exec /bin/bash", 1)
+    assert before_bash == (
+        "cd -- /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt"
+    )
+    argv = shlex.split(f"exec /bin/bash{bash_tail}")
+    assert argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    assert "if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi" in argv[5]
+    assert "python qrun_limit_minute.py conf.yaml" in argv[5]
 
 
 def test_remote_stock_pool_sync_fails_fast_when_local_cache_missing(monkeypatch, tmp_path):

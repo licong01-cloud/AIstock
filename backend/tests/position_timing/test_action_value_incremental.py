@@ -274,6 +274,8 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
         "information_block": ATR14_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
             "added_features": ["atr14_sma_bps"],
@@ -297,6 +299,15 @@ def test_source_coverage_and_request_fail_closed(tmp_path) -> None:
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request), encoding="utf-8")
     assert canonical_sha256(_load_request(path)) == canonical_sha256(request)
+    legacy = json.loads(json.dumps(request))
+    legacy["schema_version"] = "position_timing_action_value_increment_request_v1"
+    legacy.pop("source_correction")
+    legacy.pop("suspension_snapshot")
+    legacy["request_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert _load_request(path)["schema_version"].endswith("_v1")
     request["planned_trial_count"] = 2
     path.write_text(json.dumps(request), encoding="utf-8")
     with pytest.raises(ActionValueError, match="INCREMENT_REQUEST_IDENTITY_MISMATCH"):
@@ -311,6 +322,8 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
         "information_block": ATR14_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_ATR14_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "timing_root": timing_root.as_posix(),
         "feature_contract": {
             "block_id": ATR14_INFORMATION_BLOCK,
@@ -381,6 +394,7 @@ def test_bundle_and_own_registry_are_immutable_and_exact_idempotent(tmp_path) ->
     assert second_registry["duplicate_noop_count"] == 1
     assert first_registry["registry_sha256"] == second_registry["registry_sha256"]
     assert len(records) == 1
+    assert records[0].experiment_id.endswith("_explicit_suspension_source_v2")
     assert records[0].planned_trial_count == 1
     assert records[0].selected_trial_count == 0
 
