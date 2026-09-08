@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-09-08T19:35:49.341492Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1619af637a6cc6670df7c695da8e65752f533ec7",
+  "fixed_at": "2026-09-08T20:37:15Z",
   "github_issue_number": 4470,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4470",
   "last_seen_at": "2026-09-08T19:35:49.341492Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4472",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,6 +145,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -155,7 +157,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1414",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9f9218377b181c82",
+    "recorded_at": "2026-09-08T20:38:31.944009Z",
+    "runtime_contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d",
+    "source_merge_commit": "1619af637a6cc6670df7c695da8e65752f533ec7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4472",
+    "validation_evidence": [
+      "validation-receipt: id=2e8913a6393b61c2 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py -q` result=`passed: 43`",
+      "validation-receipt: id=ee4b49374b974971 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`passed: 8; ownership mapped 14/14`",
+      "validation-receipt: id=234ac14fec38ac68 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_read_backend status=passed command=`nox -s qe_read_backend` result=`passed: 411; 1 pre-existing skip`",
+      "validation-receipt: id=9b0c4214b3574905 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`nox -s qe_sector_risk_overlay_backend` result=`passed: 91`",
+      "validation-receipt: id=1e118c56f52a5a46 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_mcp_backend status=passed command=`nox -s qe_mcp_backend` result=`passed: 49`",
+      "validation-receipt: id=0c85103de0c7f185 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=ruff plan=direct status=passed command=`ruff check backend/services/quantevolver/qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_active_dataset_profile.py plus py_compile plus git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "861a8e59b8ac31038cca99e7d3a8a08e084c9f15aafea4bb86593bd3594b025b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -164,6 +192,14 @@
     "fingerprint": "95ac6aaed1f4817b063797cb",
     "source_event_id": "FE-20260908-95ac6aaed1f4"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2e8913a6393b61c2 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qe_frozen_suspend_filter.py -q` result=`passed: 43`",
+    "validation-receipt: id=ee4b49374b974971 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`passed: 8; ownership mapped 14/14`",
+    "validation-receipt: id=234ac14fec38ac68 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_read_backend status=passed command=`nox -s qe_read_backend` result=`passed: 411; 1 pre-existing skip`",
+    "validation-receipt: id=9b0c4214b3574905 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`nox -s qe_sector_risk_overlay_backend` result=`passed: 91`",
+    "validation-receipt: id=1e118c56f52a5a46 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=nox plan=qe_mcp_backend status=passed command=`nox -s qe_mcp_backend` result=`passed: 49`",
+    "validation-receipt: id=0c85103de0c7f185 commit=11ff050a98f23e9bb175969ba7c2b0f9d5e8c31d kind=ruff plan=direct status=passed command=`ruff check backend/services/quantevolver/qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_active_dataset_profile.py plus py_compile plus git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
