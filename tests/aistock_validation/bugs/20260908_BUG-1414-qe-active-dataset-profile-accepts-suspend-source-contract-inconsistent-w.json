@@ -133,8 +133,7 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "Fresh AIstock Python and nox processes imported the tracked QE active-profile validator, passed the 43-test focused matrix and qe_read_backend 411/411, and rejected the real mismatched 20260907-v2 profile before activation.",
-      "Fresh AIstock Python and nox processes imported source commit 31edfd5b1, passed the focused and QE read matrices, and rejected the real mismatched 20260907-v2 active profile before activation."
+      "Fresh AIstock Python and nox processes imported source commit 31edfd5b1, passed the focused 43-test matrix plus all required plans (411 QE read, 91 sector-risk, 49 MCP, 8 validation ownership), and rejected the real mismatched 20260907-v2 active profile before activation."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
