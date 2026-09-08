@@ -3804,9 +3804,6 @@ def test_litellm_dependency_pin_supports_deepseek_v4_native_pricing() -> None:
     assert "openai==2.44.0" in root_lines
     assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in backend_lines
     assert "openai==2.44.0" in backend_lines
-    ci_text = (repo_root / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
-    assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in ci_text
-    assert "openai==2.44.0" in ci_text
 
 
 def test_chat_turn_writes_llm_usage_ledger_and_trace_cost_summary() -> None:

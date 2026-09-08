@@ -35,9 +35,9 @@ def test_lite_is_low_resource_default() -> None:
 
 def test_full_profile_contains_all_migrated_and_platform_tools() -> None:
     payload = list_tools_payload(profile="full")
-    assert payload["legacy_tool_count"] == legacy_tool_count() == 388
+    assert payload["legacy_tool_count"] == legacy_tool_count() == 368
     assert payload["platform_tool_count"] == 6
-    assert payload["tool_count"] == 394
+    assert payload["tool_count"] == 374
     assert "validation" in payload["modules"]
     assert "qe_experiment" in payload["modules"]
     assert "qe_archive" in payload["modules"]
@@ -62,7 +62,7 @@ def test_gateway_registration_counts() -> None:
     assert len(_tool_names_for_profile("qe")) == 98
     assert len(_tool_names_for_profile("qlib_data")) == 15
     assert len(_tool_names_for_profile("data_full")) == 62
-    assert len(_tool_names_for_profile("full")) == 394
+    assert len(_tool_names_for_profile("full")) == 374
 
 
 def test_qe_custom_evo_phase_pipeline_fields_are_exposed_in_mcp_schemas() -> None:
@@ -89,14 +89,20 @@ def test_qlib_data_profiles_are_task_scoped() -> None:
     assert resolve_modules(profile="backtest_data") == ["qlib_export"]
 
 
-def test_paper_v2_profiles_are_task_scoped() -> None:
-    monitor = list_tools_payload(profile="paper_v2_monitor")
-    stable = list_tools_payload(profile="paper_v2_stable")
-    assert monitor["modules"] == ["paper_v2_monitoring", "qmt_broker_monitoring"]
-    assert monitor["tool_count"] == 42
-    assert stable["modules"] == ["strategy_packages", "selection_center", "advisory", "paper_v2_monitoring", "qmt_broker_monitoring"]
-    assert stable["tool_count"] == 128
-    assert resolve_modules(profile="paper_v2_ops") == resolve_modules(profile="paper_v2_stable")
+def test_simulation_profiles_are_task_scoped() -> None:
+    monitor = list_tools_payload(profile="simulation_runtime_monitor")
+    stable = list_tools_payload(profile="simulation_stable")
+    assert monitor["modules"] == ["simulation_runtime_monitoring", "qmt_broker_monitoring"]
+    assert monitor["tool_count"] == 22
+    assert stable["modules"] == [
+        "strategy_packages",
+        "selection_center",
+        "advisory",
+        "simulation_runtime_monitoring",
+        "qmt_broker_monitoring",
+    ]
+    assert stable["tool_count"] == 108
+    assert resolve_modules(profile="simulation_ops") == resolve_modules(profile="simulation_stable")
 
 
 def test_self_check_passes_without_backend_requirement() -> None:
