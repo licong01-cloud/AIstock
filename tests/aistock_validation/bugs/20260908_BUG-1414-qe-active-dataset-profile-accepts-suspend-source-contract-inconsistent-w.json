@@ -1,6 +1,8 @@
 {
   "actual": "A new MA-E19D1E exact retry on active profile generation 20260907-v2 failed before model training with reason_code=qe_frozen_suspend_identity_mismatch: binding expected tushare_suspend_d_shsz_S_v1 while the pinned qe_direct_suspend_d_v1 meta.json declares source_table=market.suspend_d. The active profile validates file hashes but not this semantic identity, so activation passes and every QE consumer fails later. Preserve zero-DB file-only runtime, immutable candidate files, and fail-closed checks. Validate profile suspend_pins.source_contract against the pinned metadata source_table for direct-v2; do not modify datasets, Qlib, failed task evidence, or other modules.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/qe_active_dataset_profile.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
     "tests/aistock_validation/bugs/20260908_BUG-1414-qe-active-dataset-profile-accepts-suspend-source-contract-inconsistent-w.json"
   ],
   "assigned_agent": null,
@@ -19,25 +21,91 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260908-95ac6aaed1f4",
       "timestamp": "2026-09-08T19:35:49.341477Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "The QE active-profile validator now compares the hash-pinned direct-v2 suspend metadata identity with suspend_pins before a profile can be activated or resolved. Candidate datasets, Qlib, and experiment evidence remain unchanged.",
+      "timestamp": "2026-09-08T20:05:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "Codex",
+      "note": "Fresh processes passed the 43-test active-profile/direct-v2 matrix, qe_read_backend 411/411 with one pre-existing skip, validation ownership 8/8, lint, compile, and diff checks. The real 20260907-v2 profile is rejected at validation with qe_dataset_component_identity_mismatch before experiment submission.",
+      "timestamp": "2026-09-08T20:05:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Profile validation and activation must fail closed when suspend_pins.source_contract differs from the source_table in the exact hash-pinned qe_direct_suspend_d_v1 metadata. A matching profile must preserve the existing file-only QE runtime and must not modify candidate datasets.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+    ],
+    "changed_files_source": "actual_implementation",
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/quantevolver/qe_active_dataset_profile.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+      ],
+      "impacted_modules": [
+        "platform.mcp_gateway",
+        "qe.active_dataset_universe",
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.custom_evolution",
+        "qe.sector_risk_overlay",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_active_dataset_profile.py",
+          "impact_modules": [
+            "platform.mcp_gateway",
+            "qe.auto_evolution",
+            "qe.core",
+            "qe.custom_evolution",
+            "qe.sector_risk_overlay",
+            "qe.single_experiment"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+          "impact_modules": [
+            "platform.mcp_gateway",
+            "qe.auto_evolution",
+            "qe.core",
+            "qe.custom_evolution",
+            "qe.sector_risk_overlay",
+            "qe.single_experiment"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_active_dataset_profile.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+      ],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+    ]
   },
   "first_seen_at": "2026-09-08T19:35:49.341492Z",
   "fix_branch": null,
@@ -56,20 +124,34 @@
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python and nox processes imported the tracked QE active-profile validator, passed the 43-test focused matrix and qe_read_backend 411/411, and rejected the real mismatched 20260907-v2 profile before activation."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
