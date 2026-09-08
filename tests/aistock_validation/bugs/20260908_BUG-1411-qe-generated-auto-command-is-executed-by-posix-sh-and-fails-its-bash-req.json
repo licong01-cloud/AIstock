@@ -2,6 +2,9 @@
   "actual": "MA-E19D1E exact-retry task qe_20260908_230225_0ae8 registered successfully, but both WSL loops failed before Qlib with status failed, experiment_id null, error 'QLib backtest failed with return code 70', and run.log reason_code=qe_subprocess_bash_required. AIstock ConfigComposer emits Bash-only credential scrub fragments but returns a bare auto command; the QE workspace API intentionally invokes submitted commands through /bin/sh -c. Preserve the Bash-only fail-closed credential scrub and explicitly enter audited /bin/bash for every generated auto command on WSL and remote nodes. Do not modify Qlib, datasets, failed task evidence, or the dirty RD-Agent root.",
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/stock_pool_sync.py",
+    "backend/tests/unified_engine/test_backtest_executor.py",
+    "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260908_BUG-1411-qe-generated-auto-command-is-executed-by-posix-sh-and-fails-its-bash-req.json"
   ],
@@ -21,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260908-0007b1e9b80e",
       "timestamp": "2026-09-08T15:55:27.680181Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "Scope expanded to preserve the audited Bash boundary through stock-pool installation and backtest-only injection, including single-alpha and Multi-Alpha command-contract tests.",
+      "timestamp": "2026-09-08T16:18:00Z"
     }
   ],
   "evidence_uris": [],
@@ -29,12 +38,18 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/stock_pool_sync.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/stock_pool_sync.py",
+        "backend/tests/unified_engine/test_backtest_executor.py",
+        "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
         "backend/tests/unified_engine/test_qe_config_truth.py"
       ],
       "impacted_modules": [
@@ -86,11 +101,17 @@
     },
     "planned_files": [
       "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/stock_pool_sync.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/stock_pool_sync.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ]
   },
@@ -118,11 +139,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

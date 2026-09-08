@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shlex
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -402,9 +403,11 @@ class TestConfigComposerCommandGeneration:
             backtest_freq="1min",
         )
 
-        assert command.startswith(f"cd -- {wsl_path} && ")
-        assert "python prepare_factors.py" in command
-        assert "python qrun_limit_minute.py conf.yaml" in command
+        argv = shlex.split(command)
+        assert argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+        assert argv[5].startswith(f"cd -- {wsl_path} && ")
+        assert "python prepare_factors.py" in argv[5]
+        assert "python qrun_limit_minute.py conf.yaml" in argv[5]
 
     def test_generate_auto_wsl_command_injects_cuda_expandable_segments_for_gpu_node(self):
         composer = ConfigComposer()
