@@ -22,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260908-75eef3c061a3",
       "timestamp": "2026-09-08T03:33:53.927777Z"
+    },
+    {
+      "action": "implement_and_validate_source_fix",
+      "actor": "codex_issue_workflow",
+      "note": "Separated control-plane metadata from runtime flags at the composer boundary, preserved only catalog-owned ensemble for unknown/database strategies, and verified five QE submission/configuration paths plus both standard and catalog ensemble authorities.",
+      "timestamp": "2026-09-08T03:46:11.459179Z"
     }
   ],
   "evidence_uris": [],
@@ -141,8 +147,13 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "fresh pytest processes at source commit cefd53d4f: focused configuration matrix 106 passed; required nox sessions passed with qe_read_backend 398 passed/1 skipped, qe_sector_risk_overlay_backend 91 passed, qe_mcp_backend 49 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
