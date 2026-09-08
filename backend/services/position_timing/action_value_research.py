@@ -510,6 +510,7 @@ def replay_continuous_cohorts(
         "decision_input_unavailable_sleeve_days": 0,
         "path_unknown": 0,
         "path_error_counts": {},
+        "path_error_examples": [],
     }
     for symbol in symbols:
         bars = bars_by_symbol[symbol]
@@ -571,6 +572,15 @@ def replay_continuous_cohorts(
                 excluded["path_unknown"] += 1
                 path_errors = excluded["path_error_counts"]
                 path_errors[exc.code] = int(path_errors.get(exc.code, 0)) + 1
+                if len(excluded["path_error_examples"]) < 10:
+                    excluded["path_error_examples"].append(
+                        {
+                            "symbol": symbol,
+                            "initial_state": initial_state,
+                            "error_code": exc.code,
+                            "details": {key: str(value) for key, value in exc.details.items()},
+                        }
+                    )
     if not rows:
         raise ActionValueError("CONTINUOUS_REPLAY_EMPTY")
     sleeve_days = pd.DataFrame(rows)

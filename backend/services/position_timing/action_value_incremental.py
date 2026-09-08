@@ -379,12 +379,12 @@ def run_increment_request(request_path: Path) -> dict[str, Any]:
     except ActionValueError as exc:
         if exc.code != "INCREMENT_POLICY_PATH_IDENTITY_MISMATCH":
             raise
-        raise ActionValueError(
-            exc.code,
-            **exc.details,
+        paired_daily, comparison = _path_identity_inconclusive(
+            estimand=profile.estimand,
+            differences=exc.details,
             core_excluded=core_replay.receipt["excluded"],
             optional_excluded=optional_replay.receipt["excluded"],
-        ) from exc
+        )
     coverage_support = bool(
         core_replay.receipt["coverage_can_support_policy"]
         and optional_replay.receipt["coverage_can_support_policy"]
@@ -541,6 +541,43 @@ def _paired_policy_comparison(
     }
     comparison["comparison_sha256"] = canonical_sha256(comparison)
     return daily, comparison
+
+
+def _path_identity_inconclusive(
+    *,
+    estimand: str,
+    differences: Mapping[str, Any],
+    core_excluded: Mapping[str, Any],
+    optional_excluded: Mapping[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Retain asymmetric paths without estimating on a selected intersection."""
+
+    comparison = {
+        "estimand": estimand,
+        "daily_mean_incremental_bps": None,
+        "period_cumulative_incremental_bps": None,
+        "interval_level": 0.95,
+        "interval_bps": None,
+        "mde_bps": None,
+        "economic_threshold_bps": 0.0,
+        "effect_evidence": "INCONCLUSIVE",
+        "effect_reason_code": "ASYMMETRIC_POLICY_PATH_UNAVAILABLE",
+        "power_status": "NOT_COMPUTABLE",
+        "power_reason_code": "MATCHED_POLICY_PATH_IDENTITY_UNAVAILABLE",
+        "effective_trading_days": 0,
+        "sleeve_count": 0,
+        "paired_path_rows": 0,
+        "planned_trial_count": 1,
+        "path_identity_status": "MISMATCH_NO_INTERSECTION_ESTIMATE",
+        "path_identity_differences": dict(differences),
+        "core_excluded": dict(core_excluded),
+        "optional_excluded": dict(optional_excluded),
+    }
+    comparison["comparison_sha256"] = canonical_sha256(comparison)
+    empty = pd.DataFrame(
+        columns=("valuation_date", "incremental_net_value_cny", "sleeve_count", "incremental_net_value_bps")
+    )
+    return empty, comparison
 
 
 def inspect_increment_bundle(bundle: Path) -> dict[str, Any]:
