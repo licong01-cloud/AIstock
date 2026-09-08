@@ -33,13 +33,20 @@
   "evidence_uris": [],
   "expected": "Registration/provenance metadata remains persisted but never reaches Qlib kwargs; standard seed ensemble continues through _seed_ensemble_config; an unknown/database custom strategy's catalog-owned ensemble argument remains in its executable strategy kwargs; unregistered legacy output is unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1406-qe-runtime-metadata-filtering-drops-catalog-owned-ensemble-for-custom-st.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/quantevolver/experiment_config.py",
       "backend/services/quantevolver/config_composer.py",
-      "backend/tests/quantevolver/test_qe_registered_submission.py"
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1406-qe-runtime-metadata-filtering-drops-catalog-owned-ensemble-for-custom-st.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/experiment_config.py",
@@ -149,14 +156,19 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "fresh pytest processes at source commit cefd53d4f: focused configuration matrix 106 passed; required nox sessions passed with qe_read_backend 398 passed/1 skipped, qe_sector_risk_overlay_backend 91 passed, qe_mcp_backend 49 passed"
+      "fresh pytest processes at source commit cefd53d4f: focused configuration matrix 106 passed; required nox sessions passed with qe_read_backend 398 passed/1 skipped, qe_sector_risk_overlay_backend 91 passed, qe_mcp_backend 49 passed",
+      "fresh pytest/nox Python processes imported ConfigComposer at source commit cefd53d4f and validated five QE paths -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
