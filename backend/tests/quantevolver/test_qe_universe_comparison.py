@@ -161,3 +161,68 @@ def test_custom_evo_rerun_reuses_persisted_binding_without_reading_active_profil
         "mode": "single_index",
         "pool_ids": ["csi300"],
     }
+    assert "stock_pool" not in public["loops"][0]
+    round_trip = evolution_router.CustomEvoLoopConfig.model_validate(public["loops"][0])
+    assert round_trip.stock_pool is None
+    assert round_trip.universe_selection == {
+        "mode": "single_index",
+        "pool_ids": ["csi300"],
+    }
+
+
+def test_public_custom_evo_config_preserves_legacy_stock_pool_without_binding() -> None:
+    public = evolution_router._public_custom_evo_config(
+        {
+            "loops": [
+                {
+                    "loop_index": 1,
+                    "stock_pool": "filtered_pool_20260630",
+                    "custom_params": {"stock_pool": "filtered_pool_20260630"},
+                }
+            ]
+        }
+    )
+
+    assert public["loops"][0]["stock_pool"] == "filtered_pool_20260630"
+    assert "universe_selection" not in public["loops"][0]
+    assert "custom_params" not in public["loops"][0]
+
+
+def test_new_custom_evo_still_rejects_conflicting_universe_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = _request(["csi300", "csi500"]).base_loop.model_copy(
+        update={
+            "stock_pool": "stock_universe",
+            "universe_selection": {"mode": "single_index", "pool_ids": ["csi300"]},
+        }
+    )
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**item, "node_id": "wsl2-5080"} for item in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    monkeypatch.setattr(profile_module, "load_active_qe_profile", lambda: object())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router._prepare_custom_evo_loop_configs(
+                [loop],
+                request_node_id="wsl2-5080",
+                node_parallelism_payload=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "stock_pool and universe_selection cannot be supplied together" in str(
+        exc_info.value.detail
+    )

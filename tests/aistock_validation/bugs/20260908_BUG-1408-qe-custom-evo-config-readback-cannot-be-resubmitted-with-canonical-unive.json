@@ -1,0 +1,229 @@
+{
+  "actual": "Batch C exact-retry of qe_20260907_204335_1fb0 failed before task creation: qe_custom_evo_get_config returns each loop with both canonical universe_selection and legacy stock_pool, while qe_custom_evo_create_pending rejects both fields together. Expected the public readback/clone contract to produce a semantically equivalent resubmittable payload without weakening the ambiguous-input guard or changing model, factor, seed, window, dataset, universe, strategy, or minute-TWAP semantics.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/quantevolver/test_qe_universe_comparison.py",
+    "tests/aistock_validation/bugs/20260908_BUG-1408-qe-custom-evo-config-readback-cannot-be-resubmitted-with-canonical-unive.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1408",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T08:02:57.313304Z",
+  "description": "Batch C exact-retry of qe_20260907_204335_1fb0 failed before task creation: qe_custom_evo_get_config returns each loop with both canonical universe_selection and legacy stock_pool, while qe_custom_evo_create_pending rejects both fields together. Expected the public readback/clone contract to produce a semantically equivalent resubmittable payload without weakening the ambiguous-input guard or changing model, factor, seed, window, dataset, universe, strategy, or minute-TWAP semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-207bd62a2444",
+      "timestamp": "2026-09-08T08:02:57.313285Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "Scope expanded to the public custom-evo readback sanitizer and its universe comparison contract tests; conflicting caller input remains fail-closed.",
+      "timestamp": "2026-09-08T08:10:20.878387Z"
+    },
+    {
+      "action": "validation_evidence",
+      "actor": "Codex",
+      "note": "Fresh pytest and nox processes verified canonical active-profile readback round-trip, legacy stock_pool compatibility, unchanged dual-input rejection, and the broader QE backend regression matrix.",
+      "timestamp": "2026-09-08T08:32:00.000000Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime MCP qe_custom_evo_get_config(qe_20260907_204335_1fb0) followed by qe_custom_evo_create_pending -> HTTP 400: stock_pool and universe_selection cannot be supplied together"
+  ],
+  "expected": "The public custom-evo config readback emits one canonical universe selector for active-profile tasks and can be resubmitted without weakening rejection of independently supplied conflicting stock_pool and universe_selection fields.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1408-qe-custom-evo-config-readback-cannot-be-resubmitted-with-canonical-unive.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1408-qe-custom-evo-config-readback-cannot-be-resubmitted-with-canonical-unive.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py"
+    ]
+  },
+  "first_seen_at": "2026-09-08T08:02:57.313304Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4449,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4449",
+  "last_seen_at": "2026-09-08T08:02:57.313304Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_universe_comparison.py -q",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "fresh pytest process: backend/tests/quantevolver/test_qe_universe_comparison.py -> 5 passed; active-profile readback emits only canonical universe_selection, legacy stock_pool remains readable, and independent dual-input creation remains HTTP 400 fail-closed",
+      "fresh pytest process: universe comparison, active dataset profile, registered submission, and MCP domain matrix -> 67 passed",
+      "fresh nox process at final source state: qe_read_backend -> 403 passed, 1 skipped; validation_module_registry_l0 -> 8 passed",
+      "fresh nox process: qe_sector_risk_overlay_backend -> 91 passed; qe_mcp_backend -> 49 passed",
+      "pytest backend/tests/quantevolver/test_qe_universe_comparison.py in fresh process at final source state -> 5 passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom-evo config readback cannot be resubmitted with canonical universe selection",
+  "trigger_condition": {
+    "fingerprint": "207bd62a2444854332aa88b1",
+    "source_event_id": "FE-20260908-207bd62a2444"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
