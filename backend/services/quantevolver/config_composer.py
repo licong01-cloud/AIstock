@@ -31,6 +31,7 @@ from ..strategy_package.workspace_policy import (
 )
 from .callback_urls import build_aistock_callback_base_url
 from .experiment_config import (
+    QE_CONTROL_PLANE_METADATA_KEYS,
     QE_RUNTIME_METADATA_KEYS,
     apply_qe_seed_to_model_params,
     ensure_qe_risk_policy,
@@ -3944,6 +3945,7 @@ class ConfigComposer:
             "only_tradable": True,
             "forbid_all_trade_at_limit": False,
         }
+        catalog_strategy_param_keys: set[str] = set()
         if strategy_info:
             # 用户选择了策略 → 必须使用该策略的源代码
             source_code = strategy_info.get("source_code")
@@ -3974,6 +3976,7 @@ class ConfigComposer:
                     strategy_class = extracted_class
                 sk = pc.get("kwargs", {})
                 strategy_kwargs.update(sk)
+                catalog_strategy_param_keys.update(sk)
             elif class_match:
                 # 没有portfolio_config，使用源码提取的类名
                 strategy_class = extracted_class
@@ -3985,6 +3988,7 @@ class ConfigComposer:
                     dk = json.loads(dk)
                 for k, v in dk.items():
                     strategy_kwargs[k] = v
+                    catalog_strategy_param_keys.add(k)
 
         # ── 模型超参键白名单（始终可用，供策略安全过滤引用） ──
         _PTNN_HP_KEYS = {
@@ -4023,7 +4027,9 @@ class ConfigComposer:
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
         _EFFICIENT_GATS_HP_KEYS = _GATS_HP_KEYS | set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
-        _NON_STRATEGY_PARAMS = set(QE_RUNTIME_METADATA_KEYS) | {
+        _NON_STRATEGY_PARAMS = (
+            set(QE_RUNTIME_METADATA_KEYS) | set(QE_CONTROL_PLANE_METADATA_KEYS)
+        ) | {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
@@ -4357,8 +4363,21 @@ class ConfigComposer:
                     f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
                 )
         else:
-            # 未知策略类型：只过滤已知的非策略参数（如 backtest_freq, execution_algo 等）
-            _removed = {k for k in strategy_kwargs if k in _NON_STRATEGY_PARAMS}
+            # Unknown/database strategies have no static allowlist. Control
+            # metadata and caller-owned runtime metadata must still be
+            # removed, while the catalog may explicitly declare ``ensemble``
+            # as a real constructor argument. Preserve only that exact
+            # ambiguous key when its authority is portfolio/default kwargs;
+            # never exempt registration or provenance metadata.
+            catalog_owned_runtime_strategy_keys = (
+                {"ensemble"} & catalog_strategy_param_keys
+            )
+            _removed = {
+                k
+                for k in strategy_kwargs
+                if k in _NON_STRATEGY_PARAMS
+                and k not in catalog_owned_runtime_strategy_keys
+            }
             if _removed:
                 logger.info(f"未知策略 '{strategy_class}': 移除非策略参数 {sorted(_removed)}")
                 for k in _removed:
