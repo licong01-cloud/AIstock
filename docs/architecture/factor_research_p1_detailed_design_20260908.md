@@ -411,6 +411,10 @@ DESIGN-COMPLIANCE-001 四项补充审核：仅关闭已获准的精确登记缺�
 
 用户随后授权本 P1 实现提交、创建 PR 与合入。交付遵循已批准的设计范围，最终 source HEAD/merge SHA/CI 由实现 PR 提供；上文“尚未提交/尚未创建 PR”均为对应检查点的历史状态。此次源码授权不包含生产两表 migration/DML、profile 安装、清理或进程操作。
 
+实现 PR #4448 首次 CI 暴露 `test_validation_catalog_integrity.py` 的计划数量快照仍为新增前 61/15。本地复现后，作为本 P1 两个计划的必要集成修正，精确补充该测试文件范围，只将 controlled_runner/delegated 计数更新为 62/16，其他断言、规则和计划不变；该断言重新通过前不合入。此为本任务配置配套遗漏，不登记流水线 BUG、不降低校验强度。最终 CI 以修正后的 PR HEAD 为准。
+
+完整 catalog 检查进一步发现两个新增 command_key 未在 `backend/services/validation/plan_catalog.py` 登记。作为同一测试计划的必要配套，精确补充该文件范围，仅新增 `nox_factor_research_backend → factor_research_backend` 和 `nox_factor_research_dev_db → factor_research_dev_db` 两个固定映射，不改变任何旧映射、命令执行器或 DEV runner 禁用语义。现有 `/hmm-risk` UI target 缺失告警与本任务无关，不跨模块修改。
+
 ### v1.1 复用与 skill 修订审核
 
 第一轮：对照已核实旧 skill 与现行路由/ManualFactorService，补充保留的技术规范、实际保存/官方评价入口、历史经验的条件化处理和双入口单方法职责，消除“新建 skill 等于重做因子库”的歧义。
