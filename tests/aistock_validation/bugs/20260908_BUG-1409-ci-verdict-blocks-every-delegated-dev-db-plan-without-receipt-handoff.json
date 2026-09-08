@@ -1,7 +1,10 @@
 {
   "actual": "The PR CI verdict unconditionally fails whenever dev_db_required=true, although the active standard says delegated DEV-DB plans are external validation and not a CI merge gate. Preserve classifier reporting and DEV safety, stop treating the requirement boolean as a CI failure, and enforce any required durable DEV receipt at the appropriate feature/issue finish boundary without CI database access.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260908_BUG-1409-ci-verdict-blocks-every-delegated-dev-db-plan-without-receipt-handoff.json"
+    "tests/aistock_validation/bugs/20260908_BUG-1409-ci-verdict-blocks-every-delegated-dev-db-plan-without-receipt-handoff.json",
+    ".github/workflows/test.yml",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1409",
@@ -19,10 +22,16 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260908-5c72c27eab76",
       "timestamp": "2026-09-08T14:56:25.770359Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Bound the repair to the PR verdict, its policy evidence, and the direct workflow-policy regression test after reproducing the unconditional DEV-DB failure.",
+      "timestamp": "2026-09-08T15:00:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "PR CI reports delegated DEV-DB requirements without treating them as an executed CI lane failure; external DEV evidence remains independently enforced by the applicable delivery or production gate.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,7 +63,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_ci_verdict_owns_workflow_validation_and_fails_closed -q",
   "required_verification": [
     "l0",
     "validation_center_backend"
