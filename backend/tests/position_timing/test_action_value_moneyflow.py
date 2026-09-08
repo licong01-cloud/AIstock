@@ -208,6 +208,8 @@ def test_moneyflow_request_binds_single_matched_core_hypothesis(tmp_path: Path) 
         "information_block": MONEYFLOW_INFORMATION_BLOCK,
         "hypothesis": "CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
         "planned_trial_count": 1,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
         "feature_contract": {
             "block_id": MONEYFLOW_INFORMATION_BLOCK,
             "added_features": [MONEYFLOW_FEATURE],
