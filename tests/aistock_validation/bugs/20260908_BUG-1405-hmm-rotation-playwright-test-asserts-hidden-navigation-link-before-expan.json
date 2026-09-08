@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1405",
-  "closed_at": null,
+  "closed_at": "2026-09-08T03:16:35Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -71,8 +71,8 @@
   },
   "first_seen_at": "2026-09-08T02:16:26.800677Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5d256f53ed09c0348ec2fc721b309cd4f24ddd55",
+  "fixed_at": "2026-09-08T03:16:35Z",
   "github_issue_number": 4430,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4430",
   "last_seen_at": "2026-09-08T02:16:26.800677Z",
@@ -80,6 +80,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4432",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -97,6 +98,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -106,7 +108,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1405",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "aef2f9fad4bd7e66",
+    "recorded_at": "2026-09-08T03:18:33.687226Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd",
+    "source_merge_commit": "5d256f53ed09c0348ec2fc721b309cd4f24ddd55",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4432",
+    "validation_evidence": [
+      "validation-receipt: id=267a1071b5de74e2 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=hmm_risk_backend status=passed command=`nox -s hmm_risk_backend` result=`passed (772 passed; line coverage 76.82%; reused after metadata-only main sync)`",
+      "validation-receipt: id=f220d8a264bc6268 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`passed (8 passed; ownership 14/14)`",
+      "validation-receipt: id=623449f75fc68bdb commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed (0 findings; 0 blocking)`",
+      "validation-receipt: id=401d05a58c2d4494 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "6ac335f0e803ef668a5c8b24a9c0cc7f437988401dd6b7bfc39bbcda0610022d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -143,6 +169,12 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=267a1071b5de74e2 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=hmm_risk_backend status=passed command=`nox -s hmm_risk_backend` result=`passed (772 passed; line coverage 76.82%; reused after metadata-only main sync)`",
+    "validation-receipt: id=f220d8a264bc6268 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`passed (8 passed; ownership 14/14)`",
+    "validation-receipt: id=623449f75fc68bdb commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed (0 findings; 0 blocking)`",
+    "validation-receipt: id=401d05a58c2d4494 commit=76c4e8af1b0310d7cd0fe7ebc499d7e2dc3982fd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
