@@ -2735,6 +2735,7 @@ def factor_research_backend(session: nox.Session) -> None:
         "python", "-m", "pytest",
         "backend/tests/factor_research/test_contracts.py",
         "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_quality.py",
         "backend/tests/factor_research/test_repository_dev.py", "-q",
         env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
     )
