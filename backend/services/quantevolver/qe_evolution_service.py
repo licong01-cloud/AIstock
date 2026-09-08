@@ -150,7 +150,6 @@ _QE_LOOP_RETRY_MODE_ALIASES = {
 }
 
 CUSTOM_EVO_STARTED_LOOP_STATUSES = {
-    "pending",
     "submitted",
     "running",
     "processing",
@@ -6045,11 +6044,41 @@ class AutoEvolutionScheduler:
         loop_rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         status = str(task.get("status") or "").lower()
-        submitted_loop_count = sum(
-            1
-            for row in loop_rows
-            if str(row.get("status") or "").lower() in CUSTOM_EVO_STARTED_LOOP_STATUSES
-        )
+        def _has_submission_evidence(row: Dict[str, Any]) -> bool:
+            row_status = str(row.get("status") or "").lower()
+            if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
+                return True
+            if row_status != "pending":
+                return False
+            if row.get("experiment_id"):
+                return True
+            raw_config = row.get("config_json")
+            if isinstance(raw_config, str):
+                try:
+                    raw_config = json.loads(raw_config)
+                except json.JSONDecodeError:
+                    # An unreadable pending config cannot be proven to be an
+                    # untouched registry reservation, so fail closed.
+                    return True
+            if not isinstance(raw_config, dict):
+                return True
+            registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
+            if not isinstance(registration, dict):
+                # Only a canonical registry reservation is allowed to keep a
+                # pending row editable/startable. Legacy or malformed pending
+                # rows remain nonstartable until explicitly reconciled.
+                return True
+            return any(
+                key in raw_config
+                for key in (
+                    "execution_manifest",
+                    "execution_manifest_sha256",
+                    _QE_RETRY_SUBMISSION_KEY,
+                    _QE_RERUN_SUBMISSION_KEY,
+                )
+            )
+
+        submitted_loop_count = sum(1 for row in loop_rows if _has_submission_evidence(row))
         startable = (
             task.get("task_type") == "custom_evo"
             and status == "pending"
@@ -6083,7 +6112,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"custom_evo task not found: {task_id}")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -6092,6 +6122,71 @@ class AutoEvolutionScheduler:
                 )
                 loop_rows = [dict(row) for row in cur.fetchall()]
         return self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+
+    def claim_custom_evo_start(self, task_id: str) -> Dict[str, Any]:
+        """Atomically claim one never-started materialized custom_evo task.
+
+        Registry reservations deliberately create pending loop rows before
+        execution.  The claim changes the task state before the FastAPI
+        background task is scheduled, making repeated/concurrent start calls
+        fail closed without treating those planned rows as prior submissions.
+        """
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE",
+                    (task_id,),
+                )
+                task = cur.fetchone()
+                if not task:
+                    raise ValueError(f"custom_evo task not found: {task_id}")
+                cur.execute(
+                    """
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                    ORDER BY loop_index ASC
+                    """,
+                    (task_id,),
+                )
+                loop_rows = [dict(row) for row in cur.fetchall()]
+                start_state = self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+                if not start_state.get("startable"):
+                    conn.commit()
+                    return {**start_state, "claimed": False}
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_tasks
+                    SET status = 'running', updated_at = NOW()
+                    WHERE task_id = %s
+                      AND task_type = 'custom_evo'
+                      AND status = 'pending'
+                      AND current_loop = 0
+                    RETURNING task_id
+                    """,
+                    (task_id,),
+                )
+                claimed = cur.fetchone() is not None
+            conn.commit()
+        if not claimed:
+            return {
+                **start_state,
+                "claimed": False,
+                "startable": False,
+                "editable": False,
+                "resume_allowed": True,
+                "start_reason": "custom_evo task start claim was lost to another request",
+            }
+        return {
+            **start_state,
+            "claimed": True,
+            "startable": False,
+            "editable": False,
+            "resume_allowed": True,
+            "start_reason": "custom_evo task start claimed",
+        }
 
     async def get_custom_evo_editable_config(self, task_id: str) -> Dict[str, Any]:
         with get_conn() as conn:
@@ -6104,7 +6199,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"task {task_id} is not a custom_evo task")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -6191,7 +6287,8 @@ class AutoEvolutionScheduler:
                         raise ValueError(f"task {task_id} is not a custom_evo task")
                     cur.execute(
                         """
-                        SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                        SELECT loop_index, loop_id, status, node_id, experiment_id,
+                               config_json, updated_at
                         FROM qe_evolution_loops
                         WHERE task_id = %s
                         ORDER BY loop_index ASC

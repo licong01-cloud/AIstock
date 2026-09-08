@@ -464,7 +464,9 @@ def build_contract_evidence(
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
         "classifier_dev_db_required_output": "dev_db_required" in test_text and "dev_db_required" in classifier_text,
-        "existing_dev_database_lane_reference": "external_DEV_validation_required" in test_text
+        "existing_dev_database_lane_reference": "### External DEV database validation" in test_text
+        and "does not run database DDL/DML" in test_text
+        and 'failures+=("dev_db=' not in test_text
         and "existing DEV database" in classifier_text,
         "no_ci_ddl_or_dml": "DDL/DML execution is prohibited in CI workflows" not in reasons,
         "no_sqlite_substitution_for_real_database_contract": "sqlite" not in ci_combined.casefold(),
