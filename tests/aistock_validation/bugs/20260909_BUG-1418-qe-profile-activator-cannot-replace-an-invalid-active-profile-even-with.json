@@ -1,6 +1,8 @@
 {
   "actual": "After BUG-1414 correctly makes an active profile with a mismatched suspend source contract fail closed, scripts/qe_active_dataset_profile.py activate calls _validate(target) before checking --expected-current-sha256. This prevents atomically replacing the known invalid active profile with a fully validated corrected profile, leaving all new QE experiments blocked. Preserve strict validation of the source profile, exact current/source SHA pins, regular-file/path checks and atomic replace. Allow recovery only when the existing target bytes match the explicit expected current SHA; do not weaken dataset/profile validation, modify candidate datasets, access DB, or control services.",
   "allowed_write_scope": [
+    "scripts/qe_active_dataset_profile.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
     "tests/aistock_validation/bugs/20260909_BUG-1418-qe-profile-activator-cannot-replace-an-invalid-active-profile-even-with.json"
   ],
   "assigned_agent": null,
@@ -19,10 +21,16 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260909-2ac97fad1bcb",
       "timestamp": "2026-09-09T07:58:34.509848Z"
+    },
+    {
+      "action": "register_fix_scope",
+      "actor": "Codex",
+      "note": "Keep full validation for the replacement source profile and exact SHA pinning for the existing target, but do not require the exact pinned current bytes to remain semantically valid before an atomic repair replacement.",
+      "timestamp": "2026-09-09T08:05:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A fully validated source profile can atomically replace an invalid existing active profile only when the target is a regular file and its bytes match the explicit expected current SHA256. Invalid sources, wrong current hashes, links, non-files and repository-local targets must remain fail closed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
