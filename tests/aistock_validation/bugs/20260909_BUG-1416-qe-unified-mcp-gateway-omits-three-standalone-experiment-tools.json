@@ -87,8 +87,8 @@
   },
   "first_seen_at": "2026-09-09T01:48:48.047817Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1375d071f4e338e3a850e0270273208d449ec257",
+  "fixed_at": "2026-09-09T04:52:36Z",
   "github_issue_number": 4474,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4474",
   "last_seen_at": "2026-09-09T01:48:48.047817Z",
@@ -96,6 +96,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4477",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -110,7 +111,9 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python scripts/aistock_mcp_gateway.py --profile qe --self-check -> pass; tool_count=101; manifest_tool_count=377; legacy_tool_count=371; errors=0"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "registered_changed_files",
@@ -120,6 +123,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -131,7 +135,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe_mcp"
   ],
@@ -140,6 +144,11 @@
     "fingerprint": "4b27b7aeb4b5451b66a4c711",
     "source_event_id": "FE-20260909-4b27b7aeb4b5"
   },
+  "validation_evidence": [
+    "python -m nox -s qe_data_contract_backend -> 47 passed",
+    "python -m nox -s mcp_gateway_manifest_quality -> 46 passed",
+    "python scripts/aistock_mcp_gateway.py --profile qe --self-check -> pass; tool_count=101; errors=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
