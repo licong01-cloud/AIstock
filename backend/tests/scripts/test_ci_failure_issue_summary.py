@@ -529,7 +529,7 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
             "statuses": {"nightlyL3": "failure"},
             "run_id": "9001",
             "nightly_session_results": [
-                {"session": "advisory_historical_range_backend", "result": "failure"},
+                {"session": "position_timing_backend", "result": "failure"},
                 {"session": "paper_v2_l3", "result": "failure"},
             ],
         }
@@ -548,11 +548,65 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
     issue_payloads = summary.build_github_issue_payloads(payload)
     assert len(issue_payloads) == 2
     assert {item["title"] for item in issue_payloads} == {
-        "[P1][advisory.historical_range] Nightly failed: advisory_historical_range_backend",
+        "[P1][position_timing] Nightly failed: position_timing_backend",
         "[P1][paper_v2_selection_center] Nightly failed: paper_v2_l3",
     }
     assert len({item["dedupe"]["nightly_marker"] for item in issue_payloads}) == 2
     assert all(item["synthetic"] is False for item in issue_payloads)
+
+    changed_sessions = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9002",
+            "nightly_session_results": [
+                {"session": "position_timing_backend", "result": "failure"},
+                {"session": "position_timing_first_release", "result": "failure"},
+                {"session": "paper_v2_l3", "result": "failure"},
+            ],
+        }
+    )
+    changed_payloads = summary.build_github_issue_payloads(changed_sessions)
+    marker_by_module = {
+        item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
+        for item in issue_payloads
+    }
+    changed_marker_by_module = {
+        item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
+        for item in changed_payloads
+    }
+    assert changed_marker_by_module["position_timing"] == marker_by_module["position_timing"]
+    assert changed_marker_by_module["paper_v2_selection_center"] == marker_by_module["paper_v2_selection_center"]
+
+
+def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy_match() -> None:
+    advisory_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9010",
+            "nightly_session_results": [
+                {"session": "advisory_historical_range_backend", "result": "failure"},
+            ],
+        }
+    )
+    paper_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9011",
+            "nightly_session_results": [{"session": "paper_v2_l3", "result": "failure"}],
+        }
+    )
+
+    advisory_payloads = summary.build_github_issue_payloads(advisory_summary)
+    paper_payloads = summary.build_github_issue_payloads(paper_summary)
+
+    assert len(advisory_payloads) == len(paper_payloads) == 1
+    assert "[advisory.historical_range]" in advisory_payloads[0]["title"]
+    assert "[paper_v2_selection_center]" in paper_payloads[0]["title"]
+    assert advisory_payloads[0]["dedupe"]["nightly_marker"] != paper_payloads[0]["dedupe"]["nightly_marker"]
+    assert (
+        advisory_payloads[0]["dedupe"]["legacy_nightly_marker"]
+        == paper_payloads[0]["dedupe"]["legacy_nightly_marker"]
+    )
 
 
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
@@ -1605,6 +1659,9 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "Array.isArray(issueDocument.payloads)" in script
     assert "if (payloads.length > 5)" in script
     assert "for (const payload of payloads)" in script
+    assert "fs.unlinkSync(singleIssueNumberPath)" in script
+    assert "existing.body = updateParams.body" in script
+    assert "payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null" in script
     assert "github-issue-number.txt" in script
     assert "github-issue-numbers.json" in script
 

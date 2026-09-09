@@ -1191,6 +1191,10 @@ jobs:
             if (payloads.length > 5) {
               throw new Error(`Nightly issue payload count ${payloads.length} exceeds the bounded maximum of 5.`);
             }
+            const singleIssueNumberPath = 'tmp/validation/nightly_failure_issue/github-issue-number.txt';
+            if (fs.existsSync(singleIssueNumberPath)) {
+              fs.unlinkSync(singleIssueNumberPath);
+            }
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner,
@@ -1207,7 +1211,12 @@ jobs:
               }
               const labels = (payload.labels || []).filter((label) => existingLabels.has(label));
               const marker = payload.dedupe.nightly_marker || payload.dedupe.marker;
-              const existing = openIssues.find((issue) => !issue.pull_request && ((issue.body || "").includes(marker) || issue.title === payload.title));
+              const legacyMarker = payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null;
+              const existing = openIssues.find((issue) => !issue.pull_request && (
+                (issue.body || "").includes(marker)
+                || (legacyMarker && (issue.body || "").includes(legacyMarker))
+                || issue.title === payload.title
+              ));
               let issueNumber;
               if (existing) {
                 issueNumber = existing.number;
@@ -1228,6 +1237,8 @@ jobs:
                   updateParams.labels = labels;
                 }
                 await github.rest.issues.update(updateParams);
+                existing.title = payload.title;
+                existing.body = updateParams.body;
               } else {
                 const createParams = {
                   owner,
@@ -1263,7 +1274,7 @@ jobs:
             );
             if (issueRecords.length === 1) {
               fs.writeFileSync(
-                'tmp/validation/nightly_failure_issue/github-issue-number.txt',
+                singleIssueNumberPath,
                 `${issueRecords[0].issue_number}\n`,
                 'utf8',
               );
