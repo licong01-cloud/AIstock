@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from backend.services.factor_research.models import ResearchError, encode, request
-from backend.services.factor_research.runner import CANONICAL_UNIVERSE, evaluation_context, load_values, validate_spec
+from backend.services.factor_research.runner import CANONICAL_UNIVERSE, evaluation_context, execute, load_values, validate_spec
 from scripts.factor_research import configure
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -139,6 +139,68 @@ def test_context_slice_preserves_future_labels_without_warmup_denominator():
     assert len(view["dates"]) == 2 and view["fwd_ret_mats"]["1d"].notna().all().all()
     assert view["fwd_ret_mats"]["1d"].iloc[-1, 0] == 1
     assert len(ctx["dates"]) == 6
+
+
+def test_runner_optional_comparison_uses_current_candidate_artifacts(tmp_path):
+    dates = pd.bdate_range("2026-01-01", periods=12)
+    instruments = [f"{index:06d}.SZ" for index in range(1, 11)]
+    candidates = []
+    for name, expression in (("base", "values"), ("candidate", "values + 0.25 * np.sin(values + day)"),
+                             ("style", "-values")):
+        script = tmp_path / f"{name}.py"
+        script.write_text(f"""
+import argparse, json
+from pathlib import Path
+import numpy as np
+import pandas as pd
+p=argparse.ArgumentParser()
+for key in ('data-dir','output','start-date','end-date','instruments'):
+    p.add_argument('--'+key, required=True)
+a=p.parse_args()
+dates=pd.bdate_range(a.start_date,a.end_date)
+symbols=json.loads(a.instruments)
+rows=[]
+for day in range(len(dates)):
+    values=np.arange(len(symbols),dtype=float)
+    rows.extend(({expression}).tolist())
+index=pd.MultiIndex.from_product([dates,symbols],names=['datetime','instrument'])
+pd.DataFrame({{'{name}':rows}},index=index).to_hdf(Path(a.output),key='data')
+""", encoding="utf-8")
+        candidates.append({"factor_name": name, "script": str(script)})
+    data = tmp_path / "data"
+    data.mkdir()
+    raw = {"task_id": str(uuid4()), "record_id": str(uuid4()), "attempt_id": str(uuid4()),
+           "expected_revision": 1, "universe_key": CANONICAL_UNIVERSE, "method_version": "2.0",
+           "data_dir": str(data), "qlib_bin_path": str(data), "artifact_root": str(tmp_path / "artifacts"),
+           "instruments": instruments, "read_start": "2026-01-01", "signal_start": "2026-01-01",
+           "signal_end": "2026-01-16", "read_end": "2026-01-16", "cutoff": "2026-01-16",
+           "candidates": candidates,
+           "comparison": {"research_role": "predictive_increment", "horizon": "1d",
+                          "baseline": ["base"], "candidate": "candidate", "value_artifacts": {},
+                          "controls": {"style": ["style"], "neighbors": ["base"], "categorical": []},
+                          "fit_windows": [{"start": "2026-01-01", "end": "2026-01-08",
+                                           "knowledge_cutoff": {"date": "2026-01-08",
+                                                                "phase": "post_close"}}],
+                          "evaluation_windows": [{"start": "2026-01-09", "end": "2026-01-16",
+                                                   "fit_window_index": 0}],
+                          "hac_maxlags": 0,
+                          "knowledge_cutoff": {"date": "2026-01-16", "phase": "post_close"},
+                          "direction": {"source": "declared", "sign": 1, "locked_at": "2026-01-08"}}}
+    validated, output = validate_spec(raw)
+    close = pd.DataFrame(np.arange(120, dtype=float).reshape(12, 10) + 100, index=dates, columns=instruments)
+    returns = pd.DataFrame(np.asarray([np.sin(np.arange(10) + day) for day in range(12)]),
+                           index=dates, columns=instruments)
+    ctx = {"close_unstacked": close, "fwd_ret_mats": {name: returns for name in ("1d", "5d", "10d", "20d")},
+           "dates": dates, "st_pit_eligible_mask": close.notna(), "suspended_pairs": set(),
+           "data_start": "2026-01-01", "data_end": "2026-01-16", "calc_batch_id": str(uuid4()),
+           "universe_metadata": {}, "coverage_semantics": "test"}
+    result = execute(validated, output, prepare=lambda **_kwargs: ctx,
+                     compute=lambda name, _frame, _ctx: {"factor_name": name, "test": True})
+    assert result["research_comparison"]["schema_version"] == "factor_research_comparison_v1"
+    assert result["research_comparison"]["method_version"] == "2.0"
+    assert result["research_comparison"]["run_scope"]["instrument_count"] == 10
+    assert [item["factor_name"] for item in result["candidates"]] == ["base", "candidate", "style"]
+    assert '"research_comparison"' in encode(result)
 
 
 @pytest.fixture(scope="module")
