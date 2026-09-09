@@ -1,4 +1,4 @@
-"""Approved G2-A v1.4 development executor for L1 sector rotation.
+"""Approved G2-A v1.4/v1.5 development executor for L1 sector rotation.
 
 This module owns the model-facing, development-only contract. It consumes an
 already materialised causal panel and fits the approved target-free market
@@ -33,7 +33,10 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
 from backend.services.hmm_risk.state_model_set import canonical_sha256
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 
-CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_4"
+V14_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_4"
+V15_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_5"
+# Backward-compatible default.  The v1.5 experiment must be selected explicitly.
+CONTRACT_VERSION = V14_CONTRACT_VERSION
 INPUT_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_bundle_v2"
 PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v2"
 ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v2"
@@ -41,6 +44,7 @@ INPUT_MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_manifest_v2"
 V13_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_3"
 V13_PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v1"
 V13_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v1"
+V15_TARGET_TRANSFORM = "daily_l1_average_rank_centered_v1"
 FIXED_HORIZON = 10
 FROZEN_FORWARD_POWER_STATUS = "INSUFFICIENT"
 HORIZON_AUTHORITY = {
@@ -812,6 +816,92 @@ def fold_slices(calendar: Sequence[date], *, horizon: int) -> tuple[FoldSlice, .
     return tuple(output)
 
 
+def build_rank_training_target(raw_target: pd.Series) -> tuple[pd.Series, dict[str, Any]]:
+    """Build the approved v1.5 train-only daily L1 rank target.
+
+    Ranking is performed on each complete 31-sector mature target cross-section
+    before feature eligibility is applied.  The raw target remains untouched and
+    authoritative for all development metrics/status metrics.
+    """
+
+    if (
+        not isinstance(raw_target, pd.Series)
+        or not isinstance(raw_target.index, pd.MultiIndex)
+        or tuple(raw_target.index.names) != ("trade_date", "sector_code")
+        or raw_target.index.has_duplicates
+        or raw_target.empty
+    ):
+        raise _fail(REASON_LABEL, "v1.5 rank target identity is invalid", stage="label_transform")
+    try:
+        values = raw_target.astype(np.float64)
+    except (TypeError, ValueError) as exc:
+        raise _fail(REASON_LABEL, "v1.5 rank target is not numeric", stage="label_transform") from exc
+    counts = values.groupby(level="trade_date", sort=True).size()
+    finite_counts = values.groupby(level="trade_date", sort=True).agg(lambda item: int(np.isfinite(item).sum()))
+    sector_sets = values.groupby(level="trade_date", sort=True).apply(
+        lambda item: frozenset(str(code) for code in item.index.get_level_values("sector_code"))
+    )
+    if (
+        counts.empty
+        or not (counts == CANONICAL_SECTOR_COUNT).all()
+        or not (finite_counts == CANONICAL_SECTOR_COUNT).all()
+        or len(set(sector_sets)) != 1
+    ):
+        raise _fail(
+            REASON_LABEL,
+            "v1.5 rank target requires 31 finite mature sectors on every train date",
+            stage="label_transform",
+            minimum_sector_count=int(counts.min()) if not counts.empty else 0,
+            minimum_finite_sector_count=int(finite_counts.min()) if not finite_counts.empty else 0,
+        )
+    labels = values.groupby(level="trade_date", sort=False).rank(method="average", ascending=True)
+    labels = (labels - 1.0) / float(CANONICAL_SECTOR_COUNT - 1) - 0.5
+    if not np.isfinite(labels.to_numpy(dtype=np.float64)).all() or not labels.between(-0.5, 0.5).all():
+        raise _fail(REASON_LABEL, "v1.5 rank target transform is invalid", stage="label_transform")
+    identity_rows = [[day.isoformat(), str(code)] for day, code in labels.index]
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_training_target_receipt_v1",
+        "transform": V15_TARGET_TRANSFORM,
+        "source_target": "target_10d",
+        "tie_method": "average_exact_float64",
+        "sector_count": CANONICAL_SECTOR_COUNT,
+        "date_count": int(len(counts)),
+        "row_count": int(len(labels)),
+        "identity_sha256": canonical_sha256(identity_rows),
+        "raw_target_sha256": canonical_sha256(values.tolist()),
+        "training_target_sha256": canonical_sha256(labels.tolist()),
+        "fit_row_count": int(len(labels)),
+        "fit_identity_sha256": canonical_sha256(identity_rows),
+        "fit_training_target_sha256": canonical_sha256(labels.tolist()),
+        "minimum": float(labels.min()),
+        "maximum": float(labels.max()),
+    }
+    return labels, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _bind_rank_training_target_fit(
+    receipt: Mapping[str, Any],
+    training_target: pd.Series,
+) -> dict[str, Any]:
+    if (
+        training_target.empty
+        or training_target.index.has_duplicates
+        or not np.isfinite(training_target.to_numpy(dtype=np.float64)).all()
+    ):
+        raise _fail(REASON_LABEL, "v1.5 fitted rank target identity is invalid", stage="label_transform")
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    body.update(
+        {
+            "fit_row_count": int(len(training_target)),
+            "fit_identity_sha256": canonical_sha256(
+                [[day.isoformat(), str(code)] for day, code in training_target.index]
+            ),
+            "fit_training_target_sha256": canonical_sha256(training_target.tolist()),
+        }
+    )
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _market_raw_features(benchmark: Mapping[date, float], calendar: Sequence[date]) -> pd.DataFrame:
     ordered = tuple(calendar)
     rows: list[dict[str, Any]] = []
@@ -1545,10 +1635,14 @@ def _run_gbdt_process_impl(
     *,
     producer_commit: str,
     process_index: int,
+    model_contract_version: str,
     progress: FitProgress,
     estimator_factory: Any | None = None,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
+    if model_contract_version not in {V14_CONTRACT_VERSION, V15_CONTRACT_VERSION}:
+        raise _fail(REASON_INPUT, "unsupported G2-A model contract", stage="input")
+    rank_target_enabled = model_contract_version == V15_CONTRACT_VERSION
     selected_horizon = FIXED_HORIZON
     forward_power_status = FROZEN_FORWARD_POWER_STATUS
     if (
@@ -1596,6 +1690,10 @@ def _run_gbdt_process_impl(
                 validation_market_signs[day] = context.signs[day]
         train = _with_market_signs(ranked.loc[(list(fold.train_dates), slice(None)), :], context.signs)
         validation = _with_market_signs(ranked.loc[(list(fold.validation_dates), slice(None)), :], context.signs)
+        training_target_receipt: dict[str, Any] | None = None
+        training_target = train[f"target_{selected_horizon}d"]
+        if rank_target_enabled:
+            training_target, training_target_receipt = build_rank_training_target(training_target)
         train_mask = _eligible_rows(
             train,
             ridge=False,
@@ -1610,13 +1708,18 @@ def _run_gbdt_process_impl(
         )
         if not train_mask.any() or not validation_mask.any():
             raise _fail(REASON_FIT, "GBDT eligible fold is empty", stage="fit", fold=fold.name)
+        if training_target_receipt is not None:
+            training_target_receipt = _bind_rank_training_target_fit(
+                training_target_receipt,
+                training_target.loc[train_mask],
+            )
         estimator = estimator_factory(**profile)
         try:
             progress.execute(
                 f"process-{process_index}:{fold.name}:gbdt",
                 lambda: estimator.fit(
                     train.loc[train_mask, V14_FEATURES],
-                    train.loc[train_mask, f"target_{selected_horizon}d"],
+                    training_target.loc[train_mask],
                 ),
             )
         except Exception as exc:
@@ -1655,17 +1758,18 @@ def _run_gbdt_process_impl(
         fold_model_hash = canonical_sha256(estimator.booster_.model_to_string())
         for identity in validation.index:
             model_hash_by_identity[(identity[0], str(identity[1]))] = fold_model_hash
-        fold_receipts.append(
-            {
-                **fold.receipt(),
-                "fit_row_count": int(train_mask.sum()),
-                "prediction_row_count": int(validation_mask.sum()),
-                "leaf_date_coverage": leaf,
-                "feature_contributions": contribution,
-                "model_sha256": fold_model_hash,
-                "market_context_receipt_sha256": context.receipt["receipt_sha256"],
-            }
-        )
+        fold_receipt = {
+            **fold.receipt(),
+            "fit_row_count": int(train_mask.sum()),
+            "prediction_row_count": int(validation_mask.sum()),
+            "leaf_date_coverage": leaf,
+            "feature_contributions": contribution,
+            "model_sha256": fold_model_hash,
+            "market_context_receipt_sha256": context.receipt["receipt_sha256"],
+        }
+        if training_target_receipt is not None:
+            fold_receipt["training_target_receipt"] = training_target_receipt
+        fold_receipts.append(fold_receipt)
     all_predictions = pd.concat(predictions).sort_index()
     states, state_receipt = project_states(all_predictions)
     metrics = _metrics(
@@ -1716,6 +1820,10 @@ def _run_gbdt_process_impl(
     )
     market_receipts.append(final_context.receipt)
     final_train = _with_market_signs(ranked.loc[(list(full_train_dates), slice(None)), :], final_context.signs)
+    final_training_target_receipt: dict[str, Any] | None = None
+    final_training_target = final_train[f"target_{selected_horizon}d"]
+    if rank_target_enabled:
+        final_training_target, final_training_target_receipt = build_rank_training_target(final_training_target)
     final_mask = _eligible_rows(
         final_train,
         ridge=False,
@@ -1724,13 +1832,18 @@ def _run_gbdt_process_impl(
     ) & np.isfinite(final_train[f"target_{selected_horizon}d"])
     if not final_mask.any():
         raise _fail(REASON_FIT, "GBDT final eligible train is empty", stage="final_fit")
+    if final_training_target_receipt is not None:
+        final_training_target_receipt = _bind_rank_training_target_fit(
+            final_training_target_receipt,
+            final_training_target.loc[final_mask],
+        )
     final_estimator = estimator_factory(**profile)
     try:
         progress.execute(
             f"process-{process_index}:full-development:gbdt",
             lambda: final_estimator.fit(
                 final_train.loc[final_mask, V14_FEATURES],
-                final_train.loc[final_mask, f"target_{selected_horizon}d"],
+                final_training_target.loc[final_mask],
             ),
         )
     except Exception as exc:
@@ -1753,6 +1866,8 @@ def _run_gbdt_process_impl(
         "model_sha256": canonical_sha256(final_model_text),
         "market_context": final_context.receipt,
     }
+    if final_training_target_receipt is not None:
+        final_model["training_target_receipt"] = final_training_target_receipt
     oof_rows: list[dict[str, Any]] = []
     calendar_position = {day: index for index, day in enumerate(calendar)}
     for (day, raw_code), raw_score in all_predictions.items():
@@ -1800,7 +1915,7 @@ def _run_gbdt_process_impl(
                 }
             )
     payload = {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": model_contract_version,
         "selected_horizon": selected_horizon,
         "horizon_authority": HORIZON_AUTHORITY,
         "horizon_authority_sha256": canonical_sha256(HORIZON_AUTHORITY),
@@ -1837,6 +1952,9 @@ def _run_gbdt_process_impl(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if rank_target_enabled:
+        payload["input_feature_contract_version"] = V14_CONTRACT_VERSION
+        payload["target_transform"] = V15_TARGET_TRANSFORM
     body = {
         "schema_version": PROCESS_SCHEMA_VERSION,
         "process_index": process_index,
@@ -1852,6 +1970,7 @@ def run_gbdt_process(
     *,
     producer_commit: str,
     process_index: int,
+    model_contract_version: str = V14_CONTRACT_VERSION,
     estimator_factory: Any | None = None,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
@@ -1861,6 +1980,7 @@ def run_gbdt_process(
             bundle,
             producer_commit=producer_commit,
             process_index=process_index,
+            model_contract_version=model_contract_version,
             progress=progress,
             estimator_factory=estimator_factory,
             runtime_validator=runtime_validator,
@@ -1953,12 +2073,70 @@ def _valid_leaf_coverage_receipt(value: Any) -> bool:
     return True
 
 
+def _valid_training_target_receipt(value: Any) -> bool:
+    expected_keys = {
+        "schema_version",
+        "transform",
+        "source_target",
+        "tie_method",
+        "sector_count",
+        "date_count",
+        "row_count",
+        "identity_sha256",
+        "raw_target_sha256",
+        "training_target_sha256",
+        "fit_row_count",
+        "fit_identity_sha256",
+        "fit_training_target_sha256",
+        "minimum",
+        "maximum",
+        "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    hashes = (
+        value.get("identity_sha256"),
+        value.get("raw_target_sha256"),
+        value.get("training_target_sha256"),
+        value.get("fit_identity_sha256"),
+        value.get("fit_training_target_sha256"),
+    )
+    return bool(
+        value.get("schema_version") == "hmm_risk_rotation_l1_g2a_training_target_receipt_v1"
+        and value.get("transform") == V15_TARGET_TRANSFORM
+        and value.get("source_target") == "target_10d"
+        and value.get("tie_method") == "average_exact_float64"
+        and value.get("sector_count") == CANONICAL_SECTOR_COUNT
+        and isinstance(value.get("date_count"), int)
+        and not isinstance(value.get("date_count"), bool)
+        and value["date_count"] > 0
+        and value.get("row_count") == value["date_count"] * CANONICAL_SECTOR_COUNT
+        and isinstance(value.get("fit_row_count"), int)
+        and not isinstance(value.get("fit_row_count"), bool)
+        and 0 < value["fit_row_count"] <= value["row_count"]
+        and all(
+            isinstance(item, str) and len(item) == 64 and all(character in "0123456789abcdef" for character in item)
+            for item in hashes
+        )
+        and isinstance(value.get("minimum"), (int, float))
+        and not isinstance(value.get("minimum"), bool)
+        and isinstance(value.get("maximum"), (int, float))
+        and not isinstance(value.get("maximum"), bool)
+        and math.isfinite(float(value["minimum"]))
+        and math.isfinite(float(value["maximum"]))
+        and -0.5 <= float(value["minimum"]) <= float(value["maximum"]) <= 0.5
+        and value.get("receipt_sha256") == canonical_sha256(body)
+    )
+
+
 def _valid_fold_receipt(
     value: Any,
     *,
     expected: tuple[str, date, date],
     horizon: int,
     feature_count: int = len(V14_FEATURES),
+    rank_target_enabled: bool = False,
 ) -> bool:
     base_keys = {
         "fold",
@@ -1982,6 +2160,8 @@ def _valid_fold_receipt(
         "model_sha256",
         "market_context_receipt_sha256",
     }
+    if rank_target_enabled:
+        expected_keys.add("training_target_receipt")
     if not isinstance(value, Mapping) or set(value) != expected_keys:
         return False
     try:
@@ -2034,6 +2214,12 @@ def _valid_fold_receipt(
         and len(contribution["canonical_sha256"]) == 64
         and all(character in "0123456789abcdef" for character in contribution["canonical_sha256"])
         and _valid_leaf_coverage_receipt(value["leaf_date_coverage"])
+        and (
+            _valid_training_target_receipt(value.get("training_target_receipt"))
+            and value["training_target_receipt"]["fit_row_count"] == value["fit_row_count"]
+            if rank_target_enabled
+            else "training_target_receipt" not in value
+        )
     )
 
 
@@ -2115,7 +2301,9 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
     oof_rows = payload.get("oof_prediction_rows") if isinstance(payload, Mapping) else None
     contract_version = payload.get("contract_version") if isinstance(payload, Mapping) else None
     legacy = contract_version == V13_CONTRACT_VERSION
-    active = contract_version == CONTRACT_VERSION
+    v14 = contract_version == V14_CONTRACT_VERSION
+    v15 = contract_version == V15_CONTRACT_VERSION
+    active = v14 or v15
     feature_count = len(V13_FEATURES) if legacy else len(V14_FEATURES)
     legacy_battery_sha = payload.get("battery_receipt_sha256") if isinstance(payload, Mapping) else None
     contract_specific_valid = bool(
@@ -2139,6 +2327,12 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
             and payload.get("forward_power_status") == FROZEN_FORWARD_POWER_STATUS
             and _valid_delta_feature_coverage_receipt(payload.get("delta_feature_coverage"))
             and "battery_receipt_sha256" not in payload
+            and (
+                payload.get("input_feature_contract_version") == V14_CONTRACT_VERSION
+                and payload.get("target_transform") == V15_TARGET_TRANSFORM
+                if v15
+                else "input_feature_contract_version" not in payload and "target_transform" not in payload
+            )
         )
     )
     if (
@@ -2174,6 +2368,7 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
                 expected=expected,
                 horizon=int(payload["selected_horizon"]),
                 feature_count=feature_count,
+                rank_target_enabled=v15,
             )
             for fold, expected in zip(folds, FOLDS, strict=True)
         )
@@ -2183,6 +2378,12 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
         or not isinstance(final_model, Mapping)
         or final_model.get("model_sha256") != canonical_sha256(model_text)
         or not _valid_leaf_coverage_receipt(final_model.get("leaf_date_coverage"))
+        or (
+            not _valid_training_target_receipt(final_model.get("training_target_receipt"))
+            or final_model["training_target_receipt"]["fit_row_count"] != final_model.get("fit_row_count")
+            if v15
+            else "training_target_receipt" in final_model
+        )
     ):
         raise _fail(REASON_REPRODUCIBILITY, "GBDT child envelope or receipt differs", stage="closure")
     fold_model_hashes = {fold.get("model_sha256") for fold in folds}
@@ -2437,11 +2638,141 @@ def validate_v13_process_reference(value: Mapping[str, Any]) -> None:
         raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.3 process", stage="input")
 
 
+def validate_v14_process_reference(value: Mapping[str, Any]) -> None:
+    """Validate the frozen v1.4 comparison receipt before any v1.5 fit."""
+
+    payload = _validated_process(value, expected_index=1)
+    if payload.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="input")
+
+
+def _v15_training_target_authority(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    frame, calendar, _sectors, _benchmark = validate_input_bundle(bundle)
+    folds = []
+    for fold in fold_slices(calendar, horizon=FIXED_HORIZON):
+        _labels, receipt = build_rank_training_target(frame.loc[(list(fold.train_dates), slice(None)), "target_10d"])
+        folds.append({"fold": fold.name, "receipt": receipt})
+    full_train_end = len(calendar) - FIXED_HORIZON
+    full_train_dates = calendar[full_train_end - ROLLING_WINDOW_OPEN_DAYS : full_train_end]
+    if len(full_train_dates) != ROLLING_WINDOW_OPEN_DAYS:
+        raise _fail(REASON_LABEL, "v1.5 final rank target authority is incomplete", stage="closure")
+    _labels, final_receipt = build_rank_training_target(frame.loc[(list(full_train_dates), slice(None)), "target_10d"])
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_training_target_authority_v1",
+        "folds": folds,
+        "final": final_receipt,
+        "input_identity": dict(bundle["identity"]),
+    }
+    return {**body, "authority_sha256": canonical_sha256(body)}
+
+
+def _validate_v15_training_target_authority(
+    payload: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+) -> str:
+    authority = _v15_training_target_authority(bundle)
+    if payload.get("input_identity") != authority["input_identity"]:
+        raise _fail(REASON_INPUT, "v1.5 label authority input identity differs", stage="closure")
+    authority_fields = {
+        "transform",
+        "source_target",
+        "tie_method",
+        "sector_count",
+        "date_count",
+        "row_count",
+        "identity_sha256",
+        "raw_target_sha256",
+        "training_target_sha256",
+        "minimum",
+        "maximum",
+    }
+    folds = payload.get("folds")
+    if not isinstance(folds, list) or len(folds) != len(authority["folds"]):
+        raise _fail(REASON_REPRODUCIBILITY, "v1.5 fold label authority differs", stage="closure")
+    for actual_fold, expected_fold in zip(folds, authority["folds"], strict=True):
+        actual = actual_fold.get("training_target_receipt") if isinstance(actual_fold, Mapping) else None
+        expected = expected_fold["receipt"]
+        if (
+            expected_fold["fold"] != actual_fold.get("fold")
+            or not isinstance(actual, Mapping)
+            or any(actual.get(field) != expected.get(field) for field in authority_fields)
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "v1.5 fold label authority differs", stage="closure")
+    final_model = payload.get("final_model")
+    actual_final = final_model.get("training_target_receipt") if isinstance(final_model, Mapping) else None
+    expected_final = authority["final"]
+    if not isinstance(actual_final, Mapping) or any(
+        actual_final.get(field) != expected_final.get(field) for field in authority_fields
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "v1.5 final label authority differs", stage="closure")
+    return str(authority["authority_sha256"])
+
+
+def _paired_v14_diagnostic(v14_reference: Mapping[str, Any], v15_payload: Mapping[str, Any]) -> dict[str, Any]:
+    baseline = _validated_process(v14_reference, expected_index=1)
+    if baseline.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
+    if baseline.get("input_identity") != v15_payload.get("input_identity"):
+        raise _fail(REASON_INPUT, "paired v1.4/v1.5 input identity differs", stage="closure")
+
+    def daily_ic(payload: Mapping[str, Any]) -> dict[str, float]:
+        metrics = payload.get("metrics")
+        rows = metrics.get("daily") if isinstance(metrics, Mapping) else None
+        if not isinstance(rows, list):
+            raise _fail(REASON_INPUT, "paired metric evidence is missing", stage="closure")
+        result: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("metric_valid") is not True:
+                continue
+            day = row.get("trade_date")
+            value = row.get("rank_ic")
+            if (
+                not isinstance(day, str)
+                or day in result
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                raise _fail(REASON_INPUT, "paired metric identity differs", stage="closure")
+            result[day] = float(value)
+        return result
+
+    baseline_ic = daily_ic(baseline)
+    candidate_ic = daily_ic(v15_payload)
+    if tuple(baseline_ic) != tuple(candidate_ic):
+        raise _fail(REASON_INPUT, "paired v1.4/v1.5 metric dates differ", stage="closure")
+    dates = tuple(baseline_ic)
+    differences = [candidate_ic[day] - baseline_ic[day] for day in dates]
+    try:
+        paired_hac: Mapping[str, Any] = newey_west(differences, lag=FIXED_HORIZON - 1)
+        paired_hac_reason = None
+    except RotationL1G2AError as exc:
+        paired_hac = {}
+        paired_hac_reason = exc.reason_code
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_v14_v15_paired_diagnostic_v1",
+        "baseline_contract_version": V14_CONTRACT_VERSION,
+        "candidate_contract_version": V15_CONTRACT_VERSION,
+        "common_date_count": len(dates),
+        "common_date_sha256": canonical_sha256([*dates]),
+        "baseline_mean_rank_ic": float(baseline["metrics"]["mean_rank_ic"]),
+        "candidate_mean_rank_ic": float(v15_payload["metrics"]["mean_rank_ic"]),
+        "mean_daily_rank_ic_difference": float(np.mean(differences)),
+        "paired_difference_hac": dict(paired_hac),
+        "paired_difference_hac_reason_code": paired_hac_reason,
+        "binding_gate_applied": False,
+        "tail_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def close_processes(
     first: Mapping[str, Any],
     second: Mapping[str, Any],
     *,
     v13_reference: Mapping[str, Any] | None = None,
+    v14_reference: Mapping[str, Any] | None = None,
+    input_bundle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     first_payload = _validated_process(first, expected_index=1)
     second_payload = _validated_process(second, expected_index=2)
@@ -2454,8 +2785,16 @@ def close_processes(
     tail_allowed = bool(payload["tail_access_gate"]["passed"])
     forward_power_status = str(payload["forward_power_status"])
     legacy = payload["contract_version"] == V13_CONTRACT_VERSION
-    if not legacy and v13_reference is None:
+    v15 = payload["contract_version"] == V15_CONTRACT_VERSION
+    if not legacy and not v15 and v13_reference is None:
         raise _fail(REASON_INPUT, "v1.4 closure requires the frozen v1.3 diagnostic reference", stage="closure")
+    if v15 and (v14_reference is None or input_bundle is None):
+        raise _fail(
+            REASON_INPUT,
+            "v1.5 closure requires frozen v1.4 and input label authorities",
+            stage="closure",
+        )
+    training_target_authority_sha256 = _validate_v15_training_target_authority(payload, input_bundle) if v15 else None
     body = {
         "schema_version": V13_ACCEPTANCE_SCHEMA_VERSION if legacy else ACCEPTANCE_SCHEMA_VERSION,
         "contract_version": payload["contract_version"],
@@ -2490,6 +2829,13 @@ def close_processes(
     }
     if legacy:
         body["battery_receipt_sha256"] = payload["battery_receipt_sha256"]
+    elif v15:
+        body["horizon_authority"] = payload["horizon_authority"]
+        body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
+        body["input_feature_contract_version"] = payload["input_feature_contract_version"]
+        body["target_transform"] = payload["target_transform"]
+        body["training_target_authority_sha256"] = training_target_authority_sha256
+        body["paired_v14_diagnostic"] = _paired_v14_diagnostic(v14_reference, payload)
     else:
         body["horizon_authority"] = payload["horizon_authority"]
         body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
@@ -2523,11 +2869,15 @@ __all__ = [
     "V13_CONTRACT_VERSION",
     "V13_FEATURES",
     "V13_PROCESS_SCHEMA_VERSION",
+    "V14_CONTRACT_VERSION",
     "V14_CONTINUOUS_FEATURES",
     "V14_FEATURES",
+    "V15_CONTRACT_VERSION",
+    "V15_TARGET_TRANSFORM",
     "RotationL1G2AError",
     "build_label_free_feature_panel",
     "build_materialised_panel",
+    "build_rank_training_target",
     "close_processes",
     "cross_section_rank_features",
     "fold_slices",
@@ -2542,5 +2892,6 @@ __all__ = [
     "validate_battery_report",
     "validate_input_bundle",
     "validate_v13_process_reference",
+    "validate_v14_process_reference",
     "write_input_bundle",
 ]

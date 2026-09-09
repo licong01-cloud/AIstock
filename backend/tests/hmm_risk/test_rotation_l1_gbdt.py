@@ -474,6 +474,15 @@ class _FakeEstimator:
         return score
 
 
+class _CapturingEstimator(_FakeEstimator):
+    fitted_targets: list[np.ndarray] = []
+
+    def fit(self, features: pd.DataFrame, target: pd.Series) -> "_CapturingEstimator":
+        type(self).fitted_targets.append(target.to_numpy(dtype=np.float64, copy=True))
+        super().fit(features, target)
+        return self
+
+
 def _as_v13_reference(child: dict[str, object]) -> dict[str, object]:
     legacy = copy.deepcopy(child)
     payload = legacy["reproducibility_payload"]
@@ -495,6 +504,176 @@ def _as_v13_reference(child: dict[str, object]) -> dict[str, object]:
         {key: value for key, value in legacy.items() if key != "report_sha256"}
     )
     return legacy
+
+
+def test_v15_rank_target_uses_full_daily_cross_section_and_average_ties() -> None:
+    day = date(2025, 1, 2)
+    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
+    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
+    raw = pd.Series(np.arange(subject.CANONICAL_SECTOR_COUNT, dtype=np.float64), index=index)
+    raw.iloc[10:12] = 10.0
+
+    labels, receipt = subject.build_rank_training_target(raw)
+
+    assert labels.iloc[0] == pytest.approx(-0.5)
+    assert labels.iloc[-1] == pytest.approx(0.5)
+    assert labels.iloc[10] == labels.iloc[11] == pytest.approx((10.5 / 30.0) - 0.5)
+    assert receipt["transform"] == subject.V15_TARGET_TRANSFORM
+    assert receipt["sector_count"] == 31
+    assert receipt["date_count"] == 1
+
+
+def test_v15_rank_target_rejects_partial_or_non_finite_daily_target() -> None:
+    day = date(2025, 1, 2)
+    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
+    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
+    raw = pd.Series(np.arange(subject.CANONICAL_SECTOR_COUNT, dtype=np.float64), index=index)
+
+    with pytest.raises(subject.RotationL1G2AError) as partial:
+        subject.build_rank_training_target(raw.iloc[:-1])
+    assert partial.value.reason_code == subject.REASON_LABEL
+
+    raw.iloc[3] = np.nan
+    with pytest.raises(subject.RotationL1G2AError) as non_finite:
+        subject.build_rank_training_target(raw)
+    assert non_finite.value.reason_code == subject.REASON_LABEL
+
+
+def test_v15_rank_target_all_equal_cross_section_is_neutral_without_fallback() -> None:
+    day = date(2025, 1, 2)
+    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
+    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
+
+    labels, receipt = subject.build_rank_training_target(pd.Series(3.0, index=index))
+
+    assert labels.eq(0.0).all()
+    assert receipt["minimum"] == receipt["maximum"] == 0.0
+
+
+def test_v15_rank_target_rejects_cross_date_sector_identity_drift() -> None:
+    days = (date(2025, 1, 2), date(2025, 1, 3))
+    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
+    identities = [(days[0], code) for code in sectors]
+    identities.extend((days[1], code) for code in (*sectors[:-1], "809999"))
+    index = pd.MultiIndex.from_tuples(identities, names=["trade_date", "sector_code"])
+
+    with pytest.raises(subject.RotationL1G2AError) as caught:
+        subject.build_rank_training_target(pd.Series(np.arange(len(index), dtype=np.float64), index=index))
+
+    assert caught.value.reason_code == subject.REASON_LABEL
+
+
+def test_v15_process_fits_rank_target_and_closes_against_v14_reference() -> None:
+    _CapturingEstimator.fitted_targets = []
+    bundle = _bundle()
+    v14_reference = subject.run_gbdt_process(
+        bundle,
+        producer_commit="e" * 40,
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    children = [
+        subject.run_gbdt_process(
+            bundle,
+            producer_commit="e" * 40,
+            process_index=index,
+            model_contract_version=subject.V15_CONTRACT_VERSION,
+            estimator_factory=_CapturingEstimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+
+    assert len(_CapturingEstimator.fitted_targets) == 12
+    assert all(
+        float(target.min()) >= -0.5 and float(target.max()) <= 0.5 for target in _CapturingEstimator.fitted_targets
+    )
+    payload = children[0]["reproducibility_payload"]
+    assert payload["contract_version"] == subject.V15_CONTRACT_VERSION
+    assert payload["input_feature_contract_version"] == subject.V14_CONTRACT_VERSION
+    assert payload["target_transform"] == subject.V15_TARGET_TRANSFORM
+    assert all(fold["training_target_receipt"]["sector_count"] == 31 for fold in payload["folds"])
+    assert all(fold["training_target_receipt"]["fit_row_count"] == fold["fit_row_count"] for fold in payload["folds"])
+    assert payload["final_model"]["training_target_receipt"]["sector_count"] == 31
+    assert payload["final_model"]["training_target_receipt"]["fit_row_count"] == payload["final_model"]["fit_row_count"]
+
+    acceptance = subject.close_processes(*children, v14_reference=v14_reference, input_bundle=bundle)
+    assert acceptance["contract_version"] == subject.V15_CONTRACT_VERSION
+    assert acceptance["paired_v14_diagnostic"]["baseline_contract_version"] == subject.V14_CONTRACT_VERSION
+    assert acceptance["paired_v14_diagnostic"]["candidate_contract_version"] == subject.V15_CONTRACT_VERSION
+    assert acceptance["tail_accessed"] is False
+
+    with pytest.raises(subject.RotationL1G2AError) as missing_authority:
+        subject.close_processes(*children, v14_reference=v14_reference)
+    assert missing_authority.value.reason_code == subject.REASON_INPUT
+
+    tampered_bundle = copy.deepcopy(bundle)
+    first_train_date = subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON)[0].train_dates[0]
+    first_identity = (first_train_date, tampered_bundle["panel"].index.get_level_values("sector_code")[0])
+    tampered_bundle["panel"].loc[first_identity, "target_10d"] += 1.0
+    with pytest.raises(subject.RotationL1G2AError) as tampered_authority:
+        subject.close_processes(*children, v14_reference=v14_reference, input_bundle=tampered_bundle)
+    assert tampered_authority.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
+def test_cli_defaults_to_v14_and_requires_explicit_v15_selection() -> None:
+    parser = cli._parser()
+    default_args = parser.parse_args(
+        [
+            "model-child",
+            "--input-root",
+            "input",
+            "--output-file",
+            "output.json",
+            "--process-index",
+            "1",
+            "--producer-commit",
+            "e" * 40,
+        ]
+    )
+    explicit_args = parser.parse_args(
+        [
+            "model-child",
+            "--input-root",
+            "input",
+            "--output-file",
+            "output.json",
+            "--process-index",
+            "1",
+            "--producer-commit",
+            "e" * 40,
+            "--model-contract-version",
+            subject.V15_CONTRACT_VERSION,
+        ]
+    )
+
+    assert default_args.model_contract_version == subject.V14_CONTRACT_VERSION
+    assert explicit_args.model_contract_version == subject.V15_CONTRACT_VERSION
+
+
+def test_v15_cli_failure_receipt_keeps_explicit_contract_identity(tmp_path) -> None:
+    output = tmp_path / "fresh_process_1.json"
+    assert (
+        cli.main(
+            [
+                "model-child",
+                "--input-root",
+                str(tmp_path / "missing-input"),
+                "--output-file",
+                str(output),
+                "--process-index",
+                "1",
+                "--producer-commit",
+                "e" * 40,
+                "--model-contract-version",
+                subject.V15_CONTRACT_VERSION,
+            ]
+        )
+        == 2
+    )
+    failure = json.loads((tmp_path / "fresh_process_1.failure.json").read_text(encoding="utf-8"))
+    assert failure["contract_version"] == subject.V15_CONTRACT_VERSION
 
 
 def _leaf_distribution(*, sparse_tree_count: int, sparse_date_count: int) -> tuple[object, pd.DataFrame, pd.Index]:

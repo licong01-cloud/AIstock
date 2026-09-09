@@ -1,9 +1,9 @@
-"""Build and execute the approved G2-A v1.4 development contract.
+"""Build and execute the approved G2-A v1.4/v1.5 development contracts.
 
 The parent mode launches exactly two 12-fit model processes as fresh Python
-processes.  Horizon 10D is frozen by the approved v1.3 authority; this CLI has
-no battery path and never reads the sealed tail, a database, or a runtime
-service.
+processes.  Horizon 10D is frozen by the approved v1.3 authority; v1.5 must be
+selected explicitly and paired with the frozen v1.4 receipt.  This CLI has no
+battery path and never reads the sealed tail, a database, or a runtime service.
 """
 
 from __future__ import annotations
@@ -31,15 +31,17 @@ if str(ROOT) not in sys.path:
 
 from backend.services.dataset_release.cas_store import canonical_json_bytes  # noqa: E402
 from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
-    CONTRACT_VERSION,
     REASON_INPUT,
     REASON_REPRODUCIBILITY,
     RotationL1G2AError,
+    V14_CONTRACT_VERSION,
+    V15_CONTRACT_VERSION,
     canonical_sha256,
     close_processes,
     read_input_bundle,
     run_gbdt_process,
     validate_v13_process_reference,
+    validate_v14_process_reference,
     write_input_bundle,
 )
 from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
@@ -82,11 +84,29 @@ def _load_v13_reference(path: Path) -> dict[str, Any]:
     return value
 
 
+def _load_v14_reference(path: Path) -> dict[str, Any]:
+    if not path.is_absolute() or path.is_symlink():
+        raise RuntimeError("v1.4 process reference must be an absolute regular file")
+    resolved = path.resolve(strict=True)
+    if not resolved.is_file():
+        raise RuntimeError("v1.4 process reference must be an absolute regular file")
+    try:
+        resolved.relative_to(ROOT.resolve(strict=True))
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("v1.4 process reference must be outside the repository")
+    value = _load_object(resolved)
+    validate_v14_process_reference(value)
+    return value
+
+
 def _failure(
     error: BaseException,
     *,
     stage: str,
     fit_progress: dict[str, Any] | None = None,
+    contract_version: str = V14_CONTRACT_VERSION,
 ) -> dict[str, Any]:
     reason = str(getattr(error, "reason_code", REASON_INPUT))
     raw_evidence = getattr(error, "evidence", None)
@@ -95,7 +115,7 @@ def _failure(
     evidence = raw_evidence if isinstance(raw_evidence, dict) else {"exception_type": type(error).__name__}
     body = {
         "schema_version": "hmm_risk_rotation_l1_g2a_failure_v1",
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": contract_version,
         "status": "failed",
         "stage": str(getattr(error, "stage", stage)),
         "reason_code": reason,
@@ -217,6 +237,7 @@ def _model_child(args: argparse.Namespace) -> int:
         bundle,
         producer_commit=args.producer_commit,
         process_index=args.process_index,
+        model_contract_version=args.model_contract_version,
     )
     _write_once(args.output_file, report)
     return 0
@@ -244,7 +265,7 @@ def _child_command(
     ]
 
 
-def _run_child(command: list[str], failure_path: Path) -> None:
+def _run_child(command: list[str], failure_path: Path, *, contract_version: str = V14_CONTRACT_VERSION) -> None:
     completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         if failure_path.exists():
@@ -252,7 +273,7 @@ def _run_child(command: list[str], failure_path: Path) -> None:
             failure_body = {key: value for key, value in failure.items() if key != "failure_sha256"}
             if (
                 failure.get("schema_version") != "hmm_risk_rotation_l1_g2a_failure_v1"
-                or failure.get("contract_version") != CONTRACT_VERSION
+                or failure.get("contract_version") != contract_version
                 or failure.get("status") != "failed"
                 or failure.get("failure_sha256") != canonical_sha256(failure_body)
             ):
@@ -270,12 +291,25 @@ def _run_child(command: list[str], failure_path: Path) -> None:
         else:
             detail = completed.stderr.strip()[-4000:]
             error = RuntimeError(f"fresh process failed with code {completed.returncode}: {detail}")
-            _write_once(failure_path, _failure(error, stage="fresh_process"))
+            _write_once(failure_path, _failure(error, stage="fresh_process", contract_version=contract_version))
         raise error
 
 
 def _run_parent(args: argparse.Namespace) -> int:
-    v13_reference = _load_v13_reference(args.v13_process_file)
+    model_contract_version = getattr(args, "model_contract_version", V14_CONTRACT_VERSION)
+    v14_process_file = getattr(args, "v14_process_file", None)
+    if model_contract_version == V15_CONTRACT_VERSION:
+        if v14_process_file is None or args.v13_process_file is not None:
+            raise RuntimeError("v1.5 requires only --v14-process-file")
+        v14_reference = _load_v14_reference(v14_process_file)
+        v13_reference = None
+        input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
+    else:
+        if args.v13_process_file is None or v14_process_file is not None:
+            raise RuntimeError("v1.4 requires only --v13-process-file")
+        v13_reference = _load_v13_reference(args.v13_process_file)
+        v14_reference = None
+        input_bundle = None
     output = _ensure_external_new_directory(args.output_root)
     try:
         child_paths = (output / "fresh_process_1.json", output / "fresh_process_2.json")
@@ -286,14 +320,22 @@ def _run_parent(args: argparse.Namespace) -> int:
                     input_root=args.input_root,
                     output_file=child_path,
                     producer_commit=args.producer_commit,
-                    extra=["--process-index", str(index)],
+                    extra=[
+                        "--process-index",
+                        str(index),
+                        "--model-contract-version",
+                        model_contract_version,
+                    ],
                 ),
                 output / f"fresh_process_{index}.failure.json",
+                contract_version=model_contract_version,
             )
         acceptance = close_processes(
             _load_object(child_paths[0]),
             _load_object(child_paths[1]),
             v13_reference=v13_reference,
+            v14_reference=v14_reference,
+            input_bundle=input_bundle,
         )
         _write_once(output / "acceptance.json", acceptance)
     except Exception as exc:
@@ -301,7 +343,12 @@ def _run_parent(args: argparse.Namespace) -> int:
         if not parent_failure.exists():
             _write_once(
                 parent_failure,
-                _failure(exc, stage="parent", fit_progress=_parent_fit_progress(output)),
+                _failure(
+                    exc,
+                    stage="parent",
+                    fit_progress=_parent_fit_progress(output),
+                    contract_version=model_contract_version,
+                ),
             )
         print(json.dumps({"status": "failed", "failure": str(parent_failure)}, sort_keys=True), file=sys.stderr)
         return 2
@@ -332,13 +379,24 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--input-root", type=Path, required=True)
     run.add_argument("--output-root", type=Path, required=True)
-    run.add_argument("--v13-process-file", type=Path, required=True)
+    run.add_argument("--v13-process-file", type=Path)
+    run.add_argument("--v14-process-file", type=Path)
+    run.add_argument(
+        "--model-contract-version",
+        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION),
+        default=V14_CONTRACT_VERSION,
+    )
     run.add_argument("--producer-commit", required=True)
     child = subparsers.add_parser("model-child")
     child.add_argument("--input-root", type=Path, required=True)
     child.add_argument("--output-file", type=Path, required=True)
     child.add_argument("--process-index", type=int, choices=(1, 2), required=True)
     child.add_argument("--producer-commit", required=True)
+    child.add_argument(
+        "--model-contract-version",
+        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION),
+        default=V14_CONTRACT_VERSION,
+    )
     return parser
 
 
@@ -354,7 +412,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "model-child":
             failure_path = args.output_file.with_name(f"{args.output_file.stem}.failure.json")
             if not failure_path.exists():
-                _write_once(failure_path, _failure(exc, stage=args.mode))
+                _write_once(
+                    failure_path,
+                    _failure(exc, stage=args.mode, contract_version=args.model_contract_version),
+                )
         elif args.mode == "build-input":
             failure_path = args.output_root.parent / f"{args.output_root.name}.failure.json"
             if args.output_root.parent.exists() and not failure_path.exists():
