@@ -1,12 +1,12 @@
 # 因子研究比较能力：集中增补详细设计
 
-日期：2026-09-09；版本：1.0；F1 单研究模块设计。依据[蓝图 v1.1](factor_research_evolution_blueprint_20260908.md)和[方法论 v2.0](../analysis/factor_research_methodology.md)。本次仅文档、审核、合入及本任务清理，不执行以下代码、实验或数据库操作。
+日期：2026-09-09；版本：1.1；F1 单研究模块设计与实现回执。依据[蓝图 v1.1](factor_research_evolution_blueprint_20260908.md)和[方法论 v2.0](../analysis/factor_research_methodology.md)。v1.0 先完成设计；v1.1 在同一边界内实现研究比较能力，不执行正式因子晋升、QE 实验、生产数据库操作或进程控制。
 
 ## 1. 背景、目标、非目标与边界
 
 一次集中实现“看得到存量证据 → 廉价诊断 → 角色匹配的时间外增量 → 有依据的下一步”。不新增阶段、平台、表、task_type、record_type、writer、官方评价引擎、资源限制或生产门禁。研究角色用 context_json，研究结果仍由既有 records 保存。未知和不可计算只是对应诊断状态，不阻断其他研究或业务。
 
-本文是未来实现的验收设计，不是已实现接口说明。[P1](factor_research_p1_detailed_design_20260908.md)、[P2](factor_research_p2_detailed_design_20260909.md)及[质量操作记录](../operations/factor_research_quality.md)的原始测试、DEV 任务/revision、PR 与当时生产状态不修改、不重算；当前运行事实另由实时回执核实。尤其月度 h20 空值原因不能由日期猜测。
+本文前半部保留验收设计，§12 单独记录 v1.1 实现，不把设计状态追溯改写为已实现。[P1](factor_research_p1_detailed_design_20260908.md)、[P2](factor_research_p2_detailed_design_20260909.md)及[质量操作记录](../operations/factor_research_quality.md)的原始测试、DEV 任务/revision、PR 与当时生产状态不修改、不重算；当前运行事实另由实时回执核实。尤其月度 h20 空值原因不能由日期猜测。
 
 | 已有位置 | 已核实能力 | 增补边界 |
 |---|---|---|
@@ -23,7 +23,7 @@
 
 不得修改 QE/qrun/Qlib/数仓/评级/官方 writer/生产 catalog/数据集/PIT/交易语义；不安装依赖。使用已存在的 NumPy/Pandas 线性代数与日期能力，不因参考 Pingouin 文档安装 Pingouin。客户端 skill 已引用唯一方法正文，本次不改或安装它们。若实现必须改共享 owner 文件，则提交具体需求，不能偷改后声称仍为本模块。
 
-## 3. 输入与上下文接口（待实现）
+## 3. 输入与上下文接口
 
 ### 3.1 研究卡与不可混用的计数
 
@@ -39,7 +39,9 @@
 
 ### 3.3 run 可选 comparison 请求
 
-现有 run 请求兼容增加一个 `comparison` 对象；无该对象时不运行新诊断、不改变既有基础指标。对象包含：角色/主要期限、B/F 及可选替换/消融的候选名或已有稳定值产物引用、输入 bindings、样本规则、fit_windows/evaluation_windows、knowledge cutoff、控制集、近邻选择记录、方向策略、combiner、hac_maxlags、可选 cost_scenarios/权重路径。所有名字必须精确关联本次已审核计算或明确的既有产物；不增加任意代码自动执行路径。
+现有 run 请求兼容增加一个 `comparison` 对象；无该对象时不运行新诊断、不改变既有基础指标。v1 精确计算合同包含 `research_role/horizon/baseline/candidate`、可选 `replacement_target/state`、`controls`、`value_artifacts`、`fit_windows/evaluation_windows`、全局 `knowledge_cutoff`、`direction`、`hac_maxlags`、可选 `construction/cost`。研究用途、输入选择依据、近邻检索过程、样本计划等继续留在已有 task `context_json`，不在运行请求复制第二份研究卡。
+
+每个 `fit_windows[]` 明确 `{start,end,knowledge_cutoff:{date,phase}}`；每个 `evaluation_windows[]` 用 `fit_window_index` 精确绑定一次既有拟合，拟合知识截止严格早于对应评价窗口。全局和拟合 cutoff 的 phase 只允许 `pre_open/post_close`。首版 combiner 固定为分别拟合的横截面 rank OLS 和日期等权，不开放评价期模型搜索。所有信号名必须精确关联本次已审核候选或 repo 外稳定值产物；未引用产物、目录内产物、符号链接、重名控制角色和未绑定信号均拒绝，不增加任意代码自动执行路径。
 
 最小样本仍用现有 instruments/read_start/read_end/signal_start/signal_end/cutoff；多窗口保留各自边界，暖启动与标签读取范围不等于评价范围。执行依赖数组只保留本组需要的列，旧候选产物可按范围读回，不长期保留全市场大缓存，不添加 OS 以上的资源门禁。
 
@@ -106,7 +108,7 @@ R²_span 仅在拟合样本报告被基准解释程度及其样本/自由度，�
 
 ID/owner 保持 P2 原交接，不改历史 request；后续新 request/correction 链接原记录。评级方向来源标注或 catalog 元数据回填等需求只提交明确 owner，生产写入须单独授权。缺少跨模块接口只限制对应结论。
 
-## 8. 验证方案与测试验收（尚未执行）
+## 8. 验证方案与测试验收
 
 | 测试 | 必须发现的错误 / 正确观察 |
 |---|---|
@@ -142,14 +144,14 @@ F-301 上下文与研究角色；F-302 范围与标签成熟；F-303 统计与�
 
 ## 10. 发布、风险与本次 Production gates
 
-当前仅本文、蓝图与方法论三份 docs 变更，production_ddl_gate=noop、production_dml_gate=noop、dependency_install=noop、client_install=noop、runtime_impact=none、production_activation=false、process_control=false，无需重启。合入不授权未来研究/代码/生产操作；未来 runtime contract 按实际代码与 catalog 重新推导，不能沿用本次 none。
+v1.0 文档 PR 当时为 `runtime_impact=none`；v1.1 实际修改 `backend/services/factor_research/**`，最终 runtime contract 必须按 changed files/catalog 归为 backend 并绑定 `backend-main`，不能沿用旧回执。production_ddl_gate=noop、production_dml_gate=noop、dependency_install=noop、client_install=noop、production_activation=false；源码合入后是否重启由用户单独授权，本窗口不执行。DEV 仅运行既有两表事务测试和只读 context，不建表、不改 schema。
 
-文档交付执行多轮顺序实质审核与修订、UTF-8/相对链接/精确范围、git diff --check、蓝图F2和本文F1设计结构校验，PR使用最终HEAD必要CI；不执行本节所述未来因子/模型计算。合入后只清理本任务命名工作树及分支，不删研究历史或数据。源码、root同步、清理分别读回；本轮没有BUG记录，不制造close-sync。
+v1.1 源码交付执行数学/因果、兼容/恢复/性能、DESIGN-COMPLIANCE-001 三轮顺序审核与修复，运行所属模块计划、DEV 既有数据库计划、UTF-8/编译/Ruff/diff、F1 校验和 L0；PR 使用最终 HEAD 的必要 CI。不执行正式因子/模型计算。合入后只清理本任务命名工作树及分支，不删研究历史或数据。源码、root 同步、运行时待重启和清理分别读回；本轮是已批准 F1 实施，不伪造 BUG/close-sync。
 
 剩余风险是未知依赖、样本不足、研究选择偏差、现有权重路径缺失及owner未交付；以对应结论限制处理，不靠新增全局门禁解决。方法是否改善发现效率必须在后续实际研究中检验，本次设计通过不是实证。
 
 <a id="review"></a>
-## 11. 本次文档审核与修订记录
+## 11. v1.0 文档审核与修订记录
 
 以下为本窗口顺序实质审核，非独立 agent/Claude 再审声明，不引用讨论中的历史测试数作为本次验证。
 
@@ -175,3 +177,45 @@ F-301 上下文与研究角色；F-302 范围与标签成熟；F-303 统计与�
 | 禁止私增门禁审批 | §1/§4–6/§10的诊断与生产状态分开，无新阈值/审批/全库前置 | 仅已有文档流程；没有新资源/冻结/hash/自动晋升淘汰 |
 
 本地无剩余阻断文档finding；F2蓝图12条/12行、F1本文8条/8行均PASS/warnings=0，diff与链接/历史保护检查通过。最终HEAD的CI及合入后状态由PR记录，不提前宣称已合入或研究方法有效。
+
+## 12. v1.1 实现回执与实施验收
+
+### 12.1 实现范围
+
+- `comparison_context.py` 只对本次分页可见 catalog 行做词法字段扫描和近邻线索；`inputs` 是已观察 token，`completeness=unknown`，从不执行 catalog 代码，也不把 Jaccard/同表达式提升为等价结论。
+- `comparison.py` 实现显式多 fit/evaluation 窗口、独立拟合知识截止、共享标签查表、PIT/停牌样本、原始与双侧残差偏 RankIC、指定基准局部相似性、日期等权 B 与 B+F/替换/交互 OLS、张成度、分段 HAC、成本路径和两轴待解释结果。计算结果不写官方 metrics/correlations/catalog。
+- `runner.py` 仅在请求显式提供 `comparison` 时加载本次候选或声明的 repo 外稳定值文件；控制项不进入模型堆叠矩阵，未声明路径保持旧行为。`service.py` 复用原 result/attach writer，并把 comparison 请求身份、窗口、方向、控制集和结果数量纳入 readback。
+- 未新增表、migration、writer、task/record 枚举、依赖、资源门禁、QE/Qlib/数仓/评级修改；没有自动晋升、淘汰或 alpha 阈值。
+
+### 12.2 重要实现精化
+
+拟合信号区间与“拟合时知道到哪一天”不能混为一个日期，因此 v1 每个 fit window 必须携带独立 knowledge cutoff。fit 仅使用该 cutoff 已成熟且价格有效的标签；全局 cutoff 只控制评价结果当前可知范围。这个精化落实 C-7，不改变既有 `HOLDING_PERIODS` 或收益公式。方向符号在候选诊断/模型输入前应用，fitted/declared 及锁定时点仅按已登记请求回报，不由评价期重选。
+
+预测模型的评价使用真正 Spearman（预测值和目标分别排名）而非预测水平与目标排名的 Pearson；偏 RankIC 仍按 C-2 对 x/y 两侧使用同一 Z 残差化且残差不再排名。每个评价窗口同时输出声明网格、PIT、候选、共同模型输入、成熟标签的逐层数量与 closure，控制变量缺失只使相应偏相关视角不可用，不缩小 B/B+F 的模型样本。
+
+内存路径只保留声明样本：repo 外稳定值读回后立即按 signal window 和 instruments 裁剪；模型长表只堆叠 B/F/条件 state，不把诊断 controls 重复堆叠；偏 RankIC 按单日截面逐日拼接/释放。L0 的 `MEMORY-DATAFRAME-001` 对单日 `pd.concat` 给出一条非阻断启发式告警，逐行审核确认其峰值由本次股票截面而非全历史行数决定；不为消除提示新增资源门禁或虚假分块。
+
+成本只接受四份同日期、实数、递增且 repo 外的权重/同频算术毛收益路径，并声明 currency/capital normalization。费用按实际权重变化拆买卖，固定费用定义为每个发生交易日期的一次资本归一化收益扣减；路径超出评价窗口或日期被静默求交均报错。无路径仍返回 unavailable，不影响纯预测诊断。
+
+### 12.3 Design Acceptance Index 实施矩阵
+
+下表与 §9 的 v1.0 设计状态并列，不能覆盖其历史事实。状态只表示代码/测试交付，不把工具可用、真实研究结论、QE 价值或运行时激活混为一体。
+
+| design_item_at_v1_0 | implementation_refs_at_v1_0 | test_or_evidence_at_v1_0 | status_at_v1_0 | gap_or_exception_at_v1_0 |
+|---|---|---|---|---|
+| F-301 | `service.py`、`comparison_context.py` | `backend/tests/factor_research/test_comparison.py::test_context_dependency_scan_is_bounded_and_does_not_claim_equivalence`；DEV context readback | verified | - |
+| F-302 | `comparison.py::_last_available_price_position/_mature_dates/_coverage_report` | `backend/tests/factor_research/test_comparison.py::test_label_maturity_boundary_uses_trading_calendar_and_cutoff_phase`；h20/PIT/缺失同文件测试 | verified | - |
+| F-303 | `comparison.py::_partial_rank_daily/_construction_relation` | `backend/tests/factor_research/test_comparison.py::test_partial_rank_ic_residualizes_both_sides_and_never_fills_zero`；类别/张成/单调构造同文件测试 | verified | - |
+| F-304 | `comparison.py::_weighted_fit/_compute_window_result` | `backend/tests/factor_research/test_comparison.py::test_fit_uses_only_labels_mature_by_its_own_cutoff`；多窗口/Spearman/替换/交互同文件测试 | verified | - |
+| F-305 | `comparison.py::_hac/_cost_report` | `backend/tests/factor_research/test_comparison.py::test_cost_paths_cannot_silently_intersect_different_dates`；HAC/实际权重同文件测试 | verified | - |
+| F-306 | `runner.py`、`service.py` | `backend/tests/factor_research/test_contracts.py::test_runner_optional_comparison_uses_current_candidate_artifacts`；`backend/tests/factor_research/test_recovery.py`；`python -m nox -s factor_research_dev_db` | verified | - |
+| F-307 | `backend/tests/factor_research/test_comparison.py` 构造/角色测试 | `python -m pytest backend/tests/factor_research/test_comparison.py -q` | verified | approved_by_user: 本 PR 验收研究工具；正式市场研究按 §6 独立执行，不以构造测试冒充已完成 |
+| F-308 | 本文 §1–2/§7/§10/§12；全部 changed files | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/factor_research_comparison_supplement_20260909.md --tier F1`；`python -m nox -s l0` | verified | - |
+
+### 12.4 v1.1 顺序审核记录
+
+第一轮数学与因果审核发现并修复：初稿只按全局 cutoff 屏蔽标签，可能让 fit 借用其后才成熟的收益；为每个 fit 增加独立知识截止并加入边界测试。随后发现预测 RankIC 初稿误用预测水平与收益排名的 Pearson，改为两侧排名后的 Spearman。方向、PIT/停牌和未来标签变化测试通过。
+
+第二轮兼容、恢复与成本审核补齐：控制项不再进入模型长表；分母逐层闭合并区分未成熟/价格缺失；cost 四路径不再静默取日期交集；构造结论明确为 caller declaration + values/ranks check；attach 对新块做完整身份验证，旧请求不接受伪造新块。普通模块计划和既有 DEV 两表事务计划通过，未新增 schema。
+
+第三轮按最终 diff 执行 §8、FEATURE-WORKFLOW-001 与 DESIGN-COMPLIANCE-001；具体最终测试数、CI、PR/merge SHA 和 cleanup 只在实际发生后由工作流回执与 PR 记录，不在提交前预填。真实市场案例仍是后续研究任务，不作为本次源码合入的虚假成功条件。

@@ -20,7 +20,7 @@ def validate_spec(value):
     spec = json_object(value)
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
                "read_start", "signal_start", "signal_end", "read_end", "cutoff", "instruments",
-               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds"}
+               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison"}
     if set(spec) - allowed:
         raise ResearchError("invalid_request", f"Unknown run fields: {sorted(set(spec) - allowed)}")
     for key in ("task_id", "record_id", "attempt_id"):
@@ -74,6 +74,18 @@ def validate_spec(value):
         names.append(item["factor_name"])
     if len(names) != len(set(names)):
         raise ResearchError("invalid_request", "Candidate names must be unique within an attempt")
+    if spec.get("comparison") is not None:
+        from .comparison import validate_comparison_spec
+
+        spec["comparison"] = validate_comparison_spec(
+            spec["comparison"], candidate_names=set(names), repo_root=REPO_ROOT,
+        )
+        comparison_start = min(item["start"] for item in spec["comparison"]["fit_windows"])
+        comparison_end = max(item["end"] for item in spec["comparison"]["evaluation_windows"])
+        if comparison_start < spec["signal_start"] or comparison_end > spec["signal_end"]:
+            raise ResearchError("invalid_comparison", "Comparison windows must stay inside the declared signal window")
+        if spec["comparison"]["knowledge_cutoff"]["date"] > spec["cutoff"]:
+            raise ResearchError("invalid_comparison", "Comparison knowledge cutoff cannot exceed the run cutoff")
     timeout = spec.get("timeout_seconds", 600)
     if type(timeout) not in (int, float) or timeout <= 0:
         raise ResearchError("invalid_request", "timeout_seconds must be positive")
@@ -186,6 +198,35 @@ def execute(spec, output, *, prepare=None, compute=None):
         write_json(folder / "metrics.json", result)
         results.append(result)
         del frame, selected
-    return {"status": "computed", "scope": "research_candidate", "task_id": spec["task_id"],
-            "attempt_id": spec["attempt_id"], "request": spec, "candidates": results,
-            "finished_at": datetime.now(timezone.utc).isoformat()}
+    comparison = None
+    if spec.get("comparison") is not None:
+        import pandas as pd
+        from .comparison import compute_comparison
+
+        candidate_paths = {item["factor_name"]: Path(item["values"]) for item in results}
+        signals = {}
+        requested = set(spec["comparison"]["baseline"]) | {spec["comparison"]["candidate"]}
+        requested.update(spec["comparison"]["controls"]["style"])
+        requested.update(spec["comparison"]["controls"]["neighbors"])
+        requested.update(spec["comparison"]["controls"]["categorical"])
+        if spec["comparison"].get("state"):
+            requested.add(spec["comparison"]["state"])
+        for name in requested:
+            source = candidate_paths.get(name) or Path(spec["comparison"]["value_artifacts"][name])
+            values = load_values(source, name)
+            dates = values.index.get_level_values("datetime")
+            symbols = values.index.get_level_values("instrument")
+            selected = ((dates >= pd.Timestamp(spec["signal_start"]))
+                        & (dates <= pd.Timestamp(spec["signal_end"]))
+                        & symbols.isin(spec["instruments"]))
+            values = values.loc[selected]
+            if values.empty:
+                raise ResearchError("comparison_unavailable", f"Comparison signal {name} has no rows in run scope")
+            signals[name] = values
+        comparison = compute_comparison(spec["comparison"], signals, ctx, spec)
+    payload = {"status": "computed", "scope": "research_candidate", "task_id": spec["task_id"],
+               "attempt_id": spec["attempt_id"], "request": spec, "candidates": results,
+               "finished_at": datetime.now(timezone.utc).isoformat()}
+    if comparison is not None:
+        payload["research_comparison"] = comparison
+    return payload
