@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/mcp/modules/qe_experiment.py",
     "backend/mcp/tool_manifest.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
     "tests/mcp/test_qe_experiment_gateway_contract.py",
     "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
   ],
@@ -28,6 +30,12 @@
       "actor": "codex",
       "note": "Bound implementation to the QE gateway module, static manifest, one new gateway contract test, and this BUG record; existing pipeline and inventory tests remain read-only.",
       "timestamp": "2026-09-09T01:51:00Z"
+    },
+    {
+      "action": "register_contract_count_scope",
+      "actor": "codex",
+      "note": "Added only the existing QE domain and manifest exact-count contracts required by the three-tool migration; BUG-1412 profile, CLI, and inventory tests remain read-only.",
+      "timestamp": "2026-09-09T02:03:00Z"
     }
   ],
   "evidence_uris": [],
@@ -37,6 +45,8 @@
     "changed_files": [
       "backend/mcp/modules/qe_experiment.py",
       "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
       "tests/mcp/test_qe_experiment_gateway_contract.py",
       "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
     ],
@@ -52,6 +62,8 @@
     "planned_files": [
       "backend/mcp/modules/qe_experiment.py",
       "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
       "tests/mcp/test_qe_experiment_gateway_contract.py",
       "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
     ],
@@ -59,6 +71,8 @@
     "scope_files": [
       "backend/mcp/modules/qe_experiment.py",
       "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
       "tests/mcp/test_qe_experiment_gateway_contract.py",
       "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
     ]
