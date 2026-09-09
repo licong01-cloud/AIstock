@@ -1,0 +1,240 @@
+{
+  "actual": "The standalone QE experiment MCP server exposes qe_dataset_profile_get, qe_single_experiment_template_create, and qe_universe_comparison_task_create, but backend/mcp/modules/qe_experiment.py and the unified gateway manifest do not. Unified gateway clients therefore cannot use these established QE controls, and the strict migration inventory detects drift. Migrate exactly these three wrappers and add contract tests without changing pipeline or inventory tests, relaxing confirmation or validation, starting services, experiments, or database access.",
+  "allowed_write_scope": [
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "tests/mcp/test_qe_experiment_gateway_contract.py",
+    "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1416",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-09T01:48:48.047817Z",
+  "description": "The standalone QE experiment MCP server exposes qe_dataset_profile_get, qe_single_experiment_template_create, and qe_universe_comparison_task_create, but backend/mcp/modules/qe_experiment.py and the unified gateway manifest do not. Unified gateway clients therefore cannot use these established QE controls, and the strict migration inventory detects drift. Migrate exactly these three wrappers and add contract tests without changing pipeline or inventory tests, relaxing confirmation or validation, starting services, experiments, or database access.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260909-4b27b7aeb4b5",
+      "timestamp": "2026-09-09T01:48:48.047800Z"
+    },
+    {
+      "action": "register_scope_expansion",
+      "actor": "codex",
+      "note": "Bound implementation to the QE gateway module, static manifest, one new gateway contract test, and this BUG record; existing pipeline and inventory tests remain read-only.",
+      "timestamp": "2026-09-09T01:51:00Z"
+    },
+    {
+      "action": "register_contract_count_scope",
+      "actor": "codex",
+      "note": "Added only the existing QE domain and manifest exact-count contracts required by the three-tool migration; BUG-1412 profile, CLI, and inventory tests remain read-only.",
+      "timestamp": "2026-09-09T02:03:00Z"
+    },
+    {
+      "action": "validation_partial_pass_waiting_for_bug_1412",
+      "actor": "codex",
+      "note": "Three migrated signatures match the standalone contracts; new contracts 4/4, QE profile self-check, qe_data_contract_backend 47/47, L0 8/8, guardrail and ownership passed. Full mcp_gateway_manifest_quality retains exactly seven failures owned by BUG-1412, so PR creation remains fail-closed.",
+      "timestamp": "2026-09-09T02:42:45Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/4466#issuecomment-5594935327"
+  ],
+  "expected": "The unified qe_experiment gateway exposes the same three established tools with equivalent request validation and HTTP contracts, while strict inventory and manifest-quality tests remain unchanged and pass.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ],
+    "changed_files_source": "registered_scope_expansion",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "backend/tests/mcp/test_domain_modules.py",
+      "tests/mcp/test_mcp_tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ]
+  },
+  "first_seen_at": "2026-09-09T01:48:48.047817Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4474,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4474",
+  "last_seen_at": "2026-09-09T01:48:48.047817Z",
+  "module": "qe_mcp",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest tests/mcp/test_mcp_inventory_diff.py::test_legacy_qe_inventory_migrated_to_gateway_modules -q",
+  "required_verification": [
+    "l0",
+    "mcp_gateway_manifest_quality"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "registered_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe_mcp"
+  ],
+  "title": "QE unified MCP gateway omits three standalone experiment tools",
+  "trigger_condition": {
+    "fingerprint": "4b27b7aeb4b5451b66a4c711",
+    "source_event_id": "FE-20260909-4b27b7aeb4b5"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "mcp_gateway_manifest_quality"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "mcp_gateway_manifest_quality"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
