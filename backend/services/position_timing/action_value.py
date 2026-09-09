@@ -39,6 +39,7 @@ CORE_INFORMATION_BLOCK = "CORE_ONLY"
 ATR14_INFORMATION_BLOCK = "ATR14_SMA_GAP_RANGE_V1"
 SW_L2_INFORMATION_BLOCK = "SW_L2_RELATIVE_MOMENTUM_20D_V1"
 MONEYFLOW_INFORMATION_BLOCK = "MAIN_NET_FLOW_RATIO_5D_LAG1_V1"
+CHIP_COST_INFORMATION_BLOCK = "CHIP_MEDIAN_COST_DISTANCE_LAG1_V1"
 MARKET_FEATURES = (
     "return_1d_bps", "return_3d_bps", "return_5d_bps", "return_20d_bps",
     "close_to_ema20_bps", "ema20_slope_10d_bps", "realized_vol_20d_bps",
@@ -109,6 +110,21 @@ MONEYFLOW_FEATURE_SPEC = {
     "availability_policy": "T_MINUS_1_GLOBAL_SESSION_END_OF_DAY_CONSERVATIVE",
 }
 MONEYFLOW_FEATURE_SPEC_SHA256 = canonical_sha256(MONEYFLOW_FEATURE_SPEC)
+CHIP_COST_MARKET_FEATURES = MARKET_FEATURES + ("chip_median_cost_distance_lag1_bps",)
+CHIP_COST_FEATURE_ORDER = CHIP_COST_MARKET_FEATURES + STATE_FEATURES
+CHIP_COST_FEATURE_SPEC = {
+    **FEATURE_SPEC,
+    "schema": "position_timing_core_plus_chip_median_cost_distance_lag1_features_v1",
+    "feature_order": CHIP_COST_FEATURE_ORDER,
+    "optional_blocks": (CHIP_COST_INFORMATION_BLOCK,),
+    "chip_median_cost_distance_lag1_bps": (
+        "SHIFT_ONE_GLOBAL_TRADING_SESSION((RAW_CLOSE_SAME_SOURCE_DAY/"
+        "CP_COST_50PCT_SAME_SOURCE_DAY-1)*10000)_NO_FORWARD_FILL"
+    ),
+    "source_row_validity": "0<COST_15PCT<=COST_50PCT<=COST_85PCT",
+    "availability_policy": "T_MINUS_1_GLOBAL_SESSION_END_OF_DAY_CONSERVATIVE",
+}
+CHIP_COST_FEATURE_SPEC_SHA256 = canonical_sha256(CHIP_COST_FEATURE_SPEC)
 
 
 class ActionValueError(ValueError):
@@ -166,6 +182,8 @@ def feature_contract(information_block: str = CORE_INFORMATION_BLOCK) -> tuple[t
         return SW_L2_MARKET_FEATURES, SW_L2_FEATURE_ORDER, SW_L2_FEATURE_SPEC_SHA256
     if information_block == MONEYFLOW_INFORMATION_BLOCK:
         return MONEYFLOW_MARKET_FEATURES, MONEYFLOW_FEATURE_ORDER, MONEYFLOW_FEATURE_SPEC_SHA256
+    if information_block == CHIP_COST_INFORMATION_BLOCK:
+        return CHIP_COST_MARKET_FEATURES, CHIP_COST_FEATURE_ORDER, CHIP_COST_FEATURE_SPEC_SHA256
     raise ActionValueError("INFORMATION_BLOCK_UNSUPPORTED", information_block=information_block)
 
 
@@ -244,6 +262,12 @@ def market_features(
             raise ActionValueError("MONEYFLOW_FEATURE_SOURCE_MISSING")
         out["main_net_flow_ratio_5d_lag1_bps"] = pd.to_numeric(
             bars["main_net_flow_ratio_5d_lag1_bps"], errors="coerce"
+        )
+    elif information_block == CHIP_COST_INFORMATION_BLOCK:
+        if "chip_median_cost_distance_lag1_bps" not in bars:
+            raise ActionValueError("CHIP_COST_FEATURE_SOURCE_MISSING")
+        out["chip_median_cost_distance_lag1_bps"] = pd.to_numeric(
+            bars["chip_median_cost_distance_lag1_bps"], errors="coerce"
         )
     return out.loc[:, market_names].replace([np.inf, -np.inf], np.nan)
 
