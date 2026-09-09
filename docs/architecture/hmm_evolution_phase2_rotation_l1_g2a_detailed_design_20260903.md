@@ -832,6 +832,6 @@ future单日推理只调用已有shared feature与冻结model的predict，不调
 
 v1.5在现有唯一executor内实现显式model-contract分派；省略CLI参数仍执行v1.4，v1.5只能显式选择并在创建输出目录前验证冻结v1.4 process参考。每个fold与final fit先对完整31-sector成熟raw target做average-rank变换，再应用原feature eligibility mask；receipt分别绑定完整label identity和实际fit row/label identity。OOF评价、state projection、spread、MBE与tail gate继续读取raw outcome，未新增效果门、seed、battery或fallback。
 
-实现前RED测试因缺少v1.5 contract、rank transform和CLI显式分派而4项失败；实现及审核修复后直接测试43项通过，所属hmm_risk_backend模块784项通过且coverage满足门槛。冻结v1.4 input的只读fresh-process预检确认1373日、31 sectors、五个train窗各15624行均可形成完整rank label；冻结v1.4 process参考通过现行validator。上述结果只证明源码/输入可执行性，正式双fresh-process 24-fit尚未运行，tail、数据库、runtime与产品指针均未触碰。
+实现前RED测试因缺少v1.5 contract、rank transform和CLI显式分派而4项失败；实现及审核修复后直接测试44项通过。最终HMM模块门禁与coverage结果以合入前验证回执为准。冻结v1.4 input的只读fresh-process预检确认1373日、31 sectors、五个train窗各15624行均可形成完整rank label；冻结v1.4 process参考通过现行validator。上述结果只证明源码/输入可执行性，正式双fresh-process 24-fit尚未运行，tail、数据库、runtime与产品指针均未触碰。
 
 代码审核第一轮发现“receipt只绑定完整rank输入、未单独绑定feature mask后实际fit标签”并修复为每fit双重identity/hash；第二轮发现child自哈希未与parent读取的input label authority闭合，已改为parent独立重算五fold与final完整rank标签权威并在closure逐项核对；第三轮复核旧v1.3/v1.4 envelope、CLI失败回执、v1.4配对参考、raw metric边界与changed-file范围，未发现剩余阻断。正式实验前仍须在最终合入commit的独立validation worktree执行§23.3～§23.5；实验结果不得由本状态回填预判。

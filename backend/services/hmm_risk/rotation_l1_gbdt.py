@@ -833,7 +833,7 @@ def build_rank_training_target(raw_target: pd.Series) -> tuple[pd.Series, dict[s
     ):
         raise _fail(REASON_LABEL, "v1.5 rank target identity is invalid", stage="label_transform")
     try:
-        values = raw_target.astype(np.float64)
+        values = raw_target.astype(np.float64).sort_index()
     except (TypeError, ValueError) as exc:
         raise _fail(REASON_LABEL, "v1.5 rank target is not numeric", stage="label_transform") from exc
     counts = values.groupby(level="trade_date", sort=True).size()
@@ -883,6 +883,7 @@ def _bind_rank_training_target_fit(
     receipt: Mapping[str, Any],
     training_target: pd.Series,
 ) -> dict[str, Any]:
+    training_target = training_target.sort_index()
     if (
         training_target.empty
         or training_target.index.has_duplicates

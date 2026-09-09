@@ -563,6 +563,20 @@ def test_v15_rank_target_rejects_cross_date_sector_identity_drift() -> None:
     assert caught.value.reason_code == subject.REASON_LABEL
 
 
+def test_v15_rank_target_canonical_receipt_is_invariant_to_input_row_order() -> None:
+    days = (date(2025, 1, 2), date(2025, 1, 3))
+    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
+    index = pd.MultiIndex.from_product([days, sectors], names=["trade_date", "sector_code"])
+    raw = pd.Series(np.arange(len(index), dtype=np.float64), index=index)
+    reordered = raw.sample(frac=1.0, random_state=42)
+
+    expected_labels, expected_receipt = subject.build_rank_training_target(raw)
+    actual_labels, actual_receipt = subject.build_rank_training_target(reordered)
+
+    pd.testing.assert_series_equal(actual_labels, expected_labels)
+    assert actual_receipt == expected_receipt
+
+
 def test_v15_process_fits_rank_target_and_closes_against_v14_reference() -> None:
     _CapturingEstimator.fitted_targets = []
     bundle = _bundle()
