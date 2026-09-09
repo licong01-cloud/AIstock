@@ -24,7 +24,6 @@
 ```text
 backend/services/advisory_model_first/qe_advisory_matched_canary.py
 backend/tests/advisory_model_first/test_qe_advisory_matched_canary.py
-scripts/advisory_qe_matched_canary.py
 docs/architecture/advisory_qe_matched_canary_f2_detailed_design_20260909.md
 docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 ```
@@ -33,7 +32,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 ## 3. Architecture / 架构
 
-实现保持单向依赖：QE 公共 API 响应文件 → Advisory 纯函数投影与校验 → 不可执行 preflight receipt；真实三 seed 结果文件 → Advisory matched-policy 纯函数 → navigation-only report。核心模块不导入 QE 内部包，不访问 API、数据库、文件系统或进程；薄 CLI 只读取用户指定的本地 JSON 并输出单个 JSON。preflight 的 ready 只代表“允许 QE 窗口创建新任务”，不代表任务已经创建、分发或完成。
+实现保持单向依赖：QE 公共 API 响应 → Advisory 纯函数投影与校验 → 不可执行 preflight receipt；真实三 seed 结果 → Advisory matched-policy 纯函数 → navigation-only report。核心模块不导入 QE 内部包，不访问 API、数据库、文件系统或进程；既有 Advisory API/任务编排只把已取得的公开 JSON 对象传入纯函数。preflight 的 ready 只代表“允许 QE 窗口创建新任务”，不代表任务已经创建、分发或完成。
 
 ## 4. Contracts / 接口契约
 
@@ -69,7 +68,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 ## 6. Implementation Plan / 实施方案
 
 1. 在 Advisory 自有模块定义冻结 source snapshot、preflight receipt、matched observation/report 和稳定 reason code。
-2. 通过薄 CLI 消费本地保存的 QE public response，不实现 HTTP client、QE task creator 或数据库读取。
+2. 只提供消费 QE public response 的纯函数，不新增 CLI、HTTP client、QE task creator 或数据库读取。
 3. 用定向测试覆盖单边/双边合同漂移、旧任务身份、profile gate、三 seed 角色隔离、干预支持和 sealed holdout 禁止。
 4. 更新蓝图 F-242/F-245 的源码能力状态，但保持真实 seed 输出、经济验证、merge、runtime 与 experiment submission 为独立未完成状态。
 
@@ -94,15 +93,15 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-242 | `backend/services/advisory_model_first/qe_advisory_matched_canary.py`；`scripts/advisory_qe_matched_canary.py` | `python -m pytest backend/tests/advisory_model_first/test_qe_advisory_matched_canary.py -q`；24 passed | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: QE profile尚未ready，本轮不提交实验，原失败任务未修改 |
-| F-245 | `backend/services/advisory_model_first/qe_advisory_matched_canary.py`；`scripts/advisory_qe_matched_canary.py` | `backend/tests/advisory_model_first/test_qe_advisory_matched_canary.py`覆盖三seed统计、角色隔离、policy/release/sealed/support drift | REPORT_CONTRACT_IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: 真实seed314/2718输出尚不存在，只交付消费与报告能力，不构成经济证据 |
+| F-242 | `backend/services/advisory_model_first/qe_advisory_matched_canary.py` | `python -m pytest backend/tests/advisory_model_first/test_qe_advisory_matched_canary.py -q`；21 passed | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: QE profile尚未ready，本轮不提交实验，原失败任务未修改 |
+| F-245 | `backend/services/advisory_model_first/qe_advisory_matched_canary.py` | `backend/tests/advisory_model_first/test_qe_advisory_matched_canary.py`覆盖三seed统计、角色隔离、policy/release/sealed/support drift | REPORT_CONTRACT_IMPLEMENTED_LOCAL_VERIFIED | approved_by_user: 真实seed314/2718输出尚不存在，只交付消费与报告能力，不构成经济证据 |
 
 ## 10. Rollout / rollback / 发布回滚
 
 - 当前只形成独立 Advisory 源码候选；未获单独授权不得合入。
 - source merge 后不自动重启、不激活模型、不提交实验；若后端运行时需要消费新接口，仍由用户执行重启并单独验证源码/运行时一致性。
 - 回滚仅 revert 本 Feature 的 Advisory 文件与蓝图状态，不触碰原 QE 失败记录、后续 QE task、registry、dataset profile 或数据库。
-- QE ready 后的 exact retry 是新的外部阶段：必须先登记新 identity，再由 QE 公共入口分发；不由本 CLI 执行。
+- QE ready 后的 exact retry 是新的外部阶段：必须先登记新 identity，再由 QE 公共入口分发；不由本纯函数执行。
 
 ## 11. Risks / Failure Modes / 风险
 
@@ -111,7 +110,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 - 稀疏或零干预形成伪结论：逐 seed 记录干预日数量和覆盖率，不把偶然变化隐藏在平均收益里。
 - sealed holdout 污染：任何 observation 声明访问 sealed 均 typed fail closed。
 - ready marker 被误解为 submitted：receipt 永久带 `qe_task_submission_performed=false`，且核心模块无网络/QE runtime依赖。
-- 治理膨胀：不增加平台、表、后台进程、审批流或 Archive 写入，只交付纯合同与薄 CLI。
+- 治理膨胀：不增加平台、表、后台进程、审批流、CLI或 Archive 写入，只交付纯合同。
 
 ## 12. Production Gates / 生产门禁
 

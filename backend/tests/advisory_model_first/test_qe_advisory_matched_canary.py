@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-from scripts import advisory_qe_matched_canary as cli
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.qe_advisory_matched_canary import (
     PROFILE_READY_MARKER,
@@ -332,87 +330,6 @@ def test_matched_report_rejects_same_source_drift_in_all_seeds() -> None:
         build_qe_advisory_matched_canary_report(rows)
 
     assert caught.value.reason_code == "ADVISORY_QE_CANARY_CONTRACT_DRIFT"
-
-
-def test_cli_preflight_is_local_file_only(tmp_path: Path, capsys) -> None:
-    task_path = tmp_path / "task.json"
-    loop_paths = [tmp_path / "loop1.json", tmp_path / "loop2.json"]
-    task_path.write_text(json.dumps(_task_payload()), encoding="utf-8")
-    for path, payload in zip(
-        loop_paths,
-        [_loop_payload(1, 314), _loop_payload(2, 2718)],
-        strict=True,
-    ):
-        path.write_text(json.dumps(payload), encoding="utf-8")
-
-    exit_code = cli.main(
-        [
-            "preflight",
-            "--task-json",
-            str(task_path),
-            "--loop-json",
-            str(loop_paths[0]),
-            "--loop-json",
-            str(loop_paths[1]),
-            "--profile-status",
-            "NOT_READY",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["status"] == "BLOCKED_QE_PROFILE_NOT_READY"
-    assert payload["qe_task_submission_performed"] is False
-
-
-def test_cli_report_keeps_navigation_only_boundary(tmp_path: Path, capsys) -> None:
-    paths: list[Path] = []
-    for seed, candidate_bps, parent_bps in (
-        (123, 7.0, 5.0),
-        (314, 4.0, 5.0),
-        (2718, 9.0, 5.0),
-    ):
-        path = tmp_path / f"observation-{seed}.json"
-        path.write_text(
-            json.dumps(
-                _observation(
-                    seed,
-                    candidate_bps=candidate_bps,
-                    parent_bps=parent_bps,
-                )
-            ),
-            encoding="utf-8",
-        )
-        paths.append(path)
-
-    arguments = ["report"]
-    for path in paths:
-        arguments.extend(["--observation-json", str(path)])
-    exit_code = cli.main(arguments)
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["decision_use"] == "NAVIGATION_ONLY"
-    assert payload["activation_authorized"] is False
-    assert payload["qe_task_submission_performed"] is False
-
-
-def test_cli_missing_input_is_typed(tmp_path: Path, capsys) -> None:
-    exit_code = cli.main(
-        [
-            "preflight",
-            "--task-json",
-            str(tmp_path / "missing.json"),
-            "--loop-json",
-            str(tmp_path / "loop.json"),
-            "--profile-status",
-            "NOT_READY",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 1
-    assert payload["reason_code"] == "ADVISORY_QE_CANARY_INPUT_INVALID"
 
 
 def test_module_has_no_qe_runtime_or_external_io_dependency() -> None:
