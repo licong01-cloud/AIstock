@@ -2953,6 +2953,33 @@ def test_bug_434_business_modes_keep_agentic_synthesis_and_dead_renderers_remove
 
 
 def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> None:
+    class InMemoryStockEvidenceService:
+        def __getattr__(self, name: str):
+            if not (name.startswith("get_stock_") and name.endswith("_evidence")):
+                raise AttributeError(name)
+            dataset = name.removeprefix("get_stock_").removesuffix("_evidence")
+
+            def read_evidence(symbol: str, **kwargs: object) -> dict[str, object]:
+                as_of = str(kwargs.get("analysis_date") or "2026-06-16")
+                return {
+                    "ok": True,
+                    "domain": f"stock_analysis.{dataset}",
+                    "summary_first": True,
+                    "items": [{"symbol": symbol, "dataset": dataset, "date": as_of}],
+                    "total": 1,
+                    "source": f"in_memory_{dataset}_source",
+                    "source_refs": [f"stock-ref:{dataset}:{symbol}"],
+                    "as_of": as_of,
+                    "status": "ok",
+                    "summary": f"{symbol} {dataset} evidence from in-memory test source",
+                    "dataset": dataset,
+                    "response_mode": "stock_analysis_evidence_card",
+                    "reason_codes": [],
+                    "warnings": [],
+                }
+
+            return read_evidence
+
     class ClarificationThenAnswerLlmClient(FakeLlmClient):
         def __init__(self) -> None:
             super().__init__()
@@ -2996,6 +3023,7 @@ def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> Non
 
     fake = ClarificationThenAnswerLlmClient()
     svc = _chat_service(fake)
+    svc.stock_analysis_facade_factory = InMemoryStockEvidenceService
 
     first = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本情况近期走势未来趋势怎样"))
     follow_up = svc.chat_turn(
