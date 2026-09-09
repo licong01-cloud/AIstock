@@ -1,10 +1,10 @@
 # HMM Evolution Phase 2 G2-A `rotation_L1` 端到端详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.4.0（v1.3真实终态回填 + v1.4唯一信息集候选送审）
-> **日期**：2026-09-08
-> **状态**：`V1_3_PRODUCTION_RESEARCH_SURFACE_ACTIVE_V1_4_USER_APPROVED_IMPLEMENTED_NOT_EXECUTED`
-> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.46
+> **文档版本**：v1.5.0（v1.4正式终态回填 + 单一rank-target精确合同）
+> **日期**：2026-09-09
+> **状态**：`V1_4_DEVELOPMENT_COMPLETE_BELOW_MBE_V1_5_USER_APPROVED_PENDING_IMPLEMENTATION`
+> **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.49，已合入PR #4482
 > **终极目标**：在同一个G2-A闭环内交付真实日度L1板块轮动预测、最小repository/read API和真实`/hmm-risk` L1热力图，而不是只交付模型、fit、artifact、receipt或market regime页面。
 > **历史2026-09-04批准边界（叶20日规则已被下述v1.3取代）**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
 > **历史v1.2批准边界**：用户曾一次性批准§10.1的504日rolling、特征完整性、Ridge/horizon规则、LightGBM 4.6.0 profile、coverage、state projection与最小DB/API设计合同；当时未授权源码、39 fits、tail读取、DDL或runtime activation。其后源码与development实验分别获得授权，实际终态见§19.4～§19.5。
@@ -15,7 +15,7 @@
 
 ---
 
-> **2026-09-08修订边界**：v1.3结果、产品与运行状态只按真实readback更新；§10.1仍是已执行v1.3的不可变合同。用户已明确批准§21的G2A-V14-D1～D6精确合同及源码实施；实现只增加一个development选出的因果moneyflow变化率特征，并保持正式24 fits、tail、数据库与运行态动作未执行。
+> **2026-09-09修订边界**：§10.1与§21分别保留v1.3/v1.4已批准合同；v1.4正式24/24 fits已完成，结果见§23.1。用户已批准§23的G2A-V15-D1～D6及长任务执行边界；设计批准允许实施、审核、提交合入与正式24-fit development，但不改变合同外模型、不授权生产DDL/DML、依赖安装或后端进程控制。tail只在§23.5资格满足且既有一次性合同可执行时读取；否则保持禁读。
 
 ## 0. 背景、权威、现状与批准边界
 
@@ -27,7 +27,7 @@
 4. 旧P2-3A～P2-4、HR1、RW1保持不可变终态，不重跑、不调参、不复用已消费窗口；
 5. 不建设通用feature/evidence/training平台，不并行模型，不单独产品化market regime。
 
-v1.3目标方向、页首历史合同及§10.1全部精确值均已获用户批准并已执行到§20所列终态。§21的v1.4精确值与源码实施已获批准并实现；正式24 fits、tail读取、数据库写入和runtime activation仍未执行，也不由源码完成状态推导。
+v1.3已执行到§20终态；v1.4已执行到§23.1终态，二者都没有预测capability/advisory。下文§3～§10.1的raw target/9列/battery是v1.3基准合同，v1.4仅应用§21明确覆盖项；v1.5只应用§23已批准差异，其余沿用v1.4。历史条文不作为新候选重跑battery或改写旧终态的授权。v1.5已批准但尚未实施或训练。
 
 ## 1. Scope、Non-goals与术语
 
@@ -494,7 +494,7 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 
 ## 14. Design Acceptance Index
 
-- **F-011 / G2A-D1**：唯一`rotation_L1`产品目标、daily-centered future relative target和连续score/state语义。
+- **F-011 / G2A-D1**：唯一`rotation_L1`产品目标；v1.3/v1.4为daily-centered future relative target；§23拟议训练rank标签尚未批准，原始收益评价与连续score/state语义保留。
 - **F-011 / G2A-D2**：已消费development、新尾部、single rolling、purge/embargo与tail功效禁读边界。
 - **F-011 / G2A-D3**：≤10项feature、development battery、共享market context、Ridge-only 5D/10D选择及独立forward功效说明。
 - **F-011 / G2A-D4**：唯一浅层GBDT、全部参数、确定性、fresh-process、叶节点日期低位门、research/tail双门与依赖identity。
@@ -506,7 +506,7 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；v1.3模型与产品源码已合入，正式39/39 fits终态见§20；v1.4唯一信息集候选与已实施源码见§21 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v13_development_39fit_postbug1400_7eff28f1_20260908/acceptance.json` | VERIFIED_V1_4_IMPLEMENTED_NOT_EXECUTED | user approved: v1.3 tail未读、capability/advisory仍NOT_AVAILABLE；v1.4 D1～D6及源码实施已批准，正式24 fits、tail、数据库与runtime仍未执行 |
+| F-011 | 本设计D1～D5；§21 v1.4源码；§23.1正式结果；§23.2～§23.8 rank-target待批合同 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v14_development_24fit_bbe8295f_20260909/acceptance.json` | V1_4_DEVELOPMENT_COMPLETE_BELOW_MBE_V1_5_DESIGN_PENDING | user approved: 下一rank-target仅方向同意；精确合同尚未批准，未实施/训练。v1.4 tail未读且capability/advisory仍NOT_AVAILABLE；不可将设计校验通过冒充实现或效果验收 |
 | F-012 | 本设计§1.2、§8.3；read-only router与HMM-only isolation guard | `backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | VERIFIED_L1_RESEARCH_SURFACE_ISOLATION | user approved: advisory-only业务语义保持不变；无Selection/Paper/QMT/QE写路径 |
 | F-013 | `rotation_l1_prediction.py`唯一writer/repository、两个read API、真实`/hmm-risk` L1热力图与显式surface receipt；生产已承载v1.3真实OOF | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_rotation_l1_api.py`；生产19,220行/620日/31-sector及浏览器readback | VERIFIED_HISTORICAL_OOF_RESEARCH_SURFACE | user approved: `AVAILABLE_EXPERIMENTAL`不等于预测capability；v1.3未达MBE，故无新增日度预测、forward或advisory；F-013其余范围未完成 |
 
@@ -636,7 +636,7 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 
 ### 21.1 目标、边界与唯一假设
 
-v1.4只检验一个假设：**资金流强度的短期变化率比静态20日水平提供更直接的轮动方向信息，且可在不更换模型类、不扩大数据源的前提下提高10D横截面预测。** 用户已明确批准本节D1～D6精确合同及源码实施；源码完成不等于正式24 fits、tail读取、数据库写入或runtime activation已经执行。
+v1.4只检验一个假设：**资金流强度的短期变化率比静态20日水平提供更直接的轮动方向信息，且可在不更换模型类、不扩大数据源的前提下提高10D横截面预测。** 本节合同已获批准并完成正式24/24 fits，结果低于MBE且按合同停止，见§23.1；tail、v1.4产品写入与runtime activation未执行。
 
 保持不变：product presentation/estimation universe=L1、raw 10D relative-return target、t-1/PIT、五fold/504日rolling、purge=10、embargo=0、MARKET-CONTEXT-A、LightGBM 4.6.0完整profile、MBE 0.02、coverage/state projection、research/tail双门、forward三分支、advisory-only及既有repository/API/UI合同。禁止tail、grid、第二seed、early stopping、结果后换列或第二candidate。
 
@@ -684,12 +684,12 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 
 | decision | 精确建议 | 状态 |
 |---|---|---|
-| G2A-V14-D1 | 唯一方向为现有信息集增加一个moneyflow变化率，不换模型类/target/universe | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
-| G2A-V14-D2 | §21.2固定公式、10列顺序、t-1/t-6因果边界与typed missing | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
-| G2A-V14-D3 | 同一已消费development与同release direct-v2重建独立v1.4 bundle；tail禁读 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
-| G2A-V14-D4 | 冻结10D、同GBDT/MARKET-CONTEXT-A、双fresh-process共24 fits | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
-| G2A-V14-D5 | MBE/research/tail/forward/product合同不变；paired增量仅诊断 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
-| G2A-V14-D6 | 一次终态；失败不自动开v1.5，成功也只获得tail资格 | `USER_APPROVED_IMPLEMENTED_NOT_EXECUTED` |
+| G2A-V14-D1 | 唯一方向为现有信息集增加一个moneyflow变化率，不换模型类/target/universe | `USER_APPROVED_EXECUTED_BELOW_MBE` |
+| G2A-V14-D2 | §21.2固定公式、10列顺序、t-1/t-6因果边界与typed missing | `USER_APPROVED_EXECUTED_BELOW_MBE` |
+| G2A-V14-D3 | 同一已消费development与同release direct-v2重建独立v1.4 bundle；tail禁读 | `USER_APPROVED_EXECUTED_BELOW_MBE` |
+| G2A-V14-D4 | 冻结10D、同GBDT/MARKET-CONTEXT-A、双fresh-process共24 fits | `USER_APPROVED_EXECUTED_BELOW_MBE` |
+| G2A-V14-D5 | MBE/research/tail/forward/product合同不变；paired增量仅诊断 | `USER_APPROVED_EXECUTED_BELOW_MBE` |
+| G2A-V14-D6 | 一次终态；失败不自动开v1.5，成功也只获得tail资格 | `USER_APPROVED_EXECUTED_BELOW_MBE` |
 
 ### 21.6 实施与直接验证清单
 
@@ -731,4 +731,99 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 3. **禁止改变业务逻辑：PASS**。终极目标仍为真实L1未来相对强弱预测；target、10D、GBDT、market、MBE、tail、状态与advisory隔离不变。
 4. **禁止未经确认的门禁和审批：PASS**。当时v1.4六项全部明确pending；后续§21批准没有把诊断统计变成promotion gate，也没有新增人工运行审批。
 
-历史结论：当时文档本身满足提交/合入标准，但尚未批准v1.4或授权源码。当前授权边界以§21为准；正式24 fits、tail、数据库、runtime与进程控制仍未授权或执行。
+历史结论：当时文档本身满足提交/合入标准，但尚未批准v1.4或授权源码。此后v1.4批准、实施及正式24 fits均已完成；当前事实与下一候选边界以页首及§23为准，不能复用本历史段落推导当前任务状态。
+
+## 23. G2-A v1.5 单一rank-target候选（D1～D6已获用户批准）
+
+### 23.1 当前事实、唯一假设与差异范围
+
+v1.4固定merge `bbe8295f23819c391f439354942791094d230db4`上完成双fresh-process 24/24 fits，payload及model text一致。development mean Rank IC=`0.019775251189846643`，低于`0.02`；较v1.3的paired增量=`0.006261227443644525`、HAC t=`0.9734158036557933`，不能声明显著改善。acceptance canonical SHA=`a4de2ce378049b2decb61b00c957b362ca0cc6b48840977df4aa14e3c938dd50`。本次只引用紧凑结果，不重跑、搬迁或修改旧产物。
+
+v1.4计算条件通过不等于surface验证；v1.4未写产品/数据库或切换runtime，tail未读，capability/advisory仍NOT_AVAILABLE；v1.3已交付的历史研究面保持其原identity。Blueprint v2.49已批准继续方向，用户随后明确批准本节D1～D6、源码实施、正式24-fit与质量通过后的提交合入。批准不等于已经实施或效果通过。
+
+唯一假设：在相同十项feature和GBDT容量下，把训练标签从相对收益幅度改为当日相对名次，可能改善产品所需的横截面排序。raw-return回归不是已确认BUG，rank回归也不直接优化Spearman或保证改善。唯一干预是训练标签变换；不同时替换loss、调参、换horizon/feature/market/universe。
+
+### 23.2 D1：标签、分母、ties与因果边界
+
+候选model contract=`hmm_risk_rotation_l1_g2a_v1_5`；target transform=`daily_l1_average_rank_centered_v1`。对每个实际训练decision date `t`，先使用§3.1同样的31-sector成熟`target_10d`，令`y(s,t)`为原始median-centered相对收益，按数值升序做average rank：
+
+```text
+N = 31
+r(s,t) = average_rank_ascending({y(j,t): j in canonical L1})
+training_label(s,t) = (r(s,t) - 1) / (N - 1) - 0.5
+```
+
+- 只在该fold经purge后允许的训练dates（含最终504日训练窗）内构造标签；每个训练date的`t+10`必须在其批准训练可见边界内。不得对validation/tail构造标签供fit、early stopping或选择使用。
+- rank分母是完整31个canonical行业的成熟outcome，不是feature complete-case子集；先生成31-sector标签，再应用既有market/9-of-10 feature训练mask。不能先删缺feature板块再rank，不能以sector_code拆ties。
+- ties为有限float64原值精确相等，平均名次；不四舍五入、不引入epsilon。全部31个y相等时标签全部为0，这是合法相等标签，不是缺失fallback；不能人为制造排序。后续模型/IC不可计算仍按现有typed失败语义处理。
+- 延续输入源原有all-or-none成熟语义：某日31个outcome全未成熟时保留NaN及既有reason，不入fit、不删canonical行；部分成熟、非有限却声称成熟、duplicate/missing sector或不一致maturity是输入合同错误，禁止按更小N补算。正常feature缺失与标签完整性是两个维度，不额外收紧9/10规则。
+- 标签不保存到或覆盖原`target_10d`列；构造只在内存中的训练Series，以`(trade_date,sector_code)`精确对齐X。输入重排行不改变canonical标签/hash、预测和指标。
+- validation、spread、forward均继续使用原始relative-return outcome；Rank IC也与原始outcome比较，禁止用rank标签计算收益幅度。预测score是rank-label回归分数，不是预期收益率、概率或置信度；不反变换成收益。
+
+### 23.3 D2：数据复用与双重identity绑定
+
+显式输入复用已成功的development bundle：`F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v14_development_input_bbe8295f_20260909`，schema仍为`hmm_risk_rotation_l1_g2a_input_bundle_v2`，源cutoff=`2026-08-31`，development截止`2026-03-31`。其源/映射/feature合同不变，原feature authority为v1.4；未来运行路径必须由request显式传入，不能搜索latest或把该绝对路径硬编码为全局默认。
+
+正式reader继续核验原bundle内容及source/mapping/calendar/feature identity。新的v1.5执行request分别绑定`input_feature_contract=v1.4`、`model_contract=v1.5`和`target_transform`；这是唯一显式许可的兼容组合，不是把旧receipt改名为新receipt。未知schema、任一hash漂移、错误feature顺序或模型/transform交叉组合均拒绝。旧v1.3/v1.4模型入口语义不变，不进行全局常量替换来强制兼容。
+
+CLI必须显式选择v1.5 model contract；省略时保留原v1.4行为，不能让原命令悄悄改成rank训练。process/acceptance沿用现有v2 envelope，但v1.5 validator额外强制检查完整model contract、target transform、每个fit的label/index hash与原input identity；这些字段都进入既有canonical hash。旧v1.4结果不能仅补model版本字段后被当作v1.5结果，旧产品读取入口也不能不经显式支持就接受v1.5。未知或不一致组合使用`hmm_risk_rotation_input_contract_invalid`；不新建平行schema/writer。
+
+原raw标签与features文件只读复用，不重新导出direct-v2、不查询全历史数据库、不重新构造股票/指数面板、不新建通用dataset平台。新request、label-transform hash、每个fit实际X/y索引与标签canonical hash进入紧凑结果；不落一套重复全量rank-label数据。两个fresh processes读取同一输入并独立派生标签。tail bundle不创建、不读取；calendar成熟count只能沿用既有授权的纯日期信息。
+
+### 23.4 D3：模型、日期与24-fit预算
+
+完整GBDT profile原样复用§6.1，包括`objective=regression_l1`、`reg_alpha=1.0`、`reg_lambda=10.0`、`learning_rate=0.03`、240 trees、depth3/leaves7、min_child_samples310、seed42及单线程；不换成LGBMRanker、不新增label weighting/winsorize。标签尺度由D1固定，其变化可能影响拟合和现有正则的实际作用；不声称有效正则强度完全相同，也不为“补偿尺度”自选参数。此候选回答的就是该固定profile下rank标签的效果。
+
+10D authority仍为v1.3冻结Ridge选择，注明未证明对GBDT或rank-target最优；不再比较5D/10D。五fold、purge10、embargo0、504日训练窗、MARKET-CONTEXT-A、叶10日硬底线/20日以下最多1%及v1.4十列/coverage均不变。
+
+每process独立执行5 fold market + 5 fold GBDT + final market + final GBDT，恰12 fits；双fresh-process总上限24。market虽与target无关，仍按既有复现合同独立fit，不偷偷以复用参数减少预算，也不重跑15-fit battery。最终训练日期算法与§4.3相同，不把整个development作为GBDT最终训练窗。任何fail-closed终止记录planned/started/completed/failed；不重试调参、不增seed、不添加候选。
+
+### 23.5 D4/D5：评价、复现与停止
+
+保持全部现有安全、coverage和双门合同。label-transform/实际fit标签的canonical hash、模型文本、prediction及metric payload必须双进程bitwise一致；allclose只诊断。同source不意味着可以复用旧model或把旧验收boolean当新验收。
+
+唯一binding效果仍是development daily Rank IC均值`>=0.02`，不四舍五入，不增加“相对v1.4必须显著改善”、月度正向比例或spread门。原始收益spread、HAC区间、月度序列与v1.4同日期paired差只解释结果；比较缺少合法参考或统计不可计算时显式记录诊断不可用及reason，不能凭空补0或改变主验收结论。
+
+- 执行/结构/数据失败：具体typed失败并停止；不叫“模型无信号”，不重训v1.4。
+- 有效结果但均值不足0.02：本候选停止，tail未读，新日预测/capability/advisory不开放；现有v1.3研究页保持原身份。结果只否定本冻结候选达标，不永久淘汰L1 GBDT，也不自动换个股/L2方向。
+- 达到既定development全部条件：形成未forward确认的research prediction资格；产品writer/API/UI尚未完成时不能报告已发布。按独立动作授权继续同一G2-A的无标签单日预测和tail评价，不由实验自动触发生产写入/激活。
+- MDE保持说明功效，不阻止development；tail若后续授权，按§8.2实际passed/inconclusive/failed分支处理，不复用development效果替代。development已被多轮选择消费，不能重新声称untouched。
+
+### 23.6 D6：实施范围与产品延续
+
+只扩展现有`rotation_l1_gbdt.py`、`run_rotation_l1_g2a.py`及其直接HMM tests，实现显式合同分派、训练label变换、reader兼容组合与compact parent/child结果，不新建平行trainer。若现有product adapter需要识别v1.5，则在同一任务扩展`rotation_l1_prediction.py`及直接tests；保持旧identity和当前v1.3产品指针不变，不预建新的schema/API/UI。真正触及API/UI或runtime文件时按changed files重新分类，不将其降级为offline。
+
+future单日推理只调用已有shared feature与冻结model的predict，不调用训练label转换，不要求`t+10`存在。market因果递推、解释重构、31行分母、revision/dedupe与五轴状态全部复用；UI需要显示model contract与“排序分数，不是收益预测值”的语义，历史OOF与新日期不能混称。若现有实现不能承载该identity，先修正对应HMM-owned接线并验证，不能跳过产品验收或让旧writer静默接受新分数。
+
+本次设计修订本身fit/tail/DB/runtime/dependency/cleanup均为noop。后续实施、实验、生产目标写入、runtime activation、合入与用户后端重启按实际授权分别核对；不存在“设计通过自动授权一切”的路径。
+
+### 23.7 Decision Index与直接测试清单
+
+| decision | 精确方案 | 状态 |
+|---|---|---|
+| G2A-V15-D1 | §23.2完整31-sector average rank，`(r-1)/30-0.5`，精确ties，rank后再用feature mask；raw outcome独立 | USER_APPROVED_PENDING_IMPLEMENTATION |
+| G2A-V15-D2 | 显式复用v1.4 input/feature authority，v1.5 model+transform新request绑定；只内存派生标签，不重建数据 | USER_APPROVED_PENDING_IMPLEMENTATION |
+| G2A-V15-D3 | §6.1全profile及10D/504日/market/coverage/leaf不变；双fresh-process总24 fits，无battery | USER_APPROVED_PENDING_IMPLEMENTATION |
+| G2A-V15-D4 | 新label/model/prediction/metric bitwise闭合；旧合同保持，不改名receipt或替换旧产物 | USER_APPROVED_PENDING_IMPLEMENTATION |
+| G2A-V15-D5 | 原MBE0.02/双门/forward不变，paired差仅诊断；低于门槛一次停止，不自动第二candidate | USER_APPROVED_PENDING_IMPLEMENTATION |
+| G2A-V15-D6 | 复用唯一训练/产品链，达标后真实无标签单日预测与独立tail确认；生产/运行动作不自动执行 | USER_APPROVED_PENDING_IMPLEMENTATION |
+
+实施后直接测试必须覆盖：
+
+1. 完整31个递增标签端点`-0.5/0.5`、中央0、全部tie为0、局部tie平均名次、重排行一致；不按sector_code破tie。
+2. 某板块feature缺失仍参与完整label rank，fit仅用原feature mask；少sector、重复key、部分maturity、non-finite/maturity冲突typed失败；全日未成熟按已有reason不入fit。
+3. 改动validation/tail outcome不改变该fold X/y/model；训练label只从合法purged训练日期派生；raw target原文件/列未变。
+4. 五fold与final fit都收到rank label，market从不读取label；24-fit计划/错误路径准确，battery/第二seed/未经授权tail路径设为失败桩后仍完成合法development测试路径。
+5. metric/spread函数收到raw outcome，不收到rank-label；MBE边界、diagnostic不可用、state tie、双门与forward未确认语义保持。
+6. v1.4输入与v1.5模型仅经显式兼容组合接受；新旧model/transform错配、篡改label/model hash和跨process drift拒绝；v1.3/v1.4已有测试不因全局改常量失效。
+7. model-only推理无target也可执行，writer读取未知identity失败；实际产品验证前不报surface available，不改当前v1.3行或指针。
+
+文档执行F2、diff检查与四项正式审核；源码按changed files→ownership→module registry→test plans运行精确pytest/Ruff/compile及所属最小计划。合成测试只证明程序合同，不代表正式24-fit或真实产品验收。审核发现问题同scope修复，不能靠新增业务门禁解决。
+
+### 23.8 本次设计审核边界
+
+本节D1～D6已获批准并成为v1.5实施合同。禁止简化交付：完整31-sector、五fold、双进程与真实单日产品目标保留；禁止静默错误：标签/identity/因果/状态均显式处理；禁止业务漂移：只改变训练标签，不更改原始收益评价/MBE或当前产品；禁止私增门禁：诊断不晋升为gate，任何合同变化必须返回用户决定。
+
+第一轮修订：更正页首、§0、§15与§21仍称v1.4未执行的旧状态；明确rank必须先于feature mask、raw收益不能被训练标签覆盖、旧input与新model不能混称同一identity。第二轮修订：补充CLI显式版本、旧入口不变与process/acceptance完整hash校验，避免默认切换或只改版本字段冒充新结果；所有标签完整性错误复用`hmm_risk_rotation_label_incomplete`，跨进程差异复用`hmm_risk_rotation_reproducibility_mismatch`，normal未成熟保留原reason，不泛化成fit失败。
+
+复审结论：未发现剩余阻断性描述缺口；精确合同已批准，源码、正式实验和产品验收仍是未完成项。F2校验通过；递增/全tie/局部tie/重排行四个合成算例通过（直接计算公式，无源码修改、无正式fit、无数据读取），不冒充正式测试。源码实施后仍须运行§23.7完整直接测试与真实实验，不能复用本段文档结论代报代码通过。
