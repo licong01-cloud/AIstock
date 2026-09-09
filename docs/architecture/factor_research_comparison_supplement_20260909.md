@@ -189,7 +189,7 @@ v1.1 源码交付执行数学/因果、兼容/恢复/性能、DESIGN-COMPLIANCE-
 
 ### 12.2 重要实现精化
 
-拟合信号区间与“拟合时知道到哪一天”不能混为一个日期，因此 v1 每个 fit window 必须携带独立 knowledge cutoff。fit 仅使用该 cutoff 已成熟且价格有效的标签；全局 cutoff 只控制评价结果当前可知范围。这个精化落实 C-7，不改变既有 `HOLDING_PERIODS` 或收益公式。方向符号在候选诊断/模型输入前应用，fitted/declared 及锁定时点仅按已登记请求回报，不由评价期重选。
+拟合信号区间与“拟合时知道到哪一天”不能混为一个日期，因此 v1 每个 fit window 必须携带独立 knowledge cutoff。fit 仅使用该 cutoff 已成熟且价格有效的标签；全局 cutoff 只控制评价结果当前可知范围。runner 在把指标视图裁到 signal window 时额外保留完整 read-tail `label_calendar`，使 `signal_end < read_end` 时仍按实际入场/出场交易日判断成熟，而不是按裁短日历误判。这个精化落实 C-7，不改变既有 `HOLDING_PERIODS` 或收益公式。方向符号在候选诊断/模型输入前应用，fitted/declared 及锁定时点仅按已登记请求回报，不由评价期重选。
 
 预测模型的评价使用真正 Spearman（预测值和目标分别排名）而非预测水平与目标排名的 Pearson；偏 RankIC 仍按 C-2 对 x/y 两侧使用同一 Z 残差化且残差不再排名。每个评价窗口同时输出声明网格、PIT、候选、共同模型输入、成熟标签的逐层数量与 closure，控制变量缺失只使相应偏相关视角不可用，不缩小 B/B+F 的模型样本。
 
@@ -219,3 +219,14 @@ v1.1 源码交付执行数学/因果、兼容/恢复/性能、DESIGN-COMPLIANCE-
 第二轮兼容、恢复与成本审核补齐：控制项不再进入模型长表；分母逐层闭合并区分未成熟/价格缺失；cost 四路径不再静默取日期交集；构造结论明确为 caller declaration + values/ranks check；attach 对新块做完整身份验证，旧请求不接受伪造新块。普通模块计划和既有 DEV 两表事务计划通过，未新增 schema。
 
 第三轮按最终 diff 执行 §8、FEATURE-WORKFLOW-001 与 DESIGN-COMPLIANCE-001；具体最终测试数、CI、PR/merge SHA 和 cleanup 只在实际发生后由工作流回执与 PR 记录，不在提交前预填。真实市场案例仍是后续研究任务，不作为本次源码合入的虚假成功条件。
+
+最终本地证据：`factor_research_backend` 为 93 passed、9 个 DEV 测试安全 skip，Windows fresh process 2 passed；显式 DEV 计划 9 passed；workflow nox 环境测试 17 passed；module registry 8 passed 且 ownership 14/14；F1 为 8/8、warnings=0；Ruff、py_compile、diff、L0 均通过且 blocking=0；WSL `rdagent-gpu` Python 3.10.19 fresh-process 导入通过。DEV context 对两只现有因子的 expression 缺失返回 `unknown/completeness=unknown`，没有猜测依赖。生产 DDL/DML、依赖安装、进程控制均未执行。
+
+### 12.5 DESIGN-COMPLIANCE-001 最终实现审核
+
+| 条款 | 最终代码依据 | 结论与边界 |
+|---|---|---|
+| 禁止简化/子集/POC 冒充完整 | F-301～F-306 与 F-308 均有实现和真实测试；多窗口、三角色、标签、偏相关、成本、恢复均在正式路径 | 比较工具实现完整；F-307 的真实市场研究明确是后续实证，不把“未运行研究”伪装成有效 alpha |
+| 禁止静默错误或假成功 | 独立 fit cutoff、完整 label calendar、PIT 分母 closure、无穷值/非法 mask、零残差、秩亏、HAC 缺口、成本日期错配和 attach 身份均显式处理 | 不填零、不静默缩样、不把统计相似性写成构造事实、不把 computed 写成有效/可交易 |
+| 禁止擅改业务语义 | changed files 仅 factor_research、所属测试/nox 与本文；复用且不修改 `HOLDING_PERIODS`/官方 writer | QE、数仓、评级、PIT、数据集、策略和生产目录均未改；新结果只进研究 record |
+| 禁止私增门禁/审批 | 新校验只约束 opt-in comparison 输入与科学口径；无 comparison 的旧路径不变；无 OS 以上资源门禁 | 未新增生产 gate、阈值、自动准入/淘汰或资源限制；生产库 noop，backend 重启继续由用户决定 |

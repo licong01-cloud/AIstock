@@ -462,6 +462,8 @@ def _cost_report(spec: dict | None, evaluation_windows: list[dict] | None = None
                           "break_even_common_variable_bps": break_even,
                           "break_even_reason": None if turnover_delta != 0 else "equal_total_traded_weight"})
     return {"status": "computed", "reason": None, "n_dates": len(dates),
+            "date_start": dates[0].date().isoformat(), "date_end": dates[-1].date().isoformat(),
+            "date_coverage": "supplied_common_path_only_not_imputed",
             "currency": spec["currency"], "capital_normalization": spec["capital_normalization"],
             "return_basis": spec["return_basis"],
             "turnover_definition": "sum_absolute_weight_change_split_buy_sell",
@@ -519,8 +521,13 @@ def _last_available_price_position(calendar: pd.DatetimeIndex, cutoff: dict) -> 
     return int(calendar.searchsorted(pd.Timestamp(cutoff["date"]), side=side)) - 1
 
 
-def _mature_dates(calendar: pd.DatetimeIndex, last_price_position: int, shift_n: int) -> pd.Series:
-    return pd.Series(np.arange(len(calendar)) + shift_n <= last_price_position, index=calendar)
+def _mature_dates(signal_calendar: pd.DatetimeIndex, last_price_position: int, shift_n: int,
+                  price_calendar: pd.DatetimeIndex | None = None) -> pd.Series:
+    price_calendar = signal_calendar if price_calendar is None else price_calendar
+    signal_positions = price_calendar.searchsorted(signal_calendar)
+    exact = ((signal_positions < len(price_calendar))
+             & (price_calendar.take(np.minimum(signal_positions, len(price_calendar) - 1)) == signal_calendar))
+    return pd.Series(exact & (signal_positions + shift_n <= last_price_position), index=signal_calendar)
 
 
 def _coverage_report(*, evaluation_dates: pd.DatetimeIndex, eligible: pd.DataFrame,
@@ -577,16 +584,17 @@ def _compute_window_result(*, spec: dict, fit_window: dict, evaluation_window: d
                            matrices: dict[str, pd.DataFrame], returns: pd.DataFrame,
                            eligible: pd.DataFrame, calendar: pd.DatetimeIndex,
                             instruments: pd.Index, mature_dates: pd.Series, shift_n: int,
+                            price_calendar: pd.DatetimeIndex,
                             model_inputs: list[str]) -> dict:
     fit_start, fit_end = pd.Timestamp(fit_window["start"]), pd.Timestamp(fit_window["end"])
     eval_start, eval_end = pd.Timestamp(evaluation_window["start"]), pd.Timestamp(evaluation_window["end"])
     index_dates = full.index.get_level_values("datetime")
     fit_mask = (index_dates >= fit_start) & (index_dates <= fit_end)
     eval_mask = (index_dates >= eval_start) & (index_dates <= eval_end)
-    fit_last_price_position = _last_available_price_position(calendar, fit_window["knowledge_cutoff"])
+    fit_last_price_position = _last_available_price_position(price_calendar, fit_window["knowledge_cutoff"])
     if fit_last_price_position < 0:
         raise ResearchError("comparison_unavailable", "No close price is available by the fit knowledge cutoff")
-    fit_mature_dates = _mature_dates(calendar, fit_last_price_position, shift_n)
+    fit_mature_dates = _mature_dates(calendar, fit_last_price_position, shift_n, price_calendar)
     fit_mature_rows = full.index.get_level_values("datetime").map(fit_mature_dates).to_numpy(dtype=bool)
     fit_rows = fit_mask & common & fit_mature_rows & target_rank.reindex(full.index).notna()
     baseline_features = full.loc[fit_rows, spec["baseline"]]
@@ -668,7 +676,7 @@ def _compute_window_result(*, spec: dict, fit_window: dict, evaluation_window: d
         "augmented_fit": augmented_fit,
         "fit_label_maturity": {
             "knowledge_cutoff": fit_window["knowledge_cutoff"],
-            "last_available_price_date": calendar[fit_last_price_position].date().isoformat(),
+            "last_available_price_date": price_calendar[fit_last_price_position].date().isoformat(),
             "label_shift_n": shift_n,
             "mature_fit_rows": int(fit_rows.sum()),
         },
@@ -703,10 +711,13 @@ def _compute_window_result(*, spec: dict, fit_window: dict, evaluation_window: d
 def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, run_spec: dict) -> dict:
     """Compute predeclared B versus B+F/replacement/interaction windows."""
     calendar = pd.DatetimeIndex(ctx["close_unstacked"].index)
+    price_calendar = pd.DatetimeIndex(ctx.get("label_calendar", calendar))
     instruments = ctx["close_unstacked"].columns
-    if (calendar.hasnans or calendar.has_duplicates or calendar.tz is not None
+    if (calendar.empty or price_calendar.empty or calendar.hasnans or calendar.has_duplicates or calendar.tz is not None
             or not calendar.is_monotonic_increasing or not calendar.equals(calendar.normalize())
-            or instruments.has_duplicates):
+            or price_calendar.hasnans or price_calendar.has_duplicates or price_calendar.tz is not None
+            or not price_calendar.is_monotonic_increasing or not price_calendar.equals(price_calendar.normalize())
+            or not calendar.isin(price_calendar).all() or instruments.has_duplicates):
         raise ResearchError("comparison_unavailable", "Comparison context requires ordered unique daily dates and instruments")
     matrices = {name: frame.iloc[:, 0].unstack("instrument").reindex(index=calendar, columns=instruments)
                 for name, frame in signals.items()}
@@ -714,19 +725,27 @@ def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, 
     if any(pd.Timestamp(item["end"]) > cutoff for item in [*spec["fit_windows"], *spec["evaluation_windows"]]):
         raise ResearchError("comparison_unavailable", "Comparison window extends beyond cutoff")
     returns = ctx["fwd_ret_mats"][spec["horizon"]].reindex(index=calendar, columns=instruments)
-    eligible = (ctx["st_pit_eligible_mask"].reindex(index=calendar, columns=instruments, fill_value=False)
-                .fillna(False).astype(bool))
+    try:
+        return_values = returns.to_numpy(dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ResearchError("comparison_unavailable", "Forward returns must be real numeric values") from exc
+    if np.isinf(return_values).any():
+        raise ResearchError("comparison_unavailable", "Forward returns contain infinite values")
+    raw_eligible = ctx["st_pit_eligible_mask"].reindex(index=calendar, columns=instruments, fill_value=False)
+    if not (raw_eligible.isna() | raw_eligible.isin([True, False, 0, 1])).to_numpy().all():
+        raise ResearchError("comparison_unavailable", "PIT eligibility mask must be boolean")
+    eligible = raw_eligible.isin([True, 1])
     for day, symbol in ctx.get("suspended_pairs") or set():
         day = pd.Timestamp(day)
         if day in eligible.index and symbol in eligible.columns:
             eligible.loc[day, symbol] = False
-    last_price_position = _last_available_price_position(calendar, spec["knowledge_cutoff"])
+    last_price_position = _last_available_price_position(price_calendar, spec["knowledge_cutoff"])
     if last_price_position < 0:
         raise ResearchError("comparison_unavailable", "No close price is available by the knowledge cutoff")
     from backend.services.quantevolver.qe_eval_v2_metric_engine import HOLDING_PERIODS
 
     shift_n = HOLDING_PERIODS[spec["horizon"]]
-    mature_rows = _mature_dates(calendar, last_price_position, shift_n)
+    mature_rows = _mature_dates(calendar, last_price_position, shift_n, price_calendar)
     returns = returns.where(mature_rows, axis=0)
     model_inputs = list(dict.fromkeys([*spec["baseline"], spec["candidate"],
                                        *([spec["state"]] if spec.get("state") else [])]))
@@ -756,6 +775,7 @@ def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, 
             instruments=instruments,
             mature_dates=mature_rows,
             shift_n=shift_n,
+            price_calendar=price_calendar,
             model_inputs=model_inputs,
         )
         for evaluation in spec["evaluation_windows"]
@@ -770,7 +790,7 @@ def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, 
         "evaluation_windows": spec["evaluation_windows"],
         "direction": spec["direction"],
         "knowledge_cutoff": {**spec["knowledge_cutoff"],
-                             "last_available_price_date": calendar[last_price_position].date().isoformat(),
+                             "last_available_price_date": price_calendar[last_price_position].date().isoformat(),
                              "label_shift_n": shift_n},
         "baseline": spec["baseline"],
         "candidate": spec["candidate"],

@@ -197,6 +197,8 @@ pd.DataFrame({{'{name}':rows}},index=index).to_hdf(Path(a.output),key='data')
     result = execute(validated, output, prepare=lambda **_kwargs: ctx,
                      compute=lambda name, _frame, _ctx: {"factor_name": name, "test": True})
     assert result["research_comparison"]["schema_version"] == "factor_research_comparison_v1"
+    assert result["research_comparison"]["method_version"] == "2.0"
+    assert result["research_comparison"]["run_scope"]["instrument_count"] == 10
     assert [item["factor_name"] for item in result["candidates"]] == ["base", "candidate", "style"]
     assert '"research_comparison"' in encode(result)
 

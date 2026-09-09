@@ -94,9 +94,30 @@ class ResearchService:
         comparison = result.get("research_comparison")
         expected_comparison = execution["spec"].get("comparison")
         if expected_comparison is not None:
+            result_windows = comparison.get("windows") if isinstance(comparison, dict) else None
+            expected_windows = expected_comparison["evaluation_windows"]
+
+            def window_matches(actual, expected):
+                fit_index = expected.get("fit_window_index") if isinstance(expected, dict) else None
+                return (
+                    isinstance(actual, dict)
+                    and type(fit_index) is int
+                    and 0 <= fit_index < len(expected_comparison["fit_windows"])
+                    and actual.get("fit_window_index") == fit_index
+                    and actual.get("fit_window") == expected_comparison["fit_windows"][fit_index]
+                    and actual.get("evaluation_window") == {key: expected.get(key) for key in ("start", "end")}
+                )
+
+            window_identity_matches = (
+                isinstance(result_windows, list)
+                and len(result_windows) == len(expected_windows)
+                and all(window_matches(actual, expected) for actual, expected in zip(result_windows, expected_windows))
+            )
+            actual_knowledge = comparison.get("knowledge_cutoff", {}) if isinstance(comparison, dict) else {}
             if (not isinstance(comparison, dict)
                     or comparison.get("schema_version") != "factor_research_comparison_v1"
                     or comparison.get("scope") != "research_comparison_not_official_metrics_or_qe_result"
+                    or comparison.get("method_version") != execution["spec"]["method_version"]
                     or comparison.get("research_role") != expected_comparison["research_role"]
                     or comparison.get("horizon") != expected_comparison["horizon"]
                     or comparison.get("baseline") != expected_comparison["baseline"]
@@ -105,8 +126,12 @@ class ResearchService:
                     or comparison.get("fit_windows") != expected_comparison["fit_windows"]
                     or comparison.get("evaluation_windows") != expected_comparison["evaluation_windows"]
                     or comparison.get("direction") != expected_comparison["direction"]
-                    or not isinstance(comparison.get("windows"), list)
-                    or len(comparison["windows"]) != len(expected_comparison["evaluation_windows"])):
+                    or {key: actual_knowledge.get(key) for key in ("date", "phase")}
+                    != expected_comparison["knowledge_cutoff"]
+                    or not window_identity_matches
+                    or not isinstance(comparison.get("cost"), dict)
+                    or not isinstance(comparison.get("information_relation"), dict)
+                    or not isinstance(comparison.get("use_value"), dict)):
                 raise ResearchError("result_mismatch", "Comparison result is missing or has the wrong contract")
         elif comparison is not None:
             raise ResearchError("result_mismatch", "Legacy request cannot attach an undeclared comparison")

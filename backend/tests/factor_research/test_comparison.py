@@ -16,6 +16,7 @@ from backend.services.factor_research.comparison import (
 )
 from backend.services.factor_research.comparison_context import enrich_catalog_context, expression_dependencies
 from backend.services.factor_research.models import ResearchError
+from backend.services.factor_research.runner import evaluation_context
 from backend.services.factor_research.service import ResearchService
 
 
@@ -311,6 +312,32 @@ def test_label_maturity_boundary_uses_trading_calendar_and_cutoff_phase():
     assert _mature_dates(calendar, pre_open, 2).tolist() == [False, False, False, False]
 
 
+def test_label_maturity_uses_read_tail_calendar_after_signal_slice(tmp_path):
+    dates = pd.bdate_range("2026-01-01", periods=15)
+    values = np.asarray([np.roll(np.arange(10), index) for index in range(15)], dtype=float)
+    close = pd.DataFrame(values + 100, index=dates, columns=SYMBOLS)
+    returns = close.shift(-6) / close.shift(-1) - 1
+    raw_context = context(dates, {name: returns.copy() for name in ("1d", "5d", "10d", "20d")})
+    raw_context["close_unstacked"] = close
+    run = {"signal_start": dates[0].date().isoformat(), "signal_end": dates[9].date().isoformat()}
+    sliced = evaluation_context(raw_context, run)
+    signals = {"base": frame("base", dates[:10], values[:10]),
+               "candidate": frame("candidate", dates[:10], values[:10] + np.sin(np.arange(100)).reshape(10, 10)),
+               "style": frame("style", dates[:10], values[:10, ::-1])}
+    spec = validated_spec(
+        tmp_path, horizon="5d",
+        fit_window={"start": dates[0].date().isoformat(), "end": dates[1].date().isoformat(),
+                    "knowledge_cutoff": {"date": dates[7].date().isoformat(), "phase": "post_close"}},
+        evaluation_window={"start": dates[8].date().isoformat(), "end": dates[9].date().isoformat()},
+        knowledge_cutoff={"date": dates[14].date().isoformat(), "phase": "post_close"}, hac_maxlags=0,
+        direction={"source": "declared", "sign": 1, "locked_at": dates[1].date().isoformat()},
+    )
+    result = compute_comparison(spec, signals, sliced, {"cutoff": dates[14].date().isoformat()})
+    daily = first_window(result)["paired_rank_ic_delta"]["daily"]
+    assert [item["date"] for item in daily] == [dates[8].date().isoformat()]
+    assert result["knowledge_cutoff"]["last_available_price_date"] == dates[14].date().isoformat()
+
+
 def test_fit_uses_only_labels_mature_by_its_own_cutoff(tmp_path):
     dates = pd.bdate_range("2026-01-01", periods=12)
     base = np.asarray([np.roll(np.arange(10), index) for index in range(12)], dtype=float)
@@ -391,6 +418,24 @@ def test_coverage_discloses_pit_input_and_label_losses(tmp_path):
     assert coverage["losses"]["candidate_missing_on_pit"] == 1
     assert coverage["losses"]["label_missing_despite_maturity"] == 1
     assert coverage["losses"]["label_not_mature_on_common_input"] == 20
+
+
+def test_invalid_return_or_pit_context_fails_closed(tmp_path):
+    dates = pd.bdate_range("2026-01-01", periods=12)
+    values = np.asarray([np.roll(np.arange(10), index) for index in range(12)], dtype=float)
+    signals = {"base": frame("base", dates, values), "candidate": frame("candidate", dates, values + 0.1),
+               "style": frame("style", dates, values[:, ::-1])}
+    returns = pd.DataFrame(values, index=dates, columns=SYMBOLS)
+    spec = validated_spec(tmp_path)
+    invalid_returns = context(dates, {name: returns.copy() for name in ("1d", "5d", "10d", "20d")})
+    invalid_returns["fwd_ret_mats"]["1d"].iloc[0, 0] = np.inf
+    with pytest.raises(ResearchError, match="infinite"):
+        compute_comparison(spec, signals, invalid_returns, {"cutoff": "2026-01-14"})
+    invalid_mask = context(dates, {name: returns.copy() for name in ("1d", "5d", "10d", "20d")})
+    invalid_mask["st_pit_eligible_mask"] = invalid_mask["st_pit_eligible_mask"].astype(object)
+    invalid_mask["st_pit_eligible_mask"].iloc[0, 0] = "yes"
+    with pytest.raises(ResearchError, match="eligibility mask must be boolean"):
+        compute_comparison(spec, signals, invalid_mask, {"cutoff": "2026-01-14"})
 
 
 def test_declared_exact_duplicate_reports_construction_and_degenerate_fit(tmp_path):

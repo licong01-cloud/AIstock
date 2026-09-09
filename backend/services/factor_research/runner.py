@@ -136,6 +136,7 @@ def evaluation_context(ctx, spec):
     if selected.empty:
         raise ResearchError("evaluation_empty", "No signal dates available")
     view = dict(ctx)
+    view["label_calendar"] = pd.DatetimeIndex(dates)
     for key in ("close_unstacked", "st_pit_eligible_mask"):
         view[key] = ctx[key].loc[selected]
     view["fwd_ret_mats"] = {key: value.loc[selected] for key, value in ctx["fwd_ret_mats"].items()}
