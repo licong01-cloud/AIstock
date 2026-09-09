@@ -1,6 +1,9 @@
 {
   "actual": "The standalone QE experiment MCP server exposes qe_dataset_profile_get, qe_single_experiment_template_create, and qe_universe_comparison_task_create, but backend/mcp/modules/qe_experiment.py and the unified gateway manifest do not. Unified gateway clients therefore cannot use these established QE controls, and the strict migration inventory detects drift. Migrate exactly these three wrappers and add contract tests without changing pipeline or inventory tests, relaxing confirmation or validation, starting services, experiments, or database access.",
   "allowed_write_scope": [
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/mcp/tool_manifest.py",
+    "tests/mcp/test_qe_experiment_gateway_contract.py",
     "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
   ],
   "assigned_agent": null,
@@ -19,14 +22,25 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260909-4b27b7aeb4b5",
       "timestamp": "2026-09-09T01:48:48.047800Z"
+    },
+    {
+      "action": "register_scope_expansion",
+      "actor": "codex",
+      "note": "Bound implementation to the QE gateway module, static manifest, one new gateway contract test, and this BUG record; existing pipeline and inventory tests remain read-only.",
+      "timestamp": "2026-09-09T01:51:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The unified qe_experiment gateway exposes the same three established tools with equivalent request validation and HTTP contracts, while strict inventory and manifest-quality tests remain unchanged and pass.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ],
+    "changed_files_source": "registered_scope_expansion",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +49,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/mcp/modules/qe_experiment.py",
+      "backend/mcp/tool_manifest.py",
+      "tests/mcp/test_qe_experiment_gateway_contract.py",
+      "tests/aistock_validation/bugs/20260909_BUG-1416-qe-unified-mcp-gateway-omits-three-standalone-experiment-tools.json"
+    ]
   },
   "first_seen_at": "2026-09-09T01:48:48.047817Z",
   "fix_branch": null,
@@ -54,22 +78,34 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest tests/mcp/test_mcp_inventory_diff.py::test_legacy_qe_inventory_migrated_to_gateway_modules -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "mcp_gateway_manifest_quality"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "registered_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -117,7 +153,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "mcp_gateway_manifest_quality"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -170,7 +207,8 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "mcp_gateway_manifest_quality"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
