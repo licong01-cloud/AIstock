@@ -483,6 +483,7 @@ def replay_continuous_cohorts(
     seed: int = 20260907,
     information_block: str = CORE_INFORMATION_BLOCK,
     initial_holding_policy_id: str = LEGACY_INITIAL_HOLDING_POLICY_ID,
+    model_action_authority: str = "FULL_ACTION_VALUE_V4",
 ) -> ContinuousReplayResult:
     """Replay one continuous OOT sleeve per symbol and initial state.
 
@@ -492,8 +493,19 @@ def replay_continuous_cohorts(
     corporate-action quantity/cash transformations.
     """
 
+    from .action_value_advice import (
+        ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
+        FULL_MODEL_ACTION_AUTHORITY,
+        action_authority_policy_sha256,
+    )
+
     if horizon != PRIMARY_HORIZON or bootstrap_samples <= 0 or block_sessions <= 0:
         raise ActionValueError("CONTINUOUS_REPLAY_SPEC_DRIFT")
+    if model_action_authority not in {
+        FULL_MODEL_ACTION_AUTHORITY,
+        ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
+    }:
+        raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
     if initial_holding_policy_id not in {
         LEGACY_INITIAL_HOLDING_POLICY_ID,
         EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
@@ -577,6 +589,7 @@ def replay_continuous_cohorts(
                     corporate_actions=action_book,
                     information_block=information_block,
                     initial_holding_policy_id=initial_holding_policy_id,
+                    model_action_authority=model_action_authority,
                 )
                 excluded["corporate_action_applied_sleeve_days"] += len(
                     {
@@ -669,7 +682,11 @@ def replay_continuous_cohorts(
             if initial_holding_policy_id == EXOGENOUS_INITIAL_HOLDING_POLICY_ID
             else "position_timing_continuous_policy_receipt_v4"
         ),
-        "policy_id": "DAILY_ACTION_VALUE_POLICY_V2",
+        "policy_id": (
+            "DAILY_ACTION_VALUE_POLICY_V2"
+            if model_action_authority == FULL_MODEL_ACTION_AUTHORITY
+            else model_action_authority
+        ),
         "horizon_trading_days": horizon,
         "sleeve_count": int(sleeve_days["sleeve_id"].nunique()),
         "requested_symbol_count": len(symbols),
@@ -718,6 +735,16 @@ def replay_continuous_cohorts(
             {
                 "initial_holding_policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
                 "initial_holding_policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
+            }
+        )
+    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+        receipt.update(
+            {
+                "schema_version": "position_timing_entry_only_continuous_policy_receipt_v1",
+                "policy_sha256": action_authority_policy_sha256(
+                    information_block, model_action_authority
+                ),
+                "model_action_authority": model_action_authority,
             }
         )
     receipt["receipt_sha256"] = canonical_sha256(receipt)
@@ -961,6 +988,7 @@ def _replay_one_sleeve(
     corporate_actions: CorporateActionBook,
     information_block: str,
     initial_holding_policy_id: str,
+    model_action_authority: str,
 ) -> list[dict[str, Any]]:
     from .action_value_advice import decide_stock_day
 
@@ -1106,6 +1134,7 @@ def _replay_one_sleeve(
                     target_reference=target_reference,
                     current_market=features.iloc[decision_ordinal],
                     information_block=information_block,
+                    model_action_authority=model_action_authority,
                 )
             except ActionValueError as exc:
                 if exc.code not in {"CURRENT_CORE_FEATURE_UNAVAILABLE", "CURRENT_OPTIONAL_FEATURE_UNAVAILABLE"}:
