@@ -1186,10 +1186,14 @@ jobs:
               core.info(`No actionable Nightly issue created. policy.allowed=${policy.allowed} reason=${policy.reason || 'unknown'}`);
               return;
             }
-            const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
-            if (payload.synthetic || payload.failure_kind === 'synthetic_smoke') {
-              core.info('Skipping synthetic Nightly smoke payload; it must not create or update a real GitHub Issue.');
-              return;
+            const issueDocument = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));
+            const payloads = Array.isArray(issueDocument.payloads) ? issueDocument.payloads : [issueDocument];
+            if (payloads.length > 5) {
+              throw new Error(`Nightly issue payload count ${payloads.length} exceeds the bounded maximum of 5.`);
+            }
+            const singleIssueNumberPath = 'tmp/validation/nightly_failure_issue/github-issue-number.txt';
+            if (fs.existsSync(singleIssueNumberPath)) {
+              fs.unlinkSync(singleIssueNumberPath);
             }
             const {owner, repo} = context.repo;
             const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
@@ -1198,56 +1202,84 @@ jobs:
               per_page: 100,
             });
             const existingLabels = new Set(allLabels.map((label) => label.name));
-            const labels = (payload.labels || [])
-              .filter((label) => existingLabels.has(label));
-            const marker = payload.dedupe.nightly_marker || payload.dedupe.marker;
             const openIssues = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
-            const existing = openIssues.find((issue) => !issue.pull_request && ((issue.body || "").includes(marker) || issue.title === payload.title));
-            let issueNumber;
-            if (existing) {
-              issueNumber = existing.number;
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: issueNumber,
-                body: payload.recurrence_comment,
-              });
-              const updateParams = {
-                owner,
-                repo,
-                issue_number: issueNumber,
-                title: payload.title,
-                body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
-              };
-              if (labels.length > 0) {
-                updateParams.labels = labels;
+            const issueRecords = [];
+            for (const payload of payloads) {
+              if (payload.synthetic || payload.failure_kind === 'synthetic_smoke') {
+                core.info('Skipping synthetic Nightly smoke payload; it must not create or update a real GitHub Issue.');
+                continue;
               }
-              await github.rest.issues.update(updateParams);
-            } else {
-              const createParams = {
-                owner,
-                repo,
-                title: payload.title,
-                body: "Preparing actionable Nightly diagnostics...",
-              };
-              if (labels.length > 0) {
-                createParams.labels = labels;
+              const labels = (payload.labels || []).filter((label) => existingLabels.has(label));
+              const marker = payload.dedupe.nightly_marker || payload.dedupe.marker;
+              const legacyMarker = payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null;
+              const existing = openIssues.find((issue) => !issue.pull_request && (
+                (issue.body || "").includes(marker)
+                || (legacyMarker && (issue.body || "").includes(legacyMarker))
+                || issue.title === payload.title
+              ));
+              let issueNumber;
+              if (existing) {
+                issueNumber = existing.number;
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: payload.recurrence_comment,
+                });
+                const updateParams = {
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  title: payload.title,
+                  body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
+                };
+                if (labels.length > 0) {
+                  updateParams.labels = labels;
+                }
+                await github.rest.issues.update(updateParams);
+                existing.title = payload.title;
+                existing.body = updateParams.body;
+              } else {
+                const createParams = {
+                  owner,
+                  repo,
+                  title: payload.title,
+                  body: "Preparing actionable Nightly diagnostics...",
+                };
+                if (labels.length > 0) {
+                  createParams.labels = labels;
+                }
+                const created = await github.rest.issues.create(createParams);
+                issueNumber = created.data.number;
+                const issueBody = payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`);
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: issueBody,
+                });
+                openIssues.push({number: issueNumber, title: payload.title, body: issueBody});
               }
-              const created = await github.rest.issues.create(createParams);
-              issueNumber = created.data.number;
-              await github.rest.issues.update({
-                owner,
-                repo,
+              issueRecords.push({
                 issue_number: issueNumber,
-                body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
+                fingerprint: payload.dedupe.fingerprint,
+                nightly_marker: marker,
+                title: payload.title,
               });
             }
             fs.writeFileSync(
-              'tmp/validation/nightly_failure_issue/github-issue-number.txt',
-              `${issueNumber}\n`,
+              'tmp/validation/nightly_failure_issue/github-issue-numbers.json',
+              `${JSON.stringify({schema_version: 'aistock_nightly_issue_numbers_v1', issues: issueRecords}, null, 2)}\n`,
               'utf8',
             );
-            core.info(`Nightly failure issue: #${issueNumber}`);
+            if (issueRecords.length === 1) {
+              fs.writeFileSync(
+                singleIssueNumberPath,
+                `${issueRecords[0].issue_number}\n`,
+                'utf8',
+              );
+            }
+            core.info(`Nightly failure issues: ${issueRecords.map((item) => `#${item.issue_number}`).join(', ') || 'none'}`);
 
       - name: Promote Nightly failure issue to BUG draft
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
@@ -1258,7 +1290,15 @@ jobs:
         run: |
           mkdir -p "${AISTOCK_WORKTREE_ROOT}"
           ISSUE_NUMBER_FILE="tmp/validation/nightly_failure_issue/github-issue-number.txt"
+          ISSUE_NUMBERS_FILE="tmp/validation/nightly_failure_issue/github-issue-numbers.json"
           PROMOTION_STATUS="tmp/validation/nightly_failure_issue/bug-promotion-status.txt"
+          if [ -f "${ISSUE_NUMBERS_FILE}" ]; then
+            ISSUE_COUNT="$(python -c "import json; print(len(json.load(open('${ISSUE_NUMBERS_FILE}', encoding='utf-8')).get('issues') or []))")"
+            if [ "${ISSUE_COUNT}" -gt 1 ]; then
+              echo "workflow_gate=deferred_multi_issue_promotion issue_count=${ISSUE_COUNT} reason=per_module_issues_require_independent_bug_identity" | tee "${PROMOTION_STATUS}"
+              exit 0
+            fi
+          fi
           if [ ! -f "${ISSUE_NUMBER_FILE}" ]; then
             echo "workflow_gate=skipped reason=nightly_issue_number_missing" | tee "${PROMOTION_STATUS}"
             exit 0
@@ -1387,6 +1427,7 @@ jobs:
             tmp/validation/nightly_failure_issue/bug-promotion-status.txt
             tmp/validation/nightly_failure_issue/bug-registry-pr-body.md
             tmp/validation/nightly_failure_issue/github-issue-number.txt
+            tmp/validation/nightly_failure_issue/github-issue-numbers.json
             tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md
           if-no-files-found: ignore
           retention-days: 14
