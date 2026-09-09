@@ -50,6 +50,102 @@ def test_attach_does_not_read_another_attempt_file(tmp_path):
         ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
 
 
+def test_legacy_attempt_cannot_attach_undeclared_comparison(tmp_path):
+    spec, result, value = attachment(tmp_path)
+    folder = tmp_path / "m_trial"
+    folder.mkdir()
+    (folder / "values.h5").write_bytes(b"fixture")
+    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
+    result["candidates"] = [{"factor_name": "m_trial", "scope": "research_candidate", "metrics": {},
+                             "values": str(folder / "values.h5"),
+                             "source_script": str(folder / "factor.py")}]
+    result["research_comparison"] = {"schema_version": "factor_research_comparison_v1"}
+    write_json(tmp_path / "result.json", result)
+    with pytest.raises(ResearchError, match="undeclared comparison"):
+        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
+
+
+def test_declared_comparison_attach_checks_identity_and_records_without_recompute(tmp_path):
+    spec, result, value = attachment(tmp_path)
+    spec["method_version"] = "2.0"
+    comparison_spec = {
+        "research_role": "predictive_increment", "horizon": "1d", "baseline": ["m_trial"],
+        "candidate": "m_candidate", "controls": {"style": [], "neighbors": [], "categorical": []},
+        "fit_windows": [{"start": "2026-01-01", "end": "2026-01-05",
+                         "knowledge_cutoff": {"date": "2026-01-07", "phase": "post_close"}}],
+        "evaluation_windows": [{"start": "2026-01-08", "end": "2026-01-09", "fit_window_index": 0}],
+        "knowledge_cutoff": {"date": "2026-01-12", "phase": "post_close"},
+        "direction": {"source": "declared", "sign": 1, "locked_at": "2026-01-07"},
+    }
+    spec["candidates"].append({"factor_name": "m_candidate", "script": "reviewed_candidate.py"})
+    spec["comparison"] = comparison_spec
+    result["request"] = spec
+    candidates = []
+    for name in ("m_trial", "m_candidate"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "values.h5").write_bytes(b"fixture")
+        (folder / "factor.py").write_text("# fixture", encoding="utf-8")
+        candidates.append({"factor_name": name, "scope": "research_candidate", "metrics": {},
+                           "values": str(folder / "values.h5"), "source_script": str(folder / "factor.py")})
+    result["candidates"] = candidates
+    result["research_comparison"] = {
+        "schema_version": "factor_research_comparison_v1",
+        "scope": "research_comparison_not_official_metrics_or_qe_result",
+        "method_version": "2.0",
+        **{key: comparison_spec[key] for key in (
+            "research_role", "horizon", "baseline", "candidate", "controls", "fit_windows",
+            "evaluation_windows", "direction",
+        )},
+        "knowledge_cutoff": {"date": "2026-01-12", "phase": "post_close",
+                             "last_available_price_date": "2026-01-12", "label_shift_n": 2},
+        "windows": [{"fit_window_index": 0, "fit_window": comparison_spec["fit_windows"][0],
+                     "evaluation_window": {"start": "2026-01-08", "end": "2026-01-09"}}],
+        "cost": {"status": "unavailable"},
+        "information_relation": {"classification": "unresolved_statistical_evidence"},
+        "use_value": {"classification": "evidence_insufficient"},
+    }
+    write_json(tmp_path / "result.json", result)
+    repository = RecordedAttempt(tmp_path, spec)
+    assert ResearchService(repository).attach(value)["applied"] is True
+    assert len(repository.records) == 1
+
+
+def test_declared_comparison_attach_rejects_stale_window_identity(tmp_path):
+    spec, result, value = attachment(tmp_path)
+    spec["method_version"] = "2.0"
+    comparison_spec = {
+        "research_role": "predictive_increment", "horizon": "1d", "baseline": ["m_trial"],
+        "candidate": "m_candidate", "controls": {"style": [], "neighbors": [], "categorical": []},
+        "fit_windows": [], "evaluation_windows": [{"start": "2026-01-08", "end": "2026-01-09"}],
+        "direction": {"source": "declared", "sign": 1, "locked_at": "2026-01-07"},
+    }
+    spec["candidates"].append({"factor_name": "m_candidate", "script": "reviewed_candidate.py"})
+    spec["comparison"] = comparison_spec
+    result["request"] = spec
+    result["candidates"] = []
+    for name in ("m_trial", "m_candidate"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "values.h5").write_bytes(b"fixture")
+        (folder / "factor.py").write_text("# fixture", encoding="utf-8")
+        result["candidates"].append({"factor_name": name, "scope": "research_candidate", "metrics": {},
+                                     "values": str(folder / "values.h5"),
+                                     "source_script": str(folder / "factor.py")})
+    result["research_comparison"] = {
+        "schema_version": "factor_research_comparison_v1",
+        "scope": "research_comparison_not_official_metrics_or_qe_result",
+        **{key: comparison_spec[key] for key in (
+            "research_role", "horizon", "baseline", "candidate", "controls", "fit_windows", "direction",
+        )},
+        "evaluation_windows": [{"start": "2026-01-10", "end": "2026-01-11"}],
+        "windows": [{}],
+    }
+    write_json(tmp_path / "result.json", result)
+    with pytest.raises(ResearchError, match="wrong contract"):
+        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
+
+
 def test_result_file_cannot_be_overwritten(tmp_path):
     path = tmp_path / "result.json"
     write_json(path, {"status": "computed"})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -41,6 +42,7 @@ NIGHTLY_STATUS_ALIASES = {
 NIGHTLY_FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
 LOGS_NOT_READY_REASON = "actions_run_still_in_progress_logs_unavailable"
 SYNTHETIC_RUN_IDS = {"999999999", "synthetic", "smoke"}
+MAX_NIGHTLY_AUTO_ISSUE_GROUPS = 5
 
 
 def _utc_now() -> str:
@@ -1199,6 +1201,9 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
     nightly_marker = None
     if summary.get("nightly_fingerprint"):
         nightly_marker = f"<!-- aistock-nightly-failure:{summary['nightly_fingerprint']} -->"
+    legacy_nightly_marker = None
+    if summary.get("nightly_legacy_fingerprint"):
+        legacy_nightly_marker = f"<!-- aistock-nightly-failure:{summary['nightly_legacy_fingerprint']} -->"
     marker = f"<!-- aistock-ci-failure-fingerprint:{fingerprint} -->"
     run_marker = f"<!-- aistock-issue-on-test-fail:{run_id} -->"
     failure_kind = _runtime_failure_kind(summary)
@@ -1267,6 +1272,7 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
             "fingerprint": fingerprint,
             "marker": marker,
             "nightly_marker": nightly_marker,
+            "legacy_nightly_marker": legacy_nightly_marker,
             "run_marker": run_marker,
             "search_query": f"repo:{repo} is:issue in:body {nightly_marker or marker}",
         },
@@ -1279,6 +1285,14 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
             "deterministic_issue_creation_unaffected": rollout_gate.get("deterministic_issue_creation_unaffected") is not False,
         },
     }
+
+
+def build_github_issue_payloads(summary: dict[str, Any], *, repo: str = DEFAULT_REPO) -> list[dict[str, Any]]:
+    """Build one bounded, independently deduplicated payload per Nightly module group."""
+    groups = summary.get("nightly_failure_groups") if isinstance(summary.get("nightly_failure_groups"), list) else []
+    if not groups:
+        return [build_github_issue_payload(summary, repo=repo)]
+    return [build_github_issue_payload(item, repo=repo) for item in _nightly_group_summaries(summary)]
 
 
 def _dedupe_marker(summary: dict[str, Any]) -> str:
@@ -1384,6 +1398,89 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
         {"module": module, "sessions": sorted(set(sessions)), "session_count": len(set(sessions))}
         for module, sessions in sorted(groups.items())
     ]
+
+
+def _bounded_nightly_failure_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(groups) <= MAX_NIGHTLY_AUTO_ISSUE_GROUPS:
+        return copy.deepcopy(groups)
+    retained = copy.deepcopy(groups[: MAX_NIGHTLY_AUTO_ISSUE_GROUPS - 1])
+    overflow = groups[MAX_NIGHTLY_AUTO_ISSUE_GROUPS - 1 :]
+    overflow_sessions = sorted(
+        {
+            str(session)
+            for group in overflow
+            for session in group.get("sessions") or []
+            if str(session).strip()
+        }
+    )
+    retained.append(
+        {
+            "module": "validation.runner",
+            "sessions": overflow_sessions,
+            "session_count": len(overflow_sessions),
+            "source_modules": sorted(
+                {str(group.get("module") or "validation.runner") for group in overflow}
+            ),
+            "overflow": True,
+        }
+    )
+    return retained
+
+
+def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = summary.get("nightly_failure_groups") if isinstance(summary.get("nightly_failure_groups"), list) else []
+    bounded_groups = _bounded_nightly_failure_groups(groups)
+    multiple_groups = len(bounded_groups) > 1
+    scoped_summaries: list[dict[str, Any]] = []
+    for group in bounded_groups:
+        module = str(group.get("module") or "validation.runner")
+        sessions = sorted({str(item) for item in group.get("sessions") or [] if str(item).strip()})
+        scoped = copy.deepcopy(summary)
+        scoped["nightly_failure_groups"] = [group]
+        scoped["nightly_failed_sessions"] = sessions
+        scoped["suspected_modules"] = [module]
+        scoped["issue_creation_policy"] = {
+            "allowed": True,
+            "reason": "nightly_failure_group_actionable",
+            "mode": "bounded_module_group_split",
+            "source_group_count": len(groups),
+            "max_issue_count": MAX_NIGHTLY_AUTO_ISSUE_GROUPS,
+            "automatic_bug_promotion": (
+                "deferred_when_multiple_issues" if multiple_groups else "allowed_for_single_issue"
+            ),
+        }
+        job = copy.deepcopy(_primary_failed_job(scoped))
+        job["suspected_module"] = module
+        job["nox_session"] = sessions[0] if len(sessions) == 1 else None
+        job["failed_step"] = sessions[0] if len(sessions) == 1 else "nightly_module_group"
+        job["failed_tests"] = []
+        job["error_signature"] = "Nightly failed sessions: " + ", ".join(sessions)
+        scoped["failed_jobs"] = [job]
+        # A module group must keep one durable Issue while its failing session
+        # membership changes between Nightly runs.  Session identities remain
+        # in the title/body, but they must not be part of the dedupe identity.
+        group_kind = "overflow" if group.get("overflow") else "module"
+        group_source = f"module={module}|group_kind={group_kind}"
+        group_hash = hashlib.sha256(group_source.encode("utf-8")).hexdigest()[:16]
+        scoped["nightly_fingerprint"] = f"nightly-group-{group_hash}"
+        if not multiple_groups and summary.get("nightly_fingerprint") != scoped["nightly_fingerprint"]:
+            scoped["nightly_legacy_fingerprint"] = summary.get("nightly_fingerprint")
+        scoped["fingerprint_source"] = group_source
+        scoped["fingerprint"] = f"ci-{group_hash}"
+        scoped["issue_title"] = (
+            f"[{scoped.get('severity') or 'P1'}][{module}] Nightly failed: "
+            + (", ".join(sessions) or "module group has no session identity")
+        )[:240]
+        scoped["manual_summary"] = scoped["issue_title"]
+        scoped["reproduce_command"] = (
+            "python -m nox -s " + " ".join(sessions)
+            if sessions
+            else str(scoped.get("run_url") or "Inspect the linked Nightly run.")
+        )
+        scoped["failure_event"] = build_failure_event(scoped)
+        scoped["agent_handoff"] = build_agent_handoff(scoped)
+        scoped_summaries.append(scoped)
+    return scoped_summaries
 
 
 def _test_plan_module_for_nox_session(session: str) -> str | None:
@@ -1631,12 +1728,15 @@ def summarize_nightly_status(
     summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
     if len(failure_groups) > 1:
         summary["issue_creation_policy"] = {
-            "allowed": False,
-            "reason": "nightly_heterogeneous_failures_require_group_triage",
-            "next_command": "inspect nightly_failure_groups and promote only one confirmed root-cause group",
+            "allowed": True,
+            "reason": "nightly_heterogeneous_failures_split_by_module",
+            "mode": "bounded_module_group_split",
+            "group_count": len(failure_groups),
+            "max_issue_count": MAX_NIGHTLY_AUTO_ISSUE_GROUPS,
+            "automatic_bug_promotion": "deferred_when_multiple_issues",
         }
         summary["suspected_modules"] = ["validation.runner"]
-        summary["issue_title"] = f"P1 Nightly triage required: {len(failure_groups)} heterogeneous failure groups"
+        summary["issue_title"] = f"P1 Nightly split required: {len(failure_groups)} heterogeneous failure groups"
         summary["failure_event"] = build_failure_event(summary)
         summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
@@ -1820,6 +1920,19 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.extend(["", "## Nightly Statuses", ""])
         for key in NIGHTLY_STATUS_KEYS:
             lines.append(f"- {key}: `{statuses.get(key) or 'unknown'}`")
+    failure_groups = (
+        summary.get("nightly_failure_groups")
+        if isinstance(summary.get("nightly_failure_groups"), list)
+        else []
+    )
+    if failure_groups:
+        lines.extend(["", "## Nightly Failure Groups", ""])
+        for group in failure_groups:
+            module = str(group.get("module") or "validation.runner")
+            sessions = ", ".join(str(item) for item in group.get("sessions") or []) or "unknown"
+            source_modules = ", ".join(str(item) for item in group.get("source_modules") or [])
+            suffix = f"; source_modules={source_modules}" if source_modules else ""
+            lines.append(f"- module=`{module}`; sessions=`{sessions}`{suffix}")
     llm_advice = summary.get("llm_triage_advice") if isinstance(summary.get("llm_triage_advice"), dict) else {}
     llm_evidence = llm_advice.get("llm_invocation_evidence") if isinstance(llm_advice.get("llm_invocation_evidence"), dict) else {}
     if llm_advice:
@@ -2279,7 +2392,19 @@ def main(argv: list[str] | None = None) -> int:
     _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
     policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
     if args.github_issue_payload_output and policy.get("allowed") is not False:
-        _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
+        issue_payloads = build_github_issue_payloads(summary, repo=args.repo)
+        issue_document = (
+            issue_payloads[0]
+            if len(issue_payloads) == 1
+            else {
+                "schema_version": "aistock_ci_failure_github_issue_payload_manifest_v1",
+                "payload_count": len(issue_payloads),
+                "source_group_count": len(summary.get("nightly_failure_groups") or []),
+                "max_issue_count": MAX_NIGHTLY_AUTO_ISSUE_GROUPS,
+                "payloads": issue_payloads,
+            }
+        )
+        _write_json(args.github_issue_payload_output, issue_document)
     elif args.github_issue_payload_output:
         try:
             Path(args.github_issue_payload_output).unlink()

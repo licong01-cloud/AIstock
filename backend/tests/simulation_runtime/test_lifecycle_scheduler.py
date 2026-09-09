@@ -14361,6 +14361,96 @@ def test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_heal
         "market.stk_limit.pre_close:frozen_daily_trading_context_v1"
     )
 
+    predecessor_mark_time = datetime(2026, 5, 21, 14, 56)
+    predecessor_records = {}
+    for symbol, record in records.items():
+        payload = record.model_dump(mode="python", exclude={"mark_hash"})
+        payload["as_of_time"] = predecessor_mark_time
+        predecessor_records[symbol] = LocalSimMarketMarkV1.model_validate(payload)
+    historical_snapshot_time = datetime(2026, 5, 21, 15, 0)
+    stale_normal_context = replace(
+        context,
+        local_broker=SimpleNamespace(load_authoritative_position_marks=lambda **_: predecessor_records),
+    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_position_marks(
+            positions=positions,
+            context=stale_normal_context,
+            execution=execution,
+            snapshot_time=historical_snapshot_time,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN"
+
+    historical_execution = SimpleNamespace(
+        run=SimpleNamespace(
+            trade_date=TRADE_DATE,
+            run_payload_json={
+                "local_sim_projection_outbox_v1": {
+                    "projection_payload": {
+                        "marks": [record.model_dump(mode="json") for record in predecessor_records.values()]
+                    }
+                }
+            },
+        ),
+        execution_plan=execution.execution_plan,
+    )
+    historical_context = replace(
+        context,
+        local_broker=SimpleNamespace(
+            historical_terminalization_plan_id=execution.execution_plan.plan_id,
+            load_authoritative_position_marks=lambda **_: predecessor_records,
+        ),
+    )
+    historical_accepted, restored_records = SimulationLifecycleScheduler._local_sim_position_marks(
+        positions=positions,
+        context=historical_context,
+        execution=historical_execution,
+        snapshot_time=historical_snapshot_time,
+    )
+    assert historical_accepted == accepted
+    assert restored_records == predecessor_records
+    assert restored_records[suspended_symbol].as_of_time == predecessor_mark_time
+
+    mismatched_historical_context = replace(
+        historical_context,
+        local_broker=SimpleNamespace(
+            historical_terminalization_plan_id="different_plan",
+            load_authoritative_position_marks=lambda **_: predecessor_records,
+        ),
+    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_position_marks(
+            positions=positions,
+            context=mismatched_historical_context,
+            execution=historical_execution,
+            snapshot_time=historical_snapshot_time,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_HISTORICAL_MARK_SCOPE_CONFLICT"
+
+    changed_records = dict(predecessor_records)
+    changed_records[healthy_symbol] = LocalSimMarketMarkV1(
+        symbol=healthy_symbol,
+        price=10.2,
+        as_of_time=predecessor_mark_time,
+        source=MinuteDataSource.TDX_REALTIME.value,
+        provenance=LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE,
+    )
+    changed_historical_context = replace(
+        historical_context,
+        local_broker=SimpleNamespace(
+            historical_terminalization_plan_id=execution.execution_plan.plan_id,
+            load_authoritative_position_marks=lambda **_: changed_records,
+        ),
+    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        SimulationLifecycleScheduler._local_sim_position_marks(
+            positions=positions,
+            context=changed_historical_context,
+            execution=historical_execution,
+            snapshot_time=historical_snapshot_time,
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_HISTORICAL_MARK_CHANGED"
+
 
 def test_scheduler_localsim_economic_transaction_rolls_back_both_repositories() -> None:
     class FailingPaperRepository(InMemoryPaperTradingV2Repository):
@@ -15814,12 +15904,34 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
         payload_patch={"local_sim_projection_outbox_v1": valid_outbox},
     )
 
-    next_day = restarted.run_once(
+    assert recovery_context.local_broker is not None
+    original_exporter = recovery_context.local_broker.export_execution_snapshot
+
+    def _raise_during_historical_export(*, handles):
+        del handles
+        raise RuntimeError("forced historical snapshot export failure")
+
+    recovery_context.local_broker.export_execution_snapshot = _raise_during_historical_export
+    export_failed = restarted.run_once(
         trade_date=TRADE_DATE + timedelta(days=1),
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=False,
         as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+    export_failure = next(item for item in export_failed.stale_run_results if item.get("run_id") == run_id)
+    assert export_failure["status"] == "RECOVERY_FAILED"
+    assert export_failure["error"]["message"] == "forced historical snapshot export failure"
+    assert recovery_context.local_broker.historical_terminalization_plan_id is None
+    assert tuple(repo.list_local_sim_execution_states(run_id)) == initial_states
+    recovery_context.local_broker.export_execution_snapshot = original_exporter
+
+    next_day = restarted.run_once(
+        trade_date=TRADE_DATE + timedelta(days=1),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 22, 10, 2),
     )
 
     recovered = repo.get_simulation_daily_run(run_id)
@@ -15838,6 +15950,10 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     assert recovery["durable_minute_loop_advanced"] is False
     assert recovery["historical_realtime_market_data_requested"] is False
     assert recovery["broker_execution_replayed"] is False
+    assert recovery["valuation_marks_preserved"] is True
+    assert recovery["valuation_mark_set_sha256"] == canonical_json_sha256(
+        SimulationLifecycleScheduler._previous_local_sim_mark_records(recovered)
+    )
     assert recovery["residual_order_count"] >= 1
     assert recovery["capital_residual_count"] >= 1
     assert recovery["predecessor_state_count"] == len(initial_states)
@@ -15848,6 +15964,7 @@ def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generati
     assert paper_repo.list_order_events(portfolio_id, run_id=run_id) == initial_order_events
     assert paper_repo.list_cash_ledger(portfolio_id) == initial_cash_ledger
     assert recovery_context.local_broker is not None
+    assert recovery_context.local_broker.historical_terminalization_plan_id is None
     assert recovery_context.local_broker.query_account().cash == first_broker.query_account().cash
     assert recovery_context.local_broker.query_positions() == first_broker.query_positions()
     assert all(
