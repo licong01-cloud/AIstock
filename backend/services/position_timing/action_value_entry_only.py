@@ -237,12 +237,33 @@ def _load_request(path: Path) -> dict[str, Any]:
         "database_write",
         "runtime_write",
     )
+    symbols = tuple(request.get("selected_symbols") or ())
+    parent = request.get("parent_v4") or {}
+    replay_source = request.get("daily_replay_source_identity") or {}
+    corporate_action = request.get("corporate_action_snapshot") or {}
     if (
         request.get("schema_version") != REQUEST_SCHEMA
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("study_contract_sha256") != STUDY_CONTRACT_SHA256
         or canonical_sha256(request.get("study_contract")) != STUDY_CONTRACT_SHA256
         or request.get("same_history_interpretation") != RESULT_CLASS
+        or request.get("candidate_policy_sha256")
+        != action_authority_policy_sha256(
+            CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY
+        )
+        or not symbols
+        or len(symbols) != len(set(symbols))
+        or tuple((request.get("population_spec") or {}).get("selected_symbols") or ())
+        != symbols
+        or not all(
+            parent.get(field)
+            for field in ("bundle_path", "manifest_file", "manifest_sha256", "request_sha256", "receipt_sha256")
+        )
+        or replay_source.get("schema_version")
+        != "position_timing_daily_replay_source_identity_v1"
+        or not replay_source.get("aggregate_sha256")
+        or not corporate_action.get("path")
+        or not corporate_action.get("sha256")
         or any(request.get(flag) is not False for flag in false_flags)
         or request.get("request_sha256") != canonical_sha256(identity)
     ):
@@ -434,6 +455,19 @@ def inspect_entry_only_bundle(bundle: Path) -> dict[str, Any]:
     manifest_identity = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
     receipt_identity = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     comparisons = (receipt.get("entry_only_policy") or {}).get("comparisons") or {}
+    false_flags = (
+        "registry_written",
+        "current_written",
+        "model_artifact_written",
+        "card_written",
+        "alert_written",
+        "order_written",
+        "database_written",
+        "runtime_written",
+    )
+    joint_supported = bool(comparisons) and all(
+        item.get("effect_evidence") == "SUPPORTED" for item in comparisons.values()
+    )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
         or manifest.get("manifest_sha256") != canonical_sha256(manifest_identity)
@@ -446,9 +480,16 @@ def inspect_entry_only_bundle(bundle: Path) -> dict[str, Any]:
         or receipt.get("result_class") != RESULT_CLASS
         or receipt.get("provenance_reason") != PROVENANCE_REASON
         or receipt.get("trial_count") != 2
+        or receipt.get("planned_candidate_policy_count") != 1
+        or receipt.get("familywise_hypothesis_count") != 2
         or receipt.get("selected_trial_count") != 0
         or set(comparisons) != {"BUY_AND_HOLD", "FROZEN_L1_V1"}
+        or receipt.get("joint_effect_evidence")
+        != ("SUPPORTED" if joint_supported else "INCONCLUSIVE")
+        or receipt.get("candidate_policy_sha256")
+        != request.get("candidate_policy_sha256")
         or receipt.get("serving_status") != "NOT_SERVING_SAME_HISTORY_HYPOTHESIS_GENERATED"
+        or any(receipt.get(flag) is not False for flag in false_flags)
     ):
         raise ActionValueError("ENTRY_ONLY_BUNDLE_IDENTITY_MISMATCH")
     for name, expected in manifest.get("files", {}).items():

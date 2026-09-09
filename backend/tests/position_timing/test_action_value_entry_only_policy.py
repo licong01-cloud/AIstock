@@ -170,6 +170,9 @@ def _sleeves(*, changed: bool = False) -> pd.DataFrame:
 
 
 def _request(tmp_path: Path) -> dict:
+    candidate_policy_sha256 = action_authority_policy_sha256(
+        CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY
+    )
     payload = {
         "schema_version": entry_only.REQUEST_SCHEMA,
         "pipeline_id": entry_only.PIPELINE_ID,
@@ -177,7 +180,25 @@ def _request(tmp_path: Path) -> dict:
         "repository_root": tmp_path.as_posix(),
         "repository_commit": "a" * 40,
         "timing_root": (tmp_path / "timing").as_posix(),
-        "parent_v4": {},
+        "parent_v4": {
+            "bundle_path": (tmp_path / "parent").as_posix(),
+            "manifest_file": {"path": "x", "sha256": "1" * 64, "size_bytes": 1},
+            "manifest_sha256": "2" * 64,
+            "request_sha256": "3" * 64,
+            "receipt_sha256": "4" * 64,
+        },
+        "selected_symbols": ["000001.SZ"],
+        "population_spec": {"selected_symbols": ["000001.SZ"]},
+        "daily_replay_source_identity": {
+            "schema_version": "position_timing_daily_replay_source_identity_v1",
+            "aggregate_sha256": "5" * 64,
+        },
+        "corporate_action_snapshot": {
+            "path": (tmp_path / "corporate-actions.json").as_posix(),
+            "sha256": "6" * 64,
+            "size_bytes": 1,
+        },
+        "candidate_policy_sha256": candidate_policy_sha256,
         "study_contract": entry_only.STUDY_CONTRACT,
         "study_contract_sha256": entry_only.STUDY_CONTRACT_SHA256,
         "same_history_interpretation": entry_only.RESULT_CLASS,
@@ -203,7 +224,11 @@ def _receipt(request: dict) -> dict:
         "result_class": entry_only.RESULT_CLASS,
         "provenance_reason": entry_only.PROVENANCE_REASON,
         "trial_count": 2,
+        "planned_candidate_policy_count": 1,
+        "familywise_hypothesis_count": 2,
         "selected_trial_count": 0,
+        "joint_effect_evidence": "INCONCLUSIVE",
+        "candidate_policy_sha256": request["candidate_policy_sha256"],
         "entry_only_policy": {
             "comparisons": {
                 "BUY_AND_HOLD": comparison,
@@ -211,6 +236,14 @@ def _receipt(request: dict) -> dict:
             }
         },
         "serving_status": "NOT_SERVING_SAME_HISTORY_HYPOTHESIS_GENERATED",
+        "registry_written": False,
+        "current_written": False,
+        "model_artifact_written": False,
+        "card_written": False,
+        "alert_written": False,
+        "order_written": False,
+        "database_written": False,
+        "runtime_written": False,
     }
     payload["receipt_sha256"] = canonical_sha256(payload)
     return payload
