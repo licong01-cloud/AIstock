@@ -220,7 +220,7 @@ def test_qe_experiment_template_delete_tool_confirms_before_http() -> None:
             "body": {"confirm_delete": qe_experiment.QE_TEMPLATE_DELETE_CONFIRM},
         }
     ]
-    assert qe_experiment.TOOL_COUNT == 34
+    assert qe_experiment.TOOL_COUNT == 37
 
 
 def test_qe_experiment_validate_config_is_read_only() -> None:

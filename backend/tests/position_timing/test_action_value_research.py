@@ -12,6 +12,7 @@ from backend.services.position_timing.action_value import (
     ActionValueError,
     Fill,
     PositionState,
+    action_candidates,
 )
 from backend.services.position_timing.action_value_corporate_actions import (
     CorporateAction,
@@ -19,10 +20,13 @@ from backend.services.position_timing.action_value_corporate_actions import (
 )
 from backend.services.position_timing.action_value_research import (
     _apply_replay_fill,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
     ActionValuePopulationSpec,
     build_action_value_rows,
-    replay_continuous_cohorts,
     deterministic_symbols,
+    initial_holding_endowment,
+    replay_continuous_cohorts,
     walk_forward_action_values,
 )
 from backend.services.position_timing.contracts import canonical_sha256
@@ -88,6 +92,46 @@ def test_source_only_sampling_is_stable_and_outcome_independent() -> None:
     )
 
 
+def test_exogenous_holding_endowment_normalizes_star_residual_without_buy() -> None:
+    state = initial_holding_endowment(
+        symbol="688200.SH",
+        reference=Decimal("522.03"),
+        entry_reference=Decimal("592.06"),
+    )
+
+    assert state.quantity == 191
+    assert state.sellable == 191
+    assert state.cash == Decimal("292.27")
+    assert state.quantity * Decimal("522.03") + state.cash == Decimal("100000")
+    assert state.entry_cost == Decimal("592.06")
+    assert state.holding_age == 20
+    assert {plan.delta for plan in action_candidates("688200.SH", state, Decimal("522.03"))} == {
+        -191,
+        0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("reference", "entry_reference", "reason"),
+    [
+        (Decimal("0"), Decimal("10"), "INITIAL_HOLDING_REFERENCE_UNAVAILABLE"),
+        (Decimal("100001"), Decimal("10"), "INITIAL_HOLDING_UNAVAILABLE"),
+        (Decimal("10"), None, "INITIAL_ENTRY_REFERENCE_UNAVAILABLE"),
+    ],
+)
+def test_exogenous_holding_endowment_rejects_unpriceable_state(
+    reference: Decimal,
+    entry_reference: Decimal | None,
+    reason: str,
+) -> None:
+    with pytest.raises(ActionValueError, match=reason):
+        initial_holding_endowment(
+            symbol="688200.SH",
+            reference=reference,
+            entry_reference=entry_reference,
+        )
+
+
 def test_population_builds_both_heads_with_shared_features_and_costs() -> None:
     candidate = FakeCandidate(180)
     spec = ActionValuePopulationSpec(
@@ -145,6 +189,45 @@ def test_walk_forward_never_scores_before_model_is_available() -> None:
     assert replay.receipt["receipt_sha256"] == canonical_sha256(
         {key: value for key, value in replay.receipt.items() if key != "receipt_sha256"}
     )
+
+
+def test_continuous_replay_accepts_exogenous_high_price_star_holding() -> None:
+    candidate = FakeCandidate(820)
+    spec = ActionValuePopulationSpec(
+        start=candidate.calendar[35].date(),
+        end=candidate.calendar[-25].date(),
+        symbol_limit=2,
+        review_stride=10,
+    )
+    population = build_action_value_rows(candidate, spec)
+    forward = walk_forward_action_values(
+        population.rows,
+        calendar=[day.date() for day in candidate.calendar],
+        source_sha256=canonical_sha256(population.coverage),
+        request_sha256="b" * 64,
+        source_commit="a" * 40,
+    )
+    high_price = candidate._frames["000001.SZ"].copy()
+    for column in ("open", "high", "low", "close", "up_limit", "down_limit"):
+        high_price[column] *= 55
+    candidate.symbols = ("688200.SH",)
+    candidate._frames["688200.SH"] = high_price
+
+    replay = replay_continuous_cohorts(
+        candidate,
+        models=forward.models,
+        symbols=candidate.symbols,
+        bootstrap_samples=40,
+        initial_holding_policy_id=EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+    )
+
+    assert replay.receipt["excluded"]["path_unknown"] == 0
+    assert replay.receipt["sleeve_count"] == 2
+    assert (
+        replay.receipt["initial_holding_policy_sha256"]
+        == EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256
+    )
+    assert replay.receipt["schema_version"] == "position_timing_continuous_policy_receipt_v5"
 
 
 def test_factor_change_is_reported_not_approximated() -> None:

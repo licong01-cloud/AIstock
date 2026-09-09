@@ -132,7 +132,17 @@ def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
     )
     suspend_meta_sha = _write(
         candidate / "components" / "suspend_d_daily_candidate_v2" / "meta.json",
-        b"suspend-meta",
+        _canonical(
+            {
+                "schema_version": "qe_direct_suspend_d_v1",
+                "component": "suspend_d",
+                "start": "2018-08-01",
+                "end": "2026-08-31",
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "source_table": "market.suspend_d",
+                "suspend_type": "S",
+            }
+        ),
     )
     suspend_parquet_sha = _write(
         candidate / "components" / "suspend_d_daily_candidate_v2" / "suspend_d.parquet",
@@ -172,7 +182,7 @@ def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
             "suspend_pins": {
                 "dataset_id": "suspend_d_daily_candidate_v2",
                 "schema_version": "qe_direct_suspend_d_v1",
-                "source_contract": "tushare_suspend_d_shsz_S_v1",
+                "source_contract": "market.suspend_d",
                 "metadata_sha256": suspend_meta_sha,
                 "parquet_sha256": suspend_parquet_sha,
             },
@@ -380,6 +390,21 @@ def test_profile_cli_validate_and_atomic_activate(tmp_path: Path) -> None:
             expected_current_sha256=None,
         )
     assert not absent.exists()
+
+
+def test_profile_activation_rejects_suspend_source_contract_drift(tmp_path: Path) -> None:
+    source = _fixture_profile(tmp_path)
+    profile = json.loads(source.read_text(encoding="utf-8"))
+    profile["components"]["suspend_pins"]["source_contract"] = (
+        "tushare_suspend_d_shsz_S_v1"
+    )
+    source.write_bytes(_canonical(profile))
+
+    with pytest.raises(
+        QEActiveDatasetProfileError,
+        match="suspend metadata source_table differs from the active profile",
+    ):
+        _validate(source)
 
 
 def test_profile_summary_does_not_expose_paths_or_hashes(
