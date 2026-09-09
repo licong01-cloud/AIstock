@@ -36,9 +36,17 @@
       "actor": "codex",
       "note": "Added only the existing QE domain and manifest exact-count contracts required by the three-tool migration; BUG-1412 profile, CLI, and inventory tests remain read-only.",
       "timestamp": "2026-09-09T02:03:00Z"
+    },
+    {
+      "action": "validation_partial_pass_waiting_for_bug_1412",
+      "actor": "codex",
+      "note": "Three migrated signatures match the standalone contracts; new contracts 4/4, QE profile self-check, qe_data_contract_backend 47/47, L0 8/8, guardrail and ownership passed. Full mcp_gateway_manifest_quality retains exactly seven failures owned by BUG-1412, so PR creation remains fail-closed.",
+      "timestamp": "2026-09-09T02:42:45Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/4466#issuecomment-5594935327"
+  ],
   "expected": "The unified qe_experiment gateway exposes the same three established tools with equivalent request validation and HTTP contracts, while strict inventory and manifest-quality tests remain unchanged and pass.",
   "file_scope_contract": {
     "added_files": [],
