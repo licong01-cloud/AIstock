@@ -51,6 +51,7 @@ non_runtime_source_paths:
   - scripts/dataset_release_control_store.py
   - scripts/export_qe_qlib_candidate.py
   - scripts/export_suspend_d_candidate.py
+  - scripts/qe_active_dataset_profile.py
   - scripts/factor_research.py
   - scripts/hmm_risk/build_rotation_l1_input_bundle.py
   - scripts/hmm_risk/prepare_state_model_set.py

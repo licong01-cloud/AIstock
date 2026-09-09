@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/qe_active_dataset_profile.py",
     "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260909_BUG-1418-qe-profile-activator-cannot-replace-an-invalid-active-profile-even-with.json"
   ],
   "assigned_agent": null,
@@ -27,6 +29,12 @@
       "actor": "Codex",
       "note": "Keep full validation for the replacement source profile and exact SHA pinning for the existing target, but do not require the exact pinned current bytes to remain semantically valid before an atomic repair replacement.",
       "timestamp": "2026-09-09T08:05:00Z"
+    },
+    {
+      "action": "register_runtime_classification",
+      "actor": "Codex",
+      "note": "Register only scripts/qe_active_dataset_profile.py as an exact offline non-runtime CLI and add classifier regression coverage; do not downgrade any broader scripts or backend path.",
+      "timestamp": "2026-09-09T08:18:00Z"
     }
   ],
   "evidence_uris": [],
