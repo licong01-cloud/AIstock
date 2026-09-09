@@ -33,6 +33,8 @@ from backend.services.advisory_model_first.research_control_contracts import (
 
 from .action_value import (
     ATR14_INFORMATION_BLOCK,
+    CHIP_COST_INFORMATION_BLOCK,
+    CHIP_COST_MARKET_FEATURES,
     CORE_INFORMATION_BLOCK,
     FEATURE_ORDER,
     MARKET_FEATURES,
@@ -46,6 +48,7 @@ from .action_value import (
     policy_sha256_for,
 )
 from .action_value_corporate_actions import CorporateActionBook, freeze_corporate_action_snapshot
+from .action_value_chip import ChipCostAugmentedCandidate
 from .action_value_data import DailyCandidate, file_reference
 from .action_value_moneyflow import MoneyflowAugmentedCandidate
 from .action_value_sector import SectorAugmentedCandidate
@@ -138,10 +141,21 @@ MONEYFLOW_PROFILE = IncrementProfile(
     evidence_role="position_timing_action_value_moneyflow_5d_lag1_increment_receipt",
     experiment_id="position_timing_action_value_main_net_flow_ratio_5d_lag1_v1",
 )
+CHIP_COST_PROFILE = IncrementProfile(
+    information_block=CHIP_COST_INFORMATION_BLOCK,
+    added_features=tuple(name for name in CHIP_COST_MARKET_FEATURES if name not in MARKET_FEATURES),
+    hypothesis="CORE_PLUS_CHIP_MEDIAN_COST_DISTANCE_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
+    main_comparison="CORE_PLUS_CHIP_MEDIAN_COST_DISTANCE_LAG1_MINUS_MATCHED_CORE",
+    estimand="CORE_PLUS_CHIP_MEDIAN_COST_DISTANCE_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY_DAILY_BPS",
+    artifact_prefix="chip_cost_lag1",
+    evidence_role="position_timing_action_value_chip_cost_lag1_increment_receipt",
+    experiment_id="position_timing_action_value_chip_median_cost_distance_lag1_v1",
+)
 PROFILES = {
     ATR14_PROFILE.information_block: ATR14_PROFILE,
     SW_L2_PROFILE.information_block: SW_L2_PROFILE,
     MONEYFLOW_PROFILE.information_block: MONEYFLOW_PROFILE,
+    CHIP_COST_PROFILE.information_block: CHIP_COST_PROFILE,
 }
 
 
@@ -872,31 +886,34 @@ def _matched_row_identity(rows: pd.DataFrame) -> str:
 def _research_candidate(
     candidate: DailyCandidate,
     profile: IncrementProfile,
-) -> DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate:
+) -> DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate | ChipCostAugmentedCandidate:
     if profile.information_block == SW_L2_INFORMATION_BLOCK:
         return SectorAugmentedCandidate.open(candidate)
     if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
         return MoneyflowAugmentedCandidate.open(candidate)
+    if profile.information_block == CHIP_COST_INFORMATION_BLOCK:
+        return ChipCostAugmentedCandidate.open(candidate)
     return candidate
 
 
 def _apply_suspension_snapshot(
-    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate | ChipCostAugmentedCandidate,
     snapshot_path: Path,
 ) -> tuple[
-    DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate | ChipCostAugmentedCandidate,
     SuspensionSnapshotBook,
 ]:
     book = SuspensionSnapshotBook.open(snapshot_path)
-    base = candidate.base if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)) else candidate
+    augmented_types = (SectorAugmentedCandidate, MoneyflowAugmentedCandidate, ChipCostAugmentedCandidate)
+    base = candidate.base if isinstance(candidate, augmented_types) else candidate
     augmented_base = book.apply(base, snapshot_path=snapshot_path)
-    if isinstance(candidate, (SectorAugmentedCandidate, MoneyflowAugmentedCandidate)):
+    if isinstance(candidate, augmented_types):
         return replace(candidate, base=augmented_base), book
     return augmented_base, book
 
 
 def _source_coverage(
-    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate,
+    candidate: DailyCandidate | SectorAugmentedCandidate | MoneyflowAugmentedCandidate | ChipCostAugmentedCandidate,
     symbols: Sequence[str],
     profile: IncrementProfile,
 ) -> dict[str, Any]:
@@ -907,6 +924,10 @@ def _source_coverage(
     if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
         if not isinstance(candidate, MoneyflowAugmentedCandidate):
             raise ActionValueError("MONEYFLOW_RESEARCH_SOURCE_INVALID")
+        return candidate.coverage(symbols)
+    if profile.information_block == CHIP_COST_INFORMATION_BLOCK:
+        if not isinstance(candidate, ChipCostAugmentedCandidate):
+            raise ActionValueError("CHIP_COST_RESEARCH_SOURCE_INVALID")
         return candidate.coverage(symbols)
     if not isinstance(candidate, DailyCandidate):
         raise ActionValueError("ATR14_RESEARCH_SOURCE_INVALID")
@@ -997,6 +1018,8 @@ def _selection_contract(profile: IncrementProfile) -> str:
         return "SHA256_SEED_SECTOR_SOURCE_COVERAGE_ONLY"
     if profile.information_block == MONEYFLOW_INFORMATION_BLOCK:
         return "SHA256_SEED_MONEYFLOW_SOURCE_COVERAGE_ONLY"
+    if profile.information_block == CHIP_COST_INFORMATION_BLOCK:
+        return "SHA256_SEED_CHIP_COST_SOURCE_COVERAGE_ONLY"
     return "SHA256_SEED_SYMBOL_SOURCE_ONLY"
 
 
