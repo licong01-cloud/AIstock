@@ -739,7 +739,7 @@ moneyflow_intensity_delta_5d(t) = m20(t) - m20(t-5 canonical open days)
 
 v1.4固定merge `bbe8295f23819c391f439354942791094d230db4`上完成双fresh-process 24/24 fits，payload及model text一致。development mean Rank IC=`0.019775251189846643`，低于`0.02`；较v1.3的paired增量=`0.006261227443644525`、HAC t=`0.9734158036557933`，不能声明显著改善。acceptance canonical SHA=`a4de2ce378049b2decb61b00c957b362ca0cc6b48840977df4aa14e3c938dd50`。本次只引用紧凑结果，不重跑、搬迁或修改旧产物。
 
-v1.4计算条件通过不等于surface验证；v1.4未写产品/数据库或切换runtime，tail未读，capability/advisory仍NOT_AVAILABLE；v1.3已交付的历史研究面保持其原identity。Blueprint v2.49已批准继续方向，用户随后明确批准本节D1～D6、源码实施、正式24-fit与质量通过后的提交合入。批准不等于已经实施或效果通过。
+v1.4计算条件通过不等于surface验证；v1.4未写产品/数据库或切换runtime，tail未读，capability/advisory仍NOT_AVAILABLE；v1.3已交付的历史研究面保持其原identity。Blueprint v2.49已批准继续方向，用户随后明确批准本节D1～D6、源码实施、正式24-fit与质量通过后的提交合入。v1.5源码现已实施并完成代码门禁，但源码完成不等于正式24-fit或效果通过。
 
 唯一假设：在相同十项feature和GBDT容量下，把训练标签从相对收益幅度改为当日相对名次，可能改善产品所需的横截面排序。raw-return回归不是已确认BUG，rank回归也不直接优化Spearman或保证改善。唯一干预是训练标签变换；不同时替换loss、调参、换horizon/feature/market/universe。
 
@@ -826,7 +826,7 @@ future单日推理只调用已有shared feature与冻结model的predict，不调
 
 第一轮修订：更正页首、§0、§15与§21仍称v1.4未执行的旧状态；明确rank必须先于feature mask、raw收益不能被训练标签覆盖、旧input与新model不能混称同一identity。第二轮修订：补充CLI显式版本、旧入口不变与process/acceptance完整hash校验，避免默认切换或只改版本字段冒充新结果；所有标签完整性错误复用`hmm_risk_rotation_label_incomplete`，跨进程差异复用`hmm_risk_rotation_reproducibility_mismatch`，normal未成熟保留原reason，不泛化成fit失败。
 
-复审结论：未发现剩余阻断性描述缺口；精确合同已批准，源码、正式实验和产品验收仍是未完成项。F2校验通过；递增/全tie/局部tie/重排行四个合成算例通过（直接计算公式，无源码修改、无正式fit、无数据读取），不冒充正式测试。源码实施后仍须运行§23.7完整直接测试与真实实验，不能复用本段文档结论代报代码通过。
+复审结论：未发现剩余阻断性描述缺口；精确合同已批准。该设计审核完成后，源码已按§23.9实施并通过代码门禁；正式实验和产品验收仍未完成。F2校验通过；设计阶段的递增/全tie/局部tie/重排行四个合成算例只验证公式，不冒充正式测试或效果证据。当前代码验证与剩余实验边界以§23.9为准。
 
 ### 23.9 v1.5源码实施与实验前状态
 
@@ -834,4 +834,4 @@ v1.5在现有唯一executor内实现显式model-contract分派；省略CLI参数
 
 实现前RED测试因缺少v1.5 contract、rank transform和CLI显式分派而4项失败；实现及审核修复后直接测试43项通过，所属hmm_risk_backend模块784项通过且coverage满足门槛。冻结v1.4 input的只读fresh-process预检确认1373日、31 sectors、五个train窗各15624行均可形成完整rank label；冻结v1.4 process参考通过现行validator。上述结果只证明源码/输入可执行性，正式双fresh-process 24-fit尚未运行，tail、数据库、runtime与产品指针均未触碰。
 
-代码审核第一轮发现“receipt只绑定完整rank输入、未单独绑定feature mask后实际fit标签”并修复为每fit双重identity/hash；第二轮复核旧v1.3/v1.4 envelope、CLI失败回执、v1.4配对参考和raw metric边界，未发现剩余阻断。正式实验前仍须在最终合入commit的独立validation worktree执行§23.3～§23.5；实验结果不得由本状态回填预判。
+代码审核第一轮发现“receipt只绑定完整rank输入、未单独绑定feature mask后实际fit标签”并修复为每fit双重identity/hash；第二轮发现child自哈希未与parent读取的input label authority闭合，已改为parent独立重算五fold与final完整rank标签权威并在closure逐项核对；第三轮复核旧v1.3/v1.4 envelope、CLI失败回执、v1.4配对参考、raw metric边界与changed-file范围，未发现剩余阻断。正式实验前仍须在最终合入commit的独立validation worktree执行§23.3～§23.5；实验结果不得由本状态回填预判。
