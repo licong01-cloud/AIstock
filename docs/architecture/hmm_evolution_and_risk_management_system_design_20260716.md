@@ -1,11 +1,11 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v2.49
+> **版本**：v2.50
 > **初始日期**：2026-07-16
-> **修订日期**：2026-09-09
+> **修订日期**：2026-09-10
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
-> **当前结论**：Phase 0/1已完成历史验收。Phase 2的v1.3已完成39/39 fits和生产真实OOF研究纵切。G2-A v1.4已在固定merge `bbe8295f23819c391f439354942791094d230db4`完成双fresh-process `24/24` fits，两个reproducibility payload与model text一致；10D development mean Rank IC为`0.019775251189846643`，较v1.3增加`0.006261227443644525`，但仍低于binding MBE `0.02`，故tail-access gate关闭且tail未读。v1.4 research计算条件已满足，但未执行writer/readback/API/UI切换，预测capability/advisory仍不可用。
-> **唯一近期交付**：用户已同意按“单一排序标签候选验证→达到条件后真实单日预测→使用验证后扩展”继续。v1.4保持停止终态；下一候选以按日截面rank标签作为待检验假设，先在现有详细设计一次冻结精确合同。方向同意不等于标签公式、参数、实验或生产动作获批；不得因仅差`0.0002247488101533579`而调阈值、读tail或切换生产模型。
+> **当前结论**：Phase 0/1已完成历史验收，v1.3真实OOF研究纵切继续运行。G2-A v1.4正式development mean Rank IC=`0.019775251189846643`；v1.5 rank-target正式24/24 fits为`0.015767451084082496`，相对v1.4下降`0.004007800105764147`，两者均低于binding MBE `0.02`且均未读取tail。随后在完全相同v1.4 OOF日期与原始10D outcome上完成零fit、target-free的单特征诊断：`moneyflow_intensity_delta_5d`确定性横截面排序mean Rank IC=`0.039580909571655214`、HAC t=`2.0310652953342716`、mean spread=`0.002779018510786135`、coverage通过。该诊断支持唯一v1.6候选，但不等于正式验收。
+> **唯一近期交付**：只实施G2-A v1.6确定性稀疏预测器：沿用v1.4数据、10D outcome、五fold日期、31板块、MBE、state projection、coverage和产品合同，score只取因果可得`moneyflow_intensity_delta_5d`的当日横截面average-rank centered值。它不训练GBDT/HMM/jump、不搜索组合、不读取tail；正式双fresh-process零 dev execution仍须在合入commit上完成，达到既有development门后才另行处理tail与生产切换。
 > **生产动作**：本次DDL/DML、依赖安装、runtime activation和进程控制全部noop。
 
 ## 1. 执行摘要
@@ -35,6 +35,8 @@
 | G2-A v1.2 | 17/39 fits；15个battery fits后选10D，首个GBDT因旧20日叶minimum停止；tail未读 | 终态是`STRUCTURAL_ACCEPTANCE_FAILED`，不是GBDT预测效果失败 |
 | G2-A v1.3 | 正式39/39 fits、10D、双fresh-process一致；生产19,220行OOF与真实API/UI已验证 | mean Rank IC 0.013514低于MBE 0.02；tail未读，capability/advisory均NOT_AVAILABLE，不允许新增日度预测 |
 | G2-A v1.4唯一候选 | 固定merge上正式24/24 fits、双fresh-process一致；10D mean Rank IC `0.019775251189846643`，较v1.3增加`0.006261227443644525`；coverage和叶日期合同通过 | 仍低于MBE 0.02，tail-access=false、tail未读；增量的paired HAC t=`0.9734158036557933`仅作诊断，不构成promotion gate或显著改善声明 |
+| G2-A v1.5 rank-target | 正式24/24 fits、双fresh-process一致；mean Rank IC `0.015767451084082496` | 低于MBE且较v1.4下降`0.004007800105764147`，tail未读；rank标签方向按预注册合同终止 |
+| G2-A v1.6唯一候选 | 同v1.4 OOF日期的零fit、target-free诊断为mean Rank IC `0.039580909571655214`、HAC t `2.0310652953342716`、coverage通过 | 只支持冻结确定性moneyflow-delta排序候选；正式零fit development必须独立通过，不能把诊断冒充验收 |
 | 产品完成语义 | 设计和源码均区分research surface、capability、forward与advisory；v1.4离线closure只确认计算条件，不越级报告surface available | v1.4未执行writer/readback/API/UI或生产模型切换，故其research surface与capability/advisory均保持NOT_AVAILABLE；既有v1.3 experimental surface不被改写 |
 
 **研发缓慢的主因不能简化为算力或门禁过高**：过去曾把结构完整性误作产品目标；多次技术准备没有收敛到预测纵切；当前研究计算与产品交付状态又存在混同。另一方面，信号可能弱、样本有限、输入曾有真实缺陷也确实存在。改进是让一次冻结实验回答预测问题，并同时交付真实工程链；不是降低效果阈值保证成功。
@@ -122,12 +124,11 @@ F-001～F-010A历史验收仍有效：Prediction Store优先、可信白名单�
 
 ### Phase 2：首个预测功能优先，风险能力随后
 
-当前已完成正式development的最新模型合同是G2-A v1.4，identity为`hmm_risk_rotation_l1_g2a_v1_4`。它保留v1.3模型、target、10D、MBE、market与产品合同，仅增加`moneyflow_intensity_delta_5d`；正式24-fit已完成且未达到MBE。v1.3既有生产research surface继续保持原identity，v1.4离线结果不会自动替换它。
+当前已完成正式development的模型合同为G2-A v1.4与v1.5，二者均未达到MBE；v1.5的rank-target干预没有改善v1.4。下一且唯一候选是`hmm_risk_rotation_l1_g2a_v1_6`：直接把因果可得`moneyflow_intensity_delta_5d`转换为每日横截面排序分数，不再训练GBDT或market context。v1.3既有生产research surface继续保持原identity，任何离线结果都不会自动替换它。
 
-- 504日rolling、冻结五fold、10项features；`market_regime_sign`必须可用，九个连续feature至少8个有限，总输入至少9/10；新增delta在每fold train/validation和full-development自身coverage均须`>=90%`；
-- 10D由v1.3预注册Ridge结果冻结；v1.4不运行battery、不重选horizon，也不声称10D对v1.4 GBDT最优；
-- CSI300 MARKET-CONTEXT-A：target-free train-only z-score，K=2 jump、lambda=4.0、seed=42，5D/10D共享fold fit；
-- 唯一LightGBM 4.6.0 profile，`min_child_samples=310`，叶distinct dates硬底线10、低于20日叶比例不超过1%；两个fresh processes各12 fits，正式总数24；
+- 10D仍由v1.3预注册Ridge结果冻结；五fold评价日期、31-sector分母、原始10D outcome、MBE、state projection与coverage均沿用v1.4，不借v1.6重选horizon、窗口或阈值；
+- v1.6每个decision date只读取`t-1`边界下的`moneyflow_intensity_delta_5d`，按有限可用canonical L1做average rank并映射到`[-0.5,0.5]`；缺失或非有限行typed unavailable，不补0、neutral或旧模型score；
+- v1.6不构造LightGBM、Ridge、HMM或jump estimator，market context不参与score；双fresh-process各0 fits，只复算同一公式、行、state、metric及canonical hash；
 - Rank IC 0.02为唯一binding MBE，来源诚实记录为conventional prior magnitude；spread与跨期稳定性为诊断，不私加AND效果门；
 - MDE只说明功效，不阻止模型或research surface；tail仍只在candidate冻结且development达到MBE后访问；forward使用实际HAC passed/inconclusive/failed合同；
 - 两个已批准read endpoints与一张最小表，不把GBDT score填进HMM概率字段。
@@ -138,7 +139,8 @@ F-001～F-010A历史验收仍有效：Prediction Store优先、可信白名单�
 - [x] 完成生产真实OOF repository/API/L1页面、revision/dedupe、31分母、无交易副作用及用户重启后的实际验证。
 - [x] v1.4 D1～D6已批准，源码及直接测试已由PR #4452合入；没有重跑battery或改变10D authority。
 - [x] 固定merge `bbe8295f…`完成双fresh-process 24/24 fits；复现、coverage和叶日期合同通过，mean Rank IC `0.019775251189846643 < 0.02`，按合同关闭tail-access并返回用户。
-- [ ] 单一rank-target候选的精确合同批准、实现及一次development终态；本次仅批准推进方向，不能写为已有合格模型。
+- [x] v1.5 rank-target精确合同、源码与正式24/24 development已完成；结果低于MBE且较v1.4退化，已按合同停止并保持tail禁读。
+- [ ] v1.6确定性moneyflow-delta排序合同与源码完成后，在最终合入commit上执行双fresh-process零fit development；当前零fit诊断不能替代正式终态。
 - [ ] 若development达到既定条件，在同一G2-A内完成31-sector真实单日预测、writer/readback/API/UI和明确的forward未确认展示。
 - [ ] 只有forward通过才升级advisory；research页面不得代替capability。
 
@@ -277,7 +279,7 @@ development与sealed tail是两个隔离role，不是两个开发阶段；每rol
 | 推理依赖标签/每次重做准备 | feature-only显式as-of读取，无未来outcome、无fit、共享公式与冻结market状态 |
 | 结果弱却通过页面制造假进度 | 研究面板、capability、forward、advisory分别展示；未达MBE只历史OOF，forward failed停新增预测 |
 | “预测”被理解成交易指令 | 明确advisory-only；score不是confidence；测试无Selection/Paper/QE/QMT副作用 |
-| 无限候选/无限文档循环 | v1.4终态不变；下一rank-target仅推进一个预注册候选，不搜索target/seed/窗口。结果不足时结束本轮预算并报告，不自动转下一模型，也不声称整个L1 GBDT方向被证伪 |
+| 无限候选/无限文档循环 | v1.4/v1.5终态不变；只推进已有同日期零fit证据支持的v1.6确定性排序，不搜索feature组合、seed、窗口或模型类。正式结果不足即结束本轮，不自动打开下一候选 |
 | 把目标对齐假设写成已证实BUG | raw-return回归不是实现错误；rank标签改变学习中的收益幅度信息，不等同直接优化Rank IC，不保证改善；精确合同须说明损失/标签尺度与冻结参数的兼容性 |
 | 反复使用development形成选择偏差 | 现有development已参与多轮方向选择；新候选通过只形成开发期资格，不是独立泛化证明；paired改善与HAC区间如实报告但不新增AND promotion gate，tail保持隔离 |
 
@@ -326,8 +328,8 @@ v1.4历史OOF surface更新只列可选维护，不解除新日预测缺口、�
 1. v1.4六项精确合同、源码与直接测试已经闭合；正式执行没有改变公式、horizon、模型、阈值或状态语义。
 2. 固定merge `bbe8295f…`的双fresh-process已完成24/24 fits；reproducibility payload SHA-256均为`5466504a9ffc8eaedd85ed2154e6a382540c7f93633b608d6a377ba53f40e84a`，tail未读。
 3. development mean Rank IC `0.019775251189846643`未达到0.02，故本候选停止；不得重跑、调阈值、读tail、执行新日推理或自动切换生产identity。
-4. 用户已同意推进单一rank-target方向；先在现有G2-A详细设计展开一次精确合同，公式、参数/尺度、预算和结果分支未批准前不实施训练。只改目标表达，不趁机搜索horizon、features或模型类别。
-5. 批准后复用输入与既有代码完成P0；development达到条件直接推进同一G2-A的真实单日闭环。结果不足则在同一次结果分析中评估是否存在值得另行批准的信息集/估计截面方向，不自动换候选，不整理历史资产。
+4. v1.5 rank-target已正式失败并停止；当前只实施v1.6确定性moneyflow-delta排序，零fit、零market estimator、零参数搜索，且不改变horizon、outcome、分母、MBE或产品语义。
+5. v1.6源码与正式双fresh-process零fit development通过后，达到既定条件才推进同一G2-A真实单日闭环；结果不足即返回用户，不自动换候选，不整理历史资产。
 6. 单日推理与tail确认按§1.3/§2.3分别报告；生产写入、runtime、依赖和用户后端重启继续遵循既有授权边界。v1.4历史OOF更新不进入主线前置。
 
 这些是§7三个业务任务内的动作，不是六个新阶段。每轮review发现问题即同scope修订，零阻断可提前结束；不要求无问题也凑审核次数或为每个小动作再立设计。代码审核/修复按用户既定最多三轮处理，仍有阻断则如实暂停，不以达到轮数代替通过。
@@ -345,7 +347,7 @@ v1.4历史OOF surface更新只列可选维护，不解除新日预测缺口、�
 
 ## 11. Design Acceptance Matrix
 
-记录v2.49状态。11行历史verified原样保留；v1.3真实研究产品与预测能力状态分开记录，v1.4按正式24/24 development终态记录；rank-target只完成方向同意，精确设计/源码/实验均待完成，不因计划更新提升产品状态。
+记录v2.50状态。11行历史verified原样保留；v1.3真实研究产品与预测能力状态分开记录，v1.4/v1.5按正式development终态记录；v1.6仅有同日期零fit诊断支持和当前实现，不因实现或诊断提前提升产品状态。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -360,7 +362,7 @@ v1.4历史OOF surface更新只列可选维护，不解除新日预测缺口、�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | G2-A v1.3模型/产品实现；详细设计v1.4.0 §20～§21；PR #4452；本文§6～§9下一方向 | `artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v14_development_24fit_bbe8295f_20260909/acceptance.json`，canonical `a4de2ce378049b2decb61b00c957b362ca0cc6b48840977df4aa14e3c938dd50`；24/24 fits、双fresh-process一致、mean IC `0.019775251189846643` | V1_4_DEVELOPMENT_COMPLETE_BELOW_MBE_F011_PENDING | user approved: v1.4终态不变；单一rank-target方向获同意，精确合同/实现/实验待完成；tail未读，capability/advisory仍NOT_AVAILABLE |
+| F-011 | G2-A v1.3产品；v1.4/v1.5正式development；详细设计§24 v1.6 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v15_rank_target_development_24fit_600a2d7e_20260910/acceptance.json`；v1.6同日期零fit诊断mean IC `0.039580909571655214` | USER_APPROVED_IMPLEMENTED | user approved: v1.6源码合同已实施、正式双process零fit development待最终合入commit执行；v1.4/v1.5 tail未读，生产identity、capability/advisory未改变 |
 | F-012 | G2-A §1.2/§8～§9 isolation；现有隔离边界 | `backend/tests/hmm_risk/test_isolation.py`及生产API/写表无Selection/Paper/QE/QMT副作用readback | VERIFIED_L1_RESEARCH_SURFACE_ISOLATION | user approved: advisory-only边界保持；尚无advisory capability，不进入交易链 |
 | F-013 | G2-A D6、§8.4：真实OOF、最小repository/API/UI、条件允许的无标签单日推理 | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_rotation_l1_api.py`；生产19,220行/620日/31-sector OOF及真实浏览器readback | VERIFIED_HISTORICAL_OOF_RESEARCH_SURFACE | user approved: surface为AVAILABLE_EXPERIMENTAL；v1.3未达MBE，故没有新日预测；L2/risk/history完整范围仍未完成 |
 | F-014 | 本文Phase 3 UI与独立候选方向 | 目标`backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts` | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 独立实现级设计待后置任务；不是G2-A前置 |
@@ -404,6 +406,7 @@ G2-A最小schema、v1.3 OOF产品写入与当前research surface runtime已经�
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.50 | 2026-09-10 | 回填v1.5正式24/24终态并冻结唯一v1.6：同v1.4数据/日期/outcome/MBE，以`moneyflow_intensity_delta_5d`确定性横截面排序替代训练模型；记录同日期零fit诊断但不冒充正式验收，不新增模型搜索、平台、tail或生产动作 |
 | v2.49 | 2026-09-09 | 同意单一rank-target研究方向，收敛为候选验证→真实单日预测→使用验证后单项扩展；保留v1.4终态/MBE/tail/五轴语义，纠正“必须先证实根因”与模型类淘汰暗示；精确合同待批准，不新增平台或历史物化任务 |
 | v2.48 | 2026-09-09 | 回填G2-A v1.4固定merge双fresh-process 24/24终态：复现与结构/coverage通过，10D development mean Rank IC 0.019775低于MBE 0.02，tail-access关闭且零DB/model/runtime动作；当前主线返回用户裁决，不自动开v1.5或切换生产模型 |
 | v2.47 | 2026-09-09 | 同步G2-A v1.4 D1～D6已批准、PR #4452源码已合入、正式0/24 fits；当前唯一任务收敛为固定merge上的双fresh-process实验，删除当前态中“待批准/未实施”和39-fit/battery漂移，不改变任何模型合同 |
