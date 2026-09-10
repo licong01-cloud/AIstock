@@ -107,9 +107,7 @@ STUDY_CONTRACT_SHA256 = canonical_sha256(STUDY_CONTRACT)
 
 
 def _request_symbols(request: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = request.get("selected_symbols") or (request.get("population_spec") or {}).get(
-        "selected_symbols"
-    )
+    raw = request.get("selected_symbols") or (request.get("population_spec") or {}).get("selected_symbols")
     symbols = tuple(str(symbol).upper() for symbol in (raw or ()))
     if not symbols or len(symbols) != len(set(symbols)):
         raise ActionValueError("HELDOUT_PRIOR_REQUEST_POPULATION_INVALID")
@@ -134,21 +132,14 @@ def prior_request_identity(research_root: Path) -> dict[str, Any]:
             try:
                 request = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
-                raise ActionValueError(
-                    "HELDOUT_PRIOR_REQUEST_UNREADABLE", path=path.as_posix()
-                ) from exc
+                raise ActionValueError("HELDOUT_PRIOR_REQUEST_UNREADABLE", path=path.as_posix()) from exc
             if file_reference(path) != before:
                 raise ActionValueError("SOURCE_CHANGED_WHILE_READING", path=path.as_posix())
-            identity = {
-                key: value for key, value in request.items() if key != "request_sha256"
-            }
-            if (
-                request.get("schema_version") not in PRIOR_REQUEST_SCHEMAS
-                or request.get("request_sha256") != canonical_sha256(identity)
-            ):
-                raise ActionValueError(
-                    "HELDOUT_PRIOR_REQUEST_IDENTITY_MISMATCH", path=path.as_posix()
-                )
+            identity = {key: value for key, value in request.items() if key != "request_sha256"}
+            if request.get("schema_version") not in PRIOR_REQUEST_SCHEMAS or request.get(
+                "request_sha256"
+            ) != canonical_sha256(identity):
+                raise ActionValueError("HELDOUT_PRIOR_REQUEST_IDENTITY_MISMATCH", path=path.as_posix())
             symbols = _request_symbols(request)
             forbidden.update(symbols)
             records.append(
@@ -212,22 +203,16 @@ def _validate_parent_entry_only(inspected: Mapping[str, Any]) -> None:
         or receipt.get("joint_effect_evidence") != "INCONCLUSIVE"
         or receipt.get("selected_trial_count") != 0
         or request.get("candidate_policy_sha256")
-        != action_authority_policy_sha256(
-            CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY
-        )
+        != action_authority_policy_sha256(CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY)
     ):
         raise ActionValueError("HELDOUT_PARENT_ENTRY_ONLY_CONTRACT_MISMATCH")
 
 
-def _freeze_source_snapshots(
-    *, timing_root: Path, symbols: Sequence[str], start: date, end: date
-) -> tuple[Path, Path]:
+def _freeze_source_snapshots(*, timing_root: Path, symbols: Sequence[str], start: date, end: date) -> tuple[Path, Path]:
     from backend.db.pg_pool import get_conn
 
     with get_conn(autocommit=False) as connection:
-        connection.set_session(
-            isolation_level="REPEATABLE READ", readonly=True, autocommit=False
-        )
+        connection.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
         corporate_action_path = freeze_corporate_action_snapshot(
             connection,
             symbols=symbols,
@@ -245,9 +230,7 @@ def _freeze_source_snapshots(
     return corporate_action_path, suspension_path
 
 
-def prepare_heldout_request(
-    *, timing_root: Path, repository_root: Path, parent_entry_only_bundle: Path
-) -> Path:
+def prepare_heldout_request(*, timing_root: Path, repository_root: Path, parent_entry_only_bundle: Path) -> Path:
     repository_root = repository_root.resolve()
     source_commit = _clean_repository_commit(repository_root)
     timing_root = timing_root.resolve()
@@ -258,10 +241,8 @@ def prepare_heldout_request(
     parent_v4_bundle = Path(parent_request["parent_v4"]["bundle_path"]).resolve()
     parent_v4 = inspect_bundle(parent_v4_bundle)
     if (
-        parent_v4["request"]["request_sha256"]
-        != parent_request["parent_v4"]["request_sha256"]
-        or parent_v4["receipt"]["receipt_sha256"]
-        != parent_request["parent_v4"]["receipt_sha256"]
+        parent_v4["request"]["request_sha256"] != parent_request["parent_v4"]["request_sha256"]
+        or parent_v4["receipt"]["receipt_sha256"] != parent_request["parent_v4"]["receipt_sha256"]
     ):
         raise ActionValueError("HELDOUT_PARENT_V4_IDENTITY_MISMATCH")
 
@@ -295,9 +276,7 @@ def prepare_heldout_request(
         "parent_v4": {
             **parent_request["parent_v4"],
             "training_rows_file": file_reference(parent_v4_bundle / "training_rows.parquet"),
-            "oof_predictions_file": file_reference(
-                parent_v4_bundle / "oof_action_predictions.parquet"
-            ),
+            "oof_predictions_file": file_reference(parent_v4_bundle / "oof_action_predictions.parquet"),
         },
         "candidate_root": Path(parent_request["candidate_root"]).resolve().as_posix(),
         "training_symbols": tuple(parent_request["selected_symbols"]),
@@ -311,9 +290,7 @@ def prepare_heldout_request(
             "prior_requests_sha256": prior["aggregate_sha256"],
         },
         "prior_request_identity": prior,
-        "daily_replay_source_identity": _daily_replay_source_identity(
-            Path(parent_request["candidate_root"]), symbols
-        ),
+        "daily_replay_source_identity": _daily_replay_source_identity(Path(parent_request["candidate_root"]), symbols),
         "corporate_action_snapshot": corporate_action_ref,
         "suspension_snapshot": suspension_ref,
         "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
@@ -336,13 +313,7 @@ def prepare_heldout_request(
         "runtime_write": False,
     }
     request["request_sha256"] = canonical_sha256(request)
-    path = (
-        timing_root
-        / "research"
-        / ARTIFACT_FOLDER
-        / "requests"
-        / f"{request['request_sha256']}.json"
-    )
+    path = timing_root / "research" / ARTIFACT_FOLDER / "requests" / f"{request['request_sha256']}.json"
     PositionTimingArtifactStore._publish_immutable(path, canonical_json_bytes(request))
     return path
 
@@ -374,9 +345,7 @@ def _load_request(path: Path) -> dict[str, Any]:
     suspension = request.get("suspension_snapshot") or {}
     schema = request.get("schema_version")
     suspension_contract_valid = (
-        schema == LEGACY_REQUEST_SCHEMA
-        and not suspension
-        and request.get("source_correction") is None
+        schema == LEGACY_REQUEST_SCHEMA and not suspension and request.get("source_correction") is None
     ) or (
         schema == REQUEST_SCHEMA
         and suspension.get("path")
@@ -390,30 +359,23 @@ def _load_request(path: Path) -> dict[str, Any]:
         or canonical_sha256(request.get("study_contract")) != STUDY_CONTRACT_SHA256
         or request.get("result_class") != RESULT_CLASS
         or request.get("candidate_policy_sha256")
-        != action_authority_policy_sha256(
-            CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY
-        )
+        != action_authority_policy_sha256(CORE_INFORMATION_BLOCK, ENTRY_ONLY_MODEL_ACTION_AUTHORITY)
         or len(evaluation) != EVALUATION_SYMBOL_LIMIT
         or len(set(evaluation)) != len(evaluation)
         or not training
         or set(training).intersection(evaluation)
         or tuple(population.get("selected_symbols") or ()) != evaluation
-        or population.get("selection")
-        != "SHA256_SEED_AFTER_ALL_PRIOR_ACTION_VALUE_SYMBOLS_SOURCE_ONLY"
-        or prior.get("schema_version")
-        != "position_timing_prior_action_value_requests_v1"
+        or population.get("selection") != "SHA256_SEED_AFTER_ALL_PRIOR_ACTION_VALUE_SYMBOLS_SOURCE_ONLY"
+        or prior.get("schema_version") != "position_timing_prior_action_value_requests_v1"
         or prior.get("outcomes_read") is not False
         or tuple(prior.get("request_folders") or ()) != PRIOR_REQUEST_FOLDERS
         or Path(str(prior.get("research_root", ""))).resolve()
         != Path(request.get("timing_root", ""), "research").resolve()
         or set(prior.get("forbidden_symbols") or ()).intersection(evaluation)
-        or population.get("forbidden_symbol_count")
-        != prior.get("forbidden_symbol_count")
+        or population.get("forbidden_symbol_count") != prior.get("forbidden_symbol_count")
         or population.get("prior_requests_sha256") != prior.get("aggregate_sha256")
         or prior.get("aggregate_sha256")
-        != canonical_sha256(
-            {key: value for key, value in prior.items() if key != "aggregate_sha256"}
-        )
+        != canonical_sha256({key: value for key, value in prior.items() if key != "aggregate_sha256"})
         or not all(
             parent_entry.get(field)
             for field in (
@@ -436,8 +398,7 @@ def _load_request(path: Path) -> dict[str, Any]:
                 "oof_predictions_file",
             )
         )
-        or replay_source.get("schema_version")
-        != "position_timing_daily_replay_source_identity_v1"
+        or replay_source.get("schema_version") != "position_timing_daily_replay_source_identity_v1"
         or not replay_source.get("aggregate_sha256")
         or not corporate_action.get("path")
         or not corporate_action.get("sha256")
@@ -465,14 +426,10 @@ def _validate_bound_parents(request: Mapping[str, Any]) -> tuple[Path, dict[str,
     entry_request = entry["request"]
     if (
         tuple(entry_request["selected_symbols"]) != tuple(request["training_symbols"])
-        or Path(entry_request["candidate_root"]).resolve()
-        != Path(request["candidate_root"]).resolve()
-        or int(entry_request["population_spec"]["seed"])
-        != int(request["population_spec"]["seed"])
-        or entry_request["population_spec"]["start"]
-        != request["population_spec"]["start"]
-        or entry_request["population_spec"]["end"]
-        != request["population_spec"]["end"]
+        or Path(entry_request["candidate_root"]).resolve() != Path(request["candidate_root"]).resolve()
+        or int(entry_request["population_spec"]["seed"]) != int(request["population_spec"]["seed"])
+        or entry_request["population_spec"]["start"] != request["population_spec"]["start"]
+        or entry_request["population_spec"]["end"] != request["population_spec"]["end"]
     ):
         raise ActionValueError("HELDOUT_PARENT_POPULATION_IDENTITY_MISMATCH")
     v4_ref = request["parent_v4"]
@@ -482,13 +439,10 @@ def _validate_bound_parents(request: Mapping[str, Any]) -> tuple[Path, dict[str,
         v4["manifest"]["manifest_sha256"] != v4_ref["manifest_sha256"]
         or v4["request"]["request_sha256"] != v4_ref["request_sha256"]
         or v4["receipt"]["receipt_sha256"] != v4_ref["receipt_sha256"]
-        or file_reference(v4_bundle / "training_rows.parquet")
-        != v4_ref["training_rows_file"]
-        or file_reference(v4_bundle / "oof_action_predictions.parquet")
-        != v4_ref["oof_predictions_file"]
+        or file_reference(v4_bundle / "training_rows.parquet") != v4_ref["training_rows_file"]
+        or file_reference(v4_bundle / "oof_action_predictions.parquet") != v4_ref["oof_predictions_file"]
         or v4["receipt"]["source_sha256"] != request["parent_source_sha256"]
-        or v4["receipt"]["feature_spec_sha256"]
-        != request["parent_feature_spec_sha256"]
+        or v4["receipt"]["feature_spec_sha256"] != request["parent_feature_spec_sha256"]
         or v4["receipt"]["policy_sha256"] != request["parent_policy_sha256"]
     ):
         raise ActionValueError("HELDOUT_PARENT_V4_IDENTITY_MISMATCH")
@@ -535,15 +489,11 @@ def _publish_bundle(
     bundle.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{bundle.name}.", dir=bundle.parent))
     try:
-        PositionTimingArtifactStore._publish_immutable(
-            staging / "request.json", canonical_json_bytes(request)
-        )
+        PositionTimingArtifactStore._publish_immutable(staging / "request.json", canonical_json_bytes(request))
         oof.to_parquet(staging / "oof_action_predictions.parquet", index=False)
         sleeves.to_parquet(staging / "heldout_sleeve_days.parquet", index=False)
         daily.to_parquet(staging / "heldout_daily_comparisons.parquet", index=False)
-        PositionTimingArtifactStore._publish_immutable(
-            staging / "receipt.json", canonical_json_bytes(receipt)
-        )
+        PositionTimingArtifactStore._publish_immutable(staging / "receipt.json", canonical_json_bytes(receipt))
         PositionTimingArtifactStore._publish_immutable(
             staging / "manifest.json", canonical_json_bytes(_manifest(staging, receipt))
         )
@@ -566,12 +516,8 @@ def inspect_heldout_bundle(bundle: Path) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise ActionValueError("HELDOUT_BUNDLE_UNAVAILABLE") from exc
     request = _load_request(bundle / "request.json")
-    manifest_identity = {
-        key: value for key, value in manifest.items() if key != "manifest_sha256"
-    }
-    receipt_identity = {
-        key: value for key, value in receipt.items() if key != "receipt_sha256"
-    }
+    manifest_identity = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    receipt_identity = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     comparisons = (receipt.get("heldout_policy") or {}).get("comparisons") or {}
     joint = _joint_evidence(comparisons)
     false_flags = (
@@ -601,10 +547,8 @@ def inspect_heldout_bundle(bundle: Path) -> dict[str, Any]:
         or receipt.get("selected_trial_count") != (1 if joint == "SUPPORTED" else 0)
         or set(comparisons) != {"BUY_AND_HOLD", "FROZEN_L1_V1"}
         or receipt.get("joint_effect_evidence") != joint
-        or receipt.get("candidate_policy_sha256")
-        != request.get("candidate_policy_sha256")
-        or receipt.get("serving_status")
-        != "NOT_SERVING_SEPARATE_RUNTIME_DECISION_REQUIRED"
+        or receipt.get("candidate_policy_sha256") != request.get("candidate_policy_sha256")
+        or receipt.get("serving_status") != "NOT_SERVING_SEPARATE_RUNTIME_DECISION_REQUIRED"
         or any(receipt.get(flag) is not False for flag in false_flags)
     ):
         raise ActionValueError("HELDOUT_BUNDLE_IDENTITY_MISMATCH")
@@ -629,9 +573,7 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
     if request["schema_version"] == LEGACY_REQUEST_SCHEMA:
         raise ActionValueError("HELDOUT_LEGACY_REQUEST_NOT_RUNNABLE")
     observed_prior = prior_request_identity(timing_root / "research")
-    if canonical_sha256(observed_prior) != canonical_sha256(
-        request["prior_request_identity"]
-    ):
+    if canonical_sha256(observed_prior) != canonical_sha256(request["prior_request_identity"]):
         raise ActionValueError("HELDOUT_PRIOR_REQUEST_SET_CHANGED")
     v4_bundle, v4 = _validate_bound_parents(request)
     symbols = tuple(request["evaluation_symbols"])
@@ -643,22 +585,14 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
     )
     if expected_symbols != symbols:
         raise ActionValueError("HELDOUT_POPULATION_IDENTITY_MISMATCH")
-    if _daily_replay_source_identity(candidate.root, symbols) != request[
-        "daily_replay_source_identity"
-    ]:
+    if _daily_replay_source_identity(candidate.root, symbols) != request["daily_replay_source_identity"]:
         raise ActionValueError("HELDOUT_DAILY_REPLAY_SOURCE_CHANGED")
-    if file_reference(Path(request["corporate_action_snapshot"]["path"])) != request[
-        "corporate_action_snapshot"
-    ]:
+    if file_reference(Path(request["corporate_action_snapshot"]["path"])) != request["corporate_action_snapshot"]:
         raise ActionValueError("HELDOUT_CORPORATE_ACTION_SOURCE_CHANGED")
-    if file_reference(Path(request["suspension_snapshot"]["path"])) != request[
-        "suspension_snapshot"
-    ]:
+    if file_reference(Path(request["suspension_snapshot"]["path"])) != request["suspension_snapshot"]:
         raise ActionValueError("HELDOUT_SUSPENSION_SOURCE_CHANGED")
 
-    corporate_actions = CorporateActionBook.open(
-        Path(request["corporate_action_snapshot"]["path"])
-    )
+    corporate_actions = CorporateActionBook.open(Path(request["corporate_action_snapshot"]["path"]))
     suspensions = SuspensionSnapshotBook.open(Path(request["suspension_snapshot"]["path"]))
     expected_scope = (
         tuple(sorted(symbols)),
@@ -667,9 +601,7 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
     )
     if (suspensions.symbols, suspensions.start, suspensions.end) != expected_scope:
         raise ActionValueError("HELDOUT_SUSPENSION_SCOPE_MISMATCH")
-    candidate = suspensions.apply(
-        candidate, snapshot_path=Path(request["suspension_snapshot"]["path"])
-    )
+    candidate = suspensions.apply(candidate, snapshot_path=Path(request["suspension_snapshot"]["path"]))
     rows = pd.read_parquet(v4_bundle / "training_rows.parquet")
     if set(rows["symbol"].astype(str)) != set(request["training_symbols"]):
         raise ActionValueError("HELDOUT_TRAINING_POPULATION_MISMATCH")
@@ -703,12 +635,8 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
         "completed_at": datetime.now(TZ).isoformat(),
         "repository_commit": request["repository_commit"],
         "request_sha256": request["request_sha256"],
-        "parent_entry_only_request_sha256": request["parent_entry_only"][
-            "request_sha256"
-        ],
-        "parent_entry_only_receipt_sha256": request["parent_entry_only"][
-            "receipt_sha256"
-        ],
+        "parent_entry_only_request_sha256": request["parent_entry_only"]["request_sha256"],
+        "parent_entry_only_receipt_sha256": request["parent_entry_only"]["receipt_sha256"],
         "parent_v4_request_sha256": v4["request"]["request_sha256"],
         "parent_v4_receipt_sha256": v4["receipt"]["receipt_sha256"],
         "study_contract_sha256": STUDY_CONTRACT_SHA256,
@@ -724,16 +652,10 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
         "heldout_population": {
             "training_symbol_count": len(request["training_symbols"]),
             "evaluation_symbol_count": len(symbols),
-            "prior_forbidden_symbol_count": request["prior_request_identity"][
-                "forbidden_symbol_count"
-            ],
-            "training_evaluation_overlap": len(
-                set(request["training_symbols"]).intersection(symbols)
-            ),
+            "prior_forbidden_symbol_count": request["prior_request_identity"]["forbidden_symbol_count"],
+            "training_evaluation_overlap": len(set(request["training_symbols"]).intersection(symbols)),
             "prior_evaluation_overlap": len(
-                set(request["prior_request_identity"]["forbidden_symbols"]).intersection(
-                    symbols
-                )
+                set(request["prior_request_identity"]["forbidden_symbols"]).intersection(symbols)
             ),
             "selection": request["population_spec"]["selection"],
             "same_market_dates_not_temporal_holdout": True,
@@ -744,9 +666,7 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
         "oof_equivalence": oof_identity,
         "model_training_identity": {
             "model_count": len(forward.models),
-            "model_sha256": tuple(
-                model.metadata["model_sha256"] for model in forward.models
-            ),
+            "model_sha256": tuple(model.metadata["model_sha256"] for model in forward.models),
             "training_rows_file": request["parent_v4"]["training_rows_file"],
             "evaluation_symbols_never_enter_training": True,
         },

@@ -11,9 +11,7 @@ from backend.services.position_timing import action_value_heldout as heldout
 from backend.services.position_timing.contracts import canonical_json_bytes, canonical_sha256
 
 
-def _write_prior_request(
-    root: Path, folder: str, schema: str, symbols: list[str], suffix: str
-) -> Path:
+def _write_prior_request(root: Path, folder: str, schema: str, symbols: list[str], suffix: str) -> Path:
     path = root / folder / "requests" / f"{suffix}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"schema_version": schema, "selected_symbols": symbols}
@@ -82,9 +80,7 @@ def test_heldout_selection_is_deterministic_and_disjoint() -> None:
     universe = [f"{index:06d}.SZ" for index in range(1, 150)]
     forbidden = universe[:30]
 
-    first = heldout.select_heldout_symbols(
-        universe, forbidden_symbols=forbidden, seed=20260907, limit=64
-    )
+    first = heldout.select_heldout_symbols(universe, forbidden_symbols=forbidden, seed=20260907, limit=64)
     second = heldout.select_heldout_symbols(
         tuple(reversed(universe)),
         forbidden_symbols=forbidden,
@@ -180,9 +176,7 @@ def _request(tmp_path: Path) -> dict:
         "parent_source_sha256": "e" * 64,
         "parent_feature_spec_sha256": "f" * 64,
         "parent_policy_sha256": "0" * 64,
-        "candidate_policy_sha256": canonical_sha256(
-            heldout.STUDY_CONTRACT["candidate_policy"]
-        ),
+        "candidate_policy_sha256": canonical_sha256(heldout.STUDY_CONTRACT["candidate_policy"]),
         "study_contract": heldout.STUDY_CONTRACT,
         "study_contract_sha256": heldout.STUDY_CONTRACT_SHA256,
         "result_class": heldout.RESULT_CLASS,
@@ -311,18 +305,10 @@ def test_joint_evidence_preserves_negative_and_multiplicity() -> None:
     )
 
 
-def test_bundle_is_immutable_inspectable_and_retry_is_noop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_bundle_is_immutable_inspectable_and_retry_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _request(tmp_path)
     receipt = _receipt(request)
-    bundle = (
-        Path(request["timing_root"])
-        / "research"
-        / heldout.ARTIFACT_FOLDER
-        / "bundles"
-        / request["request_sha256"]
-    )
+    bundle = Path(request["timing_root"]) / "research" / heldout.ARTIFACT_FOLDER / "bundles" / request["request_sha256"]
     frame = pd.DataFrame({"x": [1]})
     heldout._publish_bundle(
         bundle,
@@ -384,9 +370,7 @@ def test_legacy_request_is_inspectable_but_cannot_be_newly_materialized(
         sleeves=frame,
         daily=frame,
     )
-    assert heldout.inspect_heldout_bundle(bundle)["request"]["schema_version"] == (
-        heldout.LEGACY_REQUEST_SCHEMA
-    )
+    assert heldout.inspect_heldout_bundle(bundle)["request"]["schema_version"] == (heldout.LEGACY_REQUEST_SCHEMA)
 
     request_path = tmp_path / "legacy-request.json"
     request_path.write_bytes(canonical_json_bytes(request))
