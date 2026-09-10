@@ -127,7 +127,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "Windows fresh process imported cache and projected 2026-04-03 source row to next trading date 2026-04-07: PASS"
+      "Windows fresh process imported cache and projected 2026-04-03 source row to next trading date 2026-04-07: PASS",
+      "Windows fresh process at 88ecdbed1 imported cache and projected 2026-04-03 source row to next trading date 2026-04-07: PASS"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
