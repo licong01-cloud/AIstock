@@ -135,6 +135,27 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1416",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dd74359fef1db0e8",
+    "recorded_at": "2026-09-10T05:53:16.900090Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4633ae694d33d904aa1c86ccf00986112391cf80",
+    "source_merge_commit": "1375d071f4e338e3a850e0270273208d449ec257",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4477",
+    "validation_evidence": [
+      "source PR CI passed and merged; current main targeted audit"
+    ],
+    "validation_evidence_digest": "3780bf9ad0f9e268150791c07292f0985af20c69cad43ba6836cb2003ade0e5f"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe_mcp"
@@ -147,7 +168,8 @@
   "validation_evidence": [
     "python -m nox -s qe_data_contract_backend -> 47 passed",
     "python -m nox -s mcp_gateway_manifest_quality -> 46 passed",
-    "python scripts/aistock_mcp_gateway.py --profile qe --self-check -> pass; tool_count=101; errors=0"
+    "python scripts/aistock_mcp_gateway.py --profile qe --self-check -> pass; tool_count=101; errors=0",
+    "source PR CI passed and merged; current main targeted audit"
   ],
   "verification_budget": {
     "budget": "standard",
