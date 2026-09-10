@@ -347,7 +347,7 @@ v1.4历史OOF surface更新只列可选维护，不解除新日预测缺口、�
 
 ## 11. Design Acceptance Matrix
 
-记录v2.50状态。11行历史verified原样保留；v1.3真实研究产品与预测能力状态分开记录，v1.4/v1.5按正式development终态记录；v1.6仅有同日期零fit诊断支持和当前实现，不因实现或诊断提前提升产品状态。
+记录v2.51状态。11行历史verified原样保留；v1.3真实研究产品与预测能力状态分开记录，v1.4/v1.5按正式development终态记录；v1.6正式零fit development已达到MBE，但在真实writer/readback/API/UI与runtime闭合前仍不得提前提升product surface或advisory状态。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
