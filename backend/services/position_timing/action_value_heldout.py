@@ -45,13 +45,18 @@ from .action_value_research import (
     replay_continuous_cohorts,
     walk_forward_action_values,
 )
+from .action_value_suspensions import (
+    SuspensionSnapshotBook,
+    freeze_suspension_snapshot,
+)
 from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
 PIPELINE_ID = "POSITION_TIMING_ENTRY_ONLY_HELDOUT_V1"
 ARTIFACT_FOLDER = "action_value_heldout_v1"
-REQUEST_SCHEMA = "position_timing_entry_only_heldout_request_v1"
+LEGACY_REQUEST_SCHEMA = "position_timing_entry_only_heldout_request_v1"
+REQUEST_SCHEMA = "position_timing_entry_only_heldout_request_v2"
 RECEIPT_SCHEMA = "position_timing_entry_only_heldout_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_entry_only_heldout_bundle_v1"
 RESULT_CLASS = "CROSS_SYMBOL_HELDOUT_CONFIRMATION"
@@ -214,22 +219,30 @@ def _validate_parent_entry_only(inspected: Mapping[str, Any]) -> None:
         raise ActionValueError("HELDOUT_PARENT_ENTRY_ONLY_CONTRACT_MISMATCH")
 
 
-def _freeze_corporate_actions(
+def _freeze_source_snapshots(
     *, timing_root: Path, symbols: Sequence[str], start: date, end: date
-) -> Path:
+) -> tuple[Path, Path]:
     from backend.db.pg_pool import get_conn
 
     with get_conn(autocommit=False) as connection:
         connection.set_session(
             isolation_level="REPEATABLE READ", readonly=True, autocommit=False
         )
-        return freeze_corporate_action_snapshot(
+        corporate_action_path = freeze_corporate_action_snapshot(
             connection,
             symbols=symbols,
             start=start,
             end=end,
             timing_root=timing_root,
         )
+        suspension_path = freeze_suspension_snapshot(
+            connection,
+            symbols=symbols,
+            start=start,
+            end=end,
+            timing_root=timing_root,
+        )
+    return corporate_action_path, suspension_path
 
 
 def prepare_heldout_request(
@@ -266,10 +279,11 @@ def prepare_heldout_request(
         raise ActionValueError("HELDOUT_HYPOTHESIS_POPULATION_NOT_FORBIDDEN")
     start = date.fromisoformat(population["start"])
     end = date.fromisoformat(population["end"])
-    corporate_action_path = _freeze_corporate_actions(
+    corporate_action_path, suspension_path = _freeze_source_snapshots(
         timing_root=timing_root, symbols=symbols, start=start, end=end
     )
     corporate_action_ref = file_reference(corporate_action_path)
+    suspension_ref = file_reference(suspension_path)
     request = {
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
@@ -301,6 +315,8 @@ def prepare_heldout_request(
             Path(parent_request["candidate_root"]), symbols
         ),
         "corporate_action_snapshot": corporate_action_ref,
+        "suspension_snapshot": suspension_ref,
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
         "parent_source_sha256": parent_v4["receipt"]["source_sha256"],
         "parent_feature_spec_sha256": parent_v4["receipt"]["feature_spec_sha256"],
         "parent_policy_sha256": parent_v4["receipt"]["policy_sha256"],
@@ -355,8 +371,20 @@ def _load_request(path: Path) -> dict[str, Any]:
     parent_v4 = request.get("parent_v4") or {}
     replay_source = request.get("daily_replay_source_identity") or {}
     corporate_action = request.get("corporate_action_snapshot") or {}
+    suspension = request.get("suspension_snapshot") or {}
+    schema = request.get("schema_version")
+    suspension_contract_valid = (
+        schema == LEGACY_REQUEST_SCHEMA
+        and not suspension
+        and request.get("source_correction") is None
+    ) or (
+        schema == REQUEST_SCHEMA
+        and suspension.get("path")
+        and suspension.get("sha256")
+        and request.get("source_correction") == "EXPLICIT_DB_SUSPENSION_UNION_V1"
+    )
     if (
-        request.get("schema_version") != REQUEST_SCHEMA
+        schema not in {LEGACY_REQUEST_SCHEMA, REQUEST_SCHEMA}
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("study_contract_sha256") != STUDY_CONTRACT_SHA256
         or canonical_sha256(request.get("study_contract")) != STUDY_CONTRACT_SHA256
@@ -413,6 +441,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         or not replay_source.get("aggregate_sha256")
         or not corporate_action.get("path")
         or not corporate_action.get("sha256")
+        or not suspension_contract_valid
         or any(request.get(flag) is not False for flag in false_flags)
         or request.get("request_sha256") != canonical_sha256(identity)
     ):
@@ -597,6 +626,8 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
             "bundle": bundle.as_posix(),
             **inspect_heldout_bundle(bundle),
         }
+    if request["schema_version"] == LEGACY_REQUEST_SCHEMA:
+        raise ActionValueError("HELDOUT_LEGACY_REQUEST_NOT_RUNNABLE")
     observed_prior = prior_request_identity(timing_root / "research")
     if canonical_sha256(observed_prior) != canonical_sha256(
         request["prior_request_identity"]
@@ -620,9 +651,24 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
         "corporate_action_snapshot"
     ]:
         raise ActionValueError("HELDOUT_CORPORATE_ACTION_SOURCE_CHANGED")
+    if file_reference(Path(request["suspension_snapshot"]["path"])) != request[
+        "suspension_snapshot"
+    ]:
+        raise ActionValueError("HELDOUT_SUSPENSION_SOURCE_CHANGED")
 
     corporate_actions = CorporateActionBook.open(
         Path(request["corporate_action_snapshot"]["path"])
+    )
+    suspensions = SuspensionSnapshotBook.open(Path(request["suspension_snapshot"]["path"]))
+    expected_scope = (
+        tuple(sorted(symbols)),
+        date.fromisoformat(request["population_spec"]["start"]),
+        date.fromisoformat(request["population_spec"]["end"]),
+    )
+    if (suspensions.symbols, suspensions.start, suspensions.end) != expected_scope:
+        raise ActionValueError("HELDOUT_SUSPENSION_SCOPE_MISMATCH")
+    candidate = suspensions.apply(
+        candidate, snapshot_path=Path(request["suspension_snapshot"]["path"])
     )
     rows = pd.read_parquet(v4_bundle / "training_rows.parquet")
     if set(rows["symbol"].astype(str)) != set(request["training_symbols"]):
@@ -693,6 +739,8 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
             "same_market_dates_not_temporal_holdout": True,
         },
         "heldout_policy": heldout.receipt,
+        "source_correction": request["source_correction"],
+        "suspension_snapshot_sha256": suspensions.snapshot_sha256,
         "oof_equivalence": oof_identity,
         "model_training_identity": {
             "model_count": len(forward.models),

@@ -171,9 +171,15 @@ def _request(tmp_path: Path) -> dict:
             "sha256": "c" * 64,
             "size_bytes": 1,
         },
-        "parent_source_sha256": "d" * 64,
-        "parent_feature_spec_sha256": "e" * 64,
-        "parent_policy_sha256": "f" * 64,
+        "suspension_snapshot": {
+            "path": (tmp_path / "suspensions.json").as_posix(),
+            "sha256": "d" * 64,
+            "size_bytes": 1,
+        },
+        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
+        "parent_source_sha256": "e" * 64,
+        "parent_feature_spec_sha256": "f" * 64,
+        "parent_policy_sha256": "0" * 64,
         "candidate_policy_sha256": canonical_sha256(
             heldout.STUDY_CONTRACT["candidate_policy"]
         ),
@@ -249,6 +255,15 @@ def test_request_rejects_overlap_and_write_flags(tmp_path: Path) -> None:
         *request["evaluation_symbols"][1:],
     )
     request["population_spec"]["selected_symbols"] = request["evaluation_symbols"]
+    request["request_sha256"] = canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
+    path.write_bytes(canonical_json_bytes(request))
+    with pytest.raises(ActionValueError, match="HELDOUT_REQUEST_IDENTITY_MISMATCH"):
+        heldout._load_request(path)
+
+    request = _request(tmp_path)
+    request.pop("suspension_snapshot")
     request["request_sha256"] = canonical_sha256(
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
@@ -346,3 +361,35 @@ def test_bundle_corruption_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ActionValueError, match="HELDOUT_BUNDLE_FILE_IDENTITY_MISMATCH"):
         heldout.inspect_heldout_bundle(bundle)
+
+
+def test_legacy_request_is_inspectable_but_cannot_be_newly_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(tmp_path)
+    request["schema_version"] = heldout.LEGACY_REQUEST_SCHEMA
+    request.pop("suspension_snapshot")
+    request.pop("source_correction")
+    request["request_sha256"] = canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
+    receipt = _receipt(request)
+    bundle = tmp_path / "legacy-bundle"
+    frame = pd.DataFrame({"x": [1]})
+    heldout._publish_bundle(
+        bundle,
+        request=request,
+        receipt=receipt,
+        oof=frame,
+        sleeves=frame,
+        daily=frame,
+    )
+    assert heldout.inspect_heldout_bundle(bundle)["request"]["schema_version"] == (
+        heldout.LEGACY_REQUEST_SCHEMA
+    )
+
+    request_path = tmp_path / "legacy-request.json"
+    request_path.write_bytes(canonical_json_bytes(request))
+    monkeypatch.setattr(heldout, "_clean_repository_commit", lambda _: "a" * 40)
+    with pytest.raises(ActionValueError, match="HELDOUT_LEGACY_REQUEST_NOT_RUNNABLE"):
+        heldout.run_heldout_request(request_path)
