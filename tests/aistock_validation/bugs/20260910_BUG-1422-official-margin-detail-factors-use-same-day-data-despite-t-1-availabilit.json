@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-09-10T06:07:04.471056Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "94910540898b6d046f0e603a2f2f81f0b1f5d46c",
+  "fixed_at": "2026-09-10T06:41:42Z",
   "github_issue_number": 4505,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4505",
   "last_seen_at": "2026-09-10T06:07:04.471056Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4508",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,6 +139,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -149,7 +151,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1422",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "69b57d8faa8a2103",
+    "recorded_at": "2026-09-10T06:43:43.785419Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f49a22c4e65cc4f570a9033589c48e77248ecda5",
+    "source_merge_commit": "94910540898b6d046f0e603a2f2f81f0b1f5d46c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4508",
+    "validation_evidence": [
+      "python -m nox -s qe_read_backend -> passed: 416 passed, 1 skipped",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0",
+      "python -m nox -s l0 -> passed: guardrail findings=0 blocking=0"
+    ],
+    "validation_evidence_digest": "3f26fb214de23d795232feb0f8bab180f5e22ced9f2418ce8f724866c42c523c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe"
   ],
@@ -158,6 +183,11 @@
     "fingerprint": "f9da4cab11f479d89511c67a",
     "source_event_id": "FE-20260910-f9da4cab11f4"
   },
+  "validation_evidence": [
+    "python -m nox -s qe_read_backend -> passed: 416 passed, 1 skipped",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0",
+    "python -m nox -s l0 -> passed: guardrail findings=0 blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
