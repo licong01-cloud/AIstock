@@ -1335,3 +1335,54 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
     assert CYQ_PERF.min_expected_rows == 5000
     assert MARGIN_DETAIL.min_expected_rows == 4000
     assert SW_DAILY.min_expected_rows == 100
+
+
+def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch):
+    from backend.services.tushare_dataset_specs import DAILY_BASIC
+
+    trade_date = dt.date(2026, 9, 8)
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+
+    rows = []
+    for index in range(100):
+        row = {
+            col: ("20260908" if col == "trade_date" else f"{col}-{index}")
+            for col in DAILY_BASIC.columns
+        }
+        # 5 rows with a null turnover_rate_f — ratio 95/100 == required ratio.
+        # Set the sentinel AFTER the comprehension so it is not overwritten.
+        row["turnover_rate_f"] = 1.5 if index >= 5 else None
+        rows.append(row)
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda _conn, _spec, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DAILY_BASIC, trade_date, trade_date, uuid.uuid4())
+
+    assert result.failed_batches == 0
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    coverage = call["metadata"]["required_field_coverage"]
+    assert coverage["schema_version"] == "daily_basic_required_field_coverage_v1"
+    assert coverage["field"] == "turnover_rate_f"
+    assert coverage["row_count"] == 100
+    assert coverage["finite_count"] == 95
+    assert coverage["ratio"] == pytest.approx(0.95)
+    assert coverage["required_ratio"] == 0.95
+
+
+def test_daily_basic_coverage_receipt_treats_nan_string_as_non_finite():
+    rows = [
+        {"ts_code": f"{i:06d}.SZ", "turnover_rate_f": ("NaN" if i == 0 else 1.5)}
+        for i in range(10)
+    ]
+    receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
+    assert receipt["finite_count"] == 9
+    assert receipt["ratio"] == pytest.approx(0.9)
