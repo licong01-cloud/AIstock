@@ -59,6 +59,48 @@ def _bundle(*, missing: bool = False) -> dict[str, object]:
     }
 
 
+def test_v16_single_date_feature_reuses_causal_moneyflow_window_and_reason() -> None:
+    calendar = tuple(pd.bdate_range("2026-07-27", periods=26).date)
+    sectors = tuple(f"801{index:03d}.SI" for index in range(31))
+    stock = []
+    for day_index, day in enumerate(calendar[:-1]):
+        for sector_index, sector in enumerate(sectors):
+            net = float(sector_index)
+            if day_index >= 20:
+                net = float(10 + 2 * sector_index)
+            stock.append(
+                {
+                    "source_date": day,
+                    "sector_code": sector,
+                    "moneyflow_net_amount_cny": net,
+                    "moneyflow_traded_amount_cny": 100.0,
+                    "moneyflow_reason_code": None,
+                }
+            )
+
+    frame = subject.build_v16_single_date_feature_frame(
+        calendar=calendar,
+        stock_daily_inputs=stock,
+        trade_date=calendar[-1],
+    )
+
+    assert len(frame) == 31
+    for sector_index, sector in enumerate(sectors):
+        expected = (5.0 * sector_index + 50.0) / 2000.0
+        assert frame.at[(calendar[-1], sector), subject.V16_SCORE_FEATURE] == pytest.approx(expected)
+        assert frame.at[(calendar[-1], sector), f"reason__{subject.V16_SCORE_FEATURE}"] is None
+
+    broken = copy.deepcopy(stock)
+    broken[0]["moneyflow_reason_code"] = "provider_absent"
+    missing = subject.build_v16_single_date_feature_frame(
+        calendar=calendar,
+        stock_daily_inputs=broken,
+        trade_date=calendar[-1],
+    )
+    assert np.isnan(missing.at[(calendar[-1], sectors[0]), subject.V16_SCORE_FEATURE])
+    assert missing.at[(calendar[-1], sectors[0]), f"reason__{subject.V16_SCORE_FEATURE}"] == "provider_absent"
+
+
 def test_materialised_panel_uses_t_minus_one_features_and_future_only_for_target() -> None:
     calendar = tuple(pd.bdate_range("2025-01-02", periods=90).date)
     sectors = tuple(f"80{index:04d}" for index in range(31))

@@ -245,6 +245,87 @@ def _normalise_panel(panel: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _moneyflow_intensity_from_window(
+    source_days: Sequence[date],
+    sector: str,
+    stock_by_key: Mapping[tuple[date, str], Mapping[str, Any]],
+) -> tuple[float, str | None]:
+    """Return one causal 20-session moneyflow intensity without imputation."""
+
+    if len(source_days) != 20:
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    daily_window = [stock_by_key.get((item, sector)) for item in source_days]
+    source_reasons = sorted(
+        {
+            str(item["moneyflow_reason_code"])
+            for item in daily_window
+            if item is not None and item.get("moneyflow_reason_code")
+        }
+    )
+    if source_reasons:
+        return math.nan, source_reasons[0]
+    if any(item is None for item in daily_window):
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    typed_window = [item for item in daily_window if item is not None]
+    net = [item.get("moneyflow_net_amount_cny") for item in typed_window]
+    amount = [item.get("moneyflow_traded_amount_cny") for item in typed_window]
+    try:
+        finite = all(value is not None and math.isfinite(float(value)) for value in (*net, *amount))
+        denominator = math.fsum(float(value) for value in amount) if finite else math.nan
+    except (TypeError, ValueError, OverflowError):
+        finite = False
+        denominator = math.nan
+    if not finite or not math.isfinite(denominator) or denominator <= 0:
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    value = math.fsum(float(item) for item in net) / denominator
+    if not math.isfinite(value):
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    return value, None
+
+
+def build_v16_single_date_feature_frame(
+    *,
+    calendar: Sequence[date],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+    trade_date: date,
+) -> pd.DataFrame:
+    """Build the v1.6 t-1 moneyflow-delta input for one decision session."""
+
+    ordered = tuple(calendar)
+    if len(ordered) != 26 or ordered[-1] != trade_date or ordered != tuple(sorted(set(ordered))):
+        raise _fail(REASON_INPUT, "G2-A v1.6 single-date calendar differs", stage="inference")
+    stock_by_key: dict[tuple[date, str], Mapping[str, Any]] = {}
+    for raw in stock_daily_inputs:
+        key = (raw.get("source_date"), str(raw.get("sector_code")))
+        if not isinstance(key[0], date) or key in stock_by_key:
+            raise _fail(REASON_INPUT, "G2-A v1.6 stock-derived input keys differ", stage="inference")
+        stock_by_key[key] = raw
+    sectors = tuple(sorted({sector for _day, sector in stock_by_key}))
+    expected_keys = {(day, sector) for day in ordered[:-1] for sector in sectors}
+    if len(sectors) != CANONICAL_SECTOR_COUNT or set(stock_by_key) != expected_keys:
+        raise _fail(REASON_INPUT, "G2-A v1.6 stock-derived denominator differs", stage="inference")
+
+    rows: list[dict[str, Any]] = []
+    for sector in sectors:
+        current, current_reason = _moneyflow_intensity_from_window(ordered[5:25], sector, stock_by_key)
+        lagged, lagged_reason = _moneyflow_intensity_from_window(ordered[0:20], sector, stock_by_key)
+        if math.isfinite(current) and math.isfinite(lagged):
+            value = current - lagged
+            reason = None
+        else:
+            value = math.nan
+            reason = current_reason or lagged_reason or "hmm_risk_rotation_moneyflow_history_incomplete"
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "sector_code": sector,
+                V16_SCORE_FEATURE: value,
+                f"reason__{V16_SCORE_FEATURE}": reason,
+            }
+        )
+    return pd.DataFrame.from_records(rows).set_index(["trade_date", "sector_code"]).sort_index()
+
+
 def build_materialised_panel(
     *,
     calendar: Sequence[date],
@@ -309,45 +390,11 @@ def build_materialised_panel(
 
         if decision_index < 20:
             return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
-        source_days = ordered[decision_index - 20 : decision_index]
-        if len(source_days) != 20:
-            return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
-        daily_window = [stock_by_key.get((item, sector)) for item in source_days]
-        source_reasons = sorted(
-            {
-                str(item["moneyflow_reason_code"])
-                for item in daily_window
-                if item is not None and item.get("moneyflow_reason_code")
-            }
+        return _moneyflow_intensity_from_window(
+            ordered[decision_index - 20 : decision_index],
+            sector,
+            stock_by_key,
         )
-        if source_reasons:
-            return math.nan, source_reasons[0]
-        if any(item is None for item in daily_window):
-            return (
-                math.nan,
-                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
-            )
-        typed_window = [item for item in daily_window if item is not None]
-        net = [item.get("moneyflow_net_amount_cny") for item in typed_window]
-        amount = [item.get("moneyflow_traded_amount_cny") for item in typed_window]
-        try:
-            finite = all(value is not None and math.isfinite(float(value)) for value in (*net, *amount))
-            denominator = math.fsum(float(value) for value in amount) if finite else math.nan
-        except (TypeError, ValueError, OverflowError):
-            finite = False
-            denominator = math.nan
-        if not finite or not math.isfinite(denominator) or denominator <= 0:
-            return (
-                math.nan,
-                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
-            )
-        value = math.fsum(float(item) for item in net) / denominator
-        if not math.isfinite(value):
-            return (
-                math.nan,
-                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
-            )
-        return value, None
 
     rows: list[dict[str, Any]] = []
     for decision_index, decision_day in enumerate(ordered):
@@ -3529,6 +3576,7 @@ __all__ = [
     "build_label_free_feature_panel",
     "build_materialised_panel",
     "build_rank_training_target",
+    "build_v16_single_date_feature_frame",
     "build_v16_scores",
     "close_processes",
     "cross_section_rank_features",

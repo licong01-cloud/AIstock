@@ -1859,8 +1859,9 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
     assert roots[0] != roots[1]
 
 
+@pytest.mark.parametrize("deterministic_v16", [False, True])
 def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deterministic_v16: bool
 ) -> None:
     calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
     trade_day = calendar[-1]
@@ -1906,7 +1907,8 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
 
     def build_stock_inputs(*_args, **kwargs):
         output = kwargs["g2a_l1_daily_output"]
-        for day in kwargs["calendar"][-20:]:
+        required_days = 25 if deterministic_v16 else 20
+        for day in kwargs["calendar"][-required_days:]:
             for code in codes:
                 output.append(
                     {
@@ -1950,7 +1952,10 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         work_parent=tmp_path / "work",
         trade_date=trade_day,
         as_of_date=as_of,
-        market_start=market_start,
+        market_start=None if deterministic_v16 else market_start,
+        model_contract_version=(
+            "hmm_risk_rotation_l1_g2a_v1_6" if deterministic_v16 else "hmm_risk_rotation_l1_g2a_v1_3"
+        ),
     )
 
     assert loader_calls == [
@@ -1962,14 +1967,50 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         }
     ]
     assert result["feature_calendar"][-2:] == (as_of, trade_day)
-    assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
-    assert all(day <= as_of for day, _code in result["sector_close"])
-    assert len(result["sector_close"]) == 61 * 31
-    assert len(result["stock_daily_inputs"]) == 20 * 31
+    if deterministic_v16:
+        assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v2"
+        assert result["model_contract_version"] == "hmm_risk_rotation_l1_g2a_v1_6"
+        assert result["benchmark_close"] == {}
+        assert result["sector_close"] == {}
+        assert len(result["feature_calendar"]) == 26
+        assert len(result["stock_daily_inputs"]) == 25 * 31
+        assert result["source_receipt"]["market_context_used_for_score"] is False
+        assert result["source_receipt"]["sector_close_used_for_score"] is False
+    else:
+        assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v1"
+        assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
+        assert all(day <= as_of for day, _code in result["sector_close"])
+        assert len(result["sector_close"]) == 61 * 31
+        assert len(result["stock_daily_inputs"]) == 20 * 31
     assert result["source_receipt"]["target_columns_read"] is False
     assert result["source_receipt"]["receipt_sha256"] == subject.canonical_sha256(
         {key: value for key, value in result["source_receipt"].items() if key != "receipt_sha256"}
     )
+
+
+@pytest.mark.parametrize(
+    "unsupported_contract",
+    ["hmm_risk_rotation_l1_g2a_v1_4", "hmm_risk_rotation_l1_g2a_v1_5", "unknown"],
+)
+def test_single_date_source_rejects_non_productised_model_contracts(
+    tmp_path: Path,
+    unsupported_contract: str,
+) -> None:
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.build_rotation_l1_single_date_source_from_assets(
+            direct_v2_candidate_root=tmp_path / "unused-candidate",
+            security_identity_manifest=tmp_path / "security.json",
+            provider_absence_manifest=tmp_path / "provider.json",
+            industry_authority={},
+            forbidden_roots=(),
+            work_parent=tmp_path / "work",
+            trade_date=date(2026, 1, 5),
+            as_of_date=date(2026, 1, 2),
+            market_start=date(2025, 1, 1),
+            model_contract_version=unsupported_contract,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
 
 
 def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:

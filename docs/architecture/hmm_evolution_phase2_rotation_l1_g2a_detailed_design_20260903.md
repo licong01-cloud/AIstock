@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2 G2-A `rotation_L1` 端到端详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.6.0（确定性moneyflow-delta排序合同与实现）
+> **文档版本**：v1.6.1（正式零fit终态与产品接线）
 > **日期**：2026-09-10
-> **状态**：`V1_6_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT`
+> **状态**：`V1_6_FORMAL_DEVELOPMENT_VERIFIED_PRODUCT_CLOSURE_IN_PROGRESS`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.50
 > **终极目标**：在同一个G2-A闭环内交付真实日度L1板块轮动预测、最小repository/read API和真实`/hmm-risk` L1热力图，而不是只交付模型、fit、artifact、receipt或market regime页面。
 > **历史2026-09-04批准边界（叶20日规则已被下述v1.3取代）**：MDE只决定forward-confirmation状态；`tail_access_gate`与`research_product_gate`独立；`min_child_samples=310`且训练后每叶`min_leaf_distinct_dates=20`；forward effect failure使用one-sided 95% HAC上置信界`<=0`；fold-local market context对5D/10D horizon共享；§10.1其余精确合同也已一次性批准。该批准不等于源码、fit、tail读取、DDL执行或runtime activation已获授权。
@@ -506,7 +506,7 @@ v1.3模型、产品源码、真实OOF产品链和生产研究页面均已闭合�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计D1～D5；§21 v1.4；§23 v1.5；§24 v1.6 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v15_rank_target_development_24fit_600a2d7e_20260910/acceptance.json`；v1.6零fit诊断mean IC `0.039580909571655214` | USER_APPROVED_IMPLEMENTED | user approved: v1.6源码合同已实施、正式双process零fit development待最终合入commit执行；v1.5已低于MBE终止且tail未读，capability/advisory未改变 |
+| F-011 | 本设计D1～D5；§21 v1.4；§23 v1.5；§24 v1.6 | `backend/tests/hmm_risk/test_rotation_l1_gbdt.py`；`artifact: F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v16_zero_fit_development_6448a35c_20260911/acceptance.json` | USER_APPROVED_IMPLEMENTED | user approved: v1.6正式零fit development达到MBE且tail未读；产品adapter、writer/readback/API/UI和runtime仍须分别闭合，不能提前标记surface/advisory available |
 | F-012 | 本设计§1.2、§8.3；read-only router与HMM-only isolation guard | `backend/tests/hmm_risk/test_isolation.py`与写表/调用边界断言 | VERIFIED_L1_RESEARCH_SURFACE_ISOLATION | user approved: advisory-only业务语义保持不变；无Selection/Paper/QMT/QE写路径 |
 | F-013 | `rotation_l1_prediction.py`唯一writer/repository、两个read API、真实`/hmm-risk` L1热力图与显式surface receipt；生产已承载v1.3真实OOF | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`、`backend/tests/hmm_risk/test_rotation_l1_api.py`；生产19,220行/620日/31-sector及浏览器readback | VERIFIED_HISTORICAL_OOF_RESEARCH_SURFACE | user approved: `AVAILABLE_EXPERIMENTAL`不等于预测capability；v1.3未达MBE，故无新增日度预测、forward或advisory；F-013其余范围未完成 |
 
@@ -888,15 +888,21 @@ research surface、rotation capability、forward confirmation与advisory五轴�
 
 ### 24.6 D6：实施、测试与边界
 
-只扩展现有`rotation_l1_gbdt.py`、`run_rotation_l1_g2a.py`、直接HMM测试和本两份设计文档；不新建trainer、feature store、registry、evidence平台、数据导出或新API/UI。旧v1.4/v1.5默认与显式CLI语义保持；v1.6必须显式选择并在创建输出前校验冻结v1.4 reference与input authority。
+离线执行只扩展现有`rotation_l1_gbdt.py`、`run_rotation_l1_g2a.py`、直接HMM测试和本两份设计文档；不新建trainer、feature store、registry、evidence平台、数据导出或新API/UI。达到development门后，同一G2-A允许最小扩展既有`rotation_l1_input_bundle.py`与`rotation_l1_prediction.py`及其直接测试，使唯一writer/repository和单日入口识别v1.6确定性合同；不得新增平行writer、schema、API或UI，不得让v1.4/v1.5进入未批准的单日产品路径。旧v1.3产品语义保持；v1.6必须显式绑定完整formula/model/input/mapping authority。
 
 直接测试至少覆盖：端点/中央/tie/rank顺序；输入行重排不变；target改变不改变score；缺失/非有限typed unavailable；零estimator调用与零fit receipt；formula/contribution/model hash；31分母和as-of/fold lineage；child自哈希篡改、input score authority漂移、双进程漂移均拒绝；CLI显式v1.6及v1.4/v1.5回归。源码完成后运行changed files→ownership→module registry→test plans、精确pytest、Ruff、py_compile、HMM模块、L0、F2和`git diff --check`。
 
 | decision | 精确方案 | 状态 |
 |---|---|---|
-| G2A-V16-D1 | 同v1.4面板/t-1 delta，daily available L1 average-rank centered score；missing typed unavailable | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
-| G2A-V16-D2 | canonical deterministic formula identity；非伪训练模型；单feature精确contribution | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
-| G2A-V16-D3 | 10D/五fold/31分母/coverage/state/MBE不变；market/GBDT/leaf不适用；双process 0 fits | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
-| G2A-V16-D4 | child完整hash + parent独立input score authority闭合；同日期v1.4 paired诊断 | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
-| G2A-V16-D5 | mean Rank IC 0.02唯一binding；不足即停止，达到也不自动读tail或切生产 | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
-| G2A-V16-D6 | 复用唯一executor/product contract；不建平台、不新增候选、不触碰DB/runtime | USER_APPROVED_IMPLEMENTED_PENDING_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D1 | 同v1.4面板/t-1 delta，daily available L1 average-rank centered score；missing typed unavailable | VERIFIED_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D2 | canonical deterministic formula identity；非伪训练模型；单feature精确contribution | VERIFIED_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D3 | 10D/五fold/31分母/coverage/state/MBE不变；market/GBDT/leaf不适用；双process 0 fits | VERIFIED_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D4 | child完整hash + parent独立input score authority闭合；同日期v1.4 paired诊断 | VERIFIED_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D5 | mean Rank IC 0.02唯一binding；不足即停止，达到也不自动读tail或切生产 | VERIFIED_FORMAL_ZERO_FIT_DEVELOPMENT |
+| G2A-V16-D6 | 复用唯一executor/product contract；不建平台、不新增候选、不触碰DB/runtime | IMPLEMENTED_PRODUCT_ADAPTER_PENDING_REAL_READBACK |
+
+### 24.7 2026-09-11正式零fit终态与产品接线边界
+
+固定源码`6448a35c7272bb7126a9d59042f0ac6569b26733`已在同一冻结bundle与单线程环境完成两个fresh Python processes。两次均为`planned=started=completed=failed=0`，reproducibility payload SHA-256一致；最终acceptance SHA-256为`1ae40d5601bd4f9123aca6c02dac3b26f9b3338a273913f0f5d0d089407676be`。620个OOF日期、19,220行中610日metric-valid，mean Rank IC=`0.039580909571655214`，two-sided HAC 95%区间=`[0.0013856051597341199,0.07777621398357631]`，`tail_access_gate=true`、`forward_power_status=INSUFFICIENT`、`tail_accessed=false`。该终态支持`RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`资格，不支持advisory或forward-confirmed声明。
+
+产品接线必须复用既有表、repository、read API与热力图。OOF转换时重新执行parent closure并显式传入冻结v1.4 reference和immutable input bundle；formula text、model/scoring hash、31-sector分母、input/mapping identity任一不一致均typed fail closed。单日入口只支持既有v1.3与当前v1.6：v1.6从显式direct-v2 release读取截至`t-1`的25个canonical session，计算两个重叠20日moneyflow intensity之差并作当日横截面average-rank；不得加载booster、market context、future target、v1.4/v1.5产品路径或旧score fallback。源码/测试/离线OOF转换通过后仍须真实writer/readback/API/UI和独立runtime授权，才能把surface标记为`AVAILABLE_EXPERIMENTAL`。

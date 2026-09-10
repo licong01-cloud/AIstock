@@ -3136,7 +3136,8 @@ def build_rotation_l1_single_date_source_from_assets(
     work_parent: Path,
     trade_date: date,
     as_of_date: date,
-    market_start: date,
+    market_start: date | None = None,
+    model_contract_version: str = "hmm_risk_rotation_l1_g2a_v1_3",
 ) -> dict[str, Any]:
     """Bind one label-free G2-A inference request to an explicit direct-v2 release.
 
@@ -3145,7 +3146,18 @@ def build_rotation_l1_single_date_source_from_assets(
     is placed in the returned feature or market inputs.
     """
 
-    if not isinstance(trade_date, date) or not isinstance(as_of_date, date) or not isinstance(market_start, date):
+    supported_contracts = {
+        "hmm_risk_rotation_l1_g2a_v1_3",
+        "hmm_risk_rotation_l1_g2a_v1_6",
+    }
+    deterministic_v16 = model_contract_version == "hmm_risk_rotation_l1_g2a_v1_6"
+    if (
+        not isinstance(trade_date, date)
+        or not isinstance(as_of_date, date)
+        or model_contract_version not in supported_contracts
+        or (deterministic_v16 and market_start is not None)
+        or (not deterministic_v16 and not isinstance(market_start, date))
+    ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "single-date source dates are invalid")
     assets = load_rotation_l1_g2a_direct_v2_source_assets(
         direct_v2_candidate_root,
@@ -3160,24 +3172,33 @@ def build_rotation_l1_single_date_source_from_assets(
         raise _fail(
             REASON_SOURCE_RANGE_INCOMPLETE, "single-date decision session is outside the selected release"
         ) from exc
+    minimum_position = 44 if deterministic_v16 else 61
     if (
-        trade_position < 61
+        trade_position < minimum_position
         or calendar_all[trade_position - 1] != as_of_date
-        or market_start not in calendar_all
-        or market_start > as_of_date
         or assets["data_window_end"] != as_of_date
+        or (
+            not deterministic_v16
+            and (market_start not in calendar_all or market_start is None or market_start > as_of_date)
+        )
     ):
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date canonical as-of/calendar boundary differs")
 
-    feature_calendar = tuple(calendar_all[trade_position - 61 : trade_position + 1])
-    market_start_position = calendar_all.index(market_start)
-    market_calendar = tuple(calendar_all[market_start_position : trade_position + 1])
-    stock_history_calendar = tuple(calendar_all[trade_position - 39 : trade_position])
-    stock_feature_dates = frozenset(calendar_all[trade_position - 20 : trade_position])
+    feature_lookback = 25 if deterministic_v16 else 61
+    stock_history_lookback = 44 if deterministic_v16 else 39
+    stock_feature_lookback = 25 if deterministic_v16 else 20
+    feature_calendar = tuple(calendar_all[trade_position - feature_lookback : trade_position + 1])
+    market_calendar = (
+        (trade_date,)
+        if deterministic_v16
+        else tuple(calendar_all[calendar_all.index(market_start) : trade_position + 1])
+    )
+    stock_history_calendar = tuple(calendar_all[trade_position - stock_history_lookback : trade_position])
+    stock_feature_dates = frozenset(calendar_all[trade_position - stock_feature_lookback : trade_position])
     if (
-        len(feature_calendar) != 62
-        or len(stock_history_calendar) != 39
-        or len(stock_feature_dates) != 20
+        len(feature_calendar) != feature_lookback + 1
+        or len(stock_history_calendar) != stock_history_lookback
+        or len(stock_feature_dates) != stock_feature_lookback
         or feature_calendar[-2:] != (as_of_date, trade_date)
         or market_calendar[-1] != trade_date
     ):
@@ -3265,25 +3286,30 @@ def build_rotation_l1_single_date_source_from_assets(
                 },
             )
     canonical_stock_inputs = [by_key[key] for key in sorted(by_key)]
-    if len(canonical_stock_inputs) != 20 * 31:
+    if len(canonical_stock_inputs) != stock_feature_lookback * 31:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date stock-derived feature denominator differs")
 
-    published_sector_close = _published_l1_sector_close(
-        assets["sector_index_close"],
-        assets["sector_index_code_by_sector"],
-        canonical_codes=l1_codes,
-    )
-    feature_source_dates = frozenset(feature_calendar[:-1])
-    sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
-    benchmark_close = {
-        day: float(value) for day, value in assets["benchmark_close"].items() if market_start <= day <= as_of_date
-    }
-    if (
-        len(sector_close) != 61 * 31
-        or set(benchmark_close) != set(market_calendar[:-1])
-        or any((day, sector) not in sector_close for day in feature_calendar[:-1] for sector in l1_codes)
-    ):
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date price/benchmark lookback is incomplete")
+    if deterministic_v16:
+        sector_close: dict[tuple[date, str], float] = {}
+        benchmark_close: dict[date, float] = {}
+    else:
+        published_sector_close = _published_l1_sector_close(
+            assets["sector_index_close"],
+            assets["sector_index_code_by_sector"],
+            canonical_codes=l1_codes,
+        )
+        feature_source_dates = frozenset(feature_calendar[:-1])
+        sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
+        assert market_start is not None
+        benchmark_close = {
+            day: float(value) for day, value in assets["benchmark_close"].items() if market_start <= day <= as_of_date
+        }
+        if (
+            len(sector_close) != 61 * 31
+            or set(benchmark_close) != set(market_calendar[:-1])
+            or any((day, sector) not in sector_close for day in feature_calendar[:-1] for sector in l1_codes)
+        ):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date price/benchmark lookback is incomplete")
 
     try:
         sector_names = {code: str(adapter.classification_lookup[("L1", code)]["name"]) for code in l1_codes}
@@ -3305,28 +3331,47 @@ def build_rotation_l1_single_date_source_from_assets(
         }
         for row in canonical_stock_inputs
     ]
+    source_schema_version = (
+        "hmm_risk_rotation_l1_single_date_source_v2"
+        if deterministic_v16
+        else "hmm_risk_rotation_l1_single_date_source_v1"
+    )
     source_body = {
-        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+        "schema_version": source_schema_version,
         "release_identity": dict(assets["release_identity"]),
         "source_inventory_sha256": assets["inventory"]["inventory_sha256"],
         "source_binding_manifest_sha256": assets["binding_manifest_sha256"],
         "trade_date": trade_date.isoformat(),
         "as_of_date": as_of_date.isoformat(),
-        "market_start": market_start.isoformat(),
         "feature_calendar_sha256": canonical_sha256([day.isoformat() for day in feature_calendar]),
-        "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
         "stock_feature_rows_sha256": canonical_sha256(canonical_stock_payload),
-        "sector_close_sha256": canonical_sha256(
-            [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
-        ),
-        "benchmark_close_sha256": canonical_sha256(
-            [[day.isoformat(), benchmark_close[day]] for day in sorted(benchmark_close)]
-        ),
         "mapping_snapshot_sha256": canonical_sha256(mapping_manifest),
         "target_columns_read": False,
     }
-    return {
-        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+    if deterministic_v16:
+        source_body.update(
+            {
+                "model_contract_version": model_contract_version,
+                "market_context_used_for_score": False,
+                "sector_close_used_for_score": False,
+            }
+        )
+    else:
+        assert market_start is not None
+        source_body.update(
+            {
+                "market_start": market_start.isoformat(),
+                "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
+                "sector_close_sha256": canonical_sha256(
+                    [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
+                ),
+                "benchmark_close_sha256": canonical_sha256(
+                    [[day.isoformat(), benchmark_close[day]] for day in sorted(benchmark_close)]
+                ),
+            }
+        )
+    result = {
+        "schema_version": source_schema_version,
         "trade_date": trade_date,
         "as_of_date": as_of_date,
         "feature_calendar": feature_calendar,
@@ -3339,6 +3384,9 @@ def build_rotation_l1_single_date_source_from_assets(
         "mapping_snapshot_hash": source_body["mapping_snapshot_sha256"],
         "source_receipt": _receipt_from_body(source_body),
     }
+    if deterministic_v16:
+        result["model_contract_version"] = model_contract_version
+    return result
 
 
 def _require_sha256(value: Any, field: str) -> str:
