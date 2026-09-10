@@ -523,13 +523,13 @@ def test_nightly_cli_does_not_query_its_own_in_progress_actions_run(
     }
 
 
-def test_nightly_heterogeneous_failure_groups_are_not_auto_filed() -> None:
+def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads() -> None:
     payload = summary.summarize_nightly_status(
         {
             "statuses": {"nightlyL3": "failure"},
             "run_id": "9001",
             "nightly_session_results": [
-                {"session": "advisory_historical_range_backend", "result": "failure"},
+                {"session": "position_timing_backend", "result": "failure"},
                 {"session": "paper_v2_l3", "result": "failure"},
             ],
         }
@@ -537,14 +537,149 @@ def test_nightly_heterogeneous_failure_groups_are_not_auto_filed() -> None:
 
     assert len(payload["nightly_failure_groups"]) == 2
     assert payload["issue_creation_policy"] == {
-        "allowed": False,
-        "reason": "nightly_heterogeneous_failures_require_group_triage",
-        "next_command": "inspect nightly_failure_groups and promote only one confirmed root-cause group",
+        "allowed": True,
+        "reason": "nightly_heterogeneous_failures_split_by_module",
+        "mode": "bounded_module_group_split",
+        "group_count": 2,
+        "max_issue_count": 5,
+        "automatic_bug_promotion": "deferred_when_multiple_issues",
     }
     assert payload["suspected_modules"] == ["validation.runner"]
-    assert payload["agent_handoff"]["handoff_mode"] == "triage_only"
-    with pytest.raises(ValueError, match="nightly_heterogeneous_failures"):
-        summary.build_github_issue_payload(payload)
+    issue_payloads = summary.build_github_issue_payloads(payload)
+    assert len(issue_payloads) == 2
+    assert {item["title"] for item in issue_payloads} == {
+        "[P1][position_timing] Nightly failed: position_timing_backend",
+        "[P1][paper_v2_selection_center] Nightly failed: paper_v2_l3",
+    }
+    assert len({item["dedupe"]["nightly_marker"] for item in issue_payloads}) == 2
+    assert all(item["synthetic"] is False for item in issue_payloads)
+
+    changed_sessions = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9002",
+            "nightly_session_results": [
+                {"session": "position_timing_backend", "result": "failure"},
+                {"session": "position_timing_first_release", "result": "failure"},
+                {"session": "paper_v2_l3", "result": "failure"},
+            ],
+        }
+    )
+    changed_payloads = summary.build_github_issue_payloads(changed_sessions)
+    marker_by_module = {
+        item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
+        for item in issue_payloads
+    }
+    changed_marker_by_module = {
+        item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
+        for item in changed_payloads
+    }
+    assert changed_marker_by_module["position_timing"] == marker_by_module["position_timing"]
+    assert changed_marker_by_module["paper_v2_selection_center"] == marker_by_module["paper_v2_selection_center"]
+
+
+def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy_match() -> None:
+    advisory_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9010",
+            "nightly_session_results": [
+                {"session": "advisory_historical_range_backend", "result": "failure"},
+            ],
+        }
+    )
+    paper_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9011",
+            "nightly_session_results": [{"session": "paper_v2_l3", "result": "failure"}],
+        }
+    )
+
+    advisory_payloads = summary.build_github_issue_payloads(advisory_summary)
+    paper_payloads = summary.build_github_issue_payloads(paper_summary)
+
+    assert len(advisory_payloads) == len(paper_payloads) == 1
+    assert "[advisory.historical_range]" in advisory_payloads[0]["title"]
+    assert "[paper_v2_selection_center]" in paper_payloads[0]["title"]
+    assert advisory_payloads[0]["dedupe"]["nightly_marker"] != paper_payloads[0]["dedupe"]["nightly_marker"]
+    assert (
+        advisory_payloads[0]["dedupe"]["legacy_nightly_marker"]
+        == paper_payloads[0]["dedupe"]["legacy_nightly_marker"]
+    )
+
+
+def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
+    sessions = [
+        "factor_research_backend",
+        "position_timing_backend",
+        "platform_api_backend",
+        "advisory_historical_range_backend",
+        "qe_long_trend_phase2_backend",
+        "qe_sector_risk_overlay_backend",
+    ]
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9002",
+            "nightly_session_results": [
+                {"session": session, "result": "failure"} for session in sessions
+            ],
+        }
+    )
+
+    issue_payloads = summary.build_github_issue_payloads(payload)
+
+    assert len(issue_payloads) <= summary.MAX_NIGHTLY_AUTO_ISSUE_GROUPS
+    assert len({item["dedupe"]["nightly_marker"] for item in issue_payloads}) == len(issue_payloads)
+    overflow_payload = next(item for item in issue_payloads if "[validation.runner]" in item["title"])
+    assert "source_modules=" in overflow_payload["body"]
+
+
+def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    validation_root = tmp_path / "tmp" / "validation"
+    status_path = validation_root / "nightly_failure_issue" / "status.json"
+    session_results_path = validation_root / "nightly_l3" / "session-results.json"
+    output_path = validation_root / "nightly_failure_issue" / "summary.json"
+    issue_payload_path = validation_root / "nightly_failure_issue" / "github-issue-payload.json"
+    status_path.parent.mkdir(parents=True)
+    session_results_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps({"statuses": {"nightlyL3": "failure"}, "run_id": "9003"}),
+        encoding="utf-8",
+    )
+    session_results_path.write_text(
+        json.dumps(
+            [
+                {"session": "advisory_historical_range_backend", "result": "failure"},
+                {"session": "paper_v2_l3", "result": "failure"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--output",
+            str(output_path),
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--no-candidate-history",
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    capsys.readouterr()
+    issue_document = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    assert issue_document["schema_version"] == "aistock_ci_failure_github_issue_payload_manifest_v1"
+    assert issue_document["payload_count"] == 2
+    assert len(issue_document["payloads"]) == 2
 
 
 def test_cli_persists_tmp_failure_candidate_history(
@@ -1520,8 +1655,15 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "No actionable Nightly issue created." in script
-    assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+    assert "const issueDocument = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+    assert "Array.isArray(issueDocument.payloads)" in script
+    assert "if (payloads.length > 5)" in script
+    assert "for (const payload of payloads)" in script
+    assert "fs.unlinkSync(singleIssueNumberPath)" in script
+    assert "existing.body = updateParams.body" in script
+    assert "payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null" in script
     assert "github-issue-number.txt" in script
+    assert "github-issue-numbers.json" in script
 
 
 def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
@@ -1545,6 +1687,7 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "REGISTRY_PR_STATUS" in run
     assert "PROMOTION_WORKFLOW_GATE" in run
     assert "deferred_registry_pr_capability" in run
+    assert "deferred_multi_issue_promotion" in run
     assert "workflow_gate=manual_registry_pr_required" in run
     assert "GitHub Actions could not create the registry PR" in run
     assert "Registry PR status" in run

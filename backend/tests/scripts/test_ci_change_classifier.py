@@ -796,6 +796,31 @@ def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp
     assert "data_quality_deep" in payload["backend_plan_keys"]
 
 
+def test_selected_mcp_and_research_assistant_plans_have_windows_executors() -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/research_assistant/test_service.py",
+            "tests/mcp/test_gateway_profiles.py",
+            "tests/mcp/test_mcp_inventory_diff.py",
+        ]
+    )
+
+    expected_sessions = {
+        "mcp_gateway_manifest_quality",
+        "research_assistant_backend",
+        "research_assistant_mcp_contract",
+    }
+    assert set(payload["backend_sessions"]) == expected_sessions
+    assert payload["backend_required"] is True
+    assert payload["workflow_gate"] == "passed"
+    routing = {
+        item["plan_key"]: item["runner_kind"]
+        for item in payload["plan_routing"]
+        if item["plan_key"] in expected_sessions
+    }
+    assert routing == {session: "windows_ai_stock_ci" for session in expected_sessions}
+
+
 def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

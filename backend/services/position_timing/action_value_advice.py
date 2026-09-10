@@ -19,9 +19,55 @@ from .action_value import (
     market_features, money, policy_sha256_for, risk_exit_plan, state_features,
 )
 from .action_value_model import HEADS, LocalActionModel
+from .contracts import canonical_sha256
 
 
 DIRECTION_REFERENCE_NOTIONAL_CNY = Decimal(100000)
+FULL_MODEL_ACTION_AUTHORITY = "FULL_ACTION_VALUE_V4"
+ENTRY_ONLY_MODEL_ACTION_AUTHORITY = "ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
+OPEN_ONLY_MODEL_ACTION_AUTHORITY = "OPEN_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
+ENTRY_ONLY_MODEL_ACTION_CONTRACT = {
+    "policy_id": ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
+    "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
+    "model_allowed_directions": ("OPEN", "ADD"),
+    "model_minimum_net_action_value_bps": 0.0,
+    "existing_holding_without_risk_exit_or_positive_entry": "HOLD",
+    "cash_without_positive_entry": "WAIT",
+}
+OPEN_ONLY_MODEL_ACTION_CONTRACT = {
+    "policy_id": OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+    "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
+    "model_allowed_directions": ("OPEN",),
+    "model_state_support": "CASH_ONLY_ENTRY_HEAD",
+    "model_minimum_net_action_value_bps": 0.0,
+    "existing_holding_without_risk_exit": "HOLD",
+    "cash_without_positive_open": "WAIT",
+}
+
+
+def _restricted_action_contract(model_action_authority: str) -> dict[str, Any] | None:
+    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+        return ENTRY_ONLY_MODEL_ACTION_CONTRACT
+    if model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
+        return OPEN_ONLY_MODEL_ACTION_CONTRACT
+    return None
+
+
+def action_authority_policy_sha256(
+    information_block: str, model_action_authority: str
+) -> str:
+    base = policy_sha256_for(information_block)
+    if model_action_authority == FULL_MODEL_ACTION_AUTHORITY:
+        return base
+    contract = _restricted_action_contract(model_action_authority)
+    if contract is None:
+        raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
+    return canonical_sha256(
+        {
+            "base_policy_sha256": base,
+            "model_action_contract": contract,
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -52,7 +98,9 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
                       target_state: PositionState | None = None,
                       target_reference: Decimal | None = None,
                       current_market: pd.Series | None = None,
-                      information_block: str = CORE_INFORMATION_BLOCK) -> DailyActionDecision:
+                      information_block: str = CORE_INFORMATION_BLOCK,
+                      model_action_authority: str = FULL_MODEL_ACTION_AUTHORITY,
+                      ) -> DailyActionDecision:
     """Do not substitute zero predictions, invent entry cost, or read future bars.
 
     Caller validates snapshot source/PIT identities. Current required core gaps
@@ -73,7 +121,9 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
     if not Decimal(0) <= max_exposure <= 1:
         raise ActionValueError("ACTION_BUDGET_INVALID")
     market_feature_names, feature_order, _ = feature_contract(information_block)
-    policy_sha256 = policy_sha256_for(information_block)
+    policy_sha256 = action_authority_policy_sha256(
+        information_block, model_action_authority
+    )
     if delist_risk and not planning_state.quantity:
         plan = ActionPlan(symbol, 0, planning_reference)
         return DailyActionDecision(
@@ -133,7 +183,19 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
             features=[name for name in market_feature_names if pd.isna(current[name])],
         )
     plans = action_candidates(symbol, planning_state, planning_reference, max_exposure=max_exposure)
-    actionable = [plan for plan in plans if plan.delta]
+    open_only_has_cash_state = (
+        model_action_authority != OPEN_ONLY_MODEL_ACTION_AUTHORITY
+        or planning_state.quantity == 0
+    )
+    actionable = [
+        plan
+        for plan in plans
+        if plan.delta
+        and (
+            model_action_authority == FULL_MODEL_ACTION_AUTHORITY
+            or (plan.delta > 0 and open_only_has_cash_state)
+        )
+    ]
     values = {0: 0.0}
     if actionable:
         frame = pd.DataFrame([{**current.to_dict(), **state_features(planning_state, plan)} for plan in actionable],
@@ -144,14 +206,36 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
     else:
         # Validate model identity/time even when no executable quantity exists.
         model.predict(pd.DataFrame(columns=feature_order), [], decision_as_of=decision_as_of)
-    selected = choose_action(plans, [values[plan.delta] for plan in plans])
+    eligible_plans = [
+        plan
+        for plan in plans
+        if (
+            model_action_authority == FULL_MODEL_ACTION_AUTHORITY
+            or (
+                plan.delta >= 0
+                and (
+                    model_action_authority != OPEN_ONLY_MODEL_ACTION_AUTHORITY
+                    or planning_state.quantity == 0
+                    or plan.delta == 0
+                )
+            )
+        )
+    ]
+    selected = choose_action(
+        eligible_plans, [values[plan.delta] for plan in eligible_plans]
+    )
     candidates = tuple({"action": action_name(planning_state, plan.delta),
                         "planned_delta_qty": plan.delta, "estimated_net_action_value_bps": values[plan.delta],
                         "objective": HEADS[0] if plan.delta > 0 else HEADS[1] if plan.delta < 0 else "NO_ACTION"}
-                       for plan in plans)
+                       for plan in eligible_plans)
+    reason_codes = ["MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE"]
+    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+        reason_codes.append("MODEL_EXIT_AUTHORITY_REMOVED")
+    elif model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
+        reason_codes.extend(("MODEL_EXIT_AUTHORITY_REMOVED", "MODEL_ADD_AUTHORITY_REMOVED"))
     return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, selected.delta), selected,
                                "LOCAL_MODEL_ESTIMATE", model.metadata["model_sha256"], policy_sha256, candidates,
-                               ("MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE",))
+                               tuple(reason_codes))
 
 
 def public_advice(decision: DailyActionDecision, *, direction_only: bool) -> dict[str, Any]:

@@ -81,6 +81,28 @@ def test_minute_execution_twap_fills_order() -> None:
     assert len(events) == 3
 
 
+def test_twap_residual_completion_reason_does_not_exceed_planned_denominator() -> None:
+    algo = TWAPAlgo({"split_count": 3})
+    state = algo.init_order("000001.SZ", "BUY", 600)
+
+    results = [
+        algo.compute_step(state, {"close": 10.0, "volume": 100}, {})
+        for _ in range(6)
+    ]
+
+    assert [result.quantity for result in results if result is not None] == [100] * 6
+    assert [result.reason for result in results if result is not None] == [
+        "TWAP step 1/3",
+        "TWAP step 2/3",
+        "TWAP step 3/3",
+        "TWAP residual completion attempt 1 after 3 planned steps",
+        "TWAP residual completion attempt 2 after 3 planned steps",
+        "TWAP residual completion attempt 3 after 3 planned steps",
+    ]
+    assert state.executed_quantity == state.total_quantity == 600
+    assert state.is_complete is True
+
+
 @pytest.mark.parametrize(
     ("algo_code", "algo_config", "market_context"),
     [

@@ -1515,6 +1515,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     client = workflow._classify_runtime_impact([".codex/skills/fix-aistock-issue/SKILL.md"], root=isolated_workflow_root)
     mcp_client = workflow._classify_runtime_impact(["scripts/aistock_mcp_server.py"], root=isolated_workflow_root)
     allocator_tool = workflow._classify_runtime_impact(["scripts/aistock_bug_id_allocator.py"], root=isolated_workflow_root)
+    mcp_gateway_doctor = workflow._classify_runtime_impact(
+        ["scripts/aistock_mcp_gateway_doctor.py"],
+        root=isolated_workflow_root,
+    )
     bug_registry_metadata_tool = workflow._classify_runtime_impact(
         ["scripts/bug_registry_metadata_check.py"],
         root=isolated_workflow_root,
@@ -1633,6 +1637,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert client["runtime_impact"] == "client"
     assert mcp_client["runtime_impact"] == "client"
     assert allocator_tool["runtime_impact"] == "none"
+    assert mcp_gateway_doctor["runtime_impact"] == "none"
+    assert mcp_gateway_doctor["runtime_files"] == []
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
@@ -5188,6 +5194,22 @@ def test_export_suspend_d_candidate_classified_as_non_runtime_offline_tool(
     assert contract["runtime_impact"] == "none"
     assert contract["target_ids"] == []
     assert contract["backend_restart_required"] is False
+
+
+def test_qe_active_dataset_profile_classified_as_exact_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/qe_active_dataset_profile.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
 
 
 def test_export_qe_qlib_candidate_classified_as_non_runtime_offline_tool(

@@ -238,6 +238,28 @@ class LocalSimBackend(BrokerBackend):
     def scheduler_as_of_time(self) -> datetime | None:
         return self._scheduler_as_of_time
 
+    @property
+    def historical_terminalization_plan_id(self) -> str | None:
+        """Return the exact plan currently bound to non-economic historical closure."""
+
+        return self._historical_terminalization_plan_id
+
+    def clear_historical_terminalization_scope(self, *, plan_id: str) -> None:
+        """Release an exact historical-closure scope after persistence finishes."""
+
+        exact_plan_id = str(plan_id or "").strip()
+        with self._lock:
+            if not exact_plan_id or self._historical_terminalization_plan_id not in {None, exact_plan_id}:
+                raise BrokerSubmitError(
+                    "LocalSim historical terminalization scope cannot be cleared by another plan",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_SCOPE_CONFLICT",
+                        "plan_id": exact_plan_id or None,
+                        "historical_terminalization_plan_id": self._historical_terminalization_plan_id,
+                    },
+                )
+            self._historical_terminalization_plan_id = None
+
     def _provider_requires_frozen_daily_context(self) -> bool:
         """Distinguish the strict production feed from explicit test doubles.
 

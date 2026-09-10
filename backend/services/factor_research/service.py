@@ -91,6 +91,50 @@ class ResearchService:
                 path = Path(item.get(field, ""))
                 if path.is_symlink() or path.resolve() != (folder / filename).resolve() or not path.is_file():
                     raise ResearchError("result_mismatch", "Candidate artifact missing or belongs to another attempt")
+        comparison = result.get("research_comparison")
+        expected_comparison = execution["spec"].get("comparison")
+        if expected_comparison is not None:
+            result_windows = comparison.get("windows") if isinstance(comparison, dict) else None
+            expected_windows = expected_comparison["evaluation_windows"]
+
+            def window_matches(actual, expected):
+                fit_index = expected.get("fit_window_index") if isinstance(expected, dict) else None
+                return (
+                    isinstance(actual, dict)
+                    and type(fit_index) is int
+                    and 0 <= fit_index < len(expected_comparison["fit_windows"])
+                    and actual.get("fit_window_index") == fit_index
+                    and actual.get("fit_window") == expected_comparison["fit_windows"][fit_index]
+                    and actual.get("evaluation_window") == {key: expected.get(key) for key in ("start", "end")}
+                )
+
+            window_identity_matches = (
+                isinstance(result_windows, list)
+                and len(result_windows) == len(expected_windows)
+                and all(window_matches(actual, expected) for actual, expected in zip(result_windows, expected_windows))
+            )
+            actual_knowledge = comparison.get("knowledge_cutoff", {}) if isinstance(comparison, dict) else {}
+            if (not isinstance(comparison, dict)
+                    or comparison.get("schema_version") != "factor_research_comparison_v1"
+                    or comparison.get("scope") != "research_comparison_not_official_metrics_or_qe_result"
+                    or comparison.get("method_version") != execution["spec"]["method_version"]
+                    or comparison.get("research_role") != expected_comparison["research_role"]
+                    or comparison.get("horizon") != expected_comparison["horizon"]
+                    or comparison.get("baseline") != expected_comparison["baseline"]
+                    or comparison.get("candidate") != expected_comparison["candidate"]
+                    or comparison.get("controls") != expected_comparison["controls"]
+                    or comparison.get("fit_windows") != expected_comparison["fit_windows"]
+                    or comparison.get("evaluation_windows") != expected_comparison["evaluation_windows"]
+                    or comparison.get("direction") != expected_comparison["direction"]
+                    or {key: actual_knowledge.get(key) for key in ("date", "phase")}
+                    != expected_comparison["knowledge_cutoff"]
+                    or not window_identity_matches
+                    or not isinstance(comparison.get("cost"), dict)
+                    or not isinstance(comparison.get("information_relation"), dict)
+                    or not isinstance(comparison.get("use_value"), dict)):
+                raise ResearchError("result_mismatch", "Comparison result is missing or has the wrong contract")
+        elif comparison is not None:
+            raise ResearchError("result_mismatch", "Legacy request cannot attach an undeclared comparison")
         return self.repository.record({"task_id": value["task_id"], "record_id": value["record_id"],
                                        "expected_revision": value["expected_revision"], "record_type": "result",
                                        "attempt_id": value["attempt_id"], "summary": "候选评价完成（不代表因子有效）",
@@ -104,7 +148,7 @@ class ResearchService:
         if not names or date.fromisoformat(start_date) > date.fromisoformat(end_date) or limit < 1 or offset < 0:
             raise ResearchError("invalid_request", "Explicit factors, valid dates and pagination are required")
         with self.repository.cursor() as cur:
-            cur.execute("""SELECT id,factor_name,source,asset_path,is_available FROM aistock_factor_catalog
+            cur.execute("""SELECT id,factor_name,source,asset_path,is_available,expression,description_cn FROM aistock_factor_catalog
                 WHERE factor_name=ANY(%s) ORDER BY factor_name,source,id LIMIT %s OFFSET %s""", (names, limit + 1, offset))
             catalog = [dict(r) for r in cur.fetchall()]
             cur.execute("""SELECT id,factor_name,eval_window,calc_engine,calculated_at,ic_mean,icir,
@@ -123,9 +167,14 @@ class ResearchService:
                 WHERE (a.factor_name=ANY(%s) OR b.factor_name=ANY(%s)) AND c.as_of_date BETWEEN %s AND %s
                 ORDER BY c.as_of_date DESC,c.id DESC LIMIT %s OFFSET %s""", (names, names, start_date, end_date, limit + 1, offset))
             correlations = [dict(r) for r in cur.fetchall()]
-        return {"database_target": self.target, "catalog": catalog[:limit], "metrics": metrics[:limit], "correlations": correlations[:limit],
+        from .comparison_context import enrich_catalog_context
+        visible_catalog, neighbor_hints = enrich_catalog_context(catalog[:limit])
+        return {"database_target": self.target, "catalog": visible_catalog, "metrics": metrics[:limit], "correlations": correlations[:limit],
                 "next_offset": offset + limit if any(len(rows) > limit for rows in (catalog, metrics, correlations)) else None,
                 "date_filter": {"metrics": "calculated_at", "correlations": "as_of_date"},
                 "availability": {"catalog": bool(catalog), "metrics": bool(metrics), "correlations": bool(correlations)},
+                "comparison_context": {"neighbor_hints": neighbor_hints,
+                                       "scope": "bounded_requested_catalog_rows",
+                                       "unknown_dependencies_are_not_inferred": True},
                 "comparability": "inspect_recorded_windows_and_basis",
                 "correlation_sample_evidence": "unavailable_in_this_summary; zero_is_not_proof_of_independence"}

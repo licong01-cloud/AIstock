@@ -76,12 +76,21 @@ class TWAPAlgo(BaseExecutionAlgo):
         if state.executed_quantity >= state.total_quantity:
             state.is_complete = True
 
+        if state.step <= self.split_count:
+            reason = f"TWAP step {state.step}/{self.split_count}"
+        else:
+            residual_attempt = state.step - self.split_count
+            reason = (
+                f"TWAP residual completion attempt {residual_attempt} "
+                f"after {self.split_count} planned steps"
+            )
+
         return StepResult(
             symbol=state.symbol,
             side=state.side,
             quantity=step_qty,
             price=price,
-            reason=f"TWAP step {state.step}/{self.split_count}",
+            reason=reason,
         )
 
     def handle_limit_state_no_fill(

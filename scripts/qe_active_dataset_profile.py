@@ -75,7 +75,8 @@ def _activate(
     if _is_link_or_junction(target):
         raise RuntimeError("activation target must not be a symlink or junction")
     if target.exists():
-        _validate(target)
+        if not target.is_file():
+            raise RuntimeError("activation target must be a regular file")
         if expected_current_sha256 is None:
             raise RuntimeError("existing target requires --expected-current-sha256")
         if _sha256(target) != expected_current_sha256:

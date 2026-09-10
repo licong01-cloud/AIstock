@@ -407,6 +407,45 @@ def test_profile_activation_rejects_suspend_source_contract_drift(tmp_path: Path
         _validate(source)
 
 
+def test_profile_activation_replaces_exactly_pinned_invalid_current_profile(
+    tmp_path: Path,
+) -> None:
+    source = _fixture_profile(tmp_path / "source")
+    target = _fixture_profile(tmp_path / "target")
+    invalid_profile = json.loads(target.read_text(encoding="utf-8"))
+    invalid_profile["components"]["suspend_pins"]["source_contract"] = (
+        "tushare_suspend_d_shsz_S_v1"
+    )
+    target.write_bytes(_canonical(invalid_profile))
+    invalid_bytes = target.read_bytes()
+    invalid_digest = _sha256(target)
+
+    with pytest.raises(
+        QEActiveDatasetProfileError,
+        match="suspend metadata source_table differs from the active profile",
+    ):
+        _validate(target)
+
+    with pytest.raises(RuntimeError, match="current target digest differs"):
+        _activate(
+            source=source,
+            target=target,
+            expected_source_sha256=_sha256(source),
+            expected_current_sha256="0" * 64,
+        )
+    assert target.read_bytes() == invalid_bytes
+
+    activated = _activate(
+        source=source,
+        target=target,
+        expected_source_sha256=_sha256(source),
+        expected_current_sha256=invalid_digest,
+    )
+
+    assert activated["status"] == "activated"
+    assert target.read_bytes() == source.read_bytes()
+
+
 def test_profile_summary_does_not_expose_paths_or_hashes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
