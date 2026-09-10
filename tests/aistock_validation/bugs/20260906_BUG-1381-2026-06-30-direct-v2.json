@@ -204,8 +204,8 @@
   },
   "first_seen_at": "2026-09-06T05:59:12.082424Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe7f5e2b66b28e35c9ed6b4bf738ff42b16ede8f",
+  "fixed_at": "2026-09-10T06:59:01Z",
   "github_issue_number": 4350,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4350",
   "last_seen_at": "2026-09-06T05:59:12.082424Z",
@@ -213,6 +213,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4360",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -242,6 +243,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -253,7 +255,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1381",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "138cd6a8a8e7d426",
+    "recorded_at": "2026-09-10T07:00:26.424347Z",
+    "runtime_contract_digest": "2dc046363c6ae19833808cf67bc781f73771558c1d6d2ab7265ebde7d998b5be",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8311240c3bf830b9dc3e858136b922df6ccc2083",
+    "source_merge_commit": "fe7f5e2b66b28e35c9ed6b4bf738ff42b16ede8f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4360",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_correlation_compute_independence.py backend/tests/unified_engine/test_qe_correlation_gpu_lifecycle.py -q -> passed: 18",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8",
+      "python -m nox -s validation_catalog_integrity -> passed: 7; catalog check successful",
+      "python -m nox -s qe_read_backend -> passed: 417; skipped: 1",
+      "python -m nox -s platform_api_backend -> passed: 15"
+    ],
+    "validation_evidence_digest": "b7e627e2ee05414257bc2f6d2acbd4bc8b0a43f68bde7d0516da5bb5effcd784"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -262,6 +289,13 @@
     "fingerprint": "e2bdc24ac4dd52cd87a7cc0f",
     "source_event_id": "FE-20260906-e2bdc24ac4dd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_correlation_compute_independence.py backend/tests/unified_engine/test_qe_correlation_gpu_lifecycle.py -q -> passed: 18",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8",
+    "python -m nox -s validation_catalog_integrity -> passed: 7; catalog check successful",
+    "python -m nox -s qe_read_backend -> passed: 417; skipped: 1",
+    "python -m nox -s platform_api_backend -> passed: 15"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
