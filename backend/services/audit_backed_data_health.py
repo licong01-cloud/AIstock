@@ -10,6 +10,7 @@ scan.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,8 @@ from .data_completeness import (
     T_PLUS_1_TABLES,
     DataCompletenessChecker,
 )
+
+logger = logging.getLogger(__name__)
 
 
 DAILY_CLOSE_READY_AFTER = dt.time(20, 0)
@@ -209,6 +212,63 @@ class AuditBackedDataHealthChecker:
                     latest_expected = cur.fetchone()
         return (dict(latest_success) if latest_success else None, dict(latest_expected) if latest_expected else None)
 
+    def _verify_daily_basic_coverage_from_table(
+        self,
+        *,
+        trade_date: dt.date,
+        row_count: int,
+    ) -> dict[str, Any] | None:
+        """BUG-1425: verify daily_basic turnover_rate_f coverage directly from
+        the physical table when the refresh-audit metadata lacks the required
+        coverage receipt.
+
+        This closes the contract gap between the engine write path (which now
+        writes the receipt, but historical rows may predate the fix) and the
+        gate read path, without ever fabricating evidence: the result is
+        computed live from the target table.
+        """
+        table_name, date_col = DATASET_TABLE_MAP.get("daily_basic", ("", "trade_date"))
+        if not table_name or not date_col:
+            return None
+        try:
+            with self._conn() as conn:
+                with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                    cur.execute(
+                        f"""
+                        SELECT COUNT(*)::bigint AS row_count,
+                               COUNT(*) FILTER (
+                                   WHERE turnover_rate_f IS NOT NULL
+                                     AND turnover_rate_f::text NOT IN ('NaN', 'Infinity', '-Infinity')
+                               )::bigint AS finite_count
+                        FROM {table_name}
+                        WHERE {date_col} >= %s
+                          AND {date_col} < %s
+                        """,
+                        (trade_date, trade_date + dt.timedelta(days=1)),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            # BUG-1425: never fabricate coverage evidence when the physical
+            # table cannot be read; fail closed and let the caller surface the
+            # unproven failure category.
+            logger.debug("daily_basic physical coverage fallback failed: %s", exc)
+            return None
+        if row is None:
+            return None
+        physical_rows = int(row.get("row_count") or 0)
+        if physical_rows != int(row_count) or physical_rows <= 0:
+            return None
+        finite_count = int(row.get("finite_count") or 0)
+        ratio = finite_count / physical_rows
+        return {
+            "schema_version": "daily_basic_required_field_coverage_v1",
+            "field": "turnover_rate_f",
+            "finite_count": finite_count,
+            "row_count": physical_rows,
+            "ratio": ratio,
+            "required_ratio": 0.95,
+        }
+
     def _from_physical_fallback(
         self, dataset: str, expected_date: Optional[dt.date], elapsed_ms: float
     ) -> AuditDatasetCheckResult | None:
@@ -308,6 +368,21 @@ class AuditBackedDataHealthChecker:
             metadata = metadata if isinstance(metadata, dict) else {}
             coverage = metadata.get("required_field_coverage")
             coverage = coverage if isinstance(coverage, dict) else {}
+            # BUG-1425: when the audit metadata does not carry the required
+            # coverage receipt (e.g. historical rows written before the engine
+            # started persisting it), verify coverage directly from the
+            # physical table rather than failing closed.
+            if not coverage and isinstance(latest_success.get("trade_date"), dt.date):
+                receipt = self._verify_daily_basic_coverage_from_table(
+                    trade_date=latest_success["trade_date"],
+                    row_count=int(latest_success.get("row_count") or 0),
+                )
+                if receipt is not None:
+                    coverage = receipt
+            # This try block validates the required-field coverage receipt.
+            # It never masks errors: any malformed or missing coverage
+            # evidence leaves coverage_valid=False, which fails closed below
+            # with required_field_coverage_unproven.
             try:
                 finite_count = int(coverage.get("finite_count"))
                 row_count = int(coverage.get("row_count"))
