@@ -39,6 +39,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260906-e2bdc24ac4dd",
       "timestamp": "2026-09-06T05:59:12.082397Z"
+    },
+    {
+      "action": "review_hardening",
+      "actor": "Codex",
+      "note": "After safe-sync to current main, review confirmed the all-NaN exclusion preserves factor order and lazy GPU loading. Added a fail-closed regression for the case where exclusion leaves fewer than two factors; the direct correlation and GPU-lifecycle matrix passed.",
+      "timestamp": "2026-09-10T06:50:00Z"
     }
   ],
   "evidence_uris": [],
@@ -226,7 +232,8 @@
     "fresh_process_evidence": [
       "WSL Ubuntu rdagent-gpu Python 3.10 imported the task-worktree factor services and completed the canonical-v2 DEV smoke against the 2026-08-31 direct-v2 candidate",
       "WSL Ubuntu rdagent-gpu Python 3.10 task-worktree import and DEV canonical-v2 metric/correlation smoke -> passed",
-      "WSL Ubuntu rdagent-gpu Python 3.10 fresh process -> passed: classified current-window all-NaN factor and preserved remaining finite matrix"
+      "WSL Ubuntu rdagent-gpu Python 3.10 fresh process -> passed: classified current-window all-NaN factor and preserved remaining finite matrix",
+      "Fresh AIstock process after safe-sync to current main passed 12 correlation-independence tests and 6 GPU-lifecycle tests, including fail-closed behavior when all-NaN exclusion leaves fewer than two factors."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
