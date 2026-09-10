@@ -114,14 +114,23 @@ def _request_symbols(request: Mapping[str, Any]) -> tuple[str, ...]:
     return symbols
 
 
-def prior_request_identity(research_root: Path) -> dict[str, Any]:
+def prior_request_identity(
+    research_root: Path,
+    *,
+    request_folders: Sequence[str] = PRIOR_REQUEST_FOLDERS,
+    request_schemas: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Bind every prior formal action-value request without reading outcomes."""
 
     root = research_root.resolve()
+    folders = tuple(request_folders)
+    schemas = frozenset(PRIOR_REQUEST_SCHEMAS if request_schemas is None else request_schemas)
+    if not folders or len(folders) != len(set(folders)) or not schemas:
+        raise ActionValueError("HELDOUT_PRIOR_REQUEST_CONTRACT_INVALID")
     records: list[dict[str, Any]] = []
     forbidden: set[str] = set()
     folder_counts: dict[str, int] = {}
-    for folder in PRIOR_REQUEST_FOLDERS:
+    for folder in folders:
         request_root = root / folder / "requests"
         paths = sorted(request_root.glob("*.json")) if request_root.is_dir() else []
         if not paths:
@@ -136,7 +145,7 @@ def prior_request_identity(research_root: Path) -> dict[str, Any]:
             if file_reference(path) != before:
                 raise ActionValueError("SOURCE_CHANGED_WHILE_READING", path=path.as_posix())
             identity = {key: value for key, value in request.items() if key != "request_sha256"}
-            if request.get("schema_version") not in PRIOR_REQUEST_SCHEMAS or request.get(
+            if request.get("schema_version") not in schemas or request.get(
                 "request_sha256"
             ) != canonical_sha256(identity):
                 raise ActionValueError("HELDOUT_PRIOR_REQUEST_IDENTITY_MISMATCH", path=path.as_posix())
@@ -157,7 +166,7 @@ def prior_request_identity(research_root: Path) -> dict[str, Any]:
     payload = {
         "schema_version": "position_timing_prior_action_value_requests_v1",
         "research_root": root.as_posix(),
-        "request_folders": PRIOR_REQUEST_FOLDERS,
+        "request_folders": folders,
         "request_count": len(records),
         "folder_counts": folder_counts,
         "requests": records,

@@ -25,6 +25,7 @@ from .contracts import canonical_sha256
 DIRECTION_REFERENCE_NOTIONAL_CNY = Decimal(100000)
 FULL_MODEL_ACTION_AUTHORITY = "FULL_ACTION_VALUE_V4"
 ENTRY_ONLY_MODEL_ACTION_AUTHORITY = "ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
+OPEN_ONLY_MODEL_ACTION_AUTHORITY = "OPEN_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
 ENTRY_ONLY_MODEL_ACTION_CONTRACT = {
     "policy_id": ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
     "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
@@ -33,6 +34,23 @@ ENTRY_ONLY_MODEL_ACTION_CONTRACT = {
     "existing_holding_without_risk_exit_or_positive_entry": "HOLD",
     "cash_without_positive_entry": "WAIT",
 }
+OPEN_ONLY_MODEL_ACTION_CONTRACT = {
+    "policy_id": OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+    "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
+    "model_allowed_directions": ("OPEN",),
+    "model_state_support": "CASH_ONLY_ENTRY_HEAD",
+    "model_minimum_net_action_value_bps": 0.0,
+    "existing_holding_without_risk_exit": "HOLD",
+    "cash_without_positive_open": "WAIT",
+}
+
+
+def _restricted_action_contract(model_action_authority: str) -> dict[str, Any] | None:
+    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+        return ENTRY_ONLY_MODEL_ACTION_CONTRACT
+    if model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
+        return OPEN_ONLY_MODEL_ACTION_CONTRACT
+    return None
 
 
 def action_authority_policy_sha256(
@@ -41,12 +59,13 @@ def action_authority_policy_sha256(
     base = policy_sha256_for(information_block)
     if model_action_authority == FULL_MODEL_ACTION_AUTHORITY:
         return base
-    if model_action_authority != ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+    contract = _restricted_action_contract(model_action_authority)
+    if contract is None:
         raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
     return canonical_sha256(
         {
             "base_policy_sha256": base,
-            "model_action_contract": ENTRY_ONLY_MODEL_ACTION_CONTRACT,
+            "model_action_contract": contract,
         }
     )
 
@@ -164,13 +183,17 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
             features=[name for name in market_feature_names if pd.isna(current[name])],
         )
     plans = action_candidates(symbol, planning_state, planning_reference, max_exposure=max_exposure)
+    open_only_has_cash_state = (
+        model_action_authority != OPEN_ONLY_MODEL_ACTION_AUTHORITY
+        or planning_state.quantity == 0
+    )
     actionable = [
         plan
         for plan in plans
         if plan.delta
         and (
             model_action_authority == FULL_MODEL_ACTION_AUTHORITY
-            or plan.delta > 0
+            or (plan.delta > 0 and open_only_has_cash_state)
         )
     ]
     values = {0: 0.0}
@@ -186,7 +209,17 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
     eligible_plans = [
         plan
         for plan in plans
-        if model_action_authority == FULL_MODEL_ACTION_AUTHORITY or plan.delta >= 0
+        if (
+            model_action_authority == FULL_MODEL_ACTION_AUTHORITY
+            or (
+                plan.delta >= 0
+                and (
+                    model_action_authority != OPEN_ONLY_MODEL_ACTION_AUTHORITY
+                    or planning_state.quantity == 0
+                    or plan.delta == 0
+                )
+            )
+        )
     ]
     selected = choose_action(
         eligible_plans, [values[plan.delta] for plan in eligible_plans]
@@ -198,6 +231,8 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
     reason_codes = ["MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE"]
     if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
         reason_codes.append("MODEL_EXIT_AUTHORITY_REMOVED")
+    elif model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
+        reason_codes.extend(("MODEL_EXIT_AUTHORITY_REMOVED", "MODEL_ADD_AUTHORITY_REMOVED"))
     return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, selected.delta), selected,
                                "LOCAL_MODEL_ESTIMATE", model.metadata["model_sha256"], policy_sha256, candidates,
                                tuple(reason_codes))
