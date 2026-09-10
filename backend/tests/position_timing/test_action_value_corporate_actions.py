@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.position_timing.action_value import ActionValueError, PositionState, TZ
+from backend.services.position_timing.action_value import ActionValueError, PositionState, TZ, cutoff_on
 from backend.services.position_timing.action_value_corporate_actions import (
     CorporateAction,
     CorporateActionBook,
@@ -111,6 +111,23 @@ def test_snapshot_collapses_equivalent_rows_and_round_trips(tmp_path: Path) -> N
     assert book.actions[0].quantity_multiplier == Decimal("1.3")
     assert book.actions[0].cashflow_yuan_per_share == Decimal("0.5")
     assert book.actions[0].reference_price_cash_yuan_per_share == Decimal("0.5")
+
+
+def test_snapshot_uses_earliest_availability_for_equivalent_revisions() -> None:
+    payload = _snapshot_payload(
+        [
+            _row(imp_ann_date=date(2026, 5, 21)),
+            _row(ann_date=date(2026, 5, 2), imp_ann_date=date(2026, 5, 20)),
+        ],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+
+    assert payload["canonicalized_equivalent_revision_count"] == 1
+    assert payload["actions"][0]["source_available_at"] == cutoff_on(
+        date(2026, 5, 20)
+    ).isoformat()
 
 
 def test_snapshot_separates_account_cash_from_reference_price_cash(tmp_path: Path) -> None:

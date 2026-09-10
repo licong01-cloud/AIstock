@@ -313,9 +313,14 @@ def _snapshot_payload(
             listing_date,
         ) = next(iter(economics))
         implementation_dates = {row["imp_ann_date"] for row in versions}
-        if None in implementation_dates or len(implementation_dates) != 1:
+        if None in implementation_dates:
             raise ActionValueError("CORPORATE_ACTION_AVAILABILITY_CONFLICT", symbol=symbol)
-        implementation_date = date.fromisoformat(next(iter(implementation_dates)))
+        # Equivalent source revisions can carry a later implementation
+        # announcement date without changing any economic term.  The earliest
+        # retained implementation announcement is the causal availability time
+        # of those already-identical economics; later revisions remain bound in
+        # source_rows_sha256 rather than delaying the event artificially.
+        implementation_date = min(date.fromisoformat(value) for value in implementation_dates)
         if implementation_date > effective:
             raise ActionValueError("CORPORATE_ACTION_AVAILABLE_AFTER_EFFECTIVE_DATE", symbol=symbol)
         stable_rows = sorted(versions, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
