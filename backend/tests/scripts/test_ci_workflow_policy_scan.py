@@ -84,6 +84,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
+    assert evidence["changed_tests_reachable_from_selected_ci_plan"] is True
     assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
@@ -236,11 +237,33 @@ def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     assert final_verdict["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
     assert "workflow_validation=${WORKFLOW_TEST_RESULT}" in final_verdict["run"]
     assert "workflow_policy=${WORKFLOW_POLICY_RESULT}" in final_verdict["run"]
+    assert 'failures+=("dev_db=' not in final_verdict["run"]
+    assert "### External DEV database validation" in final_verdict["run"]
+    assert "does not run database DDL/DML" in final_verdict["run"]
+
+
+def test_dev_db_requirement_cannot_be_reintroduced_as_ci_lane_failure(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                'echo "### External DEV database validation"',
+                'failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")',
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["existing_dev_database_lane_reference"] is False
 
 
 def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path) -> None:
     issue_workflow = tmp_path / "aistock_issue_workflow.py"
-    issue_workflow.write_text('MERGE_QUALITY_CHECK_CONTEXTS = ("CI verdict",)\n', encoding="utf-8")
+    issue_workflow.write_text(
+        'MERGE_QUALITY_CHECK_CONTEXTS = ("CI verdict", "CodeQL verdict")\n',
+        encoding="utf-8",
+    )
 
     evidence = build_contract_evidence(
         sorted(Path(".github/workflows").glob("*.yml")),
@@ -250,20 +273,18 @@ def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path
     assert evidence["merge_quality_contexts_are_change_scoped"] is False
 
 
-def test_close_sync_quality_skip_is_branch_scoped_before_runner_allocation() -> None:
+def test_codeql_is_nightly_only_before_runner_allocation() -> None:
     import yaml
 
-    expected = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
     for workflow_name in ("pr-quality.yml", "semgrep.yml"):
         workflow = yaml.safe_load(Path(".github/workflows", workflow_name).read_text(encoding="utf-8"))
         assert set(workflow[True]) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
-    pull_request = codeql[True]["pull_request"]
-    assert "paths-ignore" not in pull_request
-    job_if = str(codeql["jobs"]["codeql-verdict"]["if"])
-    assert "github.event_name != 'pull_request'" in job_if
-    assert expected in job_if
+    assert set(codeql[True]) == {"schedule", "workflow_dispatch"}
+    assert codeql[True]["schedule"] == [{"cron": "27 20 * * *"}]
+    assert list(codeql["jobs"]) == ["codeql-nightly"]
+    assert codeql["jobs"]["codeql-nightly"]["name"] == "CodeQL nightly full scan"
 
 
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
@@ -278,7 +299,8 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
     expected = {
         "codeql_remote_action_download_is_eliminated",
         "codeql_exact_local_workspace_fetch_is_bounded",
-        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push",
+        "codeql_daily_nightly_full_scan",
+        "codeql_pr_merge_gate_removed",
         "code_intelligence_refresh_is_scheduled_or_manual_only",
         "code_intelligence_refresh_has_no_external_artifact_action_dependency",
         "javascript_actions_use_approved_native_node24_majors",
@@ -288,6 +310,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
         "pr_ci_selected_lanes_reuse_ci_verdict_runner",
+        "changed_tests_reachable_from_selected_ci_plan",
         "codeql_reuses_single_security_runner_allocation",
     }
 

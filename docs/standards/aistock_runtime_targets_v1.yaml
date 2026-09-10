@@ -1,35 +1,102 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-30"
+updated_at: "2026-09-07"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
+  - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py
+  - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py
+  - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py
+  - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py
+  - backend/services/advisory_model_first/qe_alpha_generator_contracts.py
+  - backend/services/advisory_model_first/qe_alpha_generator_pipeline.py
+  - backend/services/advisory_model_first/score_hmm_admission_pipeline.py
+  - backend/services/advisory_model_first/selection_liability_gate_pipeline.py
+  - backend/services/advisory_model_first/turnover_constrained_utility_training.py
+  - backend/services/advisory_phase0b/audit_service.py
+  - backend/services/advisory_phase0b/snapshot_reader.py
+  - backend/services/announcements/title_classifier.py
+  - backend/services/dataset_release/direct_monthly.py
+  - backend/services/event_signal/st_announcement_adapter.py
+  - backend/services/hmm_risk/b3_d1_inactive_dimension.py
+  - backend/services/hmm_risk/b3_mixed_dimension.py
+  - backend/services/hmm_risk/b3_training.py
+  - backend/services/hmm_risk/market_relative_jump_spike.py
+  - backend/services/hmm_risk/market_relative_ridge_candidate.py
+  - backend/services/hmm_risk/market_relative_ridge_holdout.py
+  - backend/services/hmm_risk/rotation_l1_gbdt.py
+  - backend/services/hmm_risk/rotation_l1_input_bundle.py
+  - backend/services/hmm_risk/state_model_set.py
+  - backend/services/hmm_risk/stock_fact_repository.py
+  - noxfile.py
+  - scripts/advisory_p0l_build_training_request.py
+  - scripts/advisory_short_rebound_batch_b.py
+  - scripts/aistock_bug_id_allocator.py
+  - scripts/aistock_guardrail_scan.py
+  - scripts/aistock_mcp_gateway_doctor.py
   - scripts/aistock_runner_health.py
+  - scripts/bug_registry_metadata_check.py
+  - scripts/build_stock_universe_pit_spans.py
+  - scripts/build_core_index_membership_authority.py
   - scripts/build_industry_pit_candidates.py
   - scripts/build_sector_data_candidate.py
   - scripts/backfill_tushare_daily_basic_fields.py
+  - scripts/ci/prepare_self_hosted_workspace.py
+  - scripts/ci_change_classifier.py
+  - scripts/ci_failure_issue_summary.py
+  - scripts/classify_announcement_titles_v0.py
   - scripts/cleanup_simulation_history.py
   - scripts/configure_aistock_github_runner.ps1
+  - scripts/dataset_release_control_store.py
+  - scripts/export_qe_qlib_candidate.py
+  - scripts/export_suspend_d_candidate.py
+  - scripts/qe_active_dataset_profile.py
+  - scripts/factor_research.py
+  - scripts/hmm_risk/build_rotation_l1_input_bundle.py
+  - scripts/hmm_risk/prepare_state_model_set.py
+  - scripts/hmm_risk/run_market_relative_jump_spike.py
+  - scripts/hmm_risk/run_market_relative_ridge_candidate.py
+  - scripts/hmm_risk/run_market_relative_ridge_holdout.py
+  - scripts/hmm_risk/run_rotation_l1_g2a.py
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
   - scripts/ingest_tushare_daily_basic.py
+  - scripts/issue_flow.py
+  - scripts/llm_provider_adapter.py
   - scripts/localsim_history_prune_core.py
+  - scripts/nightly_adaptive_scheduler.py
+  - scripts/nightly_session_runner.py
   - scripts/prune_localsim_history.py
   - scripts/localsim_product_validation.py
   - scripts/prepare_localsim_successor_cutover.py
   - scripts/prepare_canonical_pit_monthly.py
+  - scripts/prepare_core_index_membership_pit.py
+  - scripts/qe_alpha_candidates/export_rotation_memberships.py
+  - scripts/qe_alpha_candidates/prepare_rotation_index_context.py
+  - scripts/qe_alpha_candidates/repackage_rotation_ten_sources.py
+  - scripts/qe_alpha_candidates/rotation_index_factors.py
+  - scripts/qe_alpha_candidates/rotation_liquidity_factors.py
+  - scripts/qe_alpha_candidates/run_rotation_liquidity_precheck.py
+  - scripts/qe_alpha_candidates/run_rotation_ten_correlations.py
+  - scripts/qe_alpha_candidates/run_rotation_ten_research.py
+  - scripts/qe_alpha_candidates/validate_rotation_ten_library_dev.py
   - scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py
   - scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py
   - scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py
+  - scripts/qlib_authoritative_smoke_backtest.py
   - scripts/qlib_authoritative_bin_export.py
+  - scripts/qlib_multi_dataset_smoke_backtest.py
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/seed_dataset_refresh_audit.py
   - scripts/simulation_history_cleanup_core.py
   - scripts/stale_simulation_run_terminalization_core.py
   - scripts/sync_stock_namechange.py
+  - scripts/sync_eastmoney_anns_metadata.py
   - scripts/terminalize_stale_simulation_runs.py
+  - scripts/update_backtest_dataset_monthly.py
+  - scripts/wsl/advisory_p0l_train.py
 targets:
   backend-main:
     runtime_kind: backend

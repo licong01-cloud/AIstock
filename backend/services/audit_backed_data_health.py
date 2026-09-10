@@ -59,8 +59,10 @@ class AuditDatasetCheckResult:
 
     @property
     def is_fresh(self) -> bool:
+        if self.status != "ok":
+            return False
         if self.max_date is None or self.expected_date is None:
-            return self.status == "ok"
+            return True
         return self.max_date >= self.expected_date
 
     def summary(self) -> Dict[str, Any]:
@@ -75,6 +77,7 @@ class AuditDatasetCheckResult:
             "expected_rows": self.expected_rows,
             "coverage_pct": self.coverage_pct,
             "gaps": self.gaps,
+            "error_message": self.error_message,
             "elapsed_ms": self.elapsed_ms,
             "source": self.source,
             "refreshed_at": self.refreshed_at.isoformat() if self.refreshed_at else None,
@@ -300,6 +303,33 @@ class AuditBackedDataHealthChecker:
             result.status = "low_coverage"
         else:
             result.status = "ok"
+        if dataset == "daily_basic" and result.status == "ok":
+            metadata = latest_success.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            coverage = metadata.get("required_field_coverage")
+            coverage = coverage if isinstance(coverage, dict) else {}
+            try:
+                finite_count = int(coverage.get("finite_count"))
+                row_count = int(coverage.get("row_count"))
+                ratio = float(coverage.get("ratio"))
+                required_ratio = float(coverage.get("required_ratio"))
+                coverage_valid = (
+                    coverage.get("schema_version") == "daily_basic_required_field_coverage_v1"
+                    and coverage.get("field") == "turnover_rate_f"
+                    and row_count == int(latest_success.get("row_count") or 0)
+                    and 0 <= finite_count <= row_count
+                    and row_count > 0
+                    and abs(ratio - (finite_count / row_count)) < 1e-9
+                    and required_ratio >= 0.95
+                    and ratio >= required_ratio
+                )
+            except (TypeError, ValueError, ZeroDivisionError):
+                coverage_valid = False
+            if not coverage_valid:
+                result.status = "low_coverage"
+                result.quality_status = "unproven"
+                result.failure_category = "required_field_coverage_unproven"
+                result.error_message = "daily_basic required-field coverage receipt is missing or invalid"
         return result
 
     def _check_one(

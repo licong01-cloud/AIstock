@@ -1,0 +1,358 @@
+{
+  "actual": "ConfigComposer removes every strategy kwarg whose name is in QE_RUNTIME_METADATA_KEYS for unknown strategies, including catalog-owned ensemble, while _qe_run_registration is separately filtered rather than represented by one explicit control-plane metadata contract.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/quantevolver/test_qe_registered_submission.py",
+    "tests/aistock_validation/bugs/20260908_BUG-1406-qe-runtime-metadata-filtering-drops-catalog-owned-ensemble-for-custom-st.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1406",
+  "closed_at": "2026-09-08T04:13:38.743634Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T03:33:53.927792Z",
+  "description": "ConfigComposer removes every strategy kwarg whose name is in QE_RUNTIME_METADATA_KEYS for unknown strategies, including catalog-owned ensemble, while _qe_run_registration is separately filtered rather than represented by one explicit control-plane metadata contract.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-75eef3c061a3",
+      "timestamp": "2026-09-08T03:33:53.927777Z"
+    },
+    {
+      "action": "implement_and_validate_source_fix",
+      "actor": "codex_issue_workflow",
+      "note": "Separated control-plane metadata from runtime flags at the composer boundary, preserved only catalog-owned ensemble for unknown/database strategies, and verified five QE submission/configuration paths plus both standard and catalog ensemble authorities.",
+      "timestamp": "2026-09-08T03:46:11.459179Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Registration/provenance metadata remains persisted but never reaches Qlib kwargs; standard seed ensemble continues through _seed_ensemble_config; an unknown/database custom strategy's catalog-owned ensemble argument remains in its executable strategy kwargs; unregistered legacy output is unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1406-qe-runtime-metadata-filtering-drops-catalog-owned-ensemble-for-custom-st.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1406-qe-runtime-metadata-filtering-drops-catalog-owned-ensemble-for-custom-st.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/experiment_config.py",
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.sector_risk_overlay",
+        "qe.long_trend_evaluation",
+        "qe.active_dataset_universe",
+        "platform.mcp_gateway"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/experiment_config.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_registered_submission.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/experiment_config.py",
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_registered_submission.py"
+    ]
+  },
+  "first_seen_at": "2026-09-08T03:33:53.927792Z",
+  "fix_branch": null,
+  "fix_commit": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+  "fixed_at": "2026-09-08T04:05:50Z",
+  "github_issue_number": 4436,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4436",
+  "last_seen_at": "2026-09-08T03:33:53.927792Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4438",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_registered_submission.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_sector_risk_overlay_backend",
+    "qe_mcp_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "fresh pytest processes at source commit cefd53d4f: focused configuration matrix 106 passed; required nox sessions passed with qe_read_backend 398 passed/1 skipped, qe_sector_risk_overlay_backend 91 passed, qe_mcp_backend 49 passed",
+      "fresh pytest/nox Python processes imported ConfigComposer at source commit cefd53d4f and validated five QE paths -> passed",
+      "fresh pytest and nox Python processes imported ConfigComposer at HEAD 2ac2eaebb and validated legacy, registered/pending single, custom_evo, multi-alpha, standard seed ensemble, and database custom ensemble paths -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1406\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1406",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "930e9b7bdf6a899861db65f4e47bb4ee8cb9808861fb78d0da9f9e26f119c0f6",
+      "contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+      "expected_identity": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-08T04:12:08.024037Z",
+      "mode": "read_only",
+      "observed_identity": "d92389f615c4692ee5e543f97ec679bce4ca33b0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "03db91fb7a6c50e5ea0bdc9c7537c001fbb3a5e28e0b2157db8cb6b9fe2a2fe8",
+      "receipt_sha256": "67e784ba0328932cd910cd90eb2fb9ef1f5ce7744e416655e5355a15904fd0a9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "372b5d3d59d43e58071299b8c48af32d6e209a50a6cbafdbeab13a94688ae525",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1406",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "df0b45be9fb9a99d",
+    "recorded_at": "2026-09-08T04:07:58.835980Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "824c16b8564ee086cedcae0927cb9fc20df200d9",
+    "source_merge_commit": "0f017b97ef6b077592d7ca11db690bebb2dbbaee",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4438",
+    "validation_evidence": [
+      "validation-receipt: id=cfb0605be66d18bb commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters` result=`passed: 8 tests; ownership files=14 mapped=14`",
+      "validation-receipt: id=7888cc619ffb8089 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend --no-error-on-missing-interpreters` result=`passed: 398 passed, 1 skipped`",
+      "validation-receipt: id=d27778f8acc3b0ae commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`python -m nox -s qe_sector_risk_overlay_backend --no-error-on-missing-interpreters` result=`passed: 91 passed`",
+      "validation-receipt: id=e5fd1f2ae4caea19 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_mcp_backend status=passed command=`python -m nox -s qe_mcp_backend --no-error-on-missing-interpreters` result=`passed: 49 passed`"
+    ],
+    "validation_evidence_digest": "c0df4a61940e9bd376046283788683ef53f40d650a8fb2882dda69726741e121"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE runtime metadata filtering drops catalog-owned ensemble for custom strategies",
+  "trigger_condition": {
+    "fingerprint": "75eef3c061a38c37776ea125",
+    "source_event_id": "FE-20260908-75eef3c061a3"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=cfb0605be66d18bb commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters` result=`passed: 8 tests; ownership files=14 mapped=14`",
+    "validation-receipt: id=7888cc619ffb8089 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend --no-error-on-missing-interpreters` result=`passed: 398 passed, 1 skipped`",
+    "validation-receipt: id=d27778f8acc3b0ae commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_sector_risk_overlay_backend status=passed command=`python -m nox -s qe_sector_risk_overlay_backend --no-error-on-missing-interpreters` result=`passed: 91 passed`",
+    "validation-receipt: id=e5fd1f2ae4caea19 commit=824c16b8564ee086cedcae0927cb9fc20df200d9 kind=nox plan=qe_mcp_backend status=passed command=`python -m nox -s qe_mcp_backend --no-error-on-missing-interpreters` result=`passed: 49 passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1406 --target backend-main --expected-identity 0f017b97ef6b077592d7ca11db690bebb2dbbaee --timeout-seconds 20 --output-format summary -> passed: workflow_gate=verified post_restart_effective_gate=passed runtime_identity_match=true"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read",
+        "qe_sector_risk_overlay",
+        "qe_mcp"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_sector_risk_overlay_backend",
+        "qe_mcp_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read",
+          "qe_sector_risk_overlay",
+          "qe_mcp"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_sector_risk_overlay_backend",
+          "qe_mcp_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

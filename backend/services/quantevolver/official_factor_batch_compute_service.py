@@ -179,10 +179,12 @@ class BatchComputeConfig:
     force: bool = False
     timeout_per_factor: int = 1800
     qlib_bin_path: str | None = None
+    universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY
     task_id: str | None = None
     validation_mode: str | None = None
     expected_factor_count: int | None = None
     resumed_from_task_id: str | None = None
+    supplemental_data_dir: str | None = None
 
 
 class OfficialFactorBatchComputeService:
@@ -234,8 +236,23 @@ class OfficialFactorBatchComputeService:
                 "skipped_factors": skipped,
             }
 
+        universe_meta = self._universe_service.metadata(
+            start_date=start_date,
+            end_date=end_date,
+            universe_key=cfg.universe_key,
+            refresh_policy="coverage",
+        )
+        universe_meta.setdefault("universe_key", cfg.universe_key)
+        universe_meta.setdefault("index_policy", "st_pit_buy_eligible_reindexed_v1")
+        eligible_index = self._universe_service.build_eligible_index(
+            start_date=start_date,
+            end_date=end_date,
+            universe_key=cfg.universe_key,
+        )
+
         resource_at_start = _resource_snapshot()
-        base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date)
+        extra_inputs = {"supplemental_data_dir": cfg.supplemental_data_dir} if cfg.supplemental_data_dir else {}
+        base_cache = BacktestBaseDataMemoryCache.load_once(cfg.factor_data_dir, start_date, end_date, **extra_inputs)
         base_cache_manifest = base_cache.manifest()
         resource_after_base = _resource_snapshot()
         self._emit(
@@ -250,20 +267,6 @@ class OfficialFactorBatchComputeService:
             base_cache=base_cache_manifest,
         )
 
-        universe_meta = self._universe_service.metadata(
-            start_date=start_date,
-            end_date=end_date,
-            universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
-            refresh_policy="coverage",
-        )
-        universe_meta.setdefault("universe_key", OFFICIAL_FACTOR_UNIVERSE_KEY)
-        universe_meta.setdefault("index_policy", "st_pit_buy_eligible_reindexed_v1")
-        eligible_index = self._universe_service.build_eligible_index(
-            start_date=start_date,
-            end_date=end_date,
-            universe_key=OFFICIAL_FACTOR_UNIVERSE_KEY,
-        )
-
         qlib_bin_path: Path | None = None
         metrics_ctx = None
         metrics_error: str | None = None
@@ -276,6 +279,7 @@ class OfficialFactorBatchComputeService:
                 qlib_bin_path=qlib_bin_path,
                 start_date=start_date,
                 end_date=end_date,
+                universe_key=cfg.universe_key,
             )
         except Exception as exc:
             metrics_error = f"metrics_context_failed: {type(exc).__name__}: {exc}"
@@ -740,6 +744,7 @@ class OfficialFactorBatchComputeService:
             force=bool(data.get("force", False)),
             timeout_per_factor=int(data.get("timeout_per_factor") or 1800),
             qlib_bin_path=data.get("qlib_bin_path"),
+            universe_key=str(data.get("universe_key") or OFFICIAL_FACTOR_UNIVERSE_KEY),
             task_id=data.get("task_id"),
             validation_mode=(str(data.get("validation_mode")).strip() or None) if data.get("validation_mode") is not None else None,
             expected_factor_count=(
@@ -750,6 +755,7 @@ class OfficialFactorBatchComputeService:
             resumed_from_task_id=(str(data.get("resumed_from_task_id")).strip() or None)
             if data.get("resumed_from_task_id") is not None
             else None,
+            supplemental_data_dir=str(data["supplemental_data_dir"]) if data.get("supplemental_data_dir") else None,
         )
 
     def _select_batch_workers(self, requested_workers: int, snapshot: ResourceSnapshot) -> int:

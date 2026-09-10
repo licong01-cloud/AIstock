@@ -17,14 +17,15 @@ from typing import Iterable
 
 DEFAULT_WORKFLOW_ROOT = Path(".github/workflows")
 DEFAULT_NOX_PATH = Path("noxfile.py")
-WINDOWS_PR_WORKFLOWS = {
+WINDOWS_CI_WORKFLOWS = {
     "test.yml",
     "pr-quality.yml",
     "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
-WINDOWS_PR_WORKFLOW_RUNNER_LABEL = {
+WINDOWS_PR_WORKFLOWS = WINDOWS_CI_WORKFLOWS - {"codeql.yml"}
+WINDOWS_WORKFLOW_RUNNER_LABEL = {
     "test.yml": "aistock-ci",
     "pr-quality.yml": "aistock-ci",
     "codeql.yml": "aistock-ci-security",
@@ -34,13 +35,11 @@ WINDOWS_PR_WORKFLOW_RUNNER_LABEL = {
 SUPERSEDED_RUN_WORKFLOWS = {
     "test.yml",
     "pr-quality.yml",
-    "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
 BASE_FETCH_RETRY_WORKFLOWS = {
     "test.yml",
-    "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
     "pr-quality.yml",
@@ -48,7 +47,6 @@ BASE_FETCH_RETRY_WORKFLOWS = {
 PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
-    "CodeQL verdict",
 )
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
@@ -131,10 +129,10 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
 
     findings: list[dict[str, str]] = []
     for path in paths:
-        if path.name not in WINDOWS_PR_WORKFLOWS:
+        if path.name not in WINDOWS_CI_WORKFLOWS:
             continue
         text = path.read_text(encoding="utf-8")
-        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[path.name]
+        expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[path.name]
         runner_re = re.compile(
             rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
             re.IGNORECASE,
@@ -176,6 +174,7 @@ def build_contract_evidence(
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
     changed_files_path: Path = Path("scripts/ci_changed_files.py"),
+    test_plan_coverage_path: Path = Path("scripts/ci_plan_coverage.py"),
     workspace_prepare_path: Path = Path("scripts/ci/prepare_self_hosted_workspace.py"),
     issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
     nightly_scheduler_path: Path = Path("scripts/nightly_adaptive_scheduler.py"),
@@ -189,8 +188,8 @@ def build_contract_evidence(
 
     path_list = list(paths)
     workflow_text = {path.name: path.read_text(encoding="utf-8") for path in path_list}
-    pr_texts = [workflow_text[name] for name in sorted(WINDOWS_PR_WORKFLOWS) if name in workflow_text]
-    pr_combined = "\n".join(pr_texts)
+    ci_texts = [workflow_text[name] for name in sorted(WINDOWS_CI_WORKFLOWS) if name in workflow_text]
+    ci_combined = "\n".join(ci_texts)
     test_text = workflow_text.get("test.yml", "")
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
     codeql_text = workflow_text.get("codeql.yml", "")
@@ -212,6 +211,9 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
+    test_plan_coverage_text = (
+        test_plan_coverage_path.read_text(encoding="utf-8") if test_plan_coverage_path.exists() else ""
+    )
     workspace_prepare_text = workspace_prepare_path.read_text(encoding="utf-8") if workspace_prepare_path.exists() else ""
     nightly_scheduler_text = nightly_scheduler_path.read_text(encoding="utf-8") if nightly_scheduler_path.exists() else ""
     nightly_session_runner_text = (
@@ -235,7 +237,7 @@ def build_contract_evidence(
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
     def uses_expected_runner(name: str) -> bool:
-        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[name]
+        expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[name]
         literal_runner = bool(
             re.search(
                 rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
@@ -253,29 +255,31 @@ def build_contract_evidence(
         return literal_runner or dynamic_windows_runner
 
     evidence = {
-        "windows_self_hosted_runner": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all(uses_expected_runner(name) for name in WINDOWS_PR_WORKFLOWS),
-        "prebuilt_aistock_ci_environment": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("aistock-ci" in text.casefold() for text in pr_texts),
-        "environment_fingerprint_match": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("ci_environment_verify.py" in text for text in pr_texts),
+        "windows_self_hosted_runner": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all(uses_expected_runner(name) for name in WINDOWS_CI_WORKFLOWS),
+        "prebuilt_aistock_ci_environment": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all("aistock-ci" in text.casefold() for text in ci_texts),
+        "environment_fingerprint_match": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all("ci_environment_verify.py" in text for text in ci_texts),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
         "nox_ci_install_fail_closed_guard": bool(nox_text) and not scan_nox_text(nox_text, nox_path.as_posix()),
         "no_linux_or_production_environment_fallback": (
-            len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-            and all("conda run -n aistock" not in text.casefold() for text in pr_texts)
+            len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+            and all("conda run -n aistock" not in text.casefold() for text in ci_texts)
             and all(
                 "ubuntu-" not in workflow_text.get(name, "").casefold()
-                for name in WINDOWS_PR_WORKFLOWS - {"test.yml"}
+                for name in WINDOWS_CI_WORKFLOWS - {"test.yml"}
             )
             and test_text.casefold().count("ubuntu-latest") == 1
             and "github_hosted_metadata" in test_text
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "--close-sync-only" in test_text
         ),
-        "windows_git_bash_shell": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("shell: bash" in text.casefold() for text in pr_texts),
+        "windows_git_bash_shell": all(
+            "shell: bash" in workflow_text.get(name, "").casefold()
+            for name in WINDOWS_PR_WORKFLOWS
+        ),
         "pr_quality_no_external_report_action_dependency": "actions/upload-artifact@" not in pr_quality_text
         and "actions/github-script@" not in pr_quality_text,
         "superseded_pr_runs_cancel_in_progress": all(
@@ -299,17 +303,13 @@ def build_contract_evidence(
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
         "merge_quality_contexts_are_change_scoped": (
-            "  pull_request:\n    branches: [main]" in codeql_text
-            and bool(re.search(r"(?m)^  codeql-verdict:\s*$", codeql_text))
-            and "name: CodeQL verdict" in codeql_text
-            and "if: always()" in codeql_text
+            STABLE_MERGE_QUALITY_CONTEXTS == ("CI verdict",)
+            and "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
             and "pull_request:" not in workflow_text.get("semgrep.yml", "")
             and "workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
             and "pull_request:" not in pr_quality_text
             and "workflow_dispatch:" in pr_quality_text
-            and "github.event_name != 'pull_request'" in codeql_text
-            and "startsWith(github.head_ref, 'chore/BUG-')" in codeql_text
-            and "contains(github.head_ref, '-close-sync-')" in codeql_text
             and "github_hosted_metadata" in test_text
             and "ubuntu-latest" in test_text
             and "name: CI verdict" in test_text
@@ -321,10 +321,16 @@ def build_contract_evidence(
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "_merge_quality_contexts_for_head_ref" in issue_workflow_text
             and all(f'"{context}"' in issue_workflow_text for context in STABLE_MERGE_QUALITY_CONTEXTS)
+            and '"CodeQL verdict"' not in issue_workflow_text
         ),
-        "codeql_default_branch_security_scan_preserved": bool(
-            re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get("codeql.yml", ""))
-            and "branches: [main]" in workflow_text.get("codeql.yml", "")
+        "codeql_daily_nightly_full_scan": bool(
+            "schedule:" in codeql_text
+            and "cron: '27 20 * * *'" in codeql_text
+            and "workflow_dispatch:" in codeql_text
+            and "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
+            and "name: CodeQL nightly full scan" in codeql_text
+            and "CODEQL_LANGUAGES: '[\"python\",\"javascript-typescript\"]'" in codeql_text
         ),
         "codeql_uses_hash_verified_prebuilt_bundle": (
             "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
@@ -348,9 +354,8 @@ def build_contract_evidence(
             and "strategy:" not in codeql_text
             and "matrix:" not in codeql_text
             and codeql_text.count("Prepare exact local workspace (no remote actions)") == 1
-            and "CODEQL_LANGUAGES: ${{ steps.fast_lane.outputs.languages }}" in codeql_text
+            and "CODEQL_LANGUAGES: '[\"python\",\"javascript-typescript\"]'" in codeql_text
             and "foreach ($language in $languages)" in codeql_text
-            and "CLASSIFIER_RESULT: ${{ steps.fast_lane.outcome }}" in codeql_text
             and "ANALYZE_RESULT: ${{ steps.codeql_analysis.outcome }}" in codeql_text
         ),
         "codeql_exact_local_workspace_fetch_is_bounded": (
@@ -362,13 +367,11 @@ def build_contract_evidence(
             and codeql_text.count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 1
             and "git -C $source fetch --no-tags --depth=1" not in codeql_text
         ),
-        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push": (
-            "codeql_pr_languages" in classifier_text
-            and "codeql_pr_test_only" in classifier_text
-            and "LANGUAGE_FIELD=" in workflow_text.get("codeql.yml", "")
-            and "pull_request_test_only" in workflow_text.get("codeql.yml", "")
-            and "codeql_languages" in workflow_text.get("codeql.yml", "")
-            and "github.event_name" in workflow_text.get("codeql.yml", "")
+        "codeql_pr_merge_gate_removed": (
+            "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
+            and "ci_change_classifier.py" not in codeql_text
+            and "CodeQL verdict" not in issue_workflow_text
         ),
         "code_intelligence_refresh_is_scheduled_or_manual_only": (
             "schedule:" in code_intelligence_refresh_text
@@ -424,6 +427,22 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "changed_tests_reachable_from_selected_ci_plan": (
+            "def _changed_test_plan_coverage(" in classifier_text
+            and "def _selected_nox_test_targets(" in classifier_text
+            and "file_backend_sessions" in classifier_text
+            and "unexecuted_test_files" in classifier_text
+            and "unexecuted_test_blocked" in classifier_text
+            and "changed test files are not executed by any selected CI plan" in classifier_text
+            and "AISTOCK_CI_TEST_COLLECTION_RECEIPT:" in test_text
+            and "AISTOCK_CI_CLASSIFIER_SUMMARY:" in test_text
+            and "backend_changed_test_files" in classifier_text
+            and "PYTEST_ADDOPTS: -p scripts.ci_plan_coverage" in test_text
+            and "python scripts/ci_plan_coverage.py" in test_text
+            and 'backend_failures+=("changed_test_plan_coverage")' in test_text
+            and "def pytest_collection_finish(" in test_plan_coverage_text
+            and "missing_changed_test_files" in test_plan_coverage_text
+        ),
         "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout": bool(frontend_quality_text)
         and "AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock" in test_text
         and "actions/checkout@v7" in frontend_quality_text
@@ -438,17 +457,19 @@ def build_contract_evidence(
         and "npm ci" not in frontend_quality_text.casefold()
         and "npm install" not in frontend_quality_text.casefold(),
         "pr_workflows_no_external_report_action_dependency": all(
-            marker not in pr_combined
+            marker not in ci_combined
             for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
         ),
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
         "classifier_dev_db_required_output": "dev_db_required" in test_text and "dev_db_required" in classifier_text,
-        "existing_dev_database_lane_reference": "external_DEV_validation_required" in test_text
+        "existing_dev_database_lane_reference": "### External DEV database validation" in test_text
+        and "does not run database DDL/DML" in test_text
+        and 'failures+=("dev_db=' not in test_text
         and "existing DEV database" in classifier_text,
         "no_ci_ddl_or_dml": "DDL/DML execution is prohibited in CI workflows" not in reasons,
-        "no_sqlite_substitution_for_real_database_contract": "sqlite" not in pr_combined.casefold(),
+        "no_sqlite_substitution_for_real_database_contract": "sqlite" not in ci_combined.casefold(),
         "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database": (
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()

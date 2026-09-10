@@ -547,6 +547,13 @@ def frontend_type_lint(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_experiment_registry_ui(session: nox.Session) -> None:
+    """Run the mocked QE experiment registry and progress UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/quantevolver/qe_experiment_history_registry.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def hmm_evolution_ui(session: nox.Session) -> None:
     """Run only the HMM Evolution mocked UI contract."""
 
@@ -589,6 +596,12 @@ def qlib_data_backend(session: nox.Session) -> None:
         session,
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "backend/tests/core_index_membership",
+        "backend/tests/dataset_release/test_index_pool_sidecar.py",
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/scripts/test_build_core_index_membership_authority.py",
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -828,6 +841,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/test_data_sync_targets.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
@@ -1219,7 +1233,11 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_requires_day_minute_window_parity",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry",
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_missing_market_fails_closed",
         "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
         "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
@@ -1236,11 +1254,31 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+        "backend/tests/unified_engine/test_qe_config_truth.py::test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
         "backend/tests/quantevolver/test_p0_d2_sector_oracle.py",
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
+        "backend/tests/quantevolver/test_stock_pool_sync.py",
+        "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+        "backend/tests/quantevolver/test_rotation_index_factors.py",
+        "backend/tests/quantevolver/test_rotation_liquidity_factors.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile_api.py",
+        "backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py",
+        "backend/tests/quantevolver/test_qe_experiment_history_contract.py",
+        "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+        "backend/tests/quantevolver/test_qe_reconciliation_coordinator.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py",
+        "backend/tests/quantevolver/test_qe_universe_comparison.py",
+        "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+        "backend/tests/unified_engine/test_qe_cleanup_path_policy.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
+        "backend/tests/test_correlation_compute_independence.py",
+        "backend/tests/test_factor_st_pit_metrics_cache.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
     ]
@@ -2543,6 +2581,72 @@ def market_regime_label(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def position_timing_backend(session: nox.Session) -> None:
+    """Run the isolated daily-card backend contract without services or DB writes."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def position_timing_first_release(session: nox.Session) -> None:
+    """Run the one concentrated source gate for the human-only first release."""
+
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/position_timing",
+        "backend/routers/position_timing.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/position_timing",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    _ensure_frontend_node_modules(session)
+    frontend_env = _env(
+        {
+            "BACKEND_PORT": "8012",
+            "FRONTEND_PORT": "3012",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+        }
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
+        session.run("npm", "run", "build", env=frontend_env, external=True)
+    finally:
+        os.chdir(old_cwd)
+    _run_mocked_frontend_target(session, "tests/position-timing/position-timing.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def rl_execution_smoke(session: nox.Session) -> None:
     """Module-visibility smoke for backend.services.rl_execution.
 
@@ -2622,6 +2726,33 @@ def validation_coverage_backend(session: nox.Session) -> None:
         external=True,
     )
     _cleanup_validation_artifact_paths(coverage_xml, coverage_snapshot, coverage_data)
+
+
+@nox.session(venv_backend="none")
+def factor_research_backend(session: nox.Session) -> None:
+    """Collect all research tests with DEV writes explicitly disabled, even if inherited."""
+    session.run(
+        "python", "-m", "pytest",
+        "backend/tests/factor_research/test_contracts.py",
+        "backend/tests/factor_research/test_comparison.py",
+        "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_quality.py",
+        "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
+    )
+    session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
+                env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True)
+
+
+@nox.session(venv_backend="none")
+def factor_research_dev_db(session: nox.Session) -> None:
+    """Explicit existing DEV validation, excluded from ordinary source CI."""
+    if not os.environ.get("FACTOR_RESEARCH_DEV_ENV_FILE"):
+        session.error("Explicit FACTOR_RESEARCH_DEV_ENV_FILE required for existing DEV validation")
+    session.run(
+        "python", "-m", "pytest", "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}), external=True,
+    )
 
 
 @nox.session(venv_backend="none")
@@ -3226,6 +3357,7 @@ def qe_data_contract_backend(session: nox.Session) -> None:
         session,
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/mcp/test_domain_modules.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "-q",
         "-p",

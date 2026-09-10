@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,13 +28,15 @@ from .errors import DatasetReleaseError
 
 DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
 LEGACY_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
-DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
+PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
+DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v3"
 DIRECT_COMPONENTS = (
     "daily_bin",
     "minute_bin",
     "factor_h5_static",
     "index_context",
     "suspend_d",
+    "sw_l1_index",
 )
 DIRECT_TERMINAL_STATUS = "CANDIDATE_READY"
 DIRECT_START_DATE = date(2018, 8, 1)
@@ -42,6 +46,24 @@ DIRECT_FACTOR_COMPONENT_DIR = "factor_h5_static_candidate_v2"
 DIRECT_FACTOR_SCHEMA = "qe_direct_factor_h5_static_v2"
 DIRECT_SUSPEND_COMPONENT_DIR = "suspend_d_daily_candidate_v2"
 DIRECT_SUSPEND_SCHEMA = "qe_direct_suspend_d_v1"
+DIRECT_SW_L1_COMPONENT_DIR = "sw_l1_index_daily_candidate_v1"
+DIRECT_SW_L1_SCHEMA = "qe_direct_sw_l1_index_daily_v1"
+DIRECT_SW_L1_START_DATE = date(2020, 7, 30)
+DIRECT_SW_L1_SECTOR_COUNT = 31
+DIRECT_REUSABLE_COMPONENT_DIRS = (
+    "daily_bin_candidate",
+    "minute_bin_candidate",
+    DIRECT_FACTOR_COMPONENT_DIR,
+    "index_context",
+    DIRECT_SUSPEND_COMPONENT_DIR,
+)
+DIRECT_REUSABLE_REPORT_FILES = (
+    "daily_benchmark_000300_completion.json",
+    "daily_bin_candidate_stock_daily_all.json",
+)
+DIRECT_BENCHMARK_CODE = "000300.SH"
+DIRECT_BENCHMARK_FIELDS = ("open", "high", "low", "close", "volume", "amount")
+DIRECT_BENCHMARK_SCHEMA = "qe_direct_daily_benchmark_v1"
 DIRECT_SECTOR_AUTHORITY = "classification_pit_to_published_l2_v2"
 DIRECT_CANDIDATE_PARENT = Path("X:/AIstock_dataset_candidates/backtest_dataset_candidates")
 DIRECT_INDEX_CODES = (
@@ -128,6 +150,10 @@ class DirectMonthlyLayout:
         return self.components_root / DIRECT_SUSPEND_COMPONENT_DIR
 
     @property
+    def sw_l1_root(self) -> Path:
+        return self.components_root / DIRECT_SW_L1_COMPONENT_DIR
+
+    @property
     def industry_authority_root(self) -> Path:
         return (
             self.candidate_parent
@@ -177,6 +203,11 @@ def component_plan(*, july_minute_repaired: bool = True) -> tuple[DirectComponen
             "COMPONENT_REBUILD",
             "same_release_canonical_v2_suspend_history",
         ),
+        DirectComponentPlan(
+            "sw_l1_index",
+            "COMPONENT_REBUILD",
+            "exact_31_published_sw2021_l1_close_series",
+        ),
     )
 
 
@@ -221,7 +252,7 @@ def read_state(layout: DirectMonthlyLayout) -> dict[str, Any] | None:
 
 
 def _upgrade_legacy_state(value: Any) -> Any:
-    """Expose a four-component v1 state as a resumable five-component state.
+    """Expose older direct states as a resumable six-component state.
 
     The conversion is deliberately in-memory.  A read-only status call never
     mutates an existing candidate; the upgraded state is persisted only when
@@ -231,24 +262,36 @@ def _upgrade_legacy_state(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return value
     components = value.get("components")
-    legacy_components = tuple(name for name in DIRECT_COMPONENTS if name != "suspend_d")
-    if (
-        value.get("schema_version") != LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
-        or not isinstance(components, Mapping)
-        or set(components) != set(legacy_components)
-    ):
+    if not isinstance(components, Mapping):
         return value
     upgraded = dict(value)
-    upgraded_components = {name: dict(components[name]) for name in legacy_components}
-    suspend_plan = next(item for item in component_plan() if item.component == "suspend_d")
-    upgraded_components["suspend_d"] = {
-        "action": suspend_plan.action,
-        "reason": suspend_plan.reason,
-        "status": "PENDING",
-    }
+    upgraded_components = {name: dict(record) for name, record in components.items()}
+    schema = value.get("schema_version")
+    four_components = tuple(name for name in DIRECT_COMPONENTS if name not in {"suspend_d", "sw_l1_index"})
+    five_components = tuple(name for name in DIRECT_COMPONENTS if name != "sw_l1_index")
+    if schema == LEGACY_DIRECT_MONTHLY_STATE_SCHEMA and set(components) == set(four_components):
+        suspend_plan = next(item for item in component_plan() if item.component == "suspend_d")
+        upgraded_components["suspend_d"] = {
+            "action": suspend_plan.action,
+            "reason": suspend_plan.reason,
+            "status": "PENDING",
+        }
+        schema = PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA
+    if schema == PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA and set(upgraded_components) == set(five_components):
+        sw_l1_plan = next(item for item in component_plan() if item.component == "sw_l1_index")
+        upgraded_components["sw_l1_index"] = {
+            "action": sw_l1_plan.action,
+            "reason": sw_l1_plan.reason,
+            "status": "PENDING",
+        }
+        schema = DIRECT_MONTHLY_STATE_SCHEMA
+    if schema != DIRECT_MONTHLY_STATE_SCHEMA or set(upgraded_components) != set(DIRECT_COMPONENTS):
+        return value
     upgraded["components"] = upgraded_components
-    upgraded["schema_version"] = DIRECT_MONTHLY_STATE_SCHEMA
-    if upgraded.get("status") == DIRECT_TERMINAL_STATUS:
+    upgraded["schema_version"] = schema
+    if upgraded.get("status") == DIRECT_TERMINAL_STATUS and any(
+        record.get("status") != "PASS" for record in upgraded_components.values()
+    ):
         upgraded["status"] = "PLANNING_DIRECT"
         upgraded.pop("validation", None)
     return upgraded
@@ -307,8 +350,11 @@ class DirectMonthlyRunner:
                 _validate_adoptable_direct_work(layout)
             state = initial_state(layout)
             write_state(layout, state)
-        if state["status"] == DIRECT_TERMINAL_STATUS:
+        if state["status"] == DIRECT_TERMINAL_STATUS and not _terminal_candidate_requires_benchmark_repair(layout):
             return state
+        if state["status"] == DIRECT_TERMINAL_STATUS:
+            state["status"] = "PLANNING_DIRECT"
+            state.pop("validation", None)
 
         # A failed validation may be resumed after a component contract fix.
         # Re-open only the component whose small completion metadata no longer
@@ -501,8 +547,85 @@ def production_handlers(*, project_root: Path) -> Mapping[str, ComponentHandler]
             start=DIRECT_MINUTE_START_DATE,
         ),
         "factor_h5_static": build_factor_h5_static_component,
-        "index_context": build_index_context_component,
+        "index_context": lambda layout: build_index_context_component(
+            layout,
+            project_root=root,
+        ),
         "suspend_d": build_suspend_d_component,
+        "sw_l1_index": build_sw_l1_index_component,
+    }
+
+
+def hardlink_baseline_components(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+    """Reuse completed same-volume components without reading or copying their contents."""
+
+    baseline = layout.baseline_root
+    if baseline is None or not baseline.is_dir() or baseline.is_symlink():
+        raise DirectMonthlyError("augment requires an existing non-symlink baseline candidate")
+    if layout.candidate_root.exists() and any(layout.candidate_root.iterdir()):
+        raise DirectMonthlyError("augment target candidate must be absent or empty")
+    try:
+        baseline_state = json.loads((baseline / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DirectMonthlyError("baseline direct monthly state is unreadable") from exc
+    if (
+        baseline_state.get("status") != DIRECT_TERMINAL_STATUS
+        or baseline_state.get("cutoff") != layout.cutoff.isoformat()
+    ):
+        raise DirectMonthlyError("baseline candidate is not ready at the requested cutoff")
+
+    source_components = baseline / "components"
+    target_components = layout.components_root
+    linked_files = 0
+    logical_bytes = 0
+    for directory_name in DIRECT_REUSABLE_COMPONENT_DIRS:
+        source_root = source_components / directory_name
+        if not source_root.is_dir() or source_root.is_symlink():
+            raise DirectMonthlyError(f"baseline component is unavailable: {directory_name}")
+        target_root = target_components / directory_name
+        target_root.mkdir(parents=True, exist_ok=False)
+        for source in source_root.rglob("*"):
+            relative = source.relative_to(source_root)
+            target = target_root / relative
+            if source.is_symlink():
+                raise DirectMonthlyError(f"baseline component contains a symlink: {directory_name}/{relative}")
+            if source.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not source.is_file():
+                raise DirectMonthlyError(f"baseline component contains an unsupported entry: {directory_name}/{relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, target)
+            except OSError as exc:
+                raise DirectMonthlyError(
+                    f"same-volume hardlink reuse failed for {directory_name}/{relative}"
+                ) from exc
+            linked_files += 1
+            logical_bytes += source.stat().st_size
+    target_reports = layout.reports_root
+    target_reports.mkdir(parents=True, exist_ok=False)
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        source = baseline / "reports" / filename
+        target = target_reports / filename
+        if not source.is_file() or source.is_symlink():
+            raise DirectMonthlyError(f"baseline completion report is unavailable: {filename}")
+        try:
+            os.link(source, target)
+        except OSError as exc:
+            raise DirectMonthlyError(f"same-volume hardlink reuse failed for reports/{filename}") from exc
+        linked_files += 1
+        logical_bytes += source.stat().st_size
+    return {
+        "status": "PASS",
+        "action": "REUSE_BASELINE_HARDLINK",
+        "baseline_root": str(baseline),
+        "candidate_root": str(layout.candidate_root),
+        "linked_files": linked_files,
+        "logical_bytes_reused": logical_bytes,
+        "content_hash_performed": False,
+        "production_writes": 0,
+        "production_pointer_changes": 0,
     }
 
 
@@ -652,7 +775,11 @@ def _run_qlib_component(
     }
 
 
-def build_index_context_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+def build_index_context_component(
+    layout: DirectMonthlyLayout,
+    *,
+    project_root: Path,
+) -> Mapping[str, Any]:
     import pandas as pd
 
     from backend.qlib_exporter.db_reader import DBReader
@@ -660,12 +787,14 @@ def build_index_context_component(layout: DirectMonthlyLayout) -> Mapping[str, A
     output = layout.components_root / "index_context"
     meta_path = output / "meta.json"
     if _meta_reaches_cutoff(meta_path, layout.cutoff):
+        benchmark = build_daily_benchmark_component(layout, project_root=project_root)
         return {
             "status": "PASS",
             "component": "index_context",
             "action": "REUSE_COMPLETED_DIRECT_OUTPUT",
             "path": str(output),
             "cutoff": layout.cutoff.isoformat(),
+            "daily_benchmark": benchmark,
         }
     if output.exists() and any(output.iterdir()):
         raise DirectMonthlyError("partial index_context output requires explicit inspection")
@@ -694,6 +823,7 @@ def build_index_context_component(layout: DirectMonthlyLayout) -> Mapping[str, A
             "full_history_content_hash": False,
         },
     )
+    benchmark = build_daily_benchmark_component(layout, project_root=project_root)
     return {
         "status": "PASS",
         "component": "index_context",
@@ -701,6 +831,393 @@ def build_index_context_component(layout: DirectMonthlyLayout) -> Mapping[str, A
         "path": str(output),
         "cutoff": layout.cutoff.isoformat(),
         "codes": len(counts),
+        "daily_benchmark": benchmark,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _file_identity(path: Path) -> tuple[int, int]:
+    observed = path.stat()
+    return observed.st_size, observed.st_mtime_ns
+
+
+def _write_bytes_atomic(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
+    _write_bytes_atomic(
+        path,
+        (
+            json.dumps(dict(value), ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+            + "\n"
+        ).encode("utf-8"),
+    )
+
+
+def _load_daily_benchmark_frame(layout: DirectMonthlyLayout):
+    import numpy as np
+    import pandas as pd
+
+    source_path = layout.components_root / "index_context" / "index_daily.h5"
+    if not source_path.is_file() or _is_link_or_reparse(source_path):
+        raise DirectMonthlyError("daily benchmark source index_daily.h5 is unavailable")
+    frame = pd.read_hdf(source_path, key="data")
+    required = {"trade_date", "ts_code", *DIRECT_BENCHMARK_FIELDS}
+    if not required.issubset(frame.columns):
+        raise DirectMonthlyError("daily benchmark source schema is incomplete")
+    benchmark = frame.loc[
+        frame["ts_code"].astype(str).str.upper().eq(DIRECT_BENCHMARK_CODE),
+        ["trade_date", *DIRECT_BENCHMARK_FIELDS],
+    ].copy()
+    benchmark["trade_date"] = pd.to_datetime(benchmark["trade_date"], errors="coerce")
+    if benchmark.empty or benchmark["trade_date"].isna().any():
+        raise DirectMonthlyError("daily benchmark source is empty or has invalid dates")
+    benchmark = benchmark.sort_values("trade_date", kind="stable")
+    if benchmark["trade_date"].duplicated().any():
+        raise DirectMonthlyError("daily benchmark source contains duplicate dates")
+
+    calendar = _direct_daily_calendar(layout)
+    observed_dates = benchmark["trade_date"].dt.date.tolist()
+    if observed_dates != calendar:
+        raise DirectMonthlyError("daily benchmark dates do not exactly match the Qlib day calendar")
+    numeric = benchmark.loc[:, DIRECT_BENCHMARK_FIELDS].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(numeric.to_numpy(dtype="float64")).all():
+        raise DirectMonthlyError("daily benchmark source contains non-finite OHLCV/amount values")
+    if (numeric.loc[:, ["open", "high", "low", "close"]] <= 0).any().any():
+        raise DirectMonthlyError("daily benchmark source contains non-positive prices")
+    if (
+        (numeric["high"] < numeric[["open", "close", "low"]].max(axis=1)).any()
+        or (numeric["low"] > numeric[["open", "close", "high"]].min(axis=1)).any()
+        or (numeric[["volume", "amount"]] < 0).any().any()
+    ):
+        raise DirectMonthlyError("daily benchmark source violates OHLCV invariants")
+    output = numeric.astype("float32")
+    output.insert(0, "symbol", DIRECT_BENCHMARK_CODE)
+    output.insert(0, "date", benchmark["trade_date"].dt.strftime("%Y-%m-%d").to_numpy())
+    return output
+
+
+def _run_daily_benchmark_dump(
+    *,
+    frame,
+    staging_root: Path,
+    project_root: Path,
+) -> Path:
+    snapshot_id = "benchmark_daily"
+    csv_root = staging_root / "csv"
+    csv_dir = csv_root / snapshot_id / "stock_daily"
+    bin_root = staging_root / "qlib"
+    csv_dir.mkdir(parents=True)
+    frame.to_csv(csv_dir / f"{DIRECT_BENCHMARK_CODE}.csv", index=False)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(project_root / "scripts" / "qlib_authoritative_bin_export.py"),
+            "--dataset",
+            "stock_daily",
+            "--stage",
+            "dump",
+            "--snapshot-id",
+            snapshot_id,
+            "--start",
+            DIRECT_START_DATE.isoformat(),
+            "--end",
+            DIRECT_START_DATE.isoformat(),
+            "--csv-root",
+            str(csv_root),
+            "--bin-root",
+            str(bin_root),
+            "--dump-workers",
+            "1",
+            "--isolated-dump-only",
+        ],
+        cwd=project_root,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout)[-2000:]
+        raise DirectMonthlyError(
+            f"authoritative daily benchmark dump failed with code {completed.returncode}: {detail}"
+        )
+    return bin_root / snapshot_id
+
+
+def _validate_staged_daily_benchmark(
+    layout: DirectMonthlyLayout,
+    *,
+    staged_root: Path,
+    expected,
+) -> dict[str, str]:
+    import numpy as np
+
+    calendar = [
+        line.strip()
+        for line in (staged_root / "calendars" / "day.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    expected_dates = expected["date"].astype(str).tolist()
+    if calendar != expected_dates:
+        raise DirectMonthlyError("staged benchmark Qlib calendar differs from index input")
+    feature_root = staged_root / "features" / DIRECT_BENCHMARK_CODE.lower()
+    if not feature_root.is_dir() or _is_link_or_reparse(feature_root):
+        raise DirectMonthlyError("staged benchmark feature directory is invalid")
+    expected_names = {f"{field}.day.bin" for field in DIRECT_BENCHMARK_FIELDS}
+    actual_names = {path.name for path in feature_root.iterdir() if path.is_file()}
+    if actual_names != expected_names or any(_is_link_or_reparse(path) for path in feature_root.iterdir()):
+        raise DirectMonthlyError("staged benchmark feature fields differ from the index schema")
+    hashes: dict[str, str] = {}
+    for field in DIRECT_BENCHMARK_FIELDS:
+        path = feature_root / f"{field}.day.bin"
+        values = np.fromfile(path, dtype="<f4")
+        if len(values) != len(expected) + 1 or int(values[0]) != 0:
+            raise DirectMonthlyError(f"staged benchmark Qlib offset is invalid: {field}")
+        source = expected[field].to_numpy(dtype="float32")
+        if not np.array_equal(values[1:], source):
+            raise DirectMonthlyError(f"staged benchmark Qlib values differ from index input: {field}")
+        hashes[path.name] = _sha256_file(path)
+    return hashes
+
+
+def _benchmark_receipt_path(layout: DirectMonthlyLayout) -> Path:
+    return layout.reports_root / "daily_benchmark_000300_completion.json"
+
+
+def _daily_benchmark_complete(layout: DirectMonthlyLayout) -> bool:
+    receipt_path = _benchmark_receipt_path(layout)
+    daily_root = layout.components_root / "daily_bin_candidate"
+    feature_root = daily_root / "features" / DIRECT_BENCHMARK_CODE.lower()
+    all_path = daily_root / "instruments" / "all.txt"
+    stocks_path = daily_root / "instruments" / "stock_universe.txt"
+    benchmark_path = daily_root / "instruments" / "benchmark.txt"
+    meta_path = daily_root / "meta_export.json"
+    required = [receipt_path, all_path, stocks_path, benchmark_path, meta_path]
+    if any(not path.is_file() or _is_link_or_reparse(path) for path in required):
+        return False
+    if not feature_root.is_dir() or _is_link_or_reparse(feature_root):
+        return False
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if (
+            receipt.get("schema_version") != DIRECT_BENCHMARK_SCHEMA
+            or receipt.get("code") != DIRECT_BENCHMARK_CODE
+            or receipt.get("end") != layout.cutoff.isoformat()
+            or receipt.get("source_freeze") is not False
+            or receipt.get("full_history_content_hash") is not False
+        ):
+            return False
+        benchmark_line = (
+            f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
+        )
+        all_lines = all_path.read_text(encoding="utf-8").splitlines()
+        stock_lines = stocks_path.read_text(encoding="utf-8").splitlines()
+        if all_lines.count(benchmark_line) != 1 or [line for line in all_lines if line != benchmark_line] != stock_lines:
+            return False
+        if benchmark_path.read_text(encoding="utf-8").splitlines() != [benchmark_line]:
+            return False
+        pins = receipt.get("sha256")
+        if not isinstance(pins, Mapping):
+            return False
+        paths = {
+            "instruments_all": all_path,
+            "instruments_stock_universe": stocks_path,
+            "instruments_benchmark": benchmark_path,
+            "meta_export": meta_path,
+            "source_index_daily_h5": layout.components_root / "index_context" / "index_daily.h5",
+            "daily_export_report": layout.reports_root / "daily_bin_candidate_stock_daily_all.json",
+            **{
+                f"feature_{field}": feature_root / f"{field}.day.bin"
+                for field in DIRECT_BENCHMARK_FIELDS
+            },
+        }
+        if set(pins) != set(paths):
+            return False
+        if any(not path.is_file() or _is_link_or_reparse(path) for path in paths.values()):
+            return False
+        return all(_sha256_file(path) == pins[name] for name, path in paths.items())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _terminal_candidate_requires_benchmark_repair(layout: DirectMonthlyLayout) -> bool:
+    index_root = layout.components_root / "index_context"
+    return (
+        _meta_reaches_cutoff(index_root / "meta.json", layout.cutoff)
+        and (index_root / "index_daily.h5").is_file()
+        and not _daily_benchmark_complete(layout)
+    )
+
+
+def build_daily_benchmark_component(
+    layout: DirectMonthlyLayout,
+    *,
+    project_root: Path,
+) -> Mapping[str, Any]:
+    """Add the same-release index benchmark without rebuilding stock data."""
+
+    if _daily_benchmark_complete(layout):
+        return {
+            "status": "PASS",
+            "action": "REUSE_COMPLETED_DIRECT_OUTPUT",
+            "code": DIRECT_BENCHMARK_CODE,
+            "receipt": str(_benchmark_receipt_path(layout)),
+        }
+    daily_root = layout.components_root / "daily_bin_candidate"
+    all_path = daily_root / "instruments" / "all.txt"
+    meta_path = daily_root / "meta_export.json"
+    export_report_path = layout.reports_root / "daily_bin_candidate_stock_daily_all.json"
+    source_path = layout.components_root / "index_context" / "index_daily.h5"
+    calendar_path = daily_root / "calendars" / "day.txt"
+    feature_target = daily_root / "features" / DIRECT_BENCHMARK_CODE.lower()
+    guarded_paths = (all_path, meta_path, export_report_path, source_path, calendar_path)
+    if any(not path.is_file() or _is_link_or_reparse(path) for path in guarded_paths):
+        raise DirectMonthlyError("daily benchmark target metadata is unavailable")
+    if feature_target.exists() or _benchmark_receipt_path(layout).exists():
+        raise DirectMonthlyError("partial daily benchmark output requires explicit inspection")
+
+    original_identities = {path: _file_identity(path) for path in guarded_paths}
+    original_all = all_path.read_bytes()
+    original_lines = original_all.decode("utf-8").splitlines()
+    if any(line.split("\t", 1)[0].upper() == DIRECT_BENCHMARK_CODE for line in original_lines):
+        raise DirectMonthlyError("daily benchmark instruments entry exists without a valid receipt")
+    frame = _load_daily_benchmark_frame(layout)
+    layout.work_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="daily-benchmark-", dir=layout.work_root) as temporary:
+        staging_root = Path(temporary)
+        staged_bin = _run_daily_benchmark_dump(
+            frame=frame,
+            staging_root=staging_root,
+            project_root=project_root,
+        )
+        bin_hashes = _validate_staged_daily_benchmark(
+            layout,
+            staged_root=staged_bin,
+            expected=frame,
+        )
+        staged_feature = staged_bin / "features" / DIRECT_BENCHMARK_CODE.lower()
+
+        if any(_file_identity(path) != identity for path, identity in original_identities.items()):
+            raise DirectMonthlyError("daily benchmark source or target changed during staging")
+        if feature_target.exists():
+            raise DirectMonthlyError("daily benchmark target appeared during staging")
+
+        benchmark_line = (
+            f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
+        )
+        all_payload = original_all + (b"" if original_all.endswith(b"\n") else b"\n") + benchmark_line.encode("utf-8") + b"\n"
+        stocks_path = daily_root / "instruments" / "stock_universe.txt"
+        benchmark_path = daily_root / "instruments" / "benchmark.txt"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not isinstance(meta, dict):
+            raise DirectMonthlyError("daily benchmark target metadata is not an object")
+        meta["benchmark_only"] = {
+            "schema_version": DIRECT_BENCHMARK_SCHEMA,
+            "code": DIRECT_BENCHMARK_CODE,
+            "start": DIRECT_START_DATE.isoformat(),
+            "end": layout.cutoff.isoformat(),
+            "rows": int(len(frame)),
+            "fields": list(DIRECT_BENCHMARK_FIELDS),
+            "source": "components/index_context/index_daily.h5",
+            "provider_catalog": "instruments/all.txt",
+            "selection_universe": "instruments/stock_universe.txt",
+            "benchmark_universe": "instruments/benchmark.txt",
+            "selection_eligible": False,
+        }
+        rewrite = meta.get("all_txt_rewrite")
+        if isinstance(rewrite, dict):
+            rewrite["selection_universe_rows"] = len(original_lines)
+            rewrite["provider_catalog_rows"] = len(original_lines) + 1
+            rewrite["benchmark_only_rows"] = 1
+        export_report = json.loads(export_report_path.read_text(encoding="utf-8"))
+        if not isinstance(export_report, dict):
+            raise DirectMonthlyError("daily exporter report is not an object")
+        export_report["benchmark_only_completion"] = {
+            "schema_version": DIRECT_BENCHMARK_SCHEMA,
+            "code": DIRECT_BENCHMARK_CODE,
+            "source": "components/index_context/index_daily.h5",
+            "start": DIRECT_START_DATE.isoformat(),
+            "end": layout.cutoff.isoformat(),
+            "rows": int(len(frame)),
+            "fields": list(DIRECT_BENCHMARK_FIELDS),
+            "selection_eligible": False,
+        }
+
+        os.replace(staged_feature, feature_target)
+        _write_bytes_atomic(stocks_path, original_all)
+        _write_bytes_atomic(benchmark_path, (benchmark_line + "\n").encode("utf-8"))
+        _write_bytes_atomic(all_path, all_payload)
+        _write_json_atomic(meta_path, meta)
+        _write_json_atomic(export_report_path, export_report)
+
+        pin_paths = {
+            "instruments_all": all_path,
+            "instruments_stock_universe": stocks_path,
+            "instruments_benchmark": benchmark_path,
+            "meta_export": meta_path,
+            "source_index_daily_h5": layout.components_root / "index_context" / "index_daily.h5",
+            "daily_export_report": export_report_path,
+            **{
+                f"feature_{field}": feature_target / f"{field}.day.bin"
+                for field in DIRECT_BENCHMARK_FIELDS
+            },
+        }
+        receipt = {
+            "schema_version": DIRECT_BENCHMARK_SCHEMA,
+            "status": "PASS",
+            "code": DIRECT_BENCHMARK_CODE,
+            "start": DIRECT_START_DATE.isoformat(),
+            "end": layout.cutoff.isoformat(),
+            "rows": int(len(frame)),
+            "fields": list(DIRECT_BENCHMARK_FIELDS),
+            "calendar_offset": 0,
+            "benchmark_only": True,
+            "stock_universe_rows": len(original_lines),
+            "stock_universe_preserved": True,
+            "source_freeze": False,
+            "full_history_content_hash": False,
+            "sha256": {name: _sha256_file(path) for name, path in pin_paths.items()},
+            "staged_feature_sha256": {
+                name: value for name, value in sorted(bin_hashes.items())
+            },
+        }
+        _write_json_atomic(_benchmark_receipt_path(layout), receipt)
+    if not _daily_benchmark_complete(layout):
+        raise DirectMonthlyError("daily benchmark writer/readback validation failed")
+    return {
+        "status": "PASS",
+        "action": "BENCHMARK_ONLY_COMPLETION",
+        "code": DIRECT_BENCHMARK_CODE,
+        "rows": int(len(frame)),
+        "receipt": str(_benchmark_receipt_path(layout)),
     }
 
 
@@ -1007,6 +1524,145 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
         "cutoff": layout.cutoff.isoformat(),
         "static_rows": static_rows,
         "instruments": len(codes),
+    }
+
+
+def _load_published_sw_l1_close(start: date, end: date):
+    import pandas as pd
+
+    from backend.db.pg_pool import get_conn
+
+    with get_conn() as connection:
+        catalog = pd.read_sql(
+            """
+            SELECT industry_code,index_code
+            FROM market.sw_index_classify
+            WHERE level='L1'
+              AND src='SW2021'
+              AND is_pub='1'
+              AND industry_code IS NOT NULL
+              AND index_code IS NOT NULL
+            ORDER BY industry_code,index_code
+            """,
+            connection,
+        )
+        if catalog.empty:
+            raise DirectMonthlyError("published SW2021 L1 catalog is empty")
+        catalog["sector_code"] = catalog["industry_code"].astype(str).str.strip()
+        catalog["index_code"] = catalog["index_code"].map(_canonical_index_code)
+        if (
+            len(catalog) != DIRECT_SW_L1_SECTOR_COUNT
+            or catalog["sector_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+            or catalog["index_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        ):
+            raise DirectMonthlyError("published SW2021 L1 catalog must contain exactly 31 one-to-one codes")
+        facts = pd.read_sql(
+            """
+            SELECT trade_date,ts_code,close
+            FROM market.sw_daily
+            WHERE trade_date BETWEEN %s AND %s
+              AND ts_code = ANY(%s)
+            ORDER BY trade_date,ts_code
+            """,
+            connection,
+            params=(start, end, catalog["index_code"].tolist()),
+        )
+    if facts.empty:
+        raise DirectMonthlyError("published SW2021 L1 close facts are empty")
+    projection = dict(zip(catalog["index_code"], catalog["sector_code"], strict=True))
+    facts["index_code"] = facts.pop("ts_code").map(_canonical_index_code)
+    facts["sector_code"] = facts["index_code"].map(projection)
+    facts["datetime"] = pd.to_datetime(facts.pop("trade_date")).dt.normalize()
+    facts["close"] = pd.to_numeric(facts["close"], errors="coerce").astype("float32")
+    return facts.set_index(["datetime", "sector_code"])[["index_code", "close"]].sort_index()
+
+
+def _validate_sw_l1_index_frame(frame, *, cutoff: date) -> Mapping[str, Any]:
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(frame.index, pd.MultiIndex) or list(frame.index.names) != [
+        "datetime",
+        "sector_code",
+    ]:
+        raise DirectMonthlyError("SW L1 component requires datetime/sector_code MultiIndex")
+    if not {"index_code", "close"}.issubset(frame.columns) or frame.index.duplicated().any():
+        raise DirectMonthlyError("SW L1 component schema or unique key differs")
+    rows = frame.reset_index()
+    rows["datetime"] = pd.to_datetime(rows["datetime"]).dt.normalize()
+    rows["sector_code"] = rows["sector_code"].astype(str)
+    rows["index_code"] = rows["index_code"].astype(str).str.upper()
+    close = pd.to_numeric(rows["close"], errors="coerce")
+    if not np.isfinite(close.to_numpy(dtype="float64")).all() or bool((close <= 0).any()):
+        raise DirectMonthlyError("SW L1 close contains missing, non-finite, or non-positive values")
+    if (
+        rows["sector_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        or rows["index_code"].nunique() != DIRECT_SW_L1_SECTOR_COUNT
+        or rows.groupby("sector_code")["index_code"].nunique().ne(1).any()
+        or rows.groupby("index_code")["sector_code"].nunique().ne(1).any()
+    ):
+        raise DirectMonthlyError("SW L1 component must contain exactly 31 one-to-one sector/index codes")
+    ranges = rows.groupby("sector_code")["datetime"].agg(["min", "max", "count"])
+    sectors_by_date = rows.groupby("datetime")["sector_code"].nunique()
+    if (
+        ranges["min"].ne(pd.Timestamp(DIRECT_SW_L1_START_DATE)).any()
+        or ranges["max"].ne(pd.Timestamp(cutoff)).any()
+        or ranges["count"].nunique() != 1
+        or sectors_by_date.ne(DIRECT_SW_L1_SECTOR_COUNT).any()
+    ):
+        raise DirectMonthlyError("SW L1 component date coverage is incomplete")
+    return {
+        "rows": int(len(rows)),
+        "sector_count": int(rows["sector_code"].nunique()),
+        "open_days": int(ranges["count"].iloc[0]),
+        "start": DIRECT_SW_L1_START_DATE.isoformat(),
+        "end": cutoff.isoformat(),
+    }
+
+
+def build_sw_l1_index_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
+    import pandas as pd
+
+    output = layout.sw_l1_root
+    data_path = output / "sector_data.h5"
+    meta_path = output / "meta.json"
+    if _component_output_complete(layout, "sw_l1_index"):
+        return {
+            "status": "PASS",
+            "component": "sw_l1_index",
+            "action": "REUSE_COMPLETED_DIRECT_OUTPUT",
+            "path": str(output),
+            "cutoff": layout.cutoff.isoformat(),
+        }
+    if output.exists() and any(output.iterdir()):
+        raise DirectMonthlyError("partial sw_l1_index output requires explicit inspection")
+    output.mkdir(parents=True, exist_ok=True)
+    frame = _load_published_sw_l1_close(DIRECT_SW_L1_START_DATE, layout.cutoff)
+    summary = _validate_sw_l1_index_frame(frame, cutoff=layout.cutoff)
+    frame.to_hdf(data_path, key="data", mode="w", format="table")
+    readback = pd.read_hdf(data_path, key="data")
+    readback_summary = _validate_sw_l1_index_frame(readback, cutoff=layout.cutoff)
+    if readback_summary != summary:
+        raise DirectMonthlyError("SW L1 writer/readback summary differs")
+    _write_json_new(
+        meta_path,
+        {
+            "schema_version": DIRECT_SW_L1_SCHEMA,
+            "component": "sw_l1_index",
+            **summary,
+            "columns": ["index_code", "close"],
+            "source_identity": "market.sw_index_classify:SW2021:L1:published+market.sw_daily",
+            "source_freeze": False,
+            "full_history_content_hash": False,
+        },
+    )
+    return {
+        "status": "PASS",
+        "component": "sw_l1_index",
+        "action": "COMPONENT_REBUILD",
+        "path": str(output),
+        "cutoff": layout.cutoff.isoformat(),
+        **summary,
     }
 
 
@@ -1453,6 +2109,7 @@ def _validate_adoptable_direct_work(layout: DirectMonthlyLayout) -> None:
             DIRECT_FACTOR_COMPONENT_DIR,
             "index_context",
             DIRECT_SUSPEND_COMPONENT_DIR,
+            DIRECT_SW_L1_COMPONENT_DIR,
         }
         if not {child.name for child in components.iterdir()}.issubset(allowed_components):
             raise DirectMonthlyError("existing direct work contains an unknown component")
@@ -1491,6 +2148,35 @@ def _component_output_complete(layout: DirectMonthlyLayout, component: str) -> b
             and value.get("schema_version") == DIRECT_SUSPEND_SCHEMA
             and value.get("component") == "suspend_d"
             and value.get("universe_key") == DIRECT_UNIVERSE_KEY
+            and value.get("source_freeze") is False
+            and value.get("full_history_content_hash") is False
+        )
+    if component == "index_context":
+        index = layout.components_root / "index_context"
+        if not index.exists():
+            # Preserve the existing resumable-state contract for synthetic or
+            # externally handled component receipts.  A real direct candidate
+            # with index output is checked against the benchmark completion.
+            return True
+        return (
+            _meta_reaches_cutoff(index / "meta.json", layout.cutoff)
+            and (index / "index_daily.h5").is_file()
+            and not (index / "index_daily.h5").is_symlink()
+            and _daily_benchmark_complete(layout)
+        )
+    if component == "sw_l1_index":
+        meta = layout.sw_l1_root / "meta.json"
+        data = layout.sw_l1_root / "sector_data.h5"
+        if not _meta_reaches_cutoff(meta, layout.cutoff) or not data.is_file() or data.is_symlink():
+            return False
+        try:
+            value = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return (
+            value.get("schema_version") == DIRECT_SW_L1_SCHEMA
+            and value.get("component") == "sw_l1_index"
+            and value.get("sector_count") == DIRECT_SW_L1_SECTOR_COUNT
             and value.get("source_freeze") is False
             and value.get("full_history_content_hash") is False
         )
@@ -1549,15 +2235,24 @@ def validate_direct_candidate(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
         ),
         "index_context": _meta_reaches_cutoff(index / "meta.json", layout.cutoff)
         and (index / "index_daily.h5").is_file()
-        and (index / "index_daily.h5").stat().st_size > 0,
+        and (index / "index_daily.h5").stat().st_size > 0
+        and _daily_benchmark_complete(layout),
         "suspend_d": _component_output_complete(layout, "suspend_d"),
+        "sw_l1_index": _component_output_complete(layout, "sw_l1_index"),
     }
     if not all(checks.values()):
         raise DirectMonthlyError(f"direct candidate structural validation failed: {checks}")
+    import pandas as pd
+
+    sw_l1_summary = _validate_sw_l1_index_frame(
+        pd.read_hdf(layout.sw_l1_root / "sector_data.h5", key="data"),
+        cutoff=layout.cutoff,
+    )
     return {
         "status": "PASS",
         "cutoff": layout.cutoff.isoformat(),
         "checks": checks,
+        "sw_l1_index": sw_l1_summary,
         "full_history_content_hash": False,
         "production_writes": 0,
         "production_pointer_changes": 0,
@@ -1694,13 +2389,23 @@ __all__ = [
     "DIRECT_COMPONENTS",
     "DIRECT_SUSPEND_COMPONENT_DIR",
     "DIRECT_SUSPEND_SCHEMA",
+    "DIRECT_SW_L1_COMPONENT_DIR",
+    "DIRECT_SW_L1_SCHEMA",
+    "DIRECT_REUSABLE_COMPONENT_DIRS",
+    "DIRECT_REUSABLE_REPORT_FILES",
     "DIRECT_MONTHLY_SCHEMA",
     "DIRECT_TERMINAL_STATUS",
     "DirectComponentPlan",
     "DirectMonthlyError",
     "DirectMonthlyLayout",
     "DirectMonthlyRunner",
+    "DIRECT_BENCHMARK_CODE",
+    "DIRECT_BENCHMARK_FIELDS",
+    "DIRECT_BENCHMARK_SCHEMA",
+    "build_daily_benchmark_component",
     "build_suspend_d_component",
+    "build_sw_l1_index_component",
+    "hardlink_baseline_components",
     "compact_status",
     "component_plan",
     "initial_state",

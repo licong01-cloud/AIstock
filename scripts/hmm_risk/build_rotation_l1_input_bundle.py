@@ -73,7 +73,11 @@ def _write_failure(output_root: Path, error: Exception) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset-release-manifest", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--dataset-release-manifest", type=Path)
+    source.add_argument("--direct-v2-candidate-root", type=Path)
+    parser.add_argument("--security-identity-manifest", type=Path)
+    parser.add_argument("--provider-absence-manifest", type=Path)
     parser.add_argument("--industry-pit-authority", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-end", required=True)
@@ -81,6 +85,11 @@ def main() -> int:
     args = parser.parse_args()
     if args.source_end != "2026-03-31":
         parser.error("--source-end must equal the approved boundary 2026-03-31")
+    direct_arguments = (args.security_identity_manifest, args.provider_absence_manifest)
+    if args.direct_v2_candidate_root is not None and any(value is None for value in direct_arguments):
+        parser.error("direct-v2 source requires --security-identity-manifest and --provider-absence-manifest")
+    if args.dataset_release_manifest is not None and any(value is not None for value in direct_arguments):
+        parser.error("legacy source cannot accept direct-v2 security/provider authority arguments")
     if not args.output_root.is_absolute():
         parser.error("--output-root must be absolute")
     try:
@@ -93,6 +102,9 @@ def main() -> int:
         authority = _load_object(args.industry_pit_authority, "industry PIT authority")
         inputs, source, source_identity = build_rotation_l1_inputs_from_assets(
             dataset_release_manifest=args.dataset_release_manifest,
+            direct_v2_candidate_root=args.direct_v2_candidate_root,
+            security_identity_manifest=args.security_identity_manifest,
+            provider_absence_manifest=args.provider_absence_manifest,
             industry_authority=authority,
             forbidden_roots=(ROOT,),
             work_parent=args.output_root.parent,

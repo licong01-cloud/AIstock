@@ -23,6 +23,7 @@ from .qe_dataset_contract import (
     QEFormalDatasetRequest,
     require_qe_formal_dataset_request,
 )
+from .qe_active_dataset_profile import UniverseSelection
 
 ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20, 30, 40, 60, 120, 180)
 DEFAULT_LABEL_HORIZON = 1
@@ -49,6 +50,19 @@ _QE_RISK_POLICY_RUNTIME_KEYS = {
     "quote_universe_codes",
 }
 
+QE_CONTROL_PLANE_METADATA_KEYS = frozenset(
+    {
+        # These fields belong to task/registry/UI readback. They must remain
+        # persisted, but Qlib model and strategy constructors must never
+        # receive them as executable kwargs.
+        "_qe_run_registration",
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    }
+)
+
 QE_RUNTIME_METADATA_KEYS = frozenset(
     {
         "archive_policy",
@@ -62,7 +76,7 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
         "numpy_seed",
         "ensemble",
     }
-)
+) | (QE_CONTROL_PLANE_METADATA_KEYS - {"_qe_run_registration"})
 
 SEED_ENSEMBLE_LEVELS = frozenset({"score", "portfolio"})
 SEED_ENSEMBLE_AGGS = frozenset({"mean", "rank_mean", "median"})
@@ -170,6 +184,8 @@ def model_seed_param_keys(model_class: str | None) -> tuple[str, ...]:
     """Return constructor-safe seed kwargs for a concrete Qlib model class."""
 
     normalized = str(model_class or "").strip()
+    if normalized in {"GeneralPTNN", "AIStockGeneralPTNNLTR"}:
+        return ("seed",)
     if normalized in {"LGBModel", "AIStockXGBModel", "XGBModel"}:
         return ("seed", "random_state")
     if normalized == "CatBoostModel":
@@ -388,6 +404,7 @@ class ExperimentConfig(BaseModel):
     label_type: str | None = None
     label_horizon: int | None = None
     stock_pool: str | None = None
+    universe_selection: dict[str, Any] | None = None
     sector_blacklist: list[str] | None = None
 
     # ── HMM sector filter ─────────────────────────────────────────────────────
@@ -469,6 +486,14 @@ class ExperimentConfig(BaseModel):
             self.canonical_pit_dataset = require_qe_formal_dataset_request(
                 self.canonical_pit_dataset
             )
+        if self.universe_selection is not None:
+            self.universe_selection = UniverseSelection.from_value(
+                self.universe_selection
+            ).as_dict()
+            if self.stock_pool:
+                raise ValueError(
+                    "stock_pool and universe_selection cannot be supplied together for new QE work"
+                )
         for source_name, source in (
             ("model_params_base", self.model_params_base),
             ("strategy_params", self.strategy_params),

@@ -741,6 +741,25 @@ targets:
   - Review Smart Monitor state
   - Validate Smart Monitor primary workflow
   coverage_status: planned
+- route_id: portfolio.position_timing
+  href: /position-timing
+  label: Position Timing Advice
+  nav_group: Investment Management
+  primary_module: position_timing
+  impact_modules:
+  - portfolio_management
+  - watchlist
+  risk_level: high
+  required_test_plans:
+  - l0
+  - position_timing_backend
+  - frontend_type_lint
+  recommended_test_plans: []
+  business_operations:
+  - Open Position Timing Advice
+  - Review immutable T+1 daily action cards
+  - Edit next-decision-day sizing intent
+  coverage_status: planned
 - route_id: portfolio.realtime_monitor
   href: /monitor
   label: Realtime Monitor

@@ -6,10 +6,16 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     QE_DIRECT_V2_DATASET_BINDING_FILE,
+    QE_UNIVERSE_COVERAGE_RECEIPT_FILE,
+)
+from backend.services.quantevolver.qe_active_dataset_profile import (
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
 )
 from backend.services.quantevolver.qe_dataset_contract import (
     QE_DIRECT_V2_DATASET_BINDING_PARAM,
@@ -17,7 +23,10 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QEDirectV2DatasetBinding,
 )
 from scripts.qe_build_frozen_suspend_filter import build_suspend_filter_payload
-from backend.services.quantevolver.qe_validate_direct_v2_dataset import validate_binding
+from backend.services.quantevolver.qe_validate_direct_v2_dataset import (
+    DirectV2DatasetValidationError,
+    validate_binding,
+)
 
 
 def _sha(path: Path) -> str:
@@ -36,18 +45,39 @@ def _component(root: Path, name: str, *, freq: str, start: str) -> dict[str, str
     instruments = component / "instruments" / "all.txt"
     calendar = component / "calendars" / f"{freq}.txt"
     meta = component / "meta_export.json"
-    instruments.write_text(f"000001.SZ\t{start}\t2026-08-31\n", encoding="utf-8")
+    stock_payload = f"000001.SZ\t{start}\t2026-08-31\n"
+    instruments.write_text(stock_payload, encoding="utf-8")
     calendar.write_text("2026-08-28\n2026-08-31\n", encoding="utf-8")
-    _write_json(
-        meta,
-        {
-            "snapshot_id": "daily_bin_candidate" if freq == "day" else "minute_bin_candidate",
+    meta_payload = {
+        "snapshot_id": "daily_bin_candidate" if freq == "day" else "minute_bin_candidate",
+        "start": start,
+        "end": "2026-08-31",
+        "universe_key": "aistock_equity_pit_canonical_v2",
+        "rule_version": "shsz_a_252td_st_delist_asof_v2",
+    }
+    if freq == "day":
+        benchmark_line = f"000300.SH\t{start}\t2026-08-31\n"
+        (component / "instruments" / "stock_universe.txt").write_text(
+            stock_payload, encoding="utf-8"
+        )
+        (component / "instruments" / "benchmark.txt").write_text(
+            benchmark_line, encoding="utf-8"
+        )
+        instruments.write_text(stock_payload + benchmark_line, encoding="utf-8")
+        meta_payload["benchmark_only"] = {
+            "schema_version": "qe_direct_daily_benchmark_v1",
+            "code": "000300.SH",
             "start": start,
             "end": "2026-08-31",
-            "universe_key": "aistock_equity_pit_canonical_v2",
-            "rule_version": "shsz_a_252td_st_delist_asof_v2",
-        },
-    )
+            "rows": 2,
+            "fields": ["open", "high", "low", "close", "volume", "amount"],
+            "source": "components/index_context/index_daily.h5",
+            "provider_catalog": "instruments/all.txt",
+            "selection_universe": "instruments/stock_universe.txt",
+            "benchmark_universe": "instruments/benchmark.txt",
+            "selection_eligible": False,
+        }
+    _write_json(meta, meta_payload)
     return {
         "snapshot_id": "daily_bin_candidate" if freq == "day" else "minute_bin_candidate",
         "universe_key": "aistock_equity_pit_canonical_v2",
@@ -104,7 +134,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, Path]:
 
     posix_root = "/mnt/x/AIstock_dataset_candidates/20260831-qe-hmm-v2-candidate"
     binding = {
-        "schema_version": "qe_direct_v2_dataset_binding_v1",
+        "schema_version": "qe_direct_v2_dataset_binding_v2",
         "release_id": "qe_hmm_full_v2_20260831",
         "cutoff": "2026-08-31",
         "candidate_root": posix_root,
@@ -117,6 +147,16 @@ def _fixture(tmp_path: Path) -> tuple[dict, Path]:
         "factor_meta_sha256": _sha(factor / "meta.json"),
         "day_pins": day_pins,
         "minute_pins": minute_pins,
+        "selection_pins": {
+            "stock_pool": "stock_universe",
+            "instruments_sha256": _sha(
+                root / "components" / "daily_bin_candidate" / "instruments" / "stock_universe.txt"
+            ),
+            "benchmark_code": "000300.SH",
+            "benchmark_instruments_sha256": _sha(
+                root / "components" / "daily_bin_candidate" / "instruments" / "benchmark.txt"
+            ),
+        },
         "index_pins": {
             "sha256": _sha(index_path),
             "max_date": "2026-08-31",
@@ -202,6 +242,7 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
     raw, _ = _fixture(tmp_path)
     binding = QEDirectV2DatasetBinding.from_mapping(raw)
     params = _custom_params(raw)
+    params["stock_pool"] = "all"
     split = {
         "train_start": "2018-08-01",
         "train_end": "2023-10-27",
@@ -261,12 +302,24 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
     conf = result["experiment_files"]["conf.yaml"]
     assert binding.provider_uri_day in conf
     assert binding.provider_uri_1min in conf
+    assert "market: &market stock_universe" in conf
+    assert "market: &market all" not in conf
+    parsed_conf = yaml.safe_load(conf)
+    assert parsed_conf["market"] == "stock_universe"
+    assert (
+        parsed_conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"]
+        == "all"
+    )
     prepare = result["experiment_files"]["prepare_factors.py"]
     assert repr(dict(binding.factor_meta)) in prepare
     assert binding.factor_meta_sha256 in prepare
     risk_spec = json.loads(result["experiment_files"]["qe_frozen_build_spec.json"])
     assert risk_spec["dataset"]["contract_id"] == binding.release_id
-    assert risk_spec["pins"] == dict(binding.day_pins)
+    assert risk_spec["pins"] == {
+        **dict(binding.day_pins),
+        "instruments_file": "stock_universe.txt",
+        "instruments_sha256": binding.selection_pins["instruments_sha256"],
+    }
     assert risk_spec["suspend"]["provider_uri"] == binding.suspend_data_dir
     assert risk_spec["suspend"]["metadata_name"] == "meta.json"
     assert "python qe_validate_direct_v2_dataset.py" in result["wsl_command_core"]
@@ -290,3 +343,197 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
     assert payload["suspended_row_count"] == 1
     assert payload["suspended_by_date"]["2026-08-28"] == ["000001.SZ"]
     assert payload["suspended_by_date"]["2026-08-31"] == []
+
+
+def test_direct_v2_binding_rejects_benchmark_in_selection_universe(tmp_path: Path) -> None:
+    raw, root = _fixture(tmp_path)
+    raw = _with_local_paths(raw, root)
+    binding_file = tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE
+    stock_path = (
+        root
+        / "components"
+        / "daily_bin_candidate"
+        / "instruments"
+        / "stock_universe.txt"
+    )
+    stock_path.write_text(
+        stock_path.read_text(encoding="utf-8") + "000300.SH\t2018-08-01\t2026-08-31\n",
+        encoding="utf-8",
+    )
+    raw["selection_pins"]["instruments_sha256"] = _sha(stock_path)
+    _write_json(binding_file, raw)
+
+    with pytest.raises(RuntimeError, match="qe_direct_v2_selection_contains_benchmark"):
+        validate_binding(binding_file)
+
+
+def test_direct_v2_binding_rejects_unbound_named_stock_pool(tmp_path: Path) -> None:
+    raw, _ = _fixture(tmp_path)
+    params = _custom_params(raw)
+    params["stock_pool"] = "filtered_pool_20260831"
+
+    composer = ConfigComposer.__new__(ConfigComposer)
+    with pytest.raises(ValueError, match="qe_direct_v2_stock_pool_outside_binding"):
+        composer._compose_conf_yaml(
+            factors_info=[],
+            model_info=None,
+            strategy_info=None,
+            data_split={
+                "train_start": "2018-08-01",
+                "train_end": "2023-10-27",
+                "valid_start": "2023-11-28",
+                "valid_end": "2024-05-31",
+                "test_start": "2024-07-01",
+                "test_end": "2024-12-31",
+                "backtest_end": "2024-12-30",
+            },
+            custom_params=params,
+            has_custom_factors=False,
+            has_alpha158=False,
+        )
+
+
+def _v3_binding(raw: dict, *, sidecar: str, receipt: str) -> dict:
+    value = json.loads(json.dumps(raw))
+    value["schema_version"] = "qe_direct_v2_dataset_binding_v3"
+    value["selection_pins"] = {
+        "mode": "single_index",
+        "pool_ids": ["csi300"],
+        "instrument_name": "index_pool__csi300",
+        "instruments_file": "index_pool__csi300.txt",
+        "instruments_sha256": hashlib.sha256(sidecar.encode()).hexdigest(),
+        "membership_revision": "csi300-pit-v1",
+        "coverage_receipt_sha256": hashlib.sha256(receipt.encode()).hexdigest(),
+        "benchmark_code": "000300.SH",
+        "benchmark_instruments_sha256": raw["selection_pins"]["benchmark_instruments_sha256"],
+    }
+    return value
+
+
+def _v3_receipt() -> str:
+    return json.dumps(
+        {
+            "schema_version": "qe_index_pool_coverage_receipt_v1",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "cutoff": "2026-08-31",
+            "pools": {
+                "csi300": {
+                    "available_start": "2018-08-01",
+                    "available_end": "2026-08-31",
+                    "gaps": [],
+                }
+            },
+        },
+        sort_keys=True,
+    )
+
+
+def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "index_pool__csi300.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["mode"] == "single_index"
+
+
+def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000001.SZ\tnot-a-date\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "index_pool__csi300.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(DirectV2DatasetValidationError, match="qe_direct_v2_selection_contract_invalid"):
+        validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+
+def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, _ = _fixture(tmp_path)
+    sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _v3_binding(raw, sidecar=sidecar, receipt=receipt)
+    params = _custom_params(raw)
+    params.update(
+        {
+            "stock_pool": "index_pool__csi300",
+            QE_RUN_STOCK_POOL_CONTENT_PARAM: sidecar,
+            QE_RUN_COVERAGE_RECEIPT_PARAM: receipt,
+        }
+    )
+    composer = ConfigComposer()
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {"workspace_base": "/tmp/qe_workspace"},
+    )
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": "DemoFactor",
+                "source": "custom",
+                "code_text": "def calculate_DemoFactor(instruments, start_date, end_date):\n    return None\n",
+            }
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read")
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=["DemoFactor"],
+        data_split={
+            "train_start": "2018-08-01",
+            "train_end": "2023-10-27",
+            "valid_start": "2023-11-28",
+            "valid_end": "2024-05-29",
+            "test_start": "2026-08-28",
+            "test_end": "2026-08-31",
+            "backtest_end": "2026-08-28",
+        },
+        custom_params=params,
+        experiment_name="direct-v3-test",
+        skip_db_save=True,
+        execution_algo="TWAP",
+        node_id="wsl2-5080",
+    )
+
+    files = result["experiment_files"]
+    assert files["index_pool__csi300.txt"] == sidecar
+    assert files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] == receipt
+    conf = yaml.safe_load(files["conf.yaml"])
+    assert conf["qlib_init"]["provider_uri"]["day"] == "/tmp/qe_workspace/direct-v3-test/qe_provider_day"
+    assert conf["qlib_init"]["provider_uri"]["1min"] == raw["provider_uri_1min"]
+    assert conf["market"] == "index_pool__csi300"
+    command = result["wsl_command_core"]
+    assert "ln -sfn" in command
+    assert "cp -f index_pool__csi300.txt" in command
+    assert raw["provider_uri_day"] in command
+    risk_spec = json.loads(files["qe_frozen_build_spec.json"])
+    assert risk_spec["provider_uri_day"].endswith("/qe_provider_day")
+    assert risk_spec["pins"]["instruments_file"] == "index_pool__csi300.txt"

@@ -66,6 +66,14 @@ from ..services.quantevolver.node_execution import (
     resolve_default_qe_node_id,
 )
 from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
+from ..services.quantevolver.qe_active_dataset_profile import (
+    QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    QEActiveDatasetProfileError,
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
+    reject_client_dataset_internals,
+)
+from ..services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_DATASET_BINDING_PARAM
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -203,6 +211,11 @@ class GenerateConfigRequest(BaseModel):
     data_split: Optional[Dict[str, str]] = None
     custom_params: Optional[Dict[str, Any]] = None
     experiment_name: Optional[str] = None
+    node_id: Optional[str] = Field(None, description="QE execution node; blank uses the configured default")
+    universe_selection: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Human-readable QE universe selection: stock_universe, single_index, or index_union",
+    )
     dispatch_mode: Optional[str] = Field(None, description="调度模式: normal / evolution")
     evolution_params: Optional[Dict[str, Any]] = Field(None, description="演进参数（dispatch_mode=evolution时）")
     enable_sector_hmm: bool = Field(False, description="是否启用行业 HMM 热度调整")
@@ -214,6 +227,14 @@ class GenerateConfigRequest(BaseModel):
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
     parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
+    consumer_id: str = Field(
+        "qe_mainline",
+        pattern="^(qe_mainline|advisory)$",
+        description="QE business consumer: qe_mainline or advisory",
+    )
+    created_by_type: Optional[str] = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型: ui/mcp/scheduler/agent")
+    created_by_name: Optional[str] = Field(None, description="创建来源名称")
+    purpose: str = Field("research", pattern="^(research|validation)$")
 
 
 class SingleExperimentPendingCreateRequest(GenerateConfigRequest):
@@ -279,6 +300,15 @@ def _single_experiment_start_state(exp_record: Mapping[str, Any]) -> tuple[bool,
 
 def _single_experiment_editable_payload(exp_record: Mapping[str, Any]) -> Dict[str, Any]:
     custom_params = _parse_json_object(exp_record.get("custom_params"))
+    binding = _parse_json_object(custom_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM))
+    selection = _parse_json_object(binding.get("selection_pins"))
+    for key in (
+        QE_DIRECT_V2_DATASET_BINDING_PARAM,
+        QE_RUN_STOCK_POOL_CONTENT_PARAM,
+        QE_RUN_COVERAGE_RECEIPT_PARAM,
+        QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    ):
+        custom_params.pop(key, None)
     startable, reason = _single_experiment_start_state(exp_record)
     alpha_mode = exp_record.get("alpha_mode") or "single"
     editable = startable and alpha_mode == "single"
@@ -295,6 +325,14 @@ def _single_experiment_editable_payload(exp_record: Mapping[str, Any]) -> Dict[s
         "strategy_id": exp_record.get("strategy_id"),
         "data_split": _parse_json_object(exp_record.get("data_split")),
         "custom_params": custom_params,
+        "universe_selection": (
+            {
+                "mode": selection.get("mode") or "stock_universe",
+                "pool_ids": list(selection.get("pool_ids") or []),
+            }
+            if selection
+            else None
+        ),
         "editable": editable,
         "startable": startable,
         "resume_allowed": False,
@@ -3031,6 +3069,27 @@ def generate_from_requirement(req: GenerateFromRequirementRequest):
 # Phase 2 API: ConfigComposer
 # ============================================================
 
+@router.get("/dataset-profile")
+def get_qe_dataset_profile():
+    """Return the human-readable active QE release/default/universe summary."""
+
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QEActiveDatasetProfileError,
+        get_qe_dataset_profile_summary,
+    )
+
+    try:
+        return {"ok": True, "data": get_qe_dataset_profile_summary()}
+    except QEActiveDatasetProfileError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason_code": exc.reason_code,
+                "message": str(exc),
+                "context": exc.context,
+            },
+        ) from exc
+
 @router.post("/config/generate")
 def generate_config(req: GenerateConfigRequest):
     """生成QLib配置文件。支持 HMM 板块轮动和分钟线策略。dispatch_mode=evolution时标记为待演进。"""
@@ -3049,6 +3108,45 @@ def generate_config(req: GenerateConfigRequest):
             req,
             source="quantevolver.config.generate",
         )
+        provenance = dict(custom_params.get("qe_mcp_provenance") or {})
+        provenance.update(
+            {
+                "created_by_type": req.created_by_type or "ui",
+                "consumer_id": req.consumer_id,
+                "purpose": req.purpose,
+            }
+        )
+        if req.created_by_name:
+            provenance["created_by_name"] = req.created_by_name
+        custom_params["qe_mcp_provenance"] = provenance
+
+        from ..services.quantevolver.qe_active_dataset_profile import (
+            load_active_qe_profile,
+            resolve_and_apply_active_qe_dataset,
+        )
+
+        if req.universe_selection is not None and custom_params.get("stock_pool"):
+            raise ValueError("stock_pool and universe_selection cannot be supplied together for new QE work")
+        active_profile = load_active_qe_profile()
+        if active_profile is not None:
+            reject_client_dataset_internals(req.custom_params)
+        if active_profile is None and req.universe_selection is not None:
+            raise ValueError(
+                "reason_code=qe_active_dataset_profile_missing: "
+                "universe_selection requires an activated QE dataset profile"
+            )
+        effective_node_id = req.node_id or resolve_default_qe_node_id()
+        custom_params.setdefault("execution_node_id", effective_node_id)
+        resolved_dataset_summary = None
+        if active_profile is not None and not (req.alpha_mode == "multi" and req.multi_alpha_config):
+            req.data_split, custom_params, resolved_dataset_summary = resolve_and_apply_active_qe_dataset(
+                node_id=effective_node_id,
+                data_split=req.data_split,
+                universe_selection=req.universe_selection,
+                custom_params=custom_params,
+                label_horizon=int(custom_params.get("label_horizon") or 1),
+                profile=active_profile,
+            )
 
 
         cc = ConfigComposer()
@@ -3097,6 +3195,7 @@ def generate_config(req: GenerateConfigRequest):
                 stock_pool=custom_params.get("stock_pool"),
                 hmm_config=hmm_cfg_dict,
                 experiment_name=req.experiment_name,
+                node_id=effective_node_id,
             )
             # 查询可用节点（用于分布式规划 + 前端展示）
             available_nodes = []
@@ -3113,6 +3212,16 @@ def generate_config(req: GenerateConfigRequest):
                 experiment_config=exp_cfg,
                 composer=cc,
                 available_nodes=available_nodes,
+                active_dataset_profile=active_profile,
+                universe_selection=req.universe_selection,
+                registration_context={
+                    "consumer_id": req.consumer_id,
+                    "source_type": req.created_by_type or "ui",
+                    "created_by_name": req.created_by_name,
+                    "purpose": req.purpose,
+                },
+                parent_multi_alpha_id=req.parent_multi_alpha_id,
+                parent_custom_params=custom_params,
             )
             engine_result = engine.run()
 
@@ -3120,41 +3229,6 @@ def generate_config(req: GenerateConfigRequest):
                 raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
 
             parent_exp_id = engine_result.get("parent_experiment_id")
-
-            # 汇总所有组的因子名（用于实验记录的 factor_names 字段）
-            all_factor_names = []
-            for ag in exp_cfg.multi_alpha_config.alpha_groups:
-                all_factor_names.extend(ag.factor_names)
-
-            # 创建 parent 实验记录 + 设置 alpha_mode（INSERT 而非 UPDATE，因为之前从未创建）
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO qe_experiments
-                            (experiment_id, experiment_name, status,
-                             factor_names, model_id, strategy_id,
-                             data_split, custom_params,
-                             alpha_mode, multi_alpha_config,
-                             parent_multi_alpha_id, created_at)
-                        VALUES (%s, %s, 'created', %s, %s, %s, %s, %s,
-                                'multi', %s::jsonb, %s, NOW())
-                        ON CONFLICT (experiment_id) DO UPDATE SET
-                            alpha_mode = 'multi',
-                            multi_alpha_config = EXCLUDED.multi_alpha_config,
-                            parent_multi_alpha_id = EXCLUDED.parent_multi_alpha_id,
-                            factor_names = EXCLUDED.factor_names
-                    """, (
-                        parent_exp_id,
-                        parent_exp_id,
-                        json.dumps(all_factor_names),
-                        exp_cfg.multi_alpha_config.alpha_groups[0].model_id if exp_cfg.multi_alpha_config.alpha_groups else None,
-                        req.strategy_id,
-                        json.dumps(req.data_split) if req.data_split else None,
-                        json.dumps(custom_params) if custom_params else None,
-                        json.dumps(req.multi_alpha_config),
-                        req.parent_multi_alpha_id,
-                    ))
-                conn.commit()
 
             # 生成前端需要的展示信息
             group_configs = engine_result.get("group_configs", [])
@@ -3198,6 +3272,23 @@ def generate_config(req: GenerateConfigRequest):
                 "node_distribution": node_groups,
                 "is_distributed": len(node_groups) > 1,
             }
+            if active_profile is not None:
+                result["wsl_command"] = None
+                result["group_configs"] = [
+                    {
+                        key: group[key]
+                        for key in ("group_name", "node_id", "order", "reuse_mode")
+                        if key in group
+                    }
+                    for group in group_configs
+                ]
+                result["resolved_dataset"] = {
+                    "generation": active_profile.generation,
+                    "release_id": active_profile.release_id,
+                    "cutoff": active_profile.cutoff.isoformat(),
+                    "universe_selection": req.universe_selection
+                    or active_profile.qe["default_universe"],
+                }
 
             if req.dispatch_mode == "evolution":
                 result["evolution_pending"] = True
@@ -3206,15 +3297,41 @@ def generate_config(req: GenerateConfigRequest):
             return result
 
         # ── Single-Alpha（原有逻辑）────────────────────────────────
-        result = cc.compose_experiment(
-            factor_names=req.factor_names,
-            factor_sources=req.factor_sources,
-            model_id=req.model_id,
-            strategy_id=req.strategy_id,
-            data_split=req.data_split,
-            custom_params=custom_params,
-            experiment_name=req.experiment_name,
-        )
+        if active_profile is not None:
+            result = cc.compose_experiment_in_memory(
+                factor_names=req.factor_names,
+                factor_sources=req.factor_sources,
+                model_id=req.model_id,
+                strategy_id=req.strategy_id,
+                data_split=req.data_split,
+                custom_params=custom_params,
+                experiment_name=req.experiment_name,
+                node_id=effective_node_id,
+                skip_db_save=False,
+                execution_algo=custom_params.get("execution_algo"),
+                execution_algo_params=custom_params.get("execution_algo_params"),
+            )
+            result["ok"] = True
+            result["resolved_dataset"] = resolved_dataset_summary
+            for internal_key in (
+                "experiment_files",
+                "wsl_command",
+                "wsl_command_core",
+                "wsl_workdir",
+                "direct_v2_dataset_binding",
+                "canonical_pit_dataset_binding",
+            ):
+                result.pop(internal_key, None)
+        else:
+            result = cc.compose_experiment(
+                factor_names=req.factor_names,
+                factor_sources=req.factor_sources,
+                model_id=req.model_id,
+                strategy_id=req.strategy_id,
+                data_split=req.data_split,
+                custom_params=custom_params,
+                experiment_name=req.experiment_name,
+            )
 
         if req.dispatch_mode == "evolution":
             result["evolution_pending"] = True
@@ -3225,6 +3342,22 @@ def generate_config(req: GenerateConfigRequest):
         raise
     except TradingCoreError as e:
         raise HTTPException(status_code=422, detail=e.to_dict()) from e
+    except QEActiveDatasetProfileError as e:
+        request_codes = {
+            "qe_dataset_internal_input_forbidden",
+            "qe_dataset_window_outside_release",
+            "qe_universe_mode_invalid",
+            "qe_universe_pool_unknown",
+            "qe_universe_window_coverage_incomplete",
+        }
+        raise HTTPException(
+            status_code=400 if e.reason_code in request_codes else 503,
+            detail={
+                "reason_code": e.reason_code,
+                "message": str(e),
+                "context": e.context,
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -3244,9 +3377,11 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
     provenance = {
         "runtime_first": True,
         "created_by_type": req.created_by_type or "mcp",
+        "consumer_id": req.consumer_id,
         "created_by_name": req.created_by_name,
         "source_context_json": req.source_context_json,
         "provenance": req.provenance,
+        "purpose": req.purpose,
     }
     custom_params["qe_mcp_provenance"] = {
         key: value for key, value in provenance.items() if value not in (None, "", {})
@@ -3272,6 +3407,25 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
 def list_experiments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    created_from: Optional[str] = Query(None, description="Created at or after this ISO date/time"),
+    created_to: Optional[str] = Query(None, description="Created on or before this ISO date"),
+    source_type: Optional[str] = Query(None, description="ui, mcp, scheduler, or agent"),
+    consumer_id: Optional[str] = Query(
+        None,
+        pattern="^(qe_mainline|advisory)$",
+        description="qe_mainline or advisory",
+    ),
+    run_kind: Optional[str] = Query(None, description="single, custom evolution, strategy evolution, auto evolution, or multi-alpha"),
+    purpose: Optional[str] = Query(None, description="research or validation"),
+    status: Optional[str] = Query(None, description="Canonical QE status"),
+    node_id: Optional[str] = Query(None, description="Execution node business name"),
+    model: Optional[str] = Query(None, description="Model name contains"),
+    factor: Optional[str] = Query(None, description="Factor name contains"),
+    dataset_release: Optional[str] = Query(None, description="Dataset release id"),
+    universe_pool: Optional[str] = Query(None, description="Stock-pool id"),
+    execution_algo: Optional[str] = Query(None, description="Minute execution algorithm"),
+    archive_status: Optional[str] = Query(None, description="Archive/recommendation status"),
+    query: Optional[str] = Query(None, description="Experiment name, model, or factor text"),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
     include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
     detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics/custom_params 大 JSON；full 保留旧完整字段"),
@@ -3280,13 +3434,35 @@ def list_experiments(
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children, detail=detail)
-        # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
-        if alpha_mode and result.get("ok") and result.get("items"):
-            result["items"] = [
-                exp for exp in result["items"]
-                if exp.get("alpha_mode", "single") == alpha_mode
-            ]
+        filters = {
+            key: value
+            for key, value in {
+                "alpha_mode": alpha_mode,
+                "created_from": created_from,
+                "created_to": created_to,
+                "source_type": source_type,
+                "consumer_id": consumer_id,
+                "run_kind": run_kind,
+                "purpose": purpose,
+                "status": status,
+                "node_id": node_id,
+                "model": model,
+                "factor": factor,
+                "dataset_release": dataset_release,
+                "universe_pool": universe_pool,
+                "execution_algo": execution_algo,
+                "archive_status": archive_status,
+                "query": query,
+            }.items()
+            if value not in (None, "")
+        }
+        result = cc.list_experiments(
+            limit=limit,
+            offset=offset,
+            include_children=include_children,
+            detail=detail,
+            filters=filters,
+        )
         return result
     except Exception as e:
         logger.exception("获取实验列表失败")
@@ -3343,6 +3519,35 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
             source="quantevolver.experiments.editable_config",
         )
         existing_custom_params = _parse_json_object(exp_record.get("custom_params"))
+        existing_split = _parse_json_object(exp_record.get("data_split"))
+        existing_binding = _parse_json_object(
+            existing_custom_params.get(QE_DIRECT_V2_DATASET_BINDING_PARAM)
+        )
+        if existing_binding:
+            if req.data_split is not None and dict(req.data_split) != existing_split:
+                raise HTTPException(
+                    status_code=409,
+                    detail="resolved dataset dates are immutable after pending-task creation; create a new task",
+                )
+            selection = _parse_json_object(existing_binding.get("selection_pins"))
+            existing_semantic_selection = {
+                "mode": selection.get("mode") or "stock_universe",
+                "pool_ids": list(selection.get("pool_ids") or []),
+            }
+            if req.universe_selection is not None and dict(req.universe_selection) != existing_semantic_selection:
+                raise HTTPException(
+                    status_code=409,
+                    detail="resolved universe is immutable after pending-task creation; create a new task",
+                )
+            for key in (
+                QE_DIRECT_V2_DATASET_BINDING_PARAM,
+                QE_RUN_STOCK_POOL_CONTENT_PARAM,
+                QE_RUN_COVERAGE_RECEIPT_PARAM,
+                QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+                "stock_pool",
+            ):
+                if key in existing_custom_params:
+                    custom_params[key] = existing_custom_params[key]
         for provenance_key in (
             "qe_mcp_provenance",
             "qe_pending_task_source",
@@ -3379,7 +3584,7 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
                         json.dumps(req.factor_names or []),
                         req.model_id,
                         req.strategy_id,
-                        json.dumps(req.data_split) if req.data_split else None,
+                        json.dumps(req.data_split) if req.data_split else json.dumps(existing_split) if existing_split else exp_record.get("data_split"),
                         json.dumps(custom_params) if custom_params else None,
                         experiment_id,
                     ),
@@ -6737,10 +6942,18 @@ async def _run_multi_alpha_experiment(
         experiment_config=exp_cfg,
         composer=cc,
         available_nodes=available_nodes,
+        registration_context=dict(_cp.get("_qe_run_registration") or {}),
+        parent_multi_alpha_id=exp_record.get("parent_multi_alpha_id"),
+        parent_custom_params=_cp,
     )
     engine_result = engine.run()
     if not engine_result.get("ok"):
         raise HTTPException(status_code=500, detail="MultiAlphaEngine 执行失败")
+    from ..services.quantevolver.qe_run_registry import QERunRegistry
+
+    QERunRegistry(connection_factory=get_conn).mark_dispatched(
+        experiment_id=experiment_id
+    )
 
     all_experiment_files = engine_result.get("experiment_files", {})
     group_configs = engine_result.get("group_configs", [])
@@ -6768,6 +6981,10 @@ async def _run_multi_alpha_experiment(
     submitted_nodes: list[dict] = []
     waiting_nodes: list[dict] = []
     submission_coordinator = QEWorkspaceSubmissionCoordinator()
+    multi_alpha_consumer_id = str(
+        (_cp.get("_qe_run_registration") or {}).get("consumer_id")
+        or "qe_mainline"
+    )
 
     if is_distributed:
         # ── 分布式：各节点独立提交 ────────────────────────────
@@ -6827,6 +7044,7 @@ async def _run_multi_alpha_experiment(
                 owner_id=qe_submission_owner_id(),
                 claim_source=claim_source,
                 record_waiting_capacity=record_waiting,
+                consumer_id=multi_alpha_consumer_id,
             )
             client = QEWorkspaceClient.for_node(n_id)
             try:
@@ -6967,6 +7185,7 @@ async def _run_multi_alpha_experiment(
             owner_id=qe_submission_owner_id(),
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
+            consumer_id=multi_alpha_consumer_id,
         )
         client = QEWorkspaceClient.for_node(only_node_id)
         async with client:
@@ -7138,6 +7357,21 @@ async def _run_experiment_unified(
             require_fixed_seed=True,
             submission_source_kind="qe_experiment",
             submission_source_execution_id=experiment_id,
+            submission_consumer_id=str(
+                _parse_json_object(
+                    _parse_json_object(exp_record.get("custom_params")).get(
+                        "_qe_run_registration"
+                    )
+                )
+                .get("consumer_id")
+                or "qe_mainline"
+            ),
+        )
+
+        from ..services.quantevolver.qe_run_registry import QERunRegistry
+
+        QERunRegistry(connection_factory=get_conn).mark_dispatched(
+            experiment_id=experiment_id
         )
 
         client = QEWorkspaceClient.for_node(effective_node_id)
@@ -8103,6 +8337,16 @@ async def stop_multi_alpha_experiment(experiment_id: str):
 _QE_DELETE_ACTIVE_STATUSES = {"running", "processing", "queued", "submitted"}
 
 
+def _is_registered_qe_history_row(row: Mapping[str, Any]) -> bool:
+    raw = row.get("custom_params")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+    return isinstance(raw, Mapping) and isinstance(raw.get("_qe_run_registration"), Mapping)
+
+
 def _cursor_row_to_dict(cur: Any, row: Any) -> dict[str, Any] | None:
     """Convert psycopg/fake cursor rows without requiring RealDictCursor."""
     if row is None:
@@ -8221,7 +8465,7 @@ async def delete_experiment(
 
             cur.execute(
                 """
-                SELECT task_id, status, node_id, base_experiment_id
+                SELECT task_id, status, node_id, base_experiment_id, strategy_evo_config
                 FROM qe_evolution_tasks
                 WHERE base_experiment_id = ANY(%s::text[])
                    OR task_id = ANY(%s::text[])
@@ -8280,6 +8524,13 @@ async def delete_experiment(
             multi_alpha_groups = _fetchall_dicts(cur)
 
     assert selected_exp is not None  # for type checkers
+    registered_history = _is_registered_qe_history_row(selected_exp) or any(
+        _is_registered_qe_history_row(row) for row in child_experiments
+    ) or any(
+        isinstance(row.get("strategy_evo_config"), Mapping)
+        and isinstance(row["strategy_evo_config"].get("_qe_run_registration"), Mapping)
+        for row in related_tasks
+    )
     default_node_id = resolve_default_qe_node_id()
     selected_is_child_loop = bool(selected_exp.get("parent_experiment_id") or selected_exp.get("is_evolution_loop")) and not child_experiments
 
@@ -8453,6 +8704,46 @@ async def delete_experiment(
                 "worker_cleanup_results": cleanup_results,
             },
         )
+
+    # Registered formal runs keep their Level-0 history.  For those rows this
+    # legacy route is an artifact-cleanup action, not a control-record delete.
+    if registered_history:
+        retention = {
+            "schema_version": "qe_artifact_retention_v1",
+            "status": "cleaned" if cleanup_workspace else "available",
+            "cleaned_at": datetime.now().astimezone().isoformat() if cleanup_workspace else None,
+            "cleanup_scope": "workspace_and_aistock_cache" if cleanup_workspace else "none",
+        }
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET custom_params = jsonb_set(
+                            COALESCE(custom_params, '{}'::jsonb),
+                            '{_qe_artifact_retention}',
+                            %s::jsonb,
+                            true
+                        ),
+                        updated_at = NOW()
+                    WHERE experiment_id = ANY(%s::text[])
+                    """,
+                    (json.dumps(retention), experiment_ids_to_delete),
+                )
+            conn.commit()
+        return {
+            "ok": True,
+            "experiment_id": experiment_id,
+            "history_retained": True,
+            "artifact_retention": retention,
+            "worker_workspace_cleanup_mode": "node_api_only" if cleanup_workspace else "skipped",
+            "worker_cleanup_results": cleanup_results,
+            "local_cleanup": {
+                "cleaned_dirs": cleaned_dirs,
+                "optuna_files_deleted": optuna_deleted,
+            },
+            "deleted_experiment_ids": [],
+        }
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:

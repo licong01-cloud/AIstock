@@ -88,7 +88,6 @@ CLEANUP_BATCH_TARGET_KEYS = {
 NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 MERGE_QUALITY_CHECK_CONTEXTS = (
     "CI verdict",
-    "CodeQL verdict",
 )
 ARTIFACT_PATH_PATTERNS = (
     ".codex_tmp",
@@ -158,6 +157,49 @@ WORKTREE_QE_LIVE_LOG_SCHEMA = "qe_live_log_record_v1"
 WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
 WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
     f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
+)
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT = "rdagent_assets/factor_values/checkpoints"
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_TASK_RE = re.compile(r"^official_factor_full_\d{13}$")
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_PAIRS = 64
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES = 128 * 1024
+WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES = 16 * 1024
+WORKTREE_PYTEST_FACTOR_CHECKPOINT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "task_id",
+        "status",
+        "resumed_from_task_id",
+        "created_at",
+        "window_train_start",
+        "window_backtest_end",
+        "factor_data_dir",
+        "qlib_bin_path",
+        "include_disabled",
+        "requested_factor_names",
+        "eligible_factor_names",
+        "completed_factor_names",
+        "retry_factor_names",
+        "failed_factors",
+        "db_result",
+        "resource_failures",
+        "resource_actions",
+        "snapshot_promotion",
+    }
+)
+WORKTREE_PYTEST_FACTOR_PROGRESS_FIELDS = frozenset(
+    {
+        "schema_version",
+        "task_id",
+        "status",
+        "total_factors",
+        "value_ready_count",
+        "completed_count",
+        "success_count",
+        "failed_count",
+        "active_factor_names",
+        "last_event",
+        "updated_at",
+    }
 )
 WORKTREE_BACKEND_LOG_ROOT = "backend/logs"
 WORKTREE_BACKEND_LOG_LIMITS = {
@@ -1860,22 +1902,28 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
             raise WorkflowError(
                 f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
             )
-        overlapping_targets = sorted(
-            str(target_id)
+        exact_runtime_overlaps = sorted(
+            f"{target_id}:{pattern}"
             for target_id, target in targets.items()
-            if any(
-                _runtime_glob_matches(path_value, str(pattern))
-                for pattern in flow._as_list(target.get("source_globs"))
-            )
+            for pattern in flow._as_list(target.get("source_globs"))
+            if not any(character in str(pattern) for character in "*?[")
+            and _runtime_glob_matches(path_value, str(pattern))
         )
-        if overlapping_targets:
+        if exact_runtime_overlaps:
             raise WorkflowError(
-                "runtime target catalog non-runtime path overlaps runtime targets: "
-                f"{path_value} -> {overlapping_targets}"
+                "runtime target catalog non-runtime path overlaps an exact runtime source: "
+                f"{path_value} -> {exact_runtime_overlaps}"
             )
-        if not path_value.startswith("scripts/") or Path(path_value).suffix.casefold() not in {".py", ".ps1"}:
+        suffix = Path(path_value).suffix.casefold()
+        supported_namespace = (
+            (path_value.startswith("scripts/") and suffix in {".py", ".ps1"})
+            or (path_value.startswith("backend/services/") and suffix == ".py")
+            or path_value == "noxfile.py"
+        )
+        if not supported_namespace:
             raise WorkflowError(
-                "runtime target catalog non_runtime_source_paths only accepts Python or PowerShell operator scripts under scripts/: "
+                "runtime target catalog non_runtime_source_paths only accepts exact Python or PowerShell sources "
+                "under scripts/, exact Python sources under backend/services/, or noxfile.py: "
                 f"{path_value}"
             )
         candidate = root.joinpath(*path_value.split("/"))
@@ -1960,59 +2008,6 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/ci_",
         "tests/",
     )
-    known_non_runtime_files = {
-        "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
-        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
-        "backend/services/advisory_model_first/qe_alpha_generator_contracts.py",
-        "backend/services/advisory_model_first/qe_alpha_generator_pipeline.py",
-        "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
-        "scripts/advisory_p0l_build_training_request.py",
-        "scripts/wsl/advisory_p0l_train.py",
-        "backend/services/advisory_phase0b/audit_service.py",
-        "backend/services/advisory_phase0b/snapshot_reader.py",
-        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-        "backend/services/hmm_risk/b3_mixed_dimension.py",
-        "backend/services/hmm_risk/b3_training.py",
-        "backend/services/hmm_risk/market_relative_jump_spike.py",
-        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
-        "backend/services/hmm_risk/market_relative_ridge_holdout.py",
-        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-        "backend/services/hmm_risk/state_model_set.py",
-        "backend/services/dataset_release/direct_monthly.py",
-        "backend/services/hmm_risk/stock_fact_repository.py",
-        "backend/services/announcements/title_classifier.py",
-        "backend/services/event_signal/st_announcement_adapter.py",
-        "scripts/advisory_short_rebound_batch_b.py",
-        "scripts/aistock_bug_id_allocator.py",
-        "scripts/bug_registry_metadata_check.py",
-        "scripts/aistock_issue_workflow.py",
-        "scripts/issue_flow.py",
-        "scripts/aistock_guardrail_scan.py",
-        "scripts/ci_failure_issue_summary.py",
-        "scripts/ci/prepare_self_hosted_workspace.py",
-        "scripts/export_qe_qlib_candidate.py",
-        "scripts/export_suspend_d_candidate.py",
-        "scripts/build_stock_universe_pit_spans.py",
-        "scripts/classify_announcement_titles_v0.py",
-        "scripts/sync_eastmoney_anns_metadata.py",
-        "scripts/dataset_release_control_store.py",
-        "scripts/update_backtest_dataset_monthly.py",
-        "scripts/qlib_multi_dataset_smoke_backtest.py",
-        "scripts/qlib_authoritative_smoke_backtest.py",
-        "scripts/llm_provider_adapter.py",
-        "scripts/nightly_adaptive_scheduler.py",
-        "scripts/nightly_session_runner.py",
-        "scripts/ci_change_classifier.py",
-        "scripts/hmm_risk/prepare_state_model_set.py",
-        "scripts/hmm_risk/run_market_relative_jump_spike.py",
-        "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
-        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
-        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
-        "noxfile.py",
-    }
     known_client_files = {
         "scripts/aistock_mcp_server.py",
     }
@@ -2021,9 +2016,13 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
+        # The workflow must remain classifiable while its catalog is being
+        # created or repaired. All business/offline sources stay catalog-only.
+        if path == "scripts/aistock_issue_workflow.py":
+            impacts.add("none")
+            continue
         if (
-            path in known_non_runtime_files
-            or path in catalog_non_runtime_files
+            path in catalog_non_runtime_files
             or lower.startswith(known_non_runtime_prefixes)
         ):
             impacts.add("none")
@@ -3614,6 +3613,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (
         re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
@@ -3629,6 +3629,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/advisory/programs$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/advisory/historical-range-batches$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/experiments$"), "collection", _validate_collection_payload),
@@ -12103,6 +12104,70 @@ def _state_roots_for_bug(bug_id: str) -> list[Path]:
     return unique
 
 
+def _build_resume_runtime_preflight(root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_resume_runtime_preflight_v1",
+        "status": "not_available",
+        "advisory_only": True,
+        "changed_files_count": 0,
+        "changed_files_preview": [],
+        "runtime_impact": None,
+        "target_ids": [],
+        "blocking": [],
+        "reason": None,
+    }
+    if not (root / ".git").exists():
+        payload["reason"] = "workflow root is not a git checkout"
+        return payload
+    commands = (
+        ["git", "diff", "--name-only", "origin/main...HEAD"],
+        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "diff", "--cached", "--name-only", "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    )
+    changed_files: set[str] = set()
+    for command in commands:
+        result = _run_command(command, cwd=root)
+        if not result.get("ok"):
+            payload["reason"] = f"changed-file discovery failed: {json.dumps(command[1:])}"
+            return payload
+        changed_files.update(
+            line.strip().replace("\\", "/")
+            for line in str(result.get("stdout") or "").splitlines()
+            if line.strip()
+        )
+    ordered_files = sorted(changed_files)
+    payload["changed_files_count"] = len(ordered_files)
+    payload["changed_files_preview"] = ordered_files[:12]
+    if not ordered_files:
+        payload["status"] = "not_applicable"
+        payload["reason"] = "no actual changed files"
+        return payload
+    try:
+        inference = _classify_runtime_impact(ordered_files, root=root)
+        payload["runtime_impact"] = inference["runtime_impact"]
+        payload["target_ids"] = inference["target_ids"]
+        issue_path = _state_issue_json_path(root, state)
+        if issue_path and issue_path.is_file():
+            contract = build_runtime_contract(
+                record=_load_json(issue_path),
+                changed_files=ordered_files,
+                root=root,
+            )
+            payload["blocking"] = list(contract.get("blocking") or [])
+        payload["status"] = "attention_required" if payload["blocking"] else "ready"
+        payload["reason"] = (
+            "resolve runtime catalog or contract mismatch before finish"
+            if payload["blocking"]
+            else "actual changed-file runtime classification is consistent"
+        )
+    except WorkflowError as exc:
+        payload["status"] = "attention_required"
+        payload["blocking"] = [str(exc)]
+        payload["reason"] = "runtime catalog validation failed"
+    return payload
+
+
 def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit: int = 8) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
@@ -12150,6 +12215,7 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "context_resume_digest": _workflow_context_resume_digest(resume_state, root=root),
+        "runtime_preflight": _build_resume_runtime_preflight(root, state),
         "state": state,
         "recent_events": events,
         "stop_conditions": stop_conditions,
@@ -13510,6 +13576,165 @@ def _validated_qe_live_log_transient_paths(
     return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
 
 
+def _is_pytest_temporary_path(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    candidate = Path(text)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        return False
+    try:
+        relative = candidate.resolve(strict=False).relative_to(Path(tempfile.gettempdir()).resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    parts = [part.casefold() for part in relative.parts]
+    return any(
+        part.startswith("pytest-of-")
+        and index + 2 < len(parts)
+        and re.fullmatch(r"pytest-\d+", parts[index + 1]) is not None
+        for index, part in enumerate(parts)
+    )
+
+
+def _content_bound_file_manifest_sha256(
+    worktree_path: Path,
+    relative_paths: Iterable[str],
+) -> str | None:
+    lines: list[str] = []
+    prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    for relative_path in sorted({_normalize_worktree_artifact_path(item) for item in relative_paths}):
+        candidate = worktree_path / relative_path
+        try:
+            if not relative_path.startswith(prefix) or _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return None
+            size = candidate.stat().st_size
+            limit = (
+                WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES
+                if relative_path.endswith(".progress.json")
+                else WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES
+            )
+            if size > limit:
+                return None
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        except OSError:
+            return None
+        lines.append(f"{relative_path}\t{size}\t{digest}")
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _validated_pytest_factor_checkpoint_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str, str | None]:
+    prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "pytest_factor_checkpoints_not_present", None
+    root = worktree_path / WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT
+    if not root.is_dir() or _is_reparse_or_symlink(root) or _is_reparse_or_symlink(root.parent):
+        return set(), "pytest_factor_checkpoint_unsafe_directory", None
+
+    task_paths: dict[str, dict[str, str]] = {}
+    for relative_path in sorted(observed):
+        filename = relative_path.removeprefix(prefix)
+        if "/" in filename:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        if filename.endswith(".progress.json"):
+            task_id = filename[: -len(".progress.json")]
+            kind = "progress"
+        elif filename.endswith(".json"):
+            task_id = filename[: -len(".json")]
+            kind = "checkpoint"
+        else:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        if not WORKTREE_PYTEST_FACTOR_CHECKPOINT_TASK_RE.fullmatch(task_id):
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        pair = task_paths.setdefault(task_id, {})
+        if kind in pair:
+            return set(), "pytest_factor_checkpoint_inventory_mismatch", None
+        pair[kind] = relative_path
+
+    if not task_paths or len(task_paths) > WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_PAIRS:
+        return set(), "pytest_factor_checkpoint_pair_limit_exceeded", None
+    if any(set(pair) != {"checkpoint", "progress"} for pair in task_paths.values()):
+        return set(), "pytest_factor_checkpoint_pair_incomplete", None
+
+    for task_id, pair in sorted(task_paths.items()):
+        payloads: dict[str, dict[str, Any]] = {}
+        for kind, relative_path in pair.items():
+            candidate = worktree_path / relative_path
+            try:
+                if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                    return set(), "pytest_factor_checkpoint_unsafe_file", None
+                limit = (
+                    WORKTREE_PYTEST_FACTOR_PROGRESS_MAX_FILE_BYTES
+                    if kind == "progress"
+                    else WORKTREE_PYTEST_FACTOR_CHECKPOINT_MAX_FILE_BYTES
+                )
+                if candidate.stat().st_size > limit:
+                    return set(), "pytest_factor_checkpoint_file_too_large", None
+                payload = json.loads(candidate.read_text(encoding="utf-8", errors="strict"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                return set(), "pytest_factor_checkpoint_invalid_json", None
+            if not isinstance(payload, dict):
+                return set(), "pytest_factor_checkpoint_schema_mismatch", None
+            payloads[kind] = payload
+
+        checkpoint = payloads["checkpoint"]
+        progress = payloads["progress"]
+        if (
+            set(checkpoint) != WORKTREE_PYTEST_FACTOR_CHECKPOINT_FIELDS
+            or checkpoint.get("schema_version") != "official_factor_compute_checkpoint_v1"
+            or set(progress) != WORKTREE_PYTEST_FACTOR_PROGRESS_FIELDS
+            or progress.get("schema_version") != "official_factor_compute_progress_v1"
+        ):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if checkpoint.get("task_id") != task_id or progress.get("task_id") != task_id:
+            return set(), "pytest_factor_checkpoint_task_identity_mismatch", None
+        if checkpoint.get("status") not in {"success", "failed"} or progress.get("status") != checkpoint.get("status"):
+            return set(), "pytest_factor_checkpoint_nonterminal_or_status_mismatch", None
+        if not _is_pytest_temporary_path(checkpoint.get("factor_data_dir")):
+            return set(), "pytest_factor_checkpoint_non_test_data_root", None
+        qlib_bin_path = checkpoint.get("qlib_bin_path")
+        if qlib_bin_path not in {None, ""} and not _is_pytest_temporary_path(qlib_bin_path):
+            return set(), "pytest_factor_checkpoint_non_test_qlib_root", None
+        factor_lists = (
+            checkpoint.get("requested_factor_names"),
+            checkpoint.get("eligible_factor_names"),
+            checkpoint.get("completed_factor_names"),
+            checkpoint.get("retry_factor_names"),
+            checkpoint.get("failed_factors"),
+            progress.get("active_factor_names"),
+        )
+        if any(not isinstance(items, list) for items in factor_lists):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if len(checkpoint["eligible_factor_names"]) > 64 or progress.get("active_factor_names"):
+            return set(), "pytest_factor_checkpoint_nonterminal_or_status_mismatch", None
+        counts = (
+            progress.get("total_factors"),
+            progress.get("value_ready_count"),
+            progress.get("completed_count"),
+            progress.get("success_count"),
+            progress.get("failed_count"),
+        )
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+            return set(), "pytest_factor_checkpoint_schema_mismatch", None
+        if progress["total_factors"] != len(checkpoint["eligible_factor_names"]):
+            return set(), "pytest_factor_checkpoint_count_mismatch", None
+        if progress["completed_count"] != progress["success_count"] + progress["failed_count"]:
+            return set(), "pytest_factor_checkpoint_count_mismatch", None
+
+    content_digest = _content_bound_file_manifest_sha256(worktree_path, observed)
+    if content_digest is None:
+        return set(), "pytest_factor_checkpoint_content_manifest_unavailable", None
+    return observed, "bounded_pytest_official_factor_checkpoint_pairs", content_digest
+
+
 def _validated_backend_lifespan_log_transient_paths(
     ignored_paths: Iterable[str],
     *,
@@ -13781,6 +14006,19 @@ def _worktree_ignored_artifact_profile(
         worktree_path=worktree_path,
     )
     backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    pytest_factor_checkpoint_paths, pytest_factor_checkpoint_reason, pytest_factor_checkpoint_digest = (
+        _validated_pytest_factor_checkpoint_transient_paths(
+            ignored,
+            worktree_path=worktree_path,
+        )
+    )
+    pytest_factor_checkpoint_prefix = WORKTREE_PYTEST_FACTOR_CHECKPOINT_ROOT + "/"
+    if pytest_factor_checkpoint_paths:
+        profile["content_bound_transient_manifest"] = {
+            "schema_version": "aistock_content_bound_transient_manifest_v1",
+            "paths": sorted(pytest_factor_checkpoint_paths),
+            "sha256": pytest_factor_checkpoint_digest,
+        }
     roots: list[str] = []
     transient_entries: list[tuple[str, str]] = []
     canonical_lines: list[str] = []
@@ -13797,6 +14035,9 @@ def _worktree_ignored_artifact_profile(
             elif rel.startswith(backend_log_prefix):
                 root = rel if rel in backend_log_paths else None
                 reason = backend_log_reason
+            elif rel.startswith(pytest_factor_checkpoint_prefix):
+                root = rel if rel in pytest_factor_checkpoint_paths else None
+                reason = pytest_factor_checkpoint_reason
             else:
                 root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
             if root:
@@ -13904,6 +14145,16 @@ def _purge_worktree_transient_artifacts(
     live_digest = hashlib.sha256("\n".join(live_paths).encode("utf-8")).hexdigest()
     if live_digest != expected_profile.get("transient_manifest_sha256"):
         raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
+    content_bound_manifest = expected_profile.get("content_bound_transient_manifest")
+    if content_bound_manifest:
+        if not isinstance(content_bound_manifest, dict):
+            raise WorkflowError("content-bound transient manifest is invalid")
+        content_bound_paths = [str(item) for item in content_bound_manifest.get("paths") or []]
+        if not content_bound_paths or not set(content_bound_paths).issubset(set(live_paths)):
+            raise WorkflowError("content-bound transient artifact paths changed after cleanup preflight")
+        live_content_digest = _content_bound_file_manifest_sha256(worktree_path, content_bound_paths)
+        if not live_content_digest or live_content_digest != content_bound_manifest.get("sha256"):
+            raise WorkflowError("content-bound transient artifact manifest changed after cleanup preflight")
     tracked = _run_command(
         ["git", "ls-files", "-z", "--", *transient_roots],
         cwd=worktree_path,
@@ -17674,8 +17925,8 @@ def _merge_close_sync_pr_if_ready(
         }
     try:
         # Close-sync CI normally queues behind the source merge's default-branch
-        # CodeQL run on the single Windows runner.  Keep this wait bounded, but
-        # long enough to avoid a guaranteed second manual finalizer invocation.
+        # Keep the stable CI verdict wait bounded, but long enough to avoid a
+        # guaranteed second manual finalizer invocation for an active CI job.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,

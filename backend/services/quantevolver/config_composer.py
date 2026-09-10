@@ -30,7 +30,13 @@ from ..strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
 )
 from .callback_urls import build_aistock_callback_base_url
-from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
+from .experiment_config import (
+    QE_CONTROL_PLANE_METADATA_KEYS,
+    QE_RUNTIME_METADATA_KEYS,
+    apply_qe_seed_to_model_params,
+    ensure_qe_risk_policy,
+    normalize_label_horizon,
+)
 from .qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
@@ -58,13 +64,121 @@ from .qe_dataset_contract import (
     require_qe_formal_dataset_request,
     require_qe_formal_dataset_window,
 )
+from .qe_active_dataset_profile import (
+    QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
+    load_active_qe_profile,
+)
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
+from .qe_run_registry import (
+    QE_RUN_REGISTRATION_PARAM,
+    QERunRegistry,
+    attach_qe_run_registration,
+    normalize_qe_run_consumer_id,
+)
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 QE_DIRECT_V2_DATASET_BINDING_FILE = "qe_direct_v2_dataset_binding.json"
+QE_UNIVERSE_COVERAGE_RECEIPT_FILE = "qe_universe_coverage_receipt.json"
+
+_QE_HISTORY_STATUS_ALIASES: dict[str, tuple[str, ...]] = {
+    "planned": ("planned", "created"),
+    "queued": ("queued", "pending", "waiting", "waiting_capacity"),
+    "running": ("running", "processing"),
+    "finalizing": ("finalizing",),
+    "reconciling": ("reconciling",),
+    "completed": ("completed", "success", "succeeded"),
+    "failed": ("failed", "error", "timeout"),
+    "cancelled": ("cancelled", "canceled"),
+    "interrupted": ("interrupted",),
+}
+
+
+def _qe_history_filter_sql(
+    filters: Optional[Dict[str, Any]],
+    *,
+    alias: str = "e",
+    registration_expression: str | None = None,
+) -> tuple[str, list[Any]]:
+    """Build parameterized business filters for the QE history projection."""
+
+    values = dict(filters or {})
+    clauses: list[str] = []
+    params: list[Any] = []
+    registration = registration_expression or f"{alias}.custom_params->'_qe_run_registration'"
+
+    def add_text(field: str, expression: str, *, fuzzy: bool = False) -> None:
+        value = str(values.get(field) or "").strip()
+        if not value:
+            return
+        clauses.append(f"{expression} {'ILIKE' if fuzzy else '='} %s")
+        params.append(f"%{value}%" if fuzzy else value)
+
+    created_from = str(values.get("created_from") or "").strip()
+    if created_from:
+        clauses.append(f"{alias}.created_at >= %s::timestamptz")
+        params.append(created_from)
+    created_to = str(values.get("created_to") or "").strip()
+    if created_to:
+        clauses.append(f"{alias}.created_at < (%s::date + INTERVAL '1 day')")
+        params.append(created_to)
+
+    status = str(values.get("status") or "").strip().lower()
+    if status:
+        aliases = _QE_HISTORY_STATUS_ALIASES.get(status, (status,))
+        clauses.append(f"LOWER(COALESCE({alias}.status, '')) = ANY(%s)")
+        params.append(list(aliases))
+
+    add_text("source_type", f"{registration}->>'source_type'")
+    consumer_id = str(values.get("consumer_id") or "").strip()
+    if consumer_id:
+        consumer_id = normalize_qe_run_consumer_id(consumer_id)
+        clauses.append(
+            f"COALESCE({registration}->>'consumer_id', 'qe_mainline') = %s"
+        )
+        params.append(consumer_id)
+    add_text("run_kind", f"{registration}->>'run_kind'")
+    add_text("purpose", f"{registration}->>'purpose'")
+    add_text("alpha_mode", f"COALESCE({alias}.alpha_mode, 'single')")
+    node_id = str(values.get("node_id") or "").strip()
+    if node_id:
+        clauses.append(
+            f"COALESCE({registration}->>'node_id', {alias}.custom_params->>'execution_node_id') = %s"
+        )
+        params.append(node_id)
+    add_text("model", f"COALESCE({alias}.model_id, '')", fuzzy=True)
+    add_text("dataset_release", f"{registration}->>'dataset_release_id'")
+    add_text("execution_algo", f"{registration}->>'execution_algo'")
+
+    universe_pool = str(values.get("universe_pool") or "").strip()
+    if universe_pool:
+        clauses.append(
+            f"COALESCE({registration}->'universe_pool_ids', '[]'::jsonb) @> %s::jsonb"
+        )
+        params.append(json.dumps([universe_pool], ensure_ascii=False))
+
+    factor = str(values.get("factor") or "").strip()
+    if factor:
+        clauses.append(f"COALESCE({alias}.factor_names, '[]'::jsonb)::text ILIKE %s")
+        params.append(f"%{factor}%")
+
+    query = str(values.get("query") or "").strip()
+    if query:
+        clauses.append(
+            "("
+            f"COALESCE({alias}.experiment_name, '') ILIKE %s OR "
+            f"COALESCE({alias}.model_id, '') ILIKE %s OR "
+            f"COALESCE({alias}.factor_names, '[]'::jsonb)::text ILIKE %s"
+            ")"
+        )
+        token = f"%{query}%"
+        params.extend((token, token, token))
+
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -142,6 +256,23 @@ def _direct_v2_dataset_binding(
     return require_qe_direct_v2_dataset_binding(raw)
 
 
+def _reject_unbound_active_dataset(
+    custom_params: Optional[Dict[str, Any]],
+    *,
+    operation: str,
+) -> None:
+    """Prevent active-profile dates from being paired with legacy data roots."""
+
+    if _direct_v2_dataset_binding(custom_params) is not None:
+        return
+    if load_active_qe_profile() is not None:
+        raise RuntimeError(
+            "reason_code=qe_active_dataset_binding_missing: "
+            f"{operation} requires a resolved run-scoped dataset binding while the "
+            "QE active dataset profile is enabled"
+        )
+
+
 def _requires_qe_custom_loaders(
     *,
     has_custom_factors: bool,
@@ -175,6 +306,18 @@ def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
             f"{field_name} must be a non-empty single-line path"
         )
     return shlex.quote(text)
+
+
+def _wrap_qe_auto_command_in_bash(command: str) -> str:
+    """Enter the audited Bash runtime before any QE credential scrub runs.
+
+    QE workspace APIs intentionally launch submitted strings through
+    ``/bin/sh -c``. Generated auto commands contain Bash-only fail-closed
+    credential isolation, so the command itself must establish Bash rather
+    than relying on the workspace launcher's outer shell.
+    """
+
+    return f"exec /bin/bash --noprofile --norc -c {shlex.quote(command)}"
 
 
 def _qe_subprocess_credential_scrub_command() -> str:
@@ -1399,9 +1542,19 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
+        direct_selection_mode = (
+            str(direct_binding.selection_pins.get("mode") or "stock_universe")
+            if direct_binding is not None
+            else "stock_universe"
+        )
         if (
             direct_binding is not None
             and provider_uri_day != direct_binding.provider_uri_day
+            and not (
+                direct_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
+                and direct_selection_mode != "stock_universe"
+                and provider_uri_day.endswith("/qe_provider_day")
+            )
         ):
             raise RuntimeError(
                 "reason_code=qe_direct_v2_provider_mismatch: "
@@ -1466,6 +1619,7 @@ class ConfigComposer:
             }
         elif direct_binding is not None:
             day_pins = dict(direct_binding.day_pins)
+            selection_pins = dict(direct_binding.selection_pins)
             suspend_pins = dict(direct_binding.suspend_pins)
             dataset_identity = {
                 "contract_id": direct_binding.release_id,
@@ -1474,7 +1628,14 @@ class ConfigComposer:
                 "rule_version": day_pins["rule_version"],
                 "binding_schema_version": direct_binding.schema_version,
             }
-            qlib_pins = dict(day_pins)
+            qlib_pins = {
+                **day_pins,
+                "instruments_file": str(
+                    selection_pins.get("instruments_file")
+                    or f"{selection_pins['stock_pool']}.txt"
+                ),
+                "instruments_sha256": selection_pins["instruments_sha256"],
+            }
             suspend_identity = {
                 "dataset_id": suspend_pins["dataset_id"],
                 "provider_uri": direct_binding.suspend_data_dir,
@@ -1699,6 +1860,7 @@ class ConfigComposer:
                 "QE direct-v2 candidate runs require compose_experiment_in_memory; "
                 "the legacy workspace API cannot preserve the explicit component paths"
             )
+        _reject_unbound_active_dataset(custom_params, operation="compose_experiment")
         experiment_id = self._generate_unique_experiment_id()
         experiment_name = experiment_id  # 两者统一
 
@@ -2065,6 +2227,7 @@ class ConfigComposer:
         if not experiment_name:
             experiment_name = f"qe_exp_{experiment_id}"
 
+        _reject_unbound_active_dataset(custom_params, operation="compose_experiment_in_memory")
         if not data_split:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
@@ -2150,6 +2313,7 @@ class ConfigComposer:
         # ── 获取路径配置（支持多节点） ──
         rdagent_cfg = self._fetch_workspace_config(node_id)
         workspace_wsl = rdagent_cfg.get("workspace_base", QE_WORKSPACE_WSL)
+        wsl_path = f"{workspace_wsl}/{experiment_name}"
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
         qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
@@ -2157,6 +2321,35 @@ class ConfigComposer:
             qlib_data_path = direct_v2_dataset_binding.provider_uri_day
             qlib_minute_path = direct_v2_dataset_binding.provider_uri_1min
             factor_data_dir = direct_v2_dataset_binding.factor_data_dir
+        day_provider_prepare_command: str | None = None
+        if (
+            direct_v2_dataset_binding is not None
+            and direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
+            and direct_v2_dataset_binding.selection_pins["mode"] != "stock_universe"
+        ):
+            selection = dict(direct_v2_dataset_binding.selection_pins)
+            filename = str(selection["instruments_file"])
+            content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
+            if not isinstance(content, str) or hashlib.sha256(content.encode("utf-8")).hexdigest() != selection["instruments_sha256"]:
+                raise ValueError(
+                    "reason_code=qe_universe_sidecar_hash_mismatch: "
+                    "persisted run-local stock pool content differs from binding"
+                )
+            overlay = f"{wsl_path}/qe_provider_day"
+            qlib_data_path = overlay
+            source = direct_v2_dataset_binding.provider_uri_day.rstrip("/")
+            filename_q = shlex.quote(filename)
+            overlay_q = _quote_qe_shell_path(overlay, field_name="qe_provider_day")
+            source_q = _quote_qe_shell_path(source, field_name="direct_v2_provider_uri_day")
+            day_provider_prepare_command = " && ".join(
+                [
+                    f"mkdir -p {overlay_q}/instruments",
+                    f"ln -sfn {source_q}/calendars {overlay_q}/calendars",
+                    f"ln -sfn {source_q}/features {overlay_q}/features",
+                    f"ln -sfn {source_q}/meta_export.json {overlay_q}/meta_export.json",
+                    f"cp -f {filename_q} {overlay_q}/instruments/{filename_q}",
+                ]
+            )
         prediction_store_base_url = self._prediction_store_base_url(
             node_id=node_id,
             node_callback_url=rdagent_cfg.get("callback_url"),
@@ -2184,6 +2377,27 @@ class ConfigComposer:
                 separators=(",", ":"),
                 allow_nan=False,
             )
+            coverage_receipt = (custom_params or {}).get(QE_RUN_COVERAGE_RECEIPT_PARAM)
+            if not isinstance(coverage_receipt, str):
+                if direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3":
+                    raise ValueError(
+                        "reason_code=qe_universe_window_coverage_incomplete: "
+                        "persisted coverage receipt is missing"
+                    )
+            else:
+                expected_receipt_sha = direct_v2_dataset_binding.selection_pins.get(
+                    "coverage_receipt_sha256"
+                )
+                if expected_receipt_sha and hashlib.sha256(coverage_receipt.encode("utf-8")).hexdigest() != expected_receipt_sha:
+                    raise ValueError(
+                        "reason_code=qe_universe_sidecar_hash_mismatch: persisted coverage receipt differs from binding"
+                    )
+                experiment_files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] = coverage_receipt
+            if day_provider_prepare_command is not None:
+                selection = dict(direct_v2_dataset_binding.selection_pins)
+                experiment_files[str(selection["instruments_file"])] = str(
+                    (custom_params or {})[QE_RUN_STOCK_POOL_CONTENT_PARAM]
+                )
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
@@ -2410,7 +2624,6 @@ class ConfigComposer:
         # 7) hmm_sector_coefficients.json — 已在步骤 0 提前处理
 
         # ── 生成 WSL 命令 ──
-        wsl_path = f"{workspace_wsl}/{experiment_name}"
         factor_cache_dir = rdagent_cfg.get("factor_cache_dir")
         _, auto_core_parts = self._build_auto_wsl_command_parts(
             wsl_path,
@@ -2438,6 +2651,7 @@ class ConfigComposer:
                 if direct_v2_dataset_binding is not None
                 else None
             ),
+            day_provider_prepare_command=day_provider_prepare_command,
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2467,6 +2681,7 @@ class ConfigComposer:
                 if direct_v2_dataset_binding is not None
                 else None
             ),
+            day_provider_prepare_command=day_provider_prepare_command,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2698,19 +2913,35 @@ class ConfigComposer:
         offset: int = 0,
         include_children: bool = False,
         detail: str = "summary",
+        filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """获取实验列表；默认只返回适合列表/MCP 使用的标量摘要。"""
-        if include_children:
-            return self._list_experiment_history(limit=limit, offset=offset, detail=detail)
+        if include_children or str((filters or {}).get("archive_status") or "").strip():
+            history = self._list_experiment_history(
+                limit=limit,
+                offset=offset,
+                detail=detail,
+                filters=filters,
+            )
+            if not include_children:
+                history["items"] = [
+                    item for item in history.get("items", [])
+                    if not item.get("parent_experiment_id")
+                ]
+            return history
 
         full_detail = detail == "full"
+        where_sql, where_params = _qe_history_filter_sql(filters)
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM qe_experiments")
+                cur.execute(
+                    f"SELECT COUNT(*) FROM qe_experiments e WHERE TRUE{where_sql}",
+                    where_params,
+                )
                 total = cur.fetchone()[0]
 
                 if full_detail:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT experiment_id, experiment_name, status,
                                factor_names, model_id, strategy_id,
                                workspace_path, wsl_command,
@@ -2721,12 +2952,13 @@ class ConfigComposer:
                                annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
                                created_at, updated_at, custom_params,
                                alpha_mode, multi_alpha_config, parent_multi_alpha_id
-                        FROM qe_experiments
+                        FROM qe_experiments e
+                        WHERE TRUE{where_sql}
                         ORDER BY created_at DESC
                         LIMIT %s OFFSET %s
-                    """, (limit, offset))
+                    """, (*where_params, limit, offset))
                 else:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT experiment_id, experiment_name, status,
                                jsonb_array_length(COALESCE(factor_names, '[]'::jsonb)) AS factor_count,
                                model_id, strategy_id,
@@ -2735,17 +2967,30 @@ class ConfigComposer:
                                ic, icir, rank_ic, rank_icir,
                                annualized_return, max_drawdown, information_ratio,
                                annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
-                               created_at, updated_at,
+                               created_at, updated_at, custom_params,
                                alpha_mode, parent_multi_alpha_id
-                        FROM qe_experiments
+                        FROM qe_experiments e
+                        WHERE TRUE{where_sql}
                         ORDER BY created_at DESC
                         LIMIT %s OFFSET %s
-                    """, (limit, offset))
+                    """, (*where_params, limit, offset))
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        items = rows if full_detail else [compact_experiment_row(row) for row in rows]
-        return {"ok": True, "total": total, "items": items, "detail": "full" if full_detail else "summary"}
+        projected_rows = QERunRegistry(connection_factory=get_conn).project_history(rows)
+        items = projected_rows if full_detail else [
+            compact_experiment_row(row, include_config_summary=True)
+            for row in projected_rows
+        ]
+        return {
+            "ok": True,
+            "total": total,
+            "items": items,
+            "detail": "full" if full_detail else "summary",
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(items) < total,
+        }
 
     @staticmethod
     def _normalize_history_parent_ids(
@@ -2772,6 +3017,7 @@ class ConfigComposer:
         limit: int = 50,
         offset: int = 0,
         detail: str = "summary",
+        filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Return paged top-level QE history rows plus their evolution loops.
 
@@ -2781,14 +3027,49 @@ class ConfigComposer:
         historically persisted with parent_experiment_id == task_id.  This view
         normalizes that relationship without mutating existing experiment rows.
         """
+        task_registration = (
+            "COALESCE("
+            "et_filter.strategy_evo_config->'_qe_run_registration', "
+            "e.custom_params->'_qe_run_registration'"
+            ")"
+        )
+        where_sql, where_params = _qe_history_filter_sql(
+            filters,
+            registration_expression=task_registration,
+        )
+        archive_status = str((filters or {}).get("archive_status") or "").strip().lower()
+        task_registration_join = """
+            LEFT JOIN LATERAL (
+                SELECT et_lookup.strategy_evo_config
+                FROM qe_evolution_tasks et_lookup
+                WHERE et_lookup.task_id = e.qe_task_id
+                   OR et_lookup.base_experiment_id = e.experiment_id
+                ORDER BY et_lookup.updated_at DESC NULLS LAST, et_lookup.task_id DESC
+                LIMIT 1
+            ) et_filter ON TRUE
+        """
+        # Keep the base history query and Archive source-status projection in
+        # separate pool leases.  The Archive service has its own repository
+        # reads; holding this connection across that call would consume two
+        # leases for a single user-triggered request.
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM qe_experiments WHERE parent_experiment_id IS NULL")
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM qe_experiments e
+                    {task_registration_join}
+                    WHERE e.parent_experiment_id IS NULL{where_sql}
+                    """,
+                    where_params,
+                )
                 total = cur.fetchone()[0]
 
-                cur.execute("""
+                page_clause = "" if archive_status else "LIMIT %s OFFSET %s"
+                page_params: tuple[Any, ...] = () if archive_status else (limit, offset)
+                cur.execute(f"""
                     WITH parent_rows AS (
-                        SELECT e.experiment_id,
+                        SELECT e.experiment_id, e.qe_task_id,
                                GREATEST(
                                    COALESCE(e.updated_at, e.created_at),
                                    COALESCE((
@@ -2804,19 +3085,50 @@ class ConfigComposer:
                                    ), COALESCE(e.updated_at, e.created_at))
                                ) AS history_updated_at
                         FROM qe_experiments e
-                        WHERE e.parent_experiment_id IS NULL
+                        {task_registration_join}
+                        WHERE e.parent_experiment_id IS NULL{where_sql}
                     )
-                    SELECT experiment_id
+                    SELECT experiment_id, qe_task_id
                     FROM parent_rows
                     ORDER BY history_updated_at DESC NULLS LAST, experiment_id DESC
-                    LIMIT %s OFFSET %s
-                """, (limit, offset))
-                parent_ids = [row[0] for row in cur.fetchall()]
+                    {page_clause}
+                """, (*where_params, *page_params))
+                parent_rows = [
+                    (row[0], row[1] if len(row) > 1 else None)
+                    for row in cur.fetchall()
+                ]
 
-                if not parent_ids:
-                    return {"ok": True, "total": total, "items": []}
+        if archive_status:
+            from ..qe_archive.backfill_service import QEArchiveBackfillService
 
-                select_fields = """
+            source_status = QEArchiveBackfillService().get_source_status(
+                experiment_ids=[row[0] for row in parent_rows if not row[1]],
+                task_ids=[row[1] for row in parent_rows if row[1]],
+                include_recommendation=True,
+            )
+            matched: list[tuple[Any, Any]] = []
+            for experiment_id, task_id in parent_rows:
+                bucket = "tasks" if task_id else "experiments"
+                identity = task_id or experiment_id
+                item_status = (source_status.get(bucket) or {}).get(identity) or {}
+                if str(item_status.get("archive_status") or "not_archived").lower() == archive_status:
+                    matched.append((experiment_id, task_id))
+            total = len(matched)
+            parent_rows = matched[offset:offset + limit]
+        parent_ids = [row[0] for row in parent_rows]
+
+        if not parent_ids:
+            return {
+                "ok": True,
+                "total": total,
+                "items": [],
+                "detail": "full" if detail == "full" else "summary",
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+            }
+
+        select_fields = """
                            e.experiment_id, e.experiment_name, e.status,
                            e.factor_names, e.model_id, e.strategy_id,
                            e.qe_task_id, e.qe_loop_id,
@@ -2824,13 +3136,13 @@ class ConfigComposer:
                            e.ic, e.icir, e.rank_ic, e.rank_icir,
                            e.annualized_return, e.max_drawdown, e.information_ratio,
                            e.annualized_return_no_cost, e.max_drawdown_no_cost, e.information_ratio_no_cost,
-                           e.created_at, e.updated_at,
+                           e.created_at, e.updated_at, e.custom_params,
                            e.alpha_mode, e.parent_multi_alpha_id,
                            et.base_experiment_id AS _evolution_base_experiment_id,
                            et.task_type AS _evolution_task_type
                     """
-                if detail == "full":
-                    select_fields = """
+        if detail == "full":
+            select_fields = """
                            e.experiment_id, e.experiment_name, e.status,
                            e.factor_names, e.model_id, e.strategy_id,
                            e.workspace_path, e.wsl_command,
@@ -2845,6 +3157,8 @@ class ConfigComposer:
                            et.task_type AS _evolution_task_type
                     """
 
+        with get_conn() as conn:
+            with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT {select_fields}
                     FROM qe_experiments e
@@ -2863,8 +3177,12 @@ class ConfigComposer:
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         normalized = self._normalize_history_parent_ids(rows, set(parent_ids))
+        normalized = QERunRegistry(connection_factory=get_conn).project_history(normalized)
         if detail != "full":
-            normalized = [compact_experiment_row(row) for row in normalized]
+            normalized = [
+                compact_experiment_row(row, include_config_summary=True)
+                for row in normalized
+            ]
         # Preserve parent page order, then place child loops under each parent.
         order = {experiment_id: idx for idx, experiment_id in enumerate(parent_ids)}
         normalized.sort(
@@ -2875,7 +3193,15 @@ class ConfigComposer:
                 str(exp.get("created_at") or ""),
             )
         )
-        return {"ok": True, "total": total, "items": normalized, "detail": "full" if detail == "full" else "summary"}
+        return {
+            "ok": True,
+            "total": total,
+            "items": normalized,
+            "detail": "full" if detail == "full" else "summary",
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(parent_ids) < total,
+        }
 
     def get_experiment_detail(self, experiment_id: str, detail: str = "summary") -> Dict[str, Any]:
         """获取实验详情；默认排除 result_metrics 等大 JSONB。"""
@@ -2915,8 +3241,19 @@ class ConfigComposer:
                     experiment["custom_params"] = enrich_blacklist_snapshot_for_display(custom_params)
                 except Exception as e:
                     raise RuntimeError(f"行业黑名单快照解析失败: {e}") from e
+                experiment = QERunRegistry(connection_factory=get_conn).project_history(
+                    [experiment]
+                )[0]
                 if not full_detail:
-                    experiment["metrics_summary"] = compact_experiment_row(experiment).get("metrics_summary", {})
+                    compact = compact_experiment_row(
+                        experiment,
+                        include_config_summary=True,
+                    )
+                    experiment["metrics_summary"] = compact.get("metrics_summary", {})
+                    if compact.get("registration_summary"):
+                        experiment["registration_summary"] = compact["registration_summary"]
+                    if compact.get("custom_params_summary"):
+                        experiment["custom_params_summary"] = compact["custom_params_summary"]
                     experiment["result_metrics_available"] = True
                 return {"ok": True, "experiment": experiment, "detail": "full" if full_detail else "summary"}
 
@@ -2960,6 +3297,7 @@ class ConfigComposer:
                 "QE direct-v2 candidate runs cannot use regenerate_experiment; "
                 "recompose from the persisted direct-v2 binding instead"
             )
+        _reject_unbound_active_dataset(custom_params, operation="regenerate_experiment")
 
         # 创建实验目录 (本地)
         exp_dir = _qe_experiment_dir(experiment_name)
@@ -3627,6 +3965,7 @@ class ConfigComposer:
             "only_tradable": True,
             "forbid_all_trade_at_limit": False,
         }
+        catalog_strategy_param_keys: set[str] = set()
         if strategy_info:
             # 用户选择了策略 → 必须使用该策略的源代码
             source_code = strategy_info.get("source_code")
@@ -3657,6 +3996,7 @@ class ConfigComposer:
                     strategy_class = extracted_class
                 sk = pc.get("kwargs", {})
                 strategy_kwargs.update(sk)
+                catalog_strategy_param_keys.update(sk)
             elif class_match:
                 # 没有portfolio_config，使用源码提取的类名
                 strategy_class = extracted_class
@@ -3668,6 +4008,7 @@ class ConfigComposer:
                     dk = json.loads(dk)
                 for k, v in dk.items():
                     strategy_kwargs[k] = v
+                    catalog_strategy_param_keys.add(k)
 
         # ── 模型超参键白名单（始终可用，供策略安全过滤引用） ──
         _PTNN_HP_KEYS = {
@@ -3706,13 +4047,16 @@ class ConfigComposer:
             "gats_industry_embedding", "gats_industry_embedding_dim",
         }
         _EFFICIENT_GATS_HP_KEYS = _GATS_HP_KEYS | set(_EFFICIENT_GATS_EXECUTION_DEFAULTS)
-        _NON_STRATEGY_PARAMS = {
+        _NON_STRATEGY_PARAMS = (
+            set(QE_RUNTIME_METADATA_KEYS) | set(QE_CONTROL_PLANE_METADATA_KEYS)
+        ) | {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
             "label_type",   # 训练标签类型：close/open/vwap
             "label_horizon",  # Training label horizon: 1/3/5/10/20/30/40/60/120/180d
             "stock_pool",   # 股票池文件路径
+            "execution_node_id",
             "runtime_mode",
             "bar_freq",
             "runtime_contract_version",
@@ -3740,6 +4084,10 @@ class ConfigComposer:
             "_seed_ensemble_config",
             QE_FORMAL_DATASET_REQUEST_PARAM,
             QE_DIRECT_V2_DATASET_BINDING_PARAM,
+            QE_RUN_STOCK_POOL_CONTENT_PARAM,
+            QE_RUN_COVERAGE_RECEIPT_PARAM,
+            QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+            QE_RUN_REGISTRATION_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -4035,8 +4383,21 @@ class ConfigComposer:
                     f"允许的参数: {sorted(_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS)}"
                 )
         else:
-            # 未知策略类型：只过滤已知的非策略参数（如 backtest_freq, execution_algo 等）
-            _removed = {k for k in strategy_kwargs if k in _NON_STRATEGY_PARAMS}
+            # Unknown/database strategies have no static allowlist. Control
+            # metadata and caller-owned runtime metadata must still be
+            # removed, while the catalog may explicitly declare ``ensemble``
+            # as a real constructor argument. Preserve only that exact
+            # ambiguous key when its authority is portfolio/default kwargs;
+            # never exempt registration or provenance metadata.
+            catalog_owned_runtime_strategy_keys = (
+                {"ensemble"} & catalog_strategy_param_keys
+            )
+            _removed = {
+                k
+                for k in strategy_kwargs
+                if k in _NON_STRATEGY_PARAMS
+                and k not in catalog_owned_runtime_strategy_keys
+            }
             if _removed:
                 logger.info(f"未知策略 '{strategy_class}': 移除非策略参数 {sorted(_removed)}")
                 for k in _removed:
@@ -4060,6 +4421,24 @@ class ConfigComposer:
         lines.append("    expression_cache: null")
         lines.append("")
         stock_pool = (custom_params or {}).get("stock_pool", "all")
+        direct_binding = _direct_v2_dataset_binding(custom_params)
+        if direct_binding is not None:
+            requested_stock_pool = str(stock_pool or "all").strip()
+            resolved_stock_pool = str(
+                direct_binding.selection_pins.get("instrument_name")
+                or direct_binding.selection_pins.get("stock_pool")
+            )
+            if requested_stock_pool not in {"all", resolved_stock_pool}:
+                raise ValueError(
+                    "reason_code=qe_direct_v2_stock_pool_outside_binding: "
+                    f"stock_pool={requested_stock_pool!r}"
+                )
+            stock_pool = resolved_stock_pool
+            logger.info(
+                "QE direct-v2 selection universe bound: requested_stock_pool=%s resolved_stock_pool=%s",
+                requested_stock_pool,
+                stock_pool,
+            )
         # Training label selection. label_type controls price basis; label_horizon controls horizon.
         _LABEL_FIELDS = {
             "close": "$close",
@@ -4335,6 +4714,20 @@ class ConfigComposer:
             lines.append("            codes:")
             for code in quote_universe_codes:
                 lines.append(f"                - {self._yaml_scalar(str(code).upper())}")
+        elif backtest_freq != "day":
+            if direct_binding is not None:
+                # Direct-v2 intentionally has two named-universe contracts:
+                # ``stock_universe`` exists only in the day provider and drives
+                # model/buy selection, while the separately hash-pinned minute
+                # provider exposes its executable quote/sell universe as
+                # ``all``.  A 1min Exchange resolves ``codes`` against the
+                # minute provider, so reusing the day-only name is invalid.
+                lines.append("            codes: all")
+            else:
+                # Legacy/formal providers use one shared named universe across
+                # frequencies; keep their quote/sell universe aligned with the
+                # configured model and strategy market.
+                lines.append("            codes: *market")
         risk_policy = (custom_params or {}).get("risk_policy")
         if risk_policy:
             lines.append("        # risk_policy:")
@@ -4663,7 +5056,7 @@ class ConfigComposer:
                     direct_v2_dataset_binding.day_pins["rule_version"]
                 ),
                 "universe_fingerprint_sha256": str(
-                    direct_v2_dataset_binding.day_pins["instruments_sha256"]
+                    direct_v2_dataset_binding.selection_pins["instruments_sha256"]
                 ),
             }
 
@@ -5694,6 +6087,7 @@ class ConfigComposer:
         long_trend_postprocess_enabled: bool = False,
         direct_v2_validation_enabled: bool = False,
         index_context_path: Optional[str] = None,
+        day_provider_prepare_command: Optional[str] = None,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -5811,6 +6205,8 @@ class ConfigComposer:
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
         if resource_session_id:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
+        if day_provider_prepare_command:
+            core_parts.append(day_provider_prepare_command)
         if direct_v2_validation_enabled:
             core_parts.append(scrub_credentials)
             core_parts.append("python qe_validate_direct_v2_dataset.py")
@@ -5853,7 +6249,8 @@ class ConfigComposer:
                               phase_pipeline_enabled: bool = False,
                               long_trend_postprocess_enabled: bool = False,
                               direct_v2_validation_enabled: bool = False,
-                              index_context_path: Optional[str] = None) -> str:
+                              index_context_path: Optional[str] = None,
+                              day_provider_prepare_command: Optional[str] = None) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -5884,6 +6281,7 @@ class ConfigComposer:
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
             direct_v2_validation_enabled=direct_v2_validation_enabled,
             index_context_path=index_context_path,
+            day_provider_prepare_command=day_provider_prepare_command,
         )
         env_block = "\n".join(env_lines)
         scrub_credentials = _qe_subprocess_credential_scrub_command()
@@ -5916,7 +6314,8 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
+            inner_command = " && ".join(core_parts)
+            return f"cd -- {quoted_wsl_path} && {_wrap_qe_auto_command_in_bash(inner_command)}"
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""
@@ -5929,6 +6328,8 @@ cd -- {quoted_wsl_path}
 {manual_runtime_guard_block}
 {manual_conda_chain}
 {scrub_credentials}
+
+{day_provider_prepare_command or ""}
 
 {direct_validation_manual}
 
@@ -5966,6 +6367,8 @@ cd -- {quoted_wsl_path}
 # 设置环境变量
 {env_block}
 
+{day_provider_prepare_command or ""}
+
 {direct_validation_manual}
 
 {_link_data_manual}
@@ -5992,6 +6395,8 @@ cd -- {quoted_wsl_path}
 
 # 设置环境变量
 {env_block}
+
+{day_provider_prepare_command or ""}
 
 {direct_validation_manual}
 
@@ -6601,35 +7006,30 @@ model_cls = {nn_class_name}
                                 data_split: Dict, custom_params: Optional[Dict],
                                 evolution_goal: Optional[str] = None,
                                 llm_hypothesis: Optional[Dict] = None) -> None:
-        """保存实验记录到数据库。"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO qe_experiments
-                        (experiment_id, experiment_name, status,
-                         factor_names, model_id, strategy_id,
-                         data_split, custom_params, workspace_path,
-                         evolution_goal, llm_hypothesis, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (experiment_id) DO UPDATE SET
-                        experiment_name = EXCLUDED.experiment_name,
-                        factor_names = EXCLUDED.factor_names,
-                        model_id = EXCLUDED.model_id,
-                        strategy_id = EXCLUDED.strategy_id,
-                        data_split = EXCLUDED.data_split,
-                        custom_params = EXCLUDED.custom_params,
-                        evolution_goal = EXCLUDED.evolution_goal,
-                        llm_hypothesis = EXCLUDED.llm_hypothesis
-                """, (
-                    experiment_id, experiment_name, "created",
-                    json.dumps(factor_names),
-                    model_id, strategy_id,
-                    json.dumps(data_split),
-                    json.dumps(custom_params) if custom_params else None,
-                    exp_dir,
-                    evolution_goal,
-                    json.dumps(llm_hypothesis) if llm_hypothesis else None,
-                ))
+        """Reserve a canonical single-run identity before it can be dispatched."""
+        params = dict(custom_params or {})
+        if QE_RUN_REGISTRATION_PARAM not in params:
+            params = attach_qe_run_registration(
+                params,
+                run_kind="single",
+                node_id=params.get("execution_node_id"),
+                model_id=model_id,
+                factor_names=factor_names,
+                strategy_id=strategy_id,
+                data_split=data_split,
+            )
+        QERunRegistry(connection_factory=get_conn).reserve_single(
+            experiment_id=experiment_id,
+            experiment_name=experiment_name,
+            workspace_path=exp_dir,
+            factor_names=factor_names,
+            model_id=model_id,
+            strategy_id=strategy_id,
+            data_split=data_split,
+            custom_params=params,
+            evolution_goal=evolution_goal,
+            llm_hypothesis=llm_hypothesis,
+        )
 
     def _get_experiment_record(self, experiment_id: str) -> Optional[Dict]:
         """获取实验记录。"""

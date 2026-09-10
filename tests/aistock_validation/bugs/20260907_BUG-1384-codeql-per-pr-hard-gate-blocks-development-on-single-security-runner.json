@@ -1,0 +1,258 @@
+{
+  "actual": "AIstock is a single-user local platform, but every source PR is forced to wait for CodeQL verdict on the sole aistock-ci-security runner. A runner self-update or availability fault blocks all unrelated development for 30-60+ minutes even though GitHub branch protection requires only CI verdict. Move heavyweight CodeQL to one daily nightly full scan of latest main plus manual dispatch, remove pull_request and push triggers, stop the merge workflow from requiring CodeQL verdict, keep lightweight security checks inside CI verdict, update the sole development standard and machine policy consistently, and preserve fail-closed Nightly findings without adding high-risk PR classification. Do not modify backend, database, business modules, runtime services, dependencies, or other windows.",
+  "allowed_write_scope": [
+    ".github/workflows/codeql.yml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json"
+  ],
+  "assigned_agent": "codex_app",
+  "bug_id": "BUG-1384",
+  "closed_at": "2026-09-07T05:04:38Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-07T04:39:21.554088Z",
+  "description": "AIstock is a single-user local platform, but every source PR is forced to wait for CodeQL verdict on the sole aistock-ci-security runner. A runner self-update or availability fault blocks all unrelated development for 30-60+ minutes even though GitHub branch protection requires only CI verdict. Move heavyweight CodeQL to one daily nightly full scan of latest main plus manual dispatch, remove pull_request and push triggers, stop the merge workflow from requiring CodeQL verdict, keep lightweight security checks inside CI verdict, update the sole development standard and machine policy consistently, and preserve fail-closed Nightly findings without adding high-risk PR classification. Do not modify backend, database, business modules, runtime services, dependencies, or other windows.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260907-7b39fab28d76",
+      "timestamp": "2026-09-07T04:39:21.554072Z"
+    },
+    {
+      "action": "implementation_completed",
+      "actor": "codex_app",
+      "note": "Removed CodeQL from PR and push triggers and from merge-quality contexts; added one daily latest-main Python plus JavaScript/TypeScript full scan and synchronized policy contracts.",
+      "timestamp": "2026-09-07T04:56:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Pull requests require only CI verdict, while one daily scheduled or explicitly dispatched CodeQL job performs a full latest-main Python and JavaScript/TypeScript scan without PR or push triggers, high-risk PR classification, dependency installation, or business/runtime side effects.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json",
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_workflow_policy_scan.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260907_BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-single-security-runner.json",
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_workflow_policy_scan.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-07T04:39:21.554088Z",
+  "fix_branch": "bug/BUG-1384-codeql-per-pr-hard-gate-blocks-development-on-si-20260907",
+  "fix_commit": "494ecdadc57f8432000f3ff87eb362450d9c7b0a",
+  "fixed_at": "2026-09-07T05:04:38Z",
+  "github_issue_number": 4367,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4367",
+  "last_seen_at": "2026-09-07T04:39:21.554088Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4370",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1384",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "883c9f6678294ddd",
+    "recorded_at": "2026-09-07T05:15:08.252496Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cb820cebdefa46eebf4b9865941af6aca66fd394",
+    "source_merge_commit": "494ecdadc57f8432000f3ff87eb362450d9c7b0a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4370",
+    "validation_evidence": [
+      "validation-receipt: id=9c7367afa082392e commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=passed",
+      "validation-receipt: id=e4f7fe65333f3ac7 commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files_changed_only result=passed"
+    ],
+    "validation_evidence_digest": "0df093e53be7ec94c9f6d8917100cdcf001409ac921b15a1a8b93d0ba9be7947"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CodeQL per-PR hard gate blocks development on single security runner",
+  "trigger_condition": {
+    "fingerprint": "7b39fab28d76e923ff6fbf20",
+    "source_event_id": "FE-20260907-7b39fab28d76"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=9c7367afa082392e commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=e4f7fe65333f3ac7 commit=cb820cebdefa46eebf4b9865941af6aca66fd394 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -1,0 +1,326 @@
+{
+  "actual": "Run 34164971601 completed 24 sessions with 7 failures caused by stale MCP profile/count expectations and an obsolete CI workflow dependency-pin assertion.",
+  "allowed_write_scope": [
+    "tests/mcp/test_gateway_profiles.py",
+    "tests/mcp/test_mcp_gateway_calls.py",
+    "tests/mcp/test_mcp_gateway_cli.py",
+    "tests/mcp/test_mcp_inventory_diff.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260908_BUG-1412-nightly-retains-retired-mcp-profiles-and-obsolete-ci-dependency-assertio.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1412",
+  "closed_at": "2026-09-09T04:52:36Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T18:52:56.038335Z",
+  "description": "Run 34164971601 completed 24 sessions with 7 failures caused by stale MCP profile/count expectations and an obsolete CI workflow dependency-pin assertion.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-d0cddf0de939",
+      "timestamp": "2026-09-08T18:52:56.038314Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/34164971601"
+  ],
+  "expected": "Nightly contract tests follow the current simulation MCP profiles and dependency authorities, and the affected sessions pass without changing product runtime behavior.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/research_assistant/test_service.py",
+      "tests/mcp/test_gateway_profiles.py",
+      "tests/mcp/test_mcp_gateway_calls.py",
+      "tests/mcp/test_mcp_gateway_cli.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/research_assistant/test_service.py",
+      "tests/mcp/test_gateway_profiles.py",
+      "tests/mcp/test_mcp_gateway_calls.py",
+      "tests/mcp/test_mcp_gateway_cli.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/mcp/test_gateway_profiles.py",
+        "tests/mcp/test_mcp_gateway_calls.py",
+        "tests/mcp/test_mcp_gateway_cli.py",
+        "tests/mcp/test_mcp_inventory_diff.py",
+        "backend/tests/research_assistant/test_service.py"
+      ],
+      "impacted_modules": [
+        "platform.mcp_gateway",
+        "validation.guardrails",
+        "research_pipeline",
+        "research_assistant",
+        "qe",
+        "platform.config",
+        "tests.backend",
+        "validation.runner"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/mcp/test_gateway_profiles.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "research_pipeline",
+            "research_assistant",
+            "qe",
+            "platform.config"
+          ],
+          "primary_module": "platform.mcp_gateway",
+          "risk_level": "high",
+          "rule_id": "mcp_gateway_platform"
+        },
+        {
+          "file": "tests/mcp/test_mcp_gateway_calls.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "research_pipeline",
+            "research_assistant",
+            "qe",
+            "platform.config"
+          ],
+          "primary_module": "platform.mcp_gateway",
+          "risk_level": "high",
+          "rule_id": "mcp_gateway_platform"
+        },
+        {
+          "file": "tests/mcp/test_mcp_gateway_cli.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "research_pipeline",
+            "research_assistant",
+            "qe",
+            "platform.config"
+          ],
+          "primary_module": "platform.mcp_gateway",
+          "risk_level": "high",
+          "rule_id": "mcp_gateway_platform"
+        },
+        {
+          "file": "tests/mcp/test_mcp_inventory_diff.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "research_pipeline",
+            "research_assistant",
+            "qe",
+            "platform.config"
+          ],
+          "primary_module": "platform.mcp_gateway",
+          "risk_level": "high",
+          "rule_id": "mcp_gateway_platform"
+        },
+        {
+          "file": "backend/tests/research_assistant/test_service.py",
+          "impact_modules": [
+            "tests.backend",
+            "validation.runner"
+          ],
+          "primary_module": "research_assistant",
+          "risk_level": "high",
+          "rule_id": "research_assistant_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tests/mcp/test_gateway_profiles.py",
+        "tests/mcp/test_mcp_gateway_calls.py",
+        "tests/mcp/test_mcp_gateway_cli.py",
+        "tests/mcp/test_mcp_inventory_diff.py",
+        "backend/tests/research_assistant/test_service.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/mcp/test_gateway_profiles.py",
+      "tests/mcp/test_mcp_gateway_calls.py",
+      "tests/mcp/test_mcp_gateway_cli.py",
+      "tests/mcp/test_mcp_inventory_diff.py",
+      "backend/tests/research_assistant/test_service.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/mcp/test_gateway_profiles.py",
+      "tests/mcp/test_mcp_gateway_calls.py",
+      "tests/mcp/test_mcp_gateway_cli.py",
+      "tests/mcp/test_mcp_inventory_diff.py",
+      "backend/tests/research_assistant/test_service.py"
+    ]
+  },
+  "first_seen_at": "2026-09-08T18:52:56.038335Z",
+  "fix_branch": null,
+  "fix_commit": "1375d071f4e338e3a850e0270273208d449ec257",
+  "fixed_at": "2026-09-09T04:52:36Z",
+  "github_issue_number": 4466,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4466",
+  "last_seen_at": "2026-09-08T18:52:56.038335Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4477",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest tests/mcp/test_gateway_profiles.py tests/mcp/test_mcp_gateway_calls.py tests/mcp/test_mcp_gateway_cli.py tests/mcp/test_mcp_inventory_diff.py backend/tests/research_assistant/test_service.py::test_litellm_dependency_pin_supports_deepseek_v4_native_pricing -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "mcp_gateway_manifest_quality",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly retains retired MCP profiles and obsolete CI dependency assertions",
+  "trigger_condition": {
+    "fingerprint": "d0cddf0de9392dbc423b6873",
+    "source_event_id": "FE-20260908-d0cddf0de939"
+  },
+  "validation_evidence": [
+    "python -m nox -s research_assistant_backend -> 446 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s mcp_gateway_manifest_quality -> 46 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "mcp_gateway_manifest_quality",
+        "research_assistant",
+        "research_assistant_mcp_contract"
+      ],
+      "plans": [
+        "mcp_gateway_manifest_quality",
+        "research_assistant_backend",
+        "research_assistant_mcp_contract"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "mcp_gateway_manifest_quality",
+          "research_assistant",
+          "research_assistant_mcp_contract"
+        ],
+        "plans": [
+          "mcp_gateway_manifest_quality",
+          "research_assistant_backend",
+          "research_assistant_mcp_contract"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

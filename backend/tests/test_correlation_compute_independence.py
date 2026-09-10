@@ -73,6 +73,24 @@ def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     assert str(cache_dir) == os.path.normpath(_DEFAULT_PIPELINE_DIR)
 
 
+def test_correlation_uses_promoted_cache_universe_key(monkeypatch, tmp_path) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    (tmp_path / "_meta.json").write_text(
+        json.dumps({"universe_key": "aistock_equity_pit_canonical_v2"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
+
+    assert svc._official_cache_universe_key() == "aistock_equity_pit_canonical_v2"
+
+    (tmp_path / "_meta.json").write_text(
+        json.dumps({"universe_key": "shsz_st_pit_active_v1"}),
+        encoding="utf-8",
+    )
+    assert svc._official_cache_universe_key() == svc.OFFICIAL_FACTOR_UNIVERSE_KEY
+
+
 def test_correlation_result_classifies_no_valid_pair_factors() -> None:
     from backend.services.quantevolver.correlation_engine import CorrelationResult
 

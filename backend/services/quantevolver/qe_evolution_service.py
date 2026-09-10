@@ -24,6 +24,14 @@ from .long_trend_evaluation_contract import get_long_trend_profile
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
+from .qe_run_registry import (
+    QE_RUN_DEFAULT_CONSUMER,
+    QE_RUN_REGISTRATION_PARAM,
+    PlannedQELoop,
+    QERunRegistry,
+    attach_qe_planned_loop_registration,
+    normalize_qe_run_consumer_id,
+)
 from .qe_resource_phase_service import (
     GPU_LEASE_BUSY_REASON,
     RESOURCE_SCHEMA_REASON,
@@ -57,6 +65,11 @@ from ..strategy_package.workspace_policy import (
 logger = logging.getLogger(__name__)
 
 QE_RESOURCE_MONITORING_DISABLED_REASON = "QE_RESOURCE_MONITORING_DISABLED"
+
+
+def _consumer_id_from_registration(value: Any) -> str:
+    registration = value if isinstance(value, dict) else {}
+    return normalize_qe_run_consumer_id(registration.get("consumer_id"))
 
 
 def normalize_long_trend_profile_id(value: Any) -> str | None:
@@ -137,7 +150,6 @@ _QE_LOOP_RETRY_MODE_ALIASES = {
 }
 
 CUSTOM_EVO_STARTED_LOOP_STATUSES = {
-    "pending",
     "submitted",
     "running",
     "processing",
@@ -1022,6 +1034,9 @@ class AutoEvolutionScheduler:
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         创建演进任务并写入数据库。
@@ -1142,7 +1157,19 @@ class AutoEvolutionScheduler:
                     ))
                 conn.commit()
             logger.info(f"Created evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
-            
+
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=task_id,
+            base_experiment_id=root_experiment_id,
+            task_kind="auto_evolution",
+            planned_loops=[
+                PlannedQELoop(loop_index=index, node_id=node_id)
+                for index in range(actual_start + 1, actual_start + max_loops + 1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
         return task_id
 
     def _parse_json_field(self, value: Any, field_name: str) -> Dict[str, Any]:
@@ -1155,6 +1182,33 @@ class AutoEvolutionScheduler:
             if isinstance(parsed, dict):
                 return parsed
         raise ValueError(f"Invalid JSON field for {field_name}: {value}")
+
+    def _load_planned_loop_registration(
+        self,
+        task_id: str,
+        loop_index: int,
+    ) -> Dict[str, Any]:
+        """Read the pre-dispatch identity without inventing one for legacy loops."""
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT config_json
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s AND loop_index = %s
+                    """,
+                    (task_id, loop_index),
+                )
+                row = cur.fetchone()
+        if not row or row[0] in (None, ""):
+            return {}
+        config = self._parse_json_field(
+            row[0],
+            f"planned_loop[{task_id}/Loop{loop_index}].config_json",
+        )
+        registration = config.get(QE_RUN_REGISTRATION_PARAM)
+        return dict(registration) if isinstance(registration, dict) else {}
 
     def _extract_label_horizon_from_params(self, params: Any, *, context: str) -> int:
         parsed = self._parse_json_field(params, context) if params not in (None, "") else {}
@@ -2242,6 +2296,10 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
             )
             config = dict(config)
+            planned_registration = self._load_planned_loop_registration(
+                task_id,
+                loop_index,
+            )
             loop_model_params = merge_qe_minute_runtime_contract(
                 cfg.build_custom_params(),
                 config=config,
@@ -2250,7 +2308,11 @@ class AutoEvolutionScheduler:
                 source="evolution_loop_config",
                 allow_default_execution_algo=True,
             )
+            if planned_registration:
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = planned_registration
             config["model_params"] = loop_model_params
+            if planned_registration:
+                config[QE_RUN_REGISTRATION_PARAM] = planned_registration
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -3198,6 +3260,9 @@ class AutoEvolutionScheduler:
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -3357,6 +3422,18 @@ class AutoEvolutionScheduler:
             f"Forked new task {new_task_id} from {source_task_id} Loop {from_loop_index}, "
             f"max_loops={max_loops}, inherit_history={inherit_history}"
         )
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="fork_evolution",
+            planned_loops=[
+                PlannedQELoop(loop_index=index, node_id=effective_node_id)
+                for index in range(1, max_loops + 1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
         return new_task_id
 
     async def get_task_detail(self, task_id: str, detail: str = "summary") -> Optional[Dict[str, Any]]:
@@ -3384,7 +3461,6 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json, metrics_json,
                                COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
                                config_json->>'model_id' AS model_id,
                                config_json->>'strategy_id' AS strategy_id,
@@ -3433,100 +3509,9 @@ class AutoEvolutionScheduler:
                 result = dict(task)
                 result['loops'] = [dict(loop_row) for loop_row in loops]
 
-        # Live status 检查：对 running 状态的 loop 查询 RDAgent 侧真实状态
-        # 对于 custom_evo/strategy_evo 并行调度任务，不能直接修改 loop status（会破坏
-        # submit_custom_evo_all_loops 的 run_with_sem 调度循环），改为触发完整的
-        # process_completed_loop 流程。
-        task_type = result.get('task_type')
-        any_synced = False
-        for loop_data in result['loops']:
-            if loop_data.get('status') not in ('running', 'processing'):
-                continue
-            loop_id = loop_data['loop_id']
-            loop_index = loop_data['loop_index']
-            try:
-                client = self._get_workspace_client_for_loop(task_id, loop_id)
-                live = await client.get_loop_status(task_id, f"Loop{loop_index}")
-                rd_status = live.get("status")
-            except Exception as e:
-                logger.warning(f"[get_task_detail] live status check failed for {loop_id}: {e}")
-                loop_data["live_status_error"] = str(e)
-                continue
-
-            if task_type in ("custom_evo", "strategy_evo") and rd_status == "not_found":
-                logger.info(
-                    "[get_task_detail] Loop %s not visible on RD-Agent yet; "
-                    "keeping DB status=%s instead of treating it as terminal",
-                    loop_id,
-                    loop_data.get("status"),
-                )
-                continue
-
-            if rd_status in ("completed", "failed", "error", "not_found"):
-                if task_type in ("custom_evo", "strategy_evo"):
-                    if rd_status == "completed":
-                        try:
-                            logger.info(f"[get_task_detail] processing completed loop: {loop_id}")
-                            await self._safe_process_completed_loop(task_id, loop_id)
-                            with get_conn() as conn:
-                                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                                    cur.execute("SELECT * FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                                    updated = cur.fetchone()
-                                    if updated:
-                                        for i, lp in enumerate(result['loops']):
-                                            if lp.get('loop_id') == loop_id:
-                                                result['loops'][i] = dict(updated)
-                                                break
-                            any_synced = True
-                        except Exception as e:
-                            logger.error(f"[get_task_detail] completed-loop processing failed for {loop_id}: {e}")
-                    else:
-                        new_status = "failed" if rd_status in ("failed", "error", "not_found") else rd_status
-                        with get_conn() as conn:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() "
-                                    "WHERE loop_id = %s AND status IN ('running', 'processing')",
-                                    (new_status, loop_id),
-                                )
-                            conn.commit()
-                        loop_data["status"] = new_status
-                        any_synced = True
-                        logger.info(f"[get_task_detail] synced loop {loop_id}: rd_status={rd_status} -> {new_status}")
-                else:
-                    # 标准演进任务：保留原有快速同步逻辑
-                    new_status = "failed" if rd_status in ("failed", "not_found") else "completed"
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() WHERE loop_id = %s AND status IN ('running', 'processing')",
-                                (new_status, loop_id),
-                            )
-                        conn.commit()
-                    loop_data['status'] = new_status
-                    any_synced = True
-                    logger.info(f"[get_task_detail] auto-synced loop {loop_id}: {rd_status} -> {new_status}")
-
-        # 仅对标准演进任务（非 custom_evo/strategy_evo）自动更新 task 状态。
-        # custom_evo/strategy_evo 的 task 状态由 process_strategy_evo_completed_loop 或
-        # submit_custom_evo_all_loops 的 final status check 管理。
-        if any_synced and task_type not in ("custom_evo", "strategy_evo"):
-            all_terminal = all(
-                lp.get('status') in ('completed', 'failed', 'cancelled')
-                for lp in result['loops']
-            )
-            if all_terminal and result.get('status') == 'running':
-                has_failed = any(lp.get('status') == 'failed' for lp in result['loops'])
-                new_task_status = 'failed' if has_failed else 'completed'
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s AND status = 'running'",
-                            (new_task_status, task_id),
-                        )
-                    conn.commit()
-                result['status'] = new_task_status
-                logger.info(f"[get_task_detail] auto-synced task {task_id} -> {new_task_status}")
+        # GET is a persisted-state projection only.  Remote readback and state
+        # transitions are owned by QEReconciliationCoordinator, which already
+        # enforces the per-object >=60 second contract.
 
         if detail == "full":
             try:
@@ -5067,6 +5052,9 @@ class AutoEvolutionScheduler:
         inherit_history: bool = False,
         node_id: Optional[str] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         从指定 task 的某个已完成 loop 创建策略演进任务。
@@ -5161,11 +5149,60 @@ class AutoEvolutionScheduler:
         # 5. 创建 base_experiment 记录
         base_exp_id = f"{new_task_id}_base"
         metrics = source_loop.get("metrics_json") or {}
+        from .qe_active_dataset_profile import (
+            load_active_qe_profile,
+            resolve_and_apply_active_qe_dataset,
+        )
         if isinstance(metrics, str):
             metrics = json.loads(metrics)
 
         # node_id: 入参优先，否则继承源任务
-        effective_node_id = node_id if node_id is not None else source_task.get("node_id")
+        effective_node_id = (
+            node_id
+            if node_id is not None
+            else source_task.get("node_id") or resolve_default_qe_node_id()
+        )
+        active_profile = load_active_qe_profile()
+        if active_profile is None and any(
+            loop_cfg.get("universe_selection") is not None for loop_cfg in loops_config
+        ):
+            raise ValueError(
+                "reason_code=qe_active_dataset_profile_missing: "
+                "universe_selection requires an activated QE dataset profile"
+            )
+        if active_profile is not None:
+            for idx, loop_cfg in enumerate(loops_config, start=1):
+                if loop_cfg.get("stock_pool") and loop_cfg.get("universe_selection") is not None:
+                    raise ValueError(
+                        f"strategy_fork loop {idx}: stock_pool and universe_selection cannot be supplied together"
+                    )
+                resolved_split, resolved_params, resolved_summary = resolve_and_apply_active_qe_dataset(
+                    node_id=str(effective_node_id),
+                    data_split=base_data_split,
+                    universe_selection=loop_cfg.get("universe_selection"),
+                    custom_params=loop_cfg.get("custom_params"),
+                    label_horizon=source_label_horizon,
+                    profile=active_profile,
+                )
+                resolved_params.setdefault("execution_node_id", str(effective_node_id))
+                loop_cfg["data_split"] = resolved_split
+                loop_cfg["custom_params"] = resolved_params
+                loop_cfg["stock_pool"] = resolved_params.get("stock_pool")
+                loop_cfg["resolved_dataset"] = resolved_summary
+        loops_config = [
+            attach_qe_planned_loop_registration(
+                loop_cfg,
+                run_kind="strategy_evolution_loop",
+                source_type=created_by_type,
+                created_by_name=created_by_name,
+                purpose=purpose,
+                node_id=str(loop_cfg.get("node_id") or effective_node_id),
+                parent_id=base_exp_id,
+                task_id=new_task_id,
+                loop_index=index,
+            )
+            for index, loop_cfg in enumerate(loops_config, start=1)
+        ]
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -5216,6 +5253,24 @@ class AutoEvolutionScheduler:
         logger.info(
             f"创建策略演进任务 {new_task_id} 从 {source_task_id} L{from_loop_index}, "
             f"共 {len(loops_config)} 个 Loop"
+        )
+
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="strategy_evolution",
+            planned_loops=[
+                PlannedQELoop(
+                    loop_index=index,
+                    node_id=str(loop_cfg.get("node_id") or effective_node_id),
+                    config=loop_cfg,
+                    action_type="strategy_backtest",
+                )
+                for index, loop_cfg in enumerate(loops_config, start=1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
         )
 
         # 7. 异步启动批量调度
@@ -5336,7 +5391,12 @@ class AutoEvolutionScheduler:
                 source="strategy_evo_loop_config",
                 allow_default_execution_algo=True,
             )
+            planned_registration = loop_config.get(QE_RUN_REGISTRATION_PARAM)
+            if isinstance(planned_registration, dict):
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             base_config["model_params"] = loop_model_params
+            if isinstance(planned_registration, dict):
+                base_config[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -5773,6 +5833,10 @@ class AutoEvolutionScheduler:
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
         long_trend_profile_id: Optional[str] = None,
+        consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -5791,6 +5855,7 @@ class AutoEvolutionScheduler:
         effective_long_trend_profile_id = normalize_long_trend_profile_id(
             long_trend_profile_id
         )
+        effective_consumer_id = normalize_qe_run_consumer_id(consumer_id)
         if phase_pipeline_enabled:
             QEResourcePhaseService().ensure_schema_ready()
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
@@ -5837,7 +5902,26 @@ class AutoEvolutionScheduler:
         first_loop = loops_config[0]
         factor_names = [k.split("||")[0] for k in first_loop.get("factor_keys", [])]
         base_exp_id = f"{new_task_id}_base"
-        first_custom_params = dict(first_loop.get("strategy_params") or {})
+        loops_config = [
+            attach_qe_planned_loop_registration(
+                loop_cfg,
+                run_kind="custom_evolution_loop",
+                consumer_id=effective_consumer_id,
+                source_type=created_by_type,
+                created_by_name=created_by_name,
+                purpose=purpose,
+                node_id=str(loop_cfg.get("node_id") or node_id),
+                parent_id=base_exp_id,
+                task_id=new_task_id,
+                loop_index=index,
+            )
+            for index, loop_cfg in enumerate(loops_config, start=1)
+        ]
+        first_loop = loops_config[0]
+        # Preserve server-owned active dataset/universe bindings from the
+        # normalized Loop config. Strategy params extend rather than replace it.
+        first_custom_params = dict(first_loop.get("custom_params") or {})
+        first_custom_params.update(dict(first_loop.get("strategy_params") or {}))
         if first_loop.get("label_type"):
             first_custom_params["label_type"] = first_loop["label_type"]
         if bool(first_loop.get("disable_alpha158", False)):
@@ -5903,6 +5987,25 @@ class AutoEvolutionScheduler:
             f"共 {len(loops_config)} 个 Loop, node_parallelism={node_parallelism}"
         )
 
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="custom_evolution",
+            planned_loops=[
+                PlannedQELoop(
+                    loop_index=index,
+                    node_id=str(loop_cfg.get("node_id") or node_id),
+                    config=loop_cfg,
+                    action_type=str(loop_cfg.get("action_type") or "custom"),
+                )
+                for index, loop_cfg in enumerate(loops_config, start=1)
+            ],
+            consumer_id=effective_consumer_id,
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
+
         # Template materialization can create the DB task without starting execution.
         if auto_start:
             bg_task = asyncio.create_task(self.submit_custom_evo_all_loops(new_task_id))
@@ -5941,11 +6044,41 @@ class AutoEvolutionScheduler:
         loop_rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         status = str(task.get("status") or "").lower()
-        submitted_loop_count = sum(
-            1
-            for row in loop_rows
-            if str(row.get("status") or "").lower() in CUSTOM_EVO_STARTED_LOOP_STATUSES
-        )
+        def _has_submission_evidence(row: Dict[str, Any]) -> bool:
+            row_status = str(row.get("status") or "").lower()
+            if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
+                return True
+            if row_status != "pending":
+                return False
+            if row.get("experiment_id"):
+                return True
+            raw_config = row.get("config_json")
+            if isinstance(raw_config, str):
+                try:
+                    raw_config = json.loads(raw_config)
+                except json.JSONDecodeError:
+                    # An unreadable pending config cannot be proven to be an
+                    # untouched registry reservation, so fail closed.
+                    return True
+            if not isinstance(raw_config, dict):
+                return True
+            registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
+            if not isinstance(registration, dict):
+                # Only a canonical registry reservation is allowed to keep a
+                # pending row editable/startable. Legacy or malformed pending
+                # rows remain nonstartable until explicitly reconciled.
+                return True
+            return any(
+                key in raw_config
+                for key in (
+                    "execution_manifest",
+                    "execution_manifest_sha256",
+                    _QE_RETRY_SUBMISSION_KEY,
+                    _QE_RERUN_SUBMISSION_KEY,
+                )
+            )
+
+        submitted_loop_count = sum(1 for row in loop_rows if _has_submission_evidence(row))
         startable = (
             task.get("task_type") == "custom_evo"
             and status == "pending"
@@ -5979,7 +6112,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"custom_evo task not found: {task_id}")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -5988,6 +6122,71 @@ class AutoEvolutionScheduler:
                 )
                 loop_rows = [dict(row) for row in cur.fetchall()]
         return self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+
+    def claim_custom_evo_start(self, task_id: str) -> Dict[str, Any]:
+        """Atomically claim one never-started materialized custom_evo task.
+
+        Registry reservations deliberately create pending loop rows before
+        execution.  The claim changes the task state before the FastAPI
+        background task is scheduled, making repeated/concurrent start calls
+        fail closed without treating those planned rows as prior submissions.
+        """
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE",
+                    (task_id,),
+                )
+                task = cur.fetchone()
+                if not task:
+                    raise ValueError(f"custom_evo task not found: {task_id}")
+                cur.execute(
+                    """
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                    ORDER BY loop_index ASC
+                    """,
+                    (task_id,),
+                )
+                loop_rows = [dict(row) for row in cur.fetchall()]
+                start_state = self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+                if not start_state.get("startable"):
+                    conn.commit()
+                    return {**start_state, "claimed": False}
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_tasks
+                    SET status = 'running', updated_at = NOW()
+                    WHERE task_id = %s
+                      AND task_type = 'custom_evo'
+                      AND status = 'pending'
+                      AND current_loop = 0
+                    RETURNING task_id
+                    """,
+                    (task_id,),
+                )
+                claimed = cur.fetchone() is not None
+            conn.commit()
+        if not claimed:
+            return {
+                **start_state,
+                "claimed": False,
+                "startable": False,
+                "editable": False,
+                "resume_allowed": True,
+                "start_reason": "custom_evo task start claim was lost to another request",
+            }
+        return {
+            **start_state,
+            "claimed": True,
+            "startable": False,
+            "editable": False,
+            "resume_allowed": True,
+            "start_reason": "custom_evo task start claimed",
+        }
 
     async def get_custom_evo_editable_config(self, task_id: str) -> Dict[str, Any]:
         with get_conn() as conn:
@@ -6000,7 +6199,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"task {task_id} is not a custom_evo task")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -6087,7 +6287,8 @@ class AutoEvolutionScheduler:
                         raise ValueError(f"task {task_id} is not a custom_evo task")
                     cur.execute(
                         """
-                        SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                        SELECT loop_index, loop_id, status, node_id, experiment_id,
+                               config_json, updated_at
                         FROM qe_evolution_loops
                         WHERE task_id = %s
                         ORDER BY loop_index ASC
@@ -7239,7 +7440,12 @@ class AutoEvolutionScheduler:
                 source="custom_evo_loop_config",
                 allow_default_execution_algo=True,
             )
+            planned_registration = loop_config.get(QE_RUN_REGISTRATION_PARAM)
+            if isinstance(planned_registration, dict):
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             config_record["model_params"] = loop_model_params
+            if isinstance(planned_registration, dict):
+                config_record[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -7319,6 +7525,9 @@ class AutoEvolutionScheduler:
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=submission_source_execution_id,
                 submission_source_claim_id=submission_source_claim_id,
+                submission_consumer_id=_consumer_id_from_registration(
+                    planned_registration
+                ),
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -7362,6 +7571,9 @@ class AutoEvolutionScheduler:
                     submission_source_kind="qe_evolution_loop",
                     submission_source_execution_id=submission_source_execution_id,
                     submission_source_claim_id=submission_source_claim_id,
+                    submission_consumer_id=_consumer_id_from_registration(
+                        planned_registration
+                    ),
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -7754,7 +7966,20 @@ class AutoEvolutionScheduler:
 
             from .multi_alpha_engine import MultiAlphaEngine
 
-            engine = MultiAlphaEngine(cfg)
+            planned_registration = self._load_planned_loop_registration(
+                task_id,
+                loop_index,
+            )
+            engine = MultiAlphaEngine(
+                cfg,
+                registration_context={
+                    "source_type": planned_registration.get("source_type", "scheduler"),
+                    "created_by_name": planned_registration.get("created_by_name"),
+                    "purpose": planned_registration.get("purpose", "research"),
+                },
+                parent_multi_alpha_id=base_exp_id,
+                parent_custom_params=custom_params_clean,
+            )
             result = engine.run()
 
             config_json = {
@@ -7765,6 +7990,8 @@ class AutoEvolutionScheduler:
                 "group_configs": result.get("group_configs"),
                 "meta_method": result.get("meta_method"),
             }
+            if planned_registration:
+                config_json[QE_RUN_REGISTRATION_PARAM] = planned_registration
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(

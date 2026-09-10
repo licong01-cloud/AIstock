@@ -102,7 +102,13 @@ def test_four_cells_and_two_gating_modes_are_computed(tmp_path: Path) -> None:
     assert receipt["row_count"] == 160
     assert len(receipt["daily_sample_counts"]) == 10
     assert all(
-        value == {"rows": 16, "sectors": 4}
+        value
+        == {
+            "rows": 16,
+            "sectors": 4,
+            "singleton_sectors": 0,
+            "multi_stock_sectors": 4,
+        }
         for value in receipt["daily_sample_counts"].values()
     )
     assert {(row["cell_id"], row["gating"]) for row in receipt["cells"]} == {
@@ -274,17 +280,70 @@ def test_insufficient_daily_stock_coverage_is_not_computable(tmp_path: Path) -> 
     assert exc_info.value.reason_code == "qe_p0_d2_daily_coverage_insufficient"
 
 
-def test_single_stock_sector_is_not_computable(tmp_path: Path) -> None:
+def test_single_stock_sector_remains_in_selection_but_not_within_sector_rankic(tmp_path: Path) -> None:
     panel = _panel()
     first_date = panel["datetime"].min()
     remove = (panel["datetime"] == first_date) & (panel["l2_code_id"] == 101)
     panel = panel.loc[~remove | panel.index.to_series().eq(panel.loc[remove].index[0])].copy()
     validated, _panel_path = _validated(tmp_path, panel)
 
+    receipt = MODULE.evaluate_panel(panel, validated_input=validated)
+
+    first_day_counts = receipt["daily_sample_counts"][pd.Timestamp(first_date).date().isoformat()]
+    assert first_day_counts == {
+        "rows": 13,
+        "sectors": 4,
+        "singleton_sectors": 1,
+        "multi_stock_sectors": 3,
+    }
+    assert "qe_p0_d2_singleton_sectors_excluded_from_within_sector_rankic" in receipt["reason_codes"]
+    reality_hard = next(
+        row for row in receipt["cells"] if row["cell_id"] == "D2-RR" and row["gating"] == "hard"
+    )
+    assert reality_hard["metrics"]["within_sector_rankic_eligible_sector_fraction"] < 1.0
+    assert reality_hard["metrics"]["within_sector_rankic_singleton_sector_count_mean"] > 0.0
+    assert reality_hard["metrics"]["selected_singleton_stock_count_mean"] > 0.0
+
+
+def test_date_with_no_selected_multi_stock_sector_is_not_computable(tmp_path: Path) -> None:
+    panel = _panel()
+    first_date = panel["datetime"].min()
+    first_day = panel["datetime"] == first_date
+    keep_first_per_sector = ~panel.duplicated(["datetime", "l2_code_id"], keep="first")
+    panel = panel.loc[~first_day | keep_first_per_sector].copy()
+    panel_path = tmp_path / "panel.parquet"
+    panel.to_parquet(panel_path, index=False)
+    validated = MODULE.validate_input_manifest(
+        _manifest(panel_path, top_m=4, top_k=4),
+        panel_path=panel_path,
+    )
+
     with pytest.raises(MODULE.D2InputError) as exc_info:
         MODULE.evaluate_panel(panel, validated_input=validated)
 
     assert exc_info.value.reason_code == "qe_p0_d2_within_sector_coverage_insufficient"
+    assert "date=2025-01-02" in exc_info.value.detail
+
+
+def test_hard_top_m_treats_top_k_as_cap_when_selected_sectors_are_sparse(tmp_path: Path) -> None:
+    panel = _panel()
+    first_date = panel["datetime"].min()
+    first_day = panel["datetime"] == first_date
+    sparse_101 = first_day & panel["l2_code_id"].eq(101)
+    sparse_202 = first_day & panel["l2_code_id"].eq(202)
+    keep_101 = panel.index.to_series().eq(panel.loc[sparse_101].index[0])
+    keep_202 = panel.index.to_series().isin(panel.loc[sparse_202].index[:2])
+    panel = panel.loc[~sparse_101 | keep_101].loc[~sparse_202 | keep_202].copy()
+    validated, _panel_path = _validated(tmp_path, panel)
+
+    receipt = MODULE.evaluate_panel(panel, validated_input=validated)
+
+    reality_hard = next(
+        row for row in receipt["cells"] if row["cell_id"] == "D2-RR" and row["gating"] == "hard"
+    )
+    assert reality_hard["metrics"]["selected_stock_count"] < 4.0
+    assert reality_hard["metrics"]["selected_stock_top_k_fill_fraction"] < 1.0
+    assert reality_hard["metrics"]["within_sector_rankic_eligible_sector_fraction"] > 0.0
 
 
 @pytest.mark.parametrize(

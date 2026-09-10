@@ -290,6 +290,7 @@ def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeyp
                 "workers": 2,
                 "timeout_per_factor": 900,
                 "node_id": "node-a",
+                "universe_key": "aistock_equity_pit_canonical_v2",
             },
             triggered_by="manual",
         )
@@ -312,7 +313,30 @@ def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeyp
     assert payload["workers"] == 2
     assert payload["max_workers"] == 2
     assert payload["batch_size"] == 8
+    assert payload["universe_key"] == "aistock_equity_pit_canonical_v2"
     assert payload["cache_source"] == "official_offline_backtest_factor_data"
+
+
+def test_factor_job_status_queries_use_finished_at(monkeypatch):
+    from backend.routers import factor_correlation, factor_metrics
+
+    captured: list[str] = []
+
+    def _capture(sql, _params=()):
+        captured.append(sql)
+        return []
+
+    monkeypatch.setattr(factor_metrics, "_rows", _capture)
+    monkeypatch.setattr(factor_correlation, "_rows", _capture)
+
+    assert factor_metrics._job("job-1") is None
+    with pytest.raises(HTTPException) as exc_info:
+        factor_correlation.get_job("job-2")
+
+    assert exc_info.value.status_code == 404
+    assert len(captured) == 2
+    assert all("finished_at AS completed_at" in sql for sql in captured)
+    assert all(" started_at, completed_at" not in sql for sql in captured)
 
 
 def test_factor_cache_compute_explicit_factors_can_include_disabled(monkeypatch):

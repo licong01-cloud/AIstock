@@ -1,7 +1,6 @@
 """Read-once base-data cache for official offline factor computation."""
 from __future__ import annotations
 
-import hashlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ ALLOWED_BASE_DATA_FILES: tuple[str, ...] = (
     "margin_detail.h5",
     "static_factors.parquet",
 )
+SUPPLEMENTAL_DATA_FILES = ("index_factor_context.h5",)
 
 
 @dataclass
@@ -31,7 +31,6 @@ class BaseDataEntry:
     size_mb: float
     rows: int
     columns: int
-    sha256_16: str
 
 
 @dataclass
@@ -54,6 +53,7 @@ class BacktestBaseDataMemoryCache:
         *,
         hdf_reader: Callable[..., pd.DataFrame] | None = None,
         parquet_reader: Callable[..., pd.DataFrame] | None = None,
+        supplemental_data_dir: str | os.PathLike[str] | None = None,
     ) -> "BacktestBaseDataMemoryCache":
         root = Path(factor_data_dir).expanduser().resolve()
         if not root.is_dir():
@@ -61,11 +61,17 @@ class BacktestBaseDataMemoryCache:
         cache = cls(root, start_date, end_date)
         hdf_reader = hdf_reader or pd.read_hdf
         parquet_reader = parquet_reader or pd.read_parquet
-        for name in allowed_files:
-            path = (root / name).resolve()
+        inputs = [(root, name) for name in allowed_files]
+        if supplemental_data_dir is not None:
+            extra_root = Path(supplemental_data_dir).expanduser().resolve(strict=True)
+            inputs.extend((extra_root, name) for name in SUPPLEMENTAL_DATA_FILES)
+        for input_root, name in inputs:
+            path = (input_root / name).resolve()
             if not path.is_file():
+                if name in SUPPLEMENTAL_DATA_FILES:
+                    raise FileNotFoundError(f"explicit supplemental input missing: {path}")
                 continue
-            if root not in path.parents and path != root:
+            if input_root not in path.parents:
                 raise RuntimeError(f"base data path escapes factor_data_dir: {path}")
             t0 = time.time()
             if name.endswith(".h5"):
@@ -87,7 +93,6 @@ class BacktestBaseDataMemoryCache:
                 size_mb=round(path.stat().st_size / 1024 / 1024, 3),
                 rows=original_rows,
                 columns=original_columns,
-                sha256_16=_file_sha256_16(path),
             )
         if not cache.entries:
             raise RuntimeError(f"no allowed base data files found under {root}")
@@ -95,7 +100,7 @@ class BacktestBaseDataMemoryCache:
 
     def get(self, name_or_path: str | os.PathLike[str], *, columns: Any = None) -> pd.DataFrame:
         name = Path(str(name_or_path)).name
-        if name not in ALLOWED_BASE_DATA_FILES:
+        if name not in ALLOWED_BASE_DATA_FILES + SUPPLEMENTAL_DATA_FILES:
             raise FileNotFoundError(f"official offline factor code cannot read unknown base data file: {name}")
         entry = self.entries.get(name)
         if entry is None:
@@ -121,7 +126,6 @@ class BacktestBaseDataMemoryCache:
                     "rows": entry.rows,
                     "columns": entry.columns,
                     "elapsed_sec": entry.elapsed_sec,
-                    "sha256_16": entry.sha256_16,
                     "read_count": self.read_counts.get(name, 0),
                 }
                 for name, entry in self.entries.items()
@@ -145,14 +149,6 @@ class BacktestBaseDataMemoryCache:
         except Exception:
             return df.copy(deep=False)
         return df.copy(deep=False)
-
-
-def _file_sha256_16(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
 
 
 def _copy_slice_releasing_parent(df: pd.DataFrame, mask: Any) -> pd.DataFrame:
