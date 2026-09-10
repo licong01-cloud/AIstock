@@ -51,6 +51,17 @@ modules:
     test_plans:
       required_on_change: [l0]
       recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3, qe_mcp_backend]
+  - module_id: qe.active_dataset_universe
+    display_name: QE active dataset and PIT universe management
+    parent_module: qe
+    module_type: product_feature
+    risk_level: high
+    description: One active QE dataset profile, immutable run-scoped bindings, PIT index universes, and structured UI/MCP creation contracts.
+    description_zh: QE 单一活动数据集配置、不可变任务绑定、PIT 指数股票池及结构化 UI/MCP 创建合同。
+    ui_routes: [/quantevolver/compose, /quantevolver/evolution]
+    api_routes: [/api/v1/quantevolver/dataset-profile, /api/v1/quantevolver/evolution/universe-comparison-tasks]
+    test_plans:
+      required_on_change: [l0, qe_read_backend, qe_sector_risk_overlay_backend, qe_mcp_backend]
   - module_id: qe.long_trend_evaluation
     display_name: QE long-trend evaluation
     parent_module: qe
@@ -94,7 +105,7 @@ modules:
     api_routes: [/api/v1/quantevolver/*]
     test_plans:
       required_on_change: [l0, qe_read_backend]
-      recommended: [qe_read_l3, qe_data_contract_backend]
+      recommended: [qe_read_l3, qe_data_contract_backend, qe_experiment_registry_ui]
   - module_id: qe.custom_evolution
     display_name: QE custom evolution
     parent_module: qe
@@ -259,6 +270,14 @@ modules:
     ui_routes: [/quantevolver/factors, /quantevolver/factor-correlation]
     test_plans:
       required_on_change: [l0]
+  - module_id: factor_library.research
+    display_name: Factor research P1
+    module_type: product_feature
+    risk_level: high
+    description: Existing factor-domain research records and offline candidate tools; no serving or official writer.
+    description_zh: 因子库内部的 P1 研究验证子边界，覆盖研究记录、候选工具和恢复，不新增业务平台或影响其他因子功能。
+    test_plans:
+      required_on_change: [l0, factor_research_backend, factor_research_dev_db]
   - module_id: model_library
     display_name: Model library
     module_type: product_feature

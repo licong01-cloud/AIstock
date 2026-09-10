@@ -354,7 +354,13 @@ jobs:
             fi
           fi
           if [[ "${DEV_DB_REQUIRED}" = "true" ]]; then
-            failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
+            {
+              echo "### External DEV database validation"
+              echo
+              echo "- Required plans: \`${DEV_DB_PLANS}\`"
+              echo "- PR CI reports this delegated requirement but does not run database DDL/DML or treat external work as a CI lane failure."
+              echo "- External DEV evidence remains a separate feature/issue/production-gate state and must not be inferred from this CI result."
+            } >> "${GITHUB_STEP_SUMMARY}"
           fi
           if (( ${#failures[@]} > 0 )); then
             {

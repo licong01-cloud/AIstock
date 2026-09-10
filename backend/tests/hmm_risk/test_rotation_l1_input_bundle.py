@@ -1859,6 +1859,119 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
     assert roots[0] != roots[1]
 
 
+def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
+    trade_day = calendar[-1]
+    as_of = calendar[-2]
+    market_start = calendar[5]
+    codes = tuple(f"801{index:03d}.SI" for index in range(31))
+    candidate_root = (tmp_path / "explicit-direct-v2-candidate").resolve()
+    candidate_root.mkdir()
+    qlib_root = candidate_root / "qlib"
+    qlib_root.mkdir()
+    loader_calls: list[dict[str, object]] = []
+
+    def load_assets(root, **kwargs):
+        loader_calls.append({"root": root, **kwargs})
+        source_days = calendar[: calendar.index(as_of) + 1]
+        return {
+            "qlib_root": qlib_root,
+            "instrument_universe_path": candidate_root / "stock_universe.txt",
+            "files": {
+                "security_identity": candidate_root / "security.json",
+                "provider_absence": candidate_root / "provider.json",
+                "suspend_data": candidate_root / "suspend.parquet",
+                "suspend_manifest": candidate_root / "suspend.json",
+            },
+            "release_cutoff": trade_day,
+            "data_window_end": kwargs["data_window_end"],
+            "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+            "release_identity": {"schema_version": subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION},
+            "inventory": {"inventory_sha256": "a" * 64},
+            "binding_manifest_sha256": "b" * 64,
+            "sector_index_close": {
+                (day, code): 100.0 + day_index for day_index, day in enumerate(source_days) for code in codes
+            },
+            "sector_index_code_by_sector": {code: code for code in codes},
+            "benchmark_close": {day: 3000.0 + index for index, day in enumerate(source_days)},
+        }
+
+    adapter = SimpleNamespace(
+        constituents={code: {"l1_code": code, "l2_codes": []} for code in codes},
+        classification_lookup={("L1", code): {"name": f"Sector {index}"} for index, code in enumerate(codes)},
+        mapping_manifest=lambda **_kwargs: {"schema_version": "mapping_v1", "codes": list(codes)},
+    )
+
+    def build_stock_inputs(*_args, **kwargs):
+        output = kwargs["g2a_l1_daily_output"]
+        for day in kwargs["calendar"][-20:]:
+            for code in codes:
+                output.append(
+                    {
+                        "source_date": day,
+                        "sector_code": code,
+                        "expected_non_suspended_count": 10,
+                        "breadth_valid_count": 10,
+                        "breadth_coverage": 1.0,
+                        "pit_breadth_above_ma20": 0.5,
+                        "breadth_reason_code": None,
+                        "moneyflow_valid_count": 10,
+                        "moneyflow_coverage": 1.0,
+                        "moneyflow_net_amount_cny": 1.0,
+                        "moneyflow_traded_amount_cny": 10.0,
+                        "moneyflow_reason_code": None,
+                    }
+                )
+        return [], [], {}, {"industry": [], "status": []}
+
+    monkeypatch.setattr(subject, "load_rotation_l1_g2a_direct_v2_source_assets", load_assets)
+    monkeypatch.setattr(subject, "_load_qlib_calendar", lambda _path: calendar)
+    monkeypatch.setattr(subject, "_parse_instrument_spans", lambda _path: {})
+    monkeypatch.setattr(subject, "_industry_adapter", lambda *_args, **_kwargs: adapter)
+    monkeypatch.setattr(subject, "_IndustryProjectionIndex", lambda value, **_kwargs: value)
+    monkeypatch.setattr(subject, "_read_json_object", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        subject, "load_security_source_identity_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[])
+    )
+    monkeypatch.setattr(subject, "_SecurityResolutionIndex", lambda value: value)
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[]))
+    monkeypatch.setattr(subject, "_load_suspend_keys", lambda *_args, **_kwargs: frozenset())
+    monkeypatch.setattr(subject, "_spool_qlib_months", lambda *_args, **_kwargs: (tmp_path / "202603.bin",))
+    monkeypatch.setattr(subject, "_build_stock_fact_aggregates", build_stock_inputs)
+
+    result = subject.build_rotation_l1_single_date_source_from_assets(
+        direct_v2_candidate_root=candidate_root,
+        security_identity_manifest=candidate_root / "security.json",
+        provider_absence_manifest=candidate_root / "provider.json",
+        industry_authority={},
+        forbidden_roots=(),
+        work_parent=tmp_path / "work",
+        trade_date=trade_day,
+        as_of_date=as_of,
+        market_start=market_start,
+    )
+
+    assert loader_calls == [
+        {
+            "root": candidate_root,
+            "security_identity_manifest": candidate_root / "security.json",
+            "provider_absence_manifest": candidate_root / "provider.json",
+            "data_window_end": as_of,
+        }
+    ]
+    assert result["feature_calendar"][-2:] == (as_of, trade_day)
+    assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
+    assert all(day <= as_of for day, _code in result["sector_close"])
+    assert len(result["sector_close"]) == 61 * 31
+    assert len(result["stock_daily_inputs"]) == 20 * 31
+    assert result["source_receipt"]["target_columns_read"] is False
+    assert result["source_receipt"]["receipt_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in result["source_receipt"].items() if key != "receipt_sha256"}
+    )
+
+
 def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
     root, _security, _provider = _direct_v2_candidate(tmp_path)
     sw_root = root / "components" / "sw_l1_index_daily_candidate_v1"

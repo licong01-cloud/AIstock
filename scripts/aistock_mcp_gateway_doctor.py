@@ -19,10 +19,10 @@ if __package__ in {None, ""}:
 
 from backend.mcp.common import assert_loopback_url
 from backend.mcp.gateway import list_profiles_payload, self_check_payload
+from backend.mcp.profiles import INITIAL_PROFILES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_MCP = REPO_ROOT / ".mcp.json"
-USER_CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
 USER_CLAUDE_MCP_CONFIG = Path.home() / ".mcp.json"
 LEGACY_STANDALONE_SCRIPTS = {
     "scripts/aistock_mcp_server.py",
@@ -43,6 +43,19 @@ TOKEN_RISK_PROCESS_PATTERNS = (
     re.compile(r"worker-service\.cjs", re.I),
     re.compile(r"stream-json", re.I),
 )
+KNOWN_CLIENT_PROFILE_MIGRATIONS = {
+    "paper_v2_monitor": {
+        "server": "aistock-paper-v2-monitor",
+        "replacement_profile": "simulation_runtime_monitor",
+        "replacement_server": "aistock-simulation-runtime-monitor",
+    },
+    "paper_v2_stable": {
+        "server": "aistock-paper-v2-stable",
+        "replacement_profile": "simulation_stable",
+        "replacement_server": "aistock-simulation-stable",
+    },
+}
+VALID_GATEWAY_PROFILES = frozenset(INITIAL_PROFILES)
 
 
 def _git(args: list[str]) -> str:
@@ -78,6 +91,196 @@ def _modules_from_args(args: list[str]) -> str | None:
         if arg == "--modules" and index + 1 < len(args):
             return args[index + 1]
     return None
+
+
+def _user_codex_config() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def _gateway_profile_finding(name: str, profile: str | None, *, uses_gateway: bool) -> dict[str, Any] | None:
+    if not uses_gateway or profile is None or profile in VALID_GATEWAY_PROFILES:
+        return None
+    migration = KNOWN_CLIENT_PROFILE_MIGRATIONS.get(profile)
+    if migration and migration["replacement_profile"] in VALID_GATEWAY_PROFILES:
+        exact = name == migration["server"]
+        return {
+            "severity": "error",
+            "code": "retired_gateway_profile",
+            "server": name,
+            "profile": profile,
+            "replacement_profile": migration["replacement_profile"],
+            "replacement_server": migration["replacement_server"] if exact else None,
+            "auto_migration_available": exact,
+            "message": (
+                f"{name} uses retired gateway profile {profile!r}; replace it with "
+                f"{migration['replacement_profile']!r}"
+                + (f" and server key {migration['replacement_server']!r}" if exact else "")
+            ),
+        }
+    return {
+        "severity": "error",
+        "code": "unknown_gateway_profile",
+        "server": name,
+        "profile": profile,
+        "replacement_profile": None,
+        "replacement_server": None,
+        "auto_migration_available": False,
+        "message": f"{name} uses unknown gateway profile {profile!r}; choose a profile from {sorted(VALID_GATEWAY_PROFILES)!r}",
+    }
+
+
+def _replace_profile_arg(args: list[Any], old_profile: str, new_profile: str) -> list[Any] | None:
+    updated = list(args)
+    matches = 0
+    for index, arg in enumerate(updated):
+        value = str(arg)
+        if value == f"--profile={old_profile}":
+            updated[index] = f"--profile={new_profile}"
+            matches += 1
+        elif value == "--profile" and index + 1 < len(updated) and str(updated[index + 1]) == old_profile:
+            updated[index + 1] = new_profile
+            matches += 1
+    return updated if matches == 1 else None
+
+
+def _replace_client_config_if_unchanged(path: Path, *, expected: bytes, replacement: bytes) -> str | None:
+    temporary = path.with_name(f".{path.name}.aistock-mcp-migrate-{os.getpid()}.tmp")
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(replacement)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.read_bytes() != expected:
+            return "client config changed while migration was being prepared; rerun against the current file"
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return None
+
+
+def _migrate_known_codex_config(path: Path, *, apply: bool) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "status": "missing", "applied": False, "migrations": [], "blocking": []}
+    try:
+        raw = path.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        original = raw.decode("utf-8-sig")
+        data = tomllib.loads(original)
+    except Exception as exc:
+        return {
+            "path": str(path),
+            "status": "blocked",
+            "applied": False,
+            "migrations": [],
+            "blocking": [f"client config parse failed: {exc}"],
+        }
+
+    servers = data.get("mcp_servers") or {}
+    migrations: list[dict[str, str]] = []
+    blocking: list[str] = []
+    updated = original
+    for old_profile, migration in KNOWN_CLIENT_PROFILE_MIGRATIONS.items():
+        old_server = migration["server"]
+        new_server = migration["replacement_server"]
+        new_profile = migration["replacement_profile"]
+        if new_profile not in VALID_GATEWAY_PROFILES:
+            blocking.append(f"replacement profile {new_profile!r} is not registered")
+            continue
+        spec = servers.get(old_server)
+        if not isinstance(spec, dict):
+            continue
+        args = spec.get("args") or []
+        if _replace_profile_arg(list(args), old_profile, new_profile) is None:
+            blocking.append(f"{old_server} does not contain exactly one profile argument for {old_profile!r}")
+            continue
+        if new_server in servers:
+            blocking.append(f"target server key {new_server!r} already exists")
+            continue
+        main_header = f"[mcp_servers.{old_server}]"
+        env_header = f"[mcp_servers.{old_server}.env]"
+        if updated.count(main_header) != 1 or updated.count(f"--profile={old_profile}") != 1:
+            blocking.append(f"{old_server} is not in the exact generated TOML form required for safe migration")
+            continue
+        if env_header in updated and updated.count(env_header) != 1:
+            blocking.append(f"{old_server} has ambiguous nested env sections")
+            continue
+        updated = updated.replace(main_header, f"[mcp_servers.{new_server}]", 1)
+        updated = updated.replace(env_header, f"[mcp_servers.{new_server}.env]", 1)
+        updated = updated.replace(f"--profile={old_profile}", f"--profile={new_profile}", 1)
+        migrations.append(
+            {
+                "server": old_server,
+                "profile": old_profile,
+                "replacement_server": new_server,
+                "replacement_profile": new_profile,
+            }
+        )
+
+    if blocking:
+        return {"path": str(path), "status": "blocked", "applied": False, "migrations": migrations, "blocking": blocking}
+    if not migrations:
+        return {"path": str(path), "status": "noop", "applied": False, "migrations": [], "blocking": []}
+    if apply:
+        encoded = updated.encode("utf-8")
+        write_error = _replace_client_config_if_unchanged(
+            path,
+            expected=raw,
+            replacement=(b"\xef\xbb\xbf" if bom else b"") + encoded,
+        )
+        if write_error:
+            return {
+                "path": str(path),
+                "status": "blocked",
+                "applied": False,
+                "migrations": migrations,
+                "blocking": [write_error],
+            }
+    return {
+        "path": str(path),
+        "status": "applied" if apply else "planned",
+        "applied": apply,
+        "migrations": migrations,
+        "blocking": [],
+    }
+
+
+def migrate_known_client_configs(paths: list[Path], *, apply: bool = False) -> dict[str, Any]:
+    if apply and len(paths) != 1:
+        return {
+            "status": "blocked",
+            "applied": False,
+            "migration_count": 0,
+            "configs": [],
+            "blocking": ["apply requires exactly one explicit Codex TOML client config"],
+        }
+    configs = []
+    for path in paths:
+        if path.suffix.lower() == ".json":
+            configs.append(
+                {
+                    "path": str(path),
+                    "status": "unsupported",
+                    "applied": False,
+                    "migrations": [],
+                    "blocking": ["automatic migration is limited to Codex TOML; update JSON clients from canonical .mcp.json"],
+                }
+            )
+        else:
+            configs.append(_migrate_known_codex_config(path, apply=apply))
+    blocking = [
+        item
+        for config in configs
+        for item in config["blocking"]
+        if config["status"] in {"blocked", "unsupported"}
+    ]
+    migrations = [item for config in configs for item in config["migrations"]]
+    return {
+        "status": "blocked" if blocking else ("applied" if apply and migrations else "planned" if migrations else "noop"),
+        "applied": apply and bool(migrations) and not blocking,
+        "migration_count": len(migrations),
+        "configs": configs,
+        "blocking": blocking,
+    }
 
 
 def _check_project_mcp() -> tuple[list[dict[str, Any]], list[str], list[str]]:
@@ -229,6 +432,9 @@ def _scan_codex_config(path: Path) -> dict[str, Any]:
                     "message": f"{name} uses --modules={modules}; prefer canonical --profile entries for client configs",
                 }
             )
+        profile_finding = _gateway_profile_finding(name, profile, uses_gateway=uses_gateway)
+        if profile_finding:
+            findings.append(profile_finding)
         for env_name in ("AISTOCK_MCP_BASE_URL", "AISTOCK_VALIDATION_BASE_URL", "AISTOCK_QE_EXPERIMENT_BASE_URL", "AISTOCK_QE_ARCHIVE_BASE_URL"):
             base_url = env.get(env_name)
             if not base_url:
@@ -322,6 +528,9 @@ def _scan_json_mcp_config(path: Path) -> dict[str, Any]:
                     "message": f"{name} uses --modules={modules}; prefer canonical --profile entries for client configs",
                 }
             )
+        profile_finding = _gateway_profile_finding(name, profile, uses_gateway=uses_gateway)
+        if profile_finding:
+            findings.append(profile_finding)
         for env_name in ("AISTOCK_MCP_BASE_URL", "AISTOCK_VALIDATION_BASE_URL", "AISTOCK_QE_EXPERIMENT_BASE_URL", "AISTOCK_QE_ARCHIVE_BASE_URL"):
             base_url = env.get(env_name)
             if not base_url:
@@ -506,7 +715,7 @@ def run_doctor(
         errors.append(f"git metadata unavailable: {exc}")
 
     project_servers, project_errors, project_warnings = _check_project_mcp()
-    client_configs = _scan_client_configs(client_config_paths or [USER_CODEX_CONFIG, USER_CLAUDE_MCP_CONFIG])
+    client_configs = _scan_client_configs(client_config_paths or [_user_codex_config(), USER_CLAUDE_MCP_CONFIG])
     static_findings, static_errors, static_guardrail = _check_static_no_llm()
     gateway = self_check_payload(profile="lite", check_backend=check_backend)
     profiles = list_profiles_payload()
@@ -565,11 +774,22 @@ def main() -> None:
     parser.add_argument("--check-backend", action="store_true", help="Also attempt a short backend health request")
     parser.add_argument("--client-config", action="append", default=None, help="Additional Codex TOML config to scan for AIstock MCP drift")
     parser.add_argument("--fail-on-client-drift", action="store_true", help="Fail if user/client MCP config still points at legacy/full AIstock servers")
+    parser.add_argument(
+        "--migrate-known-client-drift",
+        action="store_true",
+        help="Plan exact known retired-profile migrations for Codex TOML client configs",
+    )
+    parser.add_argument("--apply", action="store_true", help="Apply --migrate-known-client-drift changes")
     parser.add_argument("--process-inventory", action="store_true", help="Include local process inventory for MCP/LLM/token-risk diagnostics")
     parser.add_argument("--fail-on-token-risk", action="store_true", help="Fail if process inventory finds legacy/full/LLM token-risk processes")
     parser.add_argument("--json", action="store_true", help="Pretty-print JSON output")
     args = parser.parse_args()
     client_paths = [Path(item) for item in args.client_config] if args.client_config else None
+    if args.apply and not args.migrate_known_client_drift:
+        parser.error("--apply requires --migrate-known-client-drift")
+    migration = None
+    if args.migrate_known_client_drift:
+        migration = migrate_known_client_configs(client_paths or [_user_codex_config()], apply=args.apply)
     payload = run_doctor(
         check_backend=args.check_backend,
         client_config_paths=client_paths,
@@ -577,6 +797,11 @@ def main() -> None:
         include_process_inventory=args.process_inventory,
         fail_on_token_risk=args.fail_on_token_risk,
     )
+    if migration is not None:
+        payload["client_migration"] = migration
+        if migration["status"] == "blocked":
+            payload["status"] = "fail"
+            payload["errors"].extend(f"client migration blocked: {item}" for item in migration["blocking"])
     print(json.dumps(payload, ensure_ascii=False, indent=2 if args.json else None))
     raise SystemExit(0 if payload["status"] == "pass" else 2)
 

@@ -37,7 +37,10 @@ QE_FORMAL_DATASET_BINDING_SCHEMA = "qe_formal_canonical_pit_dataset_binding_v1"
 QE_FORMAL_DATASET_REQUEST_SCHEMA = "qe_formal_canonical_pit_dataset_request_v1"
 QE_FORMAL_DATASET_REQUEST_PARAM = "_qe_formal_dataset_request"
 QE_FORMAL_RUNTIME_PINS_SCHEMA = "qe_formal_frozen_runtime_pins_v1"
-QE_DIRECT_V2_DATASET_BINDING_SCHEMA = "qe_direct_v2_dataset_binding_v2"
+QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V2 = "qe_direct_v2_dataset_binding_v2"
+QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3 = "qe_direct_v2_dataset_binding_v3"
+# Compatibility name used by historical callers and fixtures.
+QE_DIRECT_V2_DATASET_BINDING_SCHEMA = QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V2
 QE_DIRECT_V2_DATASET_BINDING_PARAM = "_qe_direct_v2_dataset_binding"
 
 QE_DIRECT_V2_INDEX_CODES = (
@@ -112,7 +115,7 @@ class QEDirectV2DatasetBinding:
     factor_meta_sha256: str
     day_pins: Mapping[str, str]
     minute_pins: Mapping[str, str]
-    selection_pins: Mapping[str, str]
+    selection_pins: Mapping[str, Any]
     index_pins: Mapping[str, Any]
     suspend_pins: Mapping[str, str]
     schema_version: str = QE_DIRECT_V2_DATASET_BINDING_SCHEMA
@@ -139,7 +142,11 @@ class QEDirectV2DatasetBinding:
         }
         if not isinstance(value, Mapping) or set(value) != required:
             raise ValueError("QE direct-v2 dataset binding schema/fields are invalid")
-        if value.get("schema_version") != QE_DIRECT_V2_DATASET_BINDING_SCHEMA:
+        schema_version = value.get("schema_version")
+        if schema_version not in {
+            QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V2,
+            QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3,
+        }:
             raise ValueError("QE direct-v2 dataset binding schema_version is invalid")
         string_fields = required - {
             "schema_version",
@@ -176,11 +183,15 @@ class QEDirectV2DatasetBinding:
             ),
             index_pins=dict(value["index_pins"]) if isinstance(value["index_pins"], Mapping) else {},
             suspend_pins=dict(value["suspend_pins"]) if isinstance(value["suspend_pins"], Mapping) else {},
+            schema_version=str(schema_version),
         )
         return binding.validated()
 
     def validated(self) -> "QEDirectV2DatasetBinding":
-        if self.schema_version != QE_DIRECT_V2_DATASET_BINDING_SCHEMA:
+        if self.schema_version not in {
+            QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V2,
+            QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3,
+        }:
             raise ValueError("QE direct-v2 dataset binding schema_version is invalid")
         if (
             self.release_id != self.release_id.strip().lower()
@@ -241,18 +252,66 @@ class QEDirectV2DatasetBinding:
             for key in ("instruments_sha256", "calendar_sha256", "meta_export_sha256"):
                 _canonical_sha256(pins[key], field=f"{label}_pins.{key}")
 
-        selection = _string_mapping(
-            self.selection_pins,
-            field="selection_pins",
-            required={
-                "stock_pool",
+        if self.schema_version == QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V2:
+            selection: dict[str, Any] = _string_mapping(
+                self.selection_pins,
+                field="selection_pins",
+                required={
+                    "stock_pool",
+                    "instruments_sha256",
+                    "benchmark_code",
+                    "benchmark_instruments_sha256",
+                },
+            )
+            if selection["stock_pool"] != "stock_universe":
+                raise ValueError("QE direct-v2 selection stock_pool is invalid")
+        else:
+            required_selection = {
+                "mode",
+                "pool_ids",
+                "instrument_name",
+                "instruments_file",
                 "instruments_sha256",
+                "membership_revision",
+                "coverage_receipt_sha256",
                 "benchmark_code",
                 "benchmark_instruments_sha256",
-            },
-        )
-        if selection["stock_pool"] != "stock_universe":
-            raise ValueError("QE direct-v2 selection stock_pool is invalid")
+            }
+            if not isinstance(self.selection_pins, Mapping) or set(self.selection_pins) != required_selection:
+                raise ValueError("QE direct-v2 selection_pins schema/fields are invalid")
+            selection = dict(self.selection_pins)
+            string_fields = required_selection - {"pool_ids"}
+            if any(not isinstance(selection[key], str) for key in string_fields):
+                raise ValueError("QE direct-v2 selection_pins values must be strings")
+            mode = selection["mode"]
+            if mode not in {"stock_universe", "single_index", "index_union"}:
+                raise ValueError("QE direct-v2 selection mode is invalid")
+            pool_ids = selection["pool_ids"]
+            if (
+                not isinstance(pool_ids, list)
+                or any(not isinstance(item, str) or not _DATASET_ID_RE.fullmatch(item) for item in pool_ids)
+                or pool_ids != sorted(set(pool_ids))
+            ):
+                raise ValueError("QE direct-v2 selection pool_ids are invalid")
+            if mode == "stock_universe" and pool_ids:
+                raise ValueError("QE direct-v2 stock_universe must not contain pool_ids")
+            if mode == "single_index" and len(pool_ids) != 1:
+                raise ValueError("QE direct-v2 single_index requires exactly one pool_id")
+            if mode == "index_union" and not pool_ids:
+                raise ValueError("QE direct-v2 index_union requires pool_ids")
+            instrument_name = selection["instrument_name"]
+            instruments_file = selection["instruments_file"]
+            if instruments_file != f"{instrument_name}.txt" or not re.fullmatch(
+                r"(?:stock_universe|index_pool__[a-z0-9_]+|index_pool__union_[0-9a-f]{12})\.txt",
+                instruments_file,
+            ):
+                raise ValueError("QE direct-v2 selection instruments_file is invalid")
+            if not selection["membership_revision"].strip():
+                raise ValueError("QE direct-v2 selection membership_revision is empty")
+            _canonical_sha256(
+                selection["coverage_receipt_sha256"],
+                field="selection_pins.coverage_receipt_sha256",
+            )
         if selection["benchmark_code"] != "000300.SH":
             raise ValueError("QE direct-v2 benchmark code is invalid")
         _canonical_sha256(
@@ -320,7 +379,14 @@ class QEDirectV2DatasetBinding:
             "factor_meta_sha256": self.factor_meta_sha256,
             "day_pins": dict(self.day_pins),
             "minute_pins": dict(self.minute_pins),
-            "selection_pins": dict(self.selection_pins),
+            "selection_pins": {
+                **dict(self.selection_pins),
+                **(
+                    {"pool_ids": list(self.selection_pins["pool_ids"])}
+                    if self.schema_version == QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3
+                    else {}
+                ),
+            },
             "index_pins": {
                 "sha256": self.index_pins["sha256"],
                 "max_date": self.index_pins["max_date"],

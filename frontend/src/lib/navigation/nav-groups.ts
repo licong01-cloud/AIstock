@@ -33,7 +33,10 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "HMM 研究工作台",
-    items: [{ href: "/hmm-evolution", label: "🧭 演进实验室" }],
+    items: [
+      { href: "/hmm-evolution", label: "🧭 演进实验室" },
+      { href: "/hmm-risk", label: "🧩 L1 板块轮动" },
+    ],
   },
   {
     title: "RD-Agent\u7BA1\u7406",

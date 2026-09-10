@@ -199,6 +199,7 @@ test("QE terminal log UI shows node log tail without local workspace wording", a
 
   await page.goto("/quantevolver/experiments");
   await expect(page.getByText(mockExperimentId).first()).toBeVisible({ timeout: 120_000 });
+  await page.getByRole("button", { name: "查看日志" }).click();
   await expect(page.getByText("node tail line 1").first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("QE 节点日志尾部").first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/本地\s*run\.log|本地日志/)).toHaveCount(0);

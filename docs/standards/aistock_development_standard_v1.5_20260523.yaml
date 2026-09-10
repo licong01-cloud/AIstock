@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 3a047c2a0e286054f03dbdc27846038215cba46f41f1a7facc2cb57b279172d9
+source_sha256: 6643861444e7554f0c5b3a5103fe5fd157e634f8f23d11ca65765a2916fd902c
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-09-04"
@@ -564,11 +564,12 @@ rules:
         - aggregate_pr_merge_and_own_cleanup_supported
         - same_run_github_actions_read_prohibited
         - nightly_failure_groups_are_module_scoped
-        - heterogeneous_failure_groups_require_triage
+        - heterogeneous_failure_groups_use_bounded_module_issue_split
+        - multi_issue_nightly_promotion_is_explicitly_deferred
         - host_wide_counter_and_permanent_reservation_remain_authoritative
         - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
-    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. When two or more independently merged non-runtime BUGs are already ready, use close-sync-aggregate with exact per-BUG source identity and commit-bound receipt recovery instead of separate metadata PRs, but never wait to accumulate a batch. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
+    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. When two or more independently merged non-runtime BUGs are already ready, use close-sync-aggregate with exact per-BUG source identity and commit-bound receipt recovery instead of separate metadata PRs, but never wait to accumulate a batch. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates. Split heterogeneous Nightly failures into at most five independently deduplicated module-group Issues, consolidate overflow explicitly, and defer automatic BUG promotion when one run creates multiple Issues.
 
   - rule_id: PROD-DEPENDENCY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
@@ -753,12 +754,12 @@ rules:
         - no_unbounded_full_history_checkout_for_merge_base_recovery
         - non_security_quality_lanes_run_once_on_pull_request
         - merge_quality_contexts_are_change_scoped
-        - codeql_default_branch_security_scan_preserved
+        - codeql_daily_nightly_full_scan
         - codeql_uses_hash_verified_prebuilt_bundle
         - codeql_remote_action_download_is_eliminated
         - codeql_reuses_single_security_runner_allocation
         - codeql_exact_local_workspace_fetch_is_bounded
-        - codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push
+        - codeql_pr_merge_gate_removed
         - code_intelligence_refresh_is_scheduled_or_manual_only
         - code_intelligence_refresh_has_no_external_artifact_action_dependency
         - javascript_actions_use_approved_native_node24_majors
@@ -776,7 +777,7 @@ rules:
         - nightly_retries_failed_or_missing_sessions_plus_new_impact
         - nightly_change_scoped_l0_uses_explicit_receipt_paths
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and change-scoped merge-quality contexts. Register each isolated Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Source or mixed PRs require CI verdict plus the isolated CodeQL verdict; PR Quality and Semgrep enforcement execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata gate named CI verdict and skip CodeQL before runner allocation. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates and make CI verdict the only merge-quality context consumed by branch protection and the automatic merger. PR Quality, Semgrep, secret leakage, and dangerous workflow checks execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Do not trigger or require CodeQL for pull_request or push events and do not classify high-risk PRs. Run one daily scheduled full scan of the latest main plus explicit workflow_dispatch, analyze Python and JavaScript/TypeScript sequentially in one security-runner allocation, upload SARIF, and keep Nightly failures visible without blocking completed or unrelated PRs. Register each Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata CI verdict. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in any CI or Nightly job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001

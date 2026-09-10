@@ -547,6 +547,13 @@ def frontend_type_lint(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_experiment_registry_ui(session: nox.Session) -> None:
+    """Run the mocked QE experiment registry and progress UI contract."""
+
+    _run_mocked_frontend_target(session, "tests/quantevolver/qe_experiment_history_registry.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def hmm_evolution_ui(session: nox.Session) -> None:
     """Run only the HMM Evolution mocked UI contract."""
 
@@ -834,6 +841,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/test_data_sync_targets.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
@@ -1255,7 +1263,20 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
         "backend/tests/quantevolver/test_stock_pool_sync.py",
         "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+        "backend/tests/quantevolver/test_rotation_index_factors.py",
+        "backend/tests/quantevolver/test_rotation_liquidity_factors.py",
         "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile_api.py",
+        "backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py",
+        "backend/tests/quantevolver/test_qe_experiment_history_contract.py",
+        "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+        "backend/tests/quantevolver/test_qe_reconciliation_coordinator.py",
+        "backend/tests/quantevolver/test_qe_registered_submission.py",
+        "backend/tests/quantevolver/test_qe_universe_comparison.py",
+        "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+        "backend/tests/unified_engine/test_qe_cleanup_path_policy.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
         "backend/tests/test_correlation_compute_independence.py",
         "backend/tests/test_factor_st_pit_metrics_cache.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
@@ -2708,6 +2729,33 @@ def validation_coverage_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def factor_research_backend(session: nox.Session) -> None:
+    """Collect all research tests with DEV writes explicitly disabled, even if inherited."""
+    session.run(
+        "python", "-m", "pytest",
+        "backend/tests/factor_research/test_contracts.py",
+        "backend/tests/factor_research/test_comparison.py",
+        "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_quality.py",
+        "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
+    )
+    session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
+                env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True)
+
+
+@nox.session(venv_backend="none")
+def factor_research_dev_db(session: nox.Session) -> None:
+    """Explicit existing DEV validation, excluded from ordinary source CI."""
+    if not os.environ.get("FACTOR_RESEARCH_DEV_ENV_FILE"):
+        session.error("Explicit FACTOR_RESEARCH_DEV_ENV_FILE required for existing DEV validation")
+    session.run(
+        "python", "-m", "pytest", "backend/tests/factor_research/test_repository_dev.py", "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}), external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def platform_api_backend(session: nox.Session) -> None:
     """Run shared Platform API contracts without starting a backend process."""
     session.run(
@@ -3309,6 +3357,7 @@ def qe_data_contract_backend(session: nox.Session) -> None:
         session,
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/mcp/test_domain_modules.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "-q",
         "-p",

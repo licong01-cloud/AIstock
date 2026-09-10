@@ -12,6 +12,8 @@ import json
 import math
 from typing import Any, Mapping
 
+from .qe_run_registry import qe_registration_summary
+
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "ic": ("ic", "IC"),
     "icir": ("icir", "ICIR"),
@@ -598,6 +600,21 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
     )
     if execution_summary:
         summary["execution_algo_params"] = execution_summary
+    active_dataset = _mapping(cfg.get("_qe_active_dataset_summary"))
+    direct_binding = _mapping(cfg.get("_qe_direct_v2_dataset_binding"))
+    selection = _mapping(direct_binding.get("selection_pins"))
+    if active_dataset:
+        summary["dataset"] = {
+            key: active_dataset[key]
+            for key in ("generation", "release_id", "cutoff", "defaults")
+            if key in active_dataset
+        }
+    if selection:
+        summary["universe"] = {
+            "mode": selection.get("mode") or "stock_universe",
+            "pool_ids": list(selection.get("pool_ids") or []),
+            "label": selection.get("instrument_name") or selection.get("stock_pool"),
+        }
     return summary
 
 
@@ -606,6 +623,7 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
         "experiment_id",
         "experiment_name",
         "status",
+        "canonical_status",
         "model_id",
         "strategy_id",
         "qe_task_id",
@@ -630,8 +648,17 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
     item.update(metrics)
     if metrics:
         item["metrics_summary"] = metrics
+    custom_params = _mapping(row.get("custom_params"))
+    registration = qe_registration_summary(custom_params.get("_qe_run_registration"))
+    if registration:
+        item["registration_summary"] = registration
+    artifact_retention = _mapping(custom_params.get("_qe_artifact_retention"))
+    if artifact_retention:
+        item["artifact_retention"] = artifact_retention
+    if row.get("progress_summary"):
+        item["progress_summary"] = row.get("progress_summary")
     if include_config_summary:
-        config_summary = compact_config_summary(row.get("custom_params"))
+        config_summary = compact_config_summary(custom_params)
         if config_summary:
             item["custom_params_summary"] = config_summary
     status = str(row.get("status") or "").lower()

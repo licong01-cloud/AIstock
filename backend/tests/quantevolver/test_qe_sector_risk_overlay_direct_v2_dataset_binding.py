@@ -11,6 +11,11 @@ import yaml
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     QE_DIRECT_V2_DATASET_BINDING_FILE,
+    QE_UNIVERSE_COVERAGE_RECEIPT_FILE,
+)
+from backend.services.quantevolver.qe_active_dataset_profile import (
+    QE_RUN_COVERAGE_RECEIPT_PARAM,
+    QE_RUN_STOCK_POOL_CONTENT_PARAM,
 )
 from backend.services.quantevolver.qe_dataset_contract import (
     QE_DIRECT_V2_DATASET_BINDING_PARAM,
@@ -18,7 +23,10 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QEDirectV2DatasetBinding,
 )
 from scripts.qe_build_frozen_suspend_filter import build_suspend_filter_payload
-from backend.services.quantevolver.qe_validate_direct_v2_dataset import validate_binding
+from backend.services.quantevolver.qe_validate_direct_v2_dataset import (
+    DirectV2DatasetValidationError,
+    validate_binding,
+)
 
 
 def _sha(path: Path) -> str:
@@ -383,3 +391,149 @@ def test_direct_v2_binding_rejects_unbound_named_stock_pool(tmp_path: Path) -> N
             has_custom_factors=False,
             has_alpha158=False,
         )
+
+
+def _v3_binding(raw: dict, *, sidecar: str, receipt: str) -> dict:
+    value = json.loads(json.dumps(raw))
+    value["schema_version"] = "qe_direct_v2_dataset_binding_v3"
+    value["selection_pins"] = {
+        "mode": "single_index",
+        "pool_ids": ["csi300"],
+        "instrument_name": "index_pool__csi300",
+        "instruments_file": "index_pool__csi300.txt",
+        "instruments_sha256": hashlib.sha256(sidecar.encode()).hexdigest(),
+        "membership_revision": "csi300-pit-v1",
+        "coverage_receipt_sha256": hashlib.sha256(receipt.encode()).hexdigest(),
+        "benchmark_code": "000300.SH",
+        "benchmark_instruments_sha256": raw["selection_pins"]["benchmark_instruments_sha256"],
+    }
+    return value
+
+
+def _v3_receipt() -> str:
+    return json.dumps(
+        {
+            "schema_version": "qe_index_pool_coverage_receipt_v1",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "cutoff": "2026-08-31",
+            "pools": {
+                "csi300": {
+                    "available_start": "2018-08-01",
+                    "available_end": "2026-08-31",
+                    "gaps": [],
+                }
+            },
+        },
+        sort_keys=True,
+    )
+
+
+def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "index_pool__csi300.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["mode"] == "single_index"
+
+
+def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000001.SZ\tnot-a-date\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "index_pool__csi300.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(DirectV2DatasetValidationError, match="qe_direct_v2_selection_contract_invalid"):
+        validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+
+def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, _ = _fixture(tmp_path)
+    sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_receipt()
+    raw = _v3_binding(raw, sidecar=sidecar, receipt=receipt)
+    params = _custom_params(raw)
+    params.update(
+        {
+            "stock_pool": "index_pool__csi300",
+            QE_RUN_STOCK_POOL_CONTENT_PARAM: sidecar,
+            QE_RUN_COVERAGE_RECEIPT_PARAM: receipt,
+        }
+    )
+    composer = ConfigComposer()
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {"workspace_base": "/tmp/qe_workspace"},
+    )
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": "DemoFactor",
+                "source": "custom",
+                "code_text": "def calculate_DemoFactor(instruments, start_date, end_date):\n    return None\n",
+            }
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read")
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=["DemoFactor"],
+        data_split={
+            "train_start": "2018-08-01",
+            "train_end": "2023-10-27",
+            "valid_start": "2023-11-28",
+            "valid_end": "2024-05-29",
+            "test_start": "2026-08-28",
+            "test_end": "2026-08-31",
+            "backtest_end": "2026-08-28",
+        },
+        custom_params=params,
+        experiment_name="direct-v3-test",
+        skip_db_save=True,
+        execution_algo="TWAP",
+        node_id="wsl2-5080",
+    )
+
+    files = result["experiment_files"]
+    assert files["index_pool__csi300.txt"] == sidecar
+    assert files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] == receipt
+    conf = yaml.safe_load(files["conf.yaml"])
+    assert conf["qlib_init"]["provider_uri"]["day"] == "/tmp/qe_workspace/direct-v3-test/qe_provider_day"
+    assert conf["qlib_init"]["provider_uri"]["1min"] == raw["provider_uri_1min"]
+    assert conf["market"] == "index_pool__csi300"
+    command = result["wsl_command_core"]
+    assert "ln -sfn" in command
+    assert "cp -f index_pool__csi300.txt" in command
+    assert raw["provider_uri_day"] in command
+    risk_spec = json.loads(files["qe_frozen_build_spec.json"])
+    assert risk_spec["provider_uri_day"].endswith("/qe_provider_day")
+    assert risk_spec["pins"]["instruments_file"] == "index_pool__csi300.txt"

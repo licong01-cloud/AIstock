@@ -125,8 +125,9 @@ def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, 
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
+@pytest.mark.parametrize("binding_schema", ["qe_direct_v2_dataset_binding_v2", "qe_direct_v2_dataset_binding_v3"])
 def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, binding_schema
 ) -> None:
     runner, _record_temp = _load_runner(monkeypatch)
     day_root = tmp_path / "day"
@@ -146,16 +147,26 @@ def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
     )
     config = _minute_config(minute_root, day_root)
     config["market"] = "stock_universe"
-    (tmp_path / "qe_direct_v2_dataset_binding.json").write_text(
+    selection_pins = {
+        "stock_pool": "stock_universe",
+        "instruments_sha256": hashlib.sha256(
+            (day_instruments / "stock_universe.txt").read_bytes()
+        ).hexdigest(),
+    }
+    if binding_schema == "qe_direct_v2_dataset_binding_v3":
+        selection_pins = {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "instruments_sha256": selection_pins["instruments_sha256"],
+        }
+    binding_path = tmp_path / "qe_direct_v2_dataset_binding.json"
+    binding_path.write_text(
         json.dumps(
             {
-                "schema_version": "qe_direct_v2_dataset_binding_v2",
-                "selection_pins": {
-                    "stock_pool": "stock_universe",
-                    "instruments_sha256": hashlib.sha256(
-                        (day_instruments / "stock_universe.txt").read_bytes()
-                    ).hexdigest(),
-                },
+                "schema_version": binding_schema,
+                "selection_pins": selection_pins,
                 "minute_pins": {
                     "instruments_sha256": hashlib.sha256(minute_all.read_bytes()).hexdigest(),
                 },
@@ -180,6 +191,13 @@ def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
     )
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_BINDING_HASH_MISMATCH"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    if binding_schema == "qe_direct_v2_dataset_binding_v3":
+        invalid_binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        invalid_binding["selection_pins"]["instruments_file"] = "other.txt"
+        binding_path.write_text(json.dumps(invalid_binding), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_BINDING_INVALID"):
+            runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
 def test_qrun_minute_quote_universe_missing_market_fails_closed(tmp_path, monkeypatch) -> None:

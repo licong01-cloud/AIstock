@@ -73,6 +73,10 @@ class DummyScheduler:
         self.calls.append(("all", args, kwargs))
         return {"submitted_loop_ids": []}
 
+    def claim_custom_evo_start(self, task_id):
+        self.calls.append(("claim", task_id))
+        return {"claimed": True, "start_reason": "custom_evo task start claimed"}
+
 
 def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None, model_params=None):
     runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
@@ -91,6 +95,8 @@ def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, e
 
 
 def _patch_non_qe_dependencies(monkeypatch):
+    from backend.services.quantevolver import qe_active_dataset_profile
+
     def fake_resolve_custom_loop_nodes(loops_config, request_node_id):
         default_node = request_node_id or "local-node"
         resolved = []
@@ -125,6 +131,7 @@ def _patch_non_qe_dependencies(monkeypatch):
     monkeypatch.setattr(qe, "normalize_node_parallelism", fake_normalize_node_parallelism)
     monkeypatch.setattr(qe, "preflight_qe_nodes", fake_preflight_qe_nodes)
     monkeypatch.setattr(qe, "_sync_stock_pool_to_remote", lambda stock_pool, node: None)
+    monkeypatch.setattr(qe_active_dataset_profile, "load_active_qe_profile", lambda: None)
 
 
 def test_custom_evo_loop_config_preserves_model_params_from_http_payload():
@@ -330,9 +337,9 @@ def test_custom_evo_update_pending_config_uses_put_path_without_scheduling(monke
 
     assert result["status"] == "success"
     assert result["operation"] == "update_pending_config"
-    assert [call[0] for call in dummy.calls] == ["update"]
-    assert dummy.calls[0][1]["task_name"] == "edited pending"
-    assert dummy.calls[0][1]["loops_config"][0]["node_id"] == "node-a"
+    assert [call[0] for call in dummy.calls] == ["config", "update"]
+    assert dummy.calls[1][1]["task_name"] == "edited pending"
+    assert dummy.calls[1][1]["loops_config"][0]["node_id"] == "node-a"
 
 
 def test_custom_evo_start_rejects_already_started_task(monkeypatch):
@@ -388,8 +395,42 @@ def test_custom_evo_start_returns_operation_start(monkeypatch):
     result = asyncio.run(qe.run_custom_evo_task("task-a", req, background_tasks))
 
     assert result["operation"] == "start"
+    assert dummy.calls[-1] == ("claim", "task-a")
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].args == ("task-a",)
+
+
+def test_custom_evo_start_rejects_when_atomic_claim_is_lost(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler({
+        "task_id": "task-a",
+        "task_type": "custom_evo",
+        "node_id": "node-a",
+        "status": "pending",
+        "startable": True,
+        "loops": [
+            {
+                "loop_index": 1,
+                "factor_keys": ["alpha_factor||catalog"],
+                "model_id": "xgboost_v1",
+                "runtime_flags": {"random_seed": 42},
+            }
+        ],
+    })
+    dummy.claim_custom_evo_start = lambda task_id: {
+        "claimed": False,
+        "start_reason": "custom_evo task start claim was lost to another request",
+    }
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    req = qe.CustomEvoRunRequest(confirm_custom_evo="QE_CUSTOM_EVO_RUN")
+    background_tasks = BackgroundTasks()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.run_custom_evo_task("task-a", req, background_tasks))
+
+    assert exc.value.status_code == 409
+    assert "lost to another request" in str(exc.value.detail)
+    assert not background_tasks.tasks
 
 
 def test_prepare_custom_evo_loop_configs_syncs_each_stock_pool_once_per_node(monkeypatch):
@@ -458,6 +499,7 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
         loops=[_loop("clone-a", node_id="node-a"), _loop("clone-b", node_id="node-b")],
         node_parallelism={"node-a": 2, "node-b": 3},
         clone_from_task_id="source-task",
+        consumer_id="advisory",
     )
     result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
 
@@ -470,6 +512,7 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
     assert result["node_parallelism"] == {"node-a": 2, "node-b": 3}
     assert dummy.calls[0][0] == "create"
     assert dummy.calls[0][1]["clone_from_task_id"] == "source-task"
+    assert dummy.calls[0][1]["consumer_id"] == "advisory"
     loops_config = dummy.calls[0][1]["loops_config"]
     assert all(loop["strategy_params"]["risk_policy"]["enabled"] is True for loop in loops_config)
     assert all("force_exit" in loop["strategy_params"]["risk_policy"]["hard_actions"] for loop in loops_config)

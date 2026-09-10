@@ -1,4 +1,4 @@
-"""Approved G2-A v1.2 development executor for L1 sector rotation.
+"""Approved G2-A v1.4/v1.5/v1.6 development executor for L1 sector rotation.
 
 This module owns the model-facing, development-only contract. It consumes an
 already materialised causal panel and fits the approved target-free market
@@ -23,7 +23,6 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
-
 from backend.services.hmm_risk.market_relative_jump_spike import (
     PreparedComponent,
     Preprocessor,
@@ -34,13 +33,35 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
 from backend.services.hmm_risk.state_model_set import canonical_sha256
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 
-CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_2"
-INPUT_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_bundle_v1"
-PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v1"
-ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v1"
-INPUT_MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_manifest_v1"
+V14_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_4"
+V15_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_5"
+V16_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_6"
+# Backward-compatible default.  The v1.5 experiment must be selected explicitly.
+CONTRACT_VERSION = V14_CONTRACT_VERSION
+INPUT_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_bundle_v2"
+PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v2"
+ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v2"
+V16_PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v3"
+V16_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v3"
+INPUT_MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_manifest_v2"
+V13_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_3"
+V13_PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v1"
+V13_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v1"
+V15_TARGET_TRANSFORM = "daily_l1_average_rank_centered_v1"
+V16_SCORE_TRANSFORM = "daily_available_l1_average_rank_centered_v1"
+V16_SCORE_FEATURE = "moneyflow_intensity_delta_5d"
+FIXED_HORIZON = 10
+FROZEN_FORWARD_POWER_STATUS = "INSUFFICIENT"
+HORIZON_AUTHORITY = {
+    "source_contract_version": "hmm_risk_rotation_l1_g2a_v1_3",
+    "selection_model_class": "RIDGE_COMPARATOR",
+    "selected_horizon": FIXED_HORIZON,
+    "gbdt_horizon_optimality_not_claimed": True,
+    "development_reused": True,
+    "battery_rerun_performed": False,
+}
 
-CONTINUOUS_FEATURES = (
+V13_CONTINUOUS_FEATURES = (
     "relative_momentum_5d",
     "relative_momentum_10d",
     "relative_momentum_20d",
@@ -50,9 +71,37 @@ CONTINUOUS_FEATURES = (
     "pit_breadth_above_ma20",
     "moneyflow_intensity_20d",
 )
-FEATURES = (*CONTINUOUS_FEATURES, "market_regime_sign")
+V14_CONTINUOUS_FEATURES = (*V13_CONTINUOUS_FEATURES, "moneyflow_intensity_delta_5d")
+V13_FEATURES = (*V13_CONTINUOUS_FEATURES, "market_regime_sign")
+V14_FEATURES = (*V14_CONTINUOUS_FEATURES, "market_regime_sign")
+
+
+def _v16_scoring_contract() -> dict[str, Any]:
+    return {
+        "schema_version": "hmm_risk_rotation_l1_deterministic_scoring_contract_v1",
+        "contract_version": V16_CONTRACT_VERSION,
+        "feature": V16_SCORE_FEATURE,
+        "causal_feature_lag": "t_minus_1_inputs_only",
+        "cross_section": "available_canonical_l1_sectors",
+        "rank_method": "average",
+        "rank_direction": "ascending",
+        "score_formula": "(average_rank - 1) / (available_count - 1) - 0.5",
+        "score_transform": V16_SCORE_TRANSFORM,
+        "sector_code_tie_break": False,
+        "missing_or_non_finite": "typed_unavailable",
+        "training_performed": False,
+        "target_accessed_for_score": False,
+        "market_context_accessed_for_score": False,
+    }
+
+
+# Backward-compatible defaults are intentionally pinned to the currently
+# active v1.3 product.  The v1.4 offline executor always passes V14_* names
+# explicitly and cannot activate itself by changing these aliases.
+CONTINUOUS_FEATURES = V13_CONTINUOUS_FEATURES
+FEATURES = V13_FEATURES
 TARGET_COLUMNS = ("target_5d", "target_10d")
-VALUE_COLUMNS = (*CONTINUOUS_FEATURES, *TARGET_COLUMNS)
+VALUE_COLUMNS = (*V14_CONTINUOUS_FEATURES, *TARGET_COLUMNS)
 REASON_COLUMNS = tuple(f"reason__{column}" for column in VALUE_COLUMNS)
 MATURITY_COLUMNS = ("target_5d_mature", "target_10d_mature")
 MARKET_FEATURES = ("daily_return", "volatility_3d")
@@ -60,9 +109,13 @@ HORIZONS = (5, 10)
 ROLLING_WINDOW_OPEN_DAYS = 504
 MINIMUM_METRIC_SECTORS = 28
 CANONICAL_SECTOR_COUNT = 31
-MINIMUM_VALID_CONTINUOUS_FEATURES = 7
+MINIMUM_VALID_CONTINUOUS_FEATURES = 8
 MINIMUM_DEVELOPMENT_COVERAGE = 0.90
-MINIMUM_LEAF_DISTINCT_DATES = 20
+MINIMUM_DELTA_FEATURE_COVERAGE = 0.90
+MINIMUM_LEAF_ROW_COUNT = 310
+MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR = math.ceil(MINIMUM_LEAF_ROW_COUNT / CANONICAL_SECTOR_COUNT)
+LEAF_DISTINCT_DATE_TARGET = 20
+MAXIMUM_BELOW_TARGET_LEAF_FRACTION = 0.01
 BINDING_MBE_IC = 0.02
 STATE_TIE_EPSILON = 1e-12
 SINGLE_THREAD_ENVIRONMENT = (
@@ -135,6 +188,47 @@ class MarketContext:
     receipt: Mapping[str, Any]
 
 
+@dataclass
+class FitProgress:
+    planned: int
+    started: int = 0
+    completed: int = 0
+    failed: int = 0
+    active_fit: str | None = None
+
+    def execute(self, identity: str, operation: Any) -> Any:
+        self.started += 1
+        self.active_fit = identity
+        try:
+            result = operation()
+        except Exception:
+            self.failed += 1
+            raise
+        self.completed += 1
+        self.active_fit = None
+        return result
+
+    def receipt(self) -> dict[str, Any]:
+        return {
+            "planned": self.planned,
+            "started": self.started,
+            "completed": self.completed,
+            "failed": self.failed,
+            "active_fit": self.active_fit,
+        }
+
+
+def _fit_progress_error(error: BaseException, progress: FitProgress) -> RotationL1G2AError:
+    evidence = dict(getattr(error, "evidence", {}) or {})
+    evidence["fit_progress"] = progress.receipt()
+    return RotationL1G2AError(
+        str(getattr(error, "reason_code", REASON_FIT)),
+        str(error),
+        stage=str(getattr(error, "stage", "execution")),
+        evidence=evidence,
+    )
+
+
 def _normalise_panel(panel: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(panel.index, pd.MultiIndex) or tuple(panel.index.names) != ("trade_date", "sector_code"):
         raise _fail(REASON_INPUT, "G2-A panel index must be (trade_date, sector_code)", stage="input")
@@ -157,8 +251,9 @@ def build_materialised_panel(
     sector_close: Mapping[tuple[date, str], float],
     benchmark_close: Mapping[date, float],
     stock_daily_inputs: Sequence[Mapping[str, Any]],
+    include_targets: bool = True,
 ) -> pd.DataFrame:
-    """Build the exact nine-column model panel from already bound components.
+    """Build the exact ten-column v1.4 model panel from bound components.
 
     The CSI300 market regime is fitted later inside each fresh process. Missing
     values stay missing; this function never imputes or shortens a lookback.
@@ -202,23 +297,76 @@ def build_materialised_panel(
             values.append(sector_now / sector_previous - market_now / market_previous)
         return values
 
+    def moneyflow_intensity(
+        decision_index: int,
+        sector: str,
+    ) -> tuple[float, str | None]:
+        """Return the causal 20-day intensity ending at decision t-1.
+
+        ``decision_index`` identifies t.  Moving it back five canonical open
+        days therefore gives the approved t-6 endpoint for the lagged term.
+        """
+
+        if decision_index < 20:
+            return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+        source_days = ordered[decision_index - 20 : decision_index]
+        if len(source_days) != 20:
+            return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+        daily_window = [stock_by_key.get((item, sector)) for item in source_days]
+        source_reasons = sorted(
+            {
+                str(item["moneyflow_reason_code"])
+                for item in daily_window
+                if item is not None and item.get("moneyflow_reason_code")
+            }
+        )
+        if source_reasons:
+            return math.nan, source_reasons[0]
+        if any(item is None for item in daily_window):
+            return (
+                math.nan,
+                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
+            )
+        typed_window = [item for item in daily_window if item is not None]
+        net = [item.get("moneyflow_net_amount_cny") for item in typed_window]
+        amount = [item.get("moneyflow_traded_amount_cny") for item in typed_window]
+        try:
+            finite = all(value is not None and math.isfinite(float(value)) for value in (*net, *amount))
+            denominator = math.fsum(float(value) for value in amount) if finite else math.nan
+        except (TypeError, ValueError, OverflowError):
+            finite = False
+            denominator = math.nan
+        if not finite or not math.isfinite(denominator) or denominator <= 0:
+            return (
+                math.nan,
+                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
+            )
+        value = math.fsum(float(item) for item in net) / denominator
+        if not math.isfinite(value):
+            return (
+                math.nan,
+                source_reasons[0] if source_reasons else "hmm_risk_rotation_moneyflow_history_incomplete",
+            )
+        return value, None
+
     rows: list[dict[str, Any]] = []
     for decision_index, decision_day in enumerate(ordered):
         raw_targets: dict[int, dict[str, float]] = {item: {} for item in HORIZONS}
-        for horizon in HORIZONS:
-            future_index = decision_index + horizon
-            if future_index >= len(ordered):
-                continue
-            future_day = ordered[future_index]
-            market_now, market_future = finite_close(decision_day), finite_close(future_day)
-            if market_now is None or market_future is None:
-                continue
-            for sector in sectors:
-                sector_now, sector_future = finite_close(decision_day, sector), finite_close(future_day, sector)
-                if sector_now is None or sector_future is None:
-                    raw_targets[horizon].clear()
-                    break
-                raw_targets[horizon][sector] = sector_future / sector_now - market_future / market_now
+        if include_targets:
+            for horizon in HORIZONS:
+                future_index = decision_index + horizon
+                if future_index >= len(ordered):
+                    continue
+                future_day = ordered[future_index]
+                market_now, market_future = finite_close(decision_day), finite_close(future_day)
+                if market_now is None or market_future is None:
+                    continue
+                for sector in sectors:
+                    sector_now, sector_future = finite_close(decision_day, sector), finite_close(future_day, sector)
+                    if sector_now is None or sector_future is None:
+                        raw_targets[horizon].clear()
+                        break
+                    raw_targets[horizon][sector] = sector_future / sector_now - market_future / market_now
         centered_targets: dict[int, dict[str, float]] = {}
         for horizon in HORIZONS:
             values = raw_targets[horizon]
@@ -230,6 +378,8 @@ def build_materialised_panel(
 
         for sector in sectors:
             row: dict[str, Any] = {"trade_date": decision_day, "sector_code": sector}
+            moneyflow_value, moneyflow_reason = moneyflow_intensity(decision_index, sector)
+            lagged_moneyflow_value, lagged_moneyflow_reason = moneyflow_intensity(decision_index - 5, sector)
             for lookback in (5, 10, 20, 60):
                 if decision_index < lookback:
                     value = math.nan
@@ -271,36 +421,27 @@ def build_materialised_panel(
                     row["relative_max_drawdown_20d"] = market_mdd - sector_mdd
                 else:
                     row["relative_max_drawdown_20d"] = math.nan
-                daily_window = [stock_by_key.get((item, sector)) for item in source_days]
-                if all(item is not None for item in daily_window):
-                    typed_window = [item for item in daily_window if item is not None]
-                    net = [item.get("moneyflow_net_amount_cny") for item in typed_window]
-                    amount = [item.get("moneyflow_traded_amount_cny") for item in typed_window]
-                    if (
-                        all(value is not None and math.isfinite(float(value)) for value in (*net, *amount))
-                        and math.fsum(float(value) for value in amount) > 0
-                    ):
-                        row["moneyflow_intensity_20d"] = math.fsum(float(value) for value in net) / math.fsum(
-                            float(value) for value in amount
-                        )
-                    else:
-                        row["moneyflow_intensity_20d"] = math.nan
-                else:
-                    row["moneyflow_intensity_20d"] = math.nan
             else:
                 row["relative_downside_volatility_20d"] = math.nan
                 row["relative_max_drawdown_20d"] = math.nan
-                row["moneyflow_intensity_20d"] = math.nan
+            row["moneyflow_intensity_20d"] = moneyflow_value
+            if math.isfinite(moneyflow_value) and math.isfinite(lagged_moneyflow_value):
+                row["moneyflow_intensity_delta_5d"] = moneyflow_value - lagged_moneyflow_value
+                moneyflow_delta_reason = None
+            else:
+                row["moneyflow_intensity_delta_5d"] = math.nan
+                moneyflow_delta_reason = moneyflow_reason or lagged_moneyflow_reason
             previous_day = ordered[decision_index - 1] if decision_index else None
             breadth = stock_by_key.get((previous_day, sector)) if previous_day is not None else None
             breadth_value = breadth.get("pit_breadth_above_ma20") if breadth is not None else None
             row["pit_breadth_above_ma20"] = (
                 float(breadth_value) if breadth_value is not None and math.isfinite(float(breadth_value)) else math.nan
             )
-            for horizon in HORIZONS:
-                row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
-                row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
-            for feature in CONTINUOUS_FEATURES:
+            if include_targets:
+                for horizon in HORIZONS:
+                    row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
+                    row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
+            for feature in V14_CONTINUOUS_FEATURES:
                 value = float(row[feature])
                 if math.isfinite(value):
                     row[f"reason__{feature}"] = None
@@ -311,31 +452,44 @@ def build_materialised_panel(
                         else "hmm_risk_rotation_breadth_coverage_insufficient"
                     )
                 elif feature == "moneyflow_intensity_20d":
-                    daily_window = (
-                        [stock_by_key.get((item, sector)) for item in ordered[decision_index - 20 : decision_index]]
-                        if decision_index >= 20
-                        else []
-                    )
-                    reasons = [
-                        str(item["moneyflow_reason_code"])
-                        for item in daily_window
-                        if item is not None and item.get("moneyflow_reason_code")
-                    ]
+                    row[f"reason__{feature}"] = moneyflow_reason
+                elif feature == "moneyflow_intensity_delta_5d":
                     row[f"reason__{feature}"] = (
-                        sorted(reasons)[0] if reasons else "hmm_risk_rotation_moneyflow_history_incomplete"
+                        moneyflow_delta_reason or "hmm_risk_rotation_moneyflow_history_incomplete"
                     )
                 else:
                     row[f"reason__{feature}"] = "hmm_risk_rotation_price_history_incomplete"
-            for target in TARGET_COLUMNS:
-                row[f"reason__{target}"] = (
-                    None if bool(row[f"{target}_mature"]) else "hmm_risk_rotation_label_not_mature_or_incomplete"
-                )
+            if include_targets:
+                for target in TARGET_COLUMNS:
+                    row[f"reason__{target}"] = (
+                        None if bool(row[f"{target}_mature"]) else "hmm_risk_rotation_label_not_mature_or_incomplete"
+                    )
             rows.append(row)
     return pd.DataFrame.from_records(rows).set_index(["trade_date", "sector_code"]).sort_index()
 
 
+def build_label_free_feature_panel(
+    *,
+    calendar: Sequence[date],
+    sector_close: Mapping[tuple[date, str], float],
+    benchmark_close: Mapping[date, float],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Build the shared causal feature panel without constructing any target."""
+
+    return build_materialised_panel(
+        calendar=calendar,
+        sector_close=sector_close,
+        benchmark_close=benchmark_close,
+        stock_daily_inputs=stock_daily_inputs,
+        include_targets=False,
+    )
+
+
 def validate_input_bundle(
     bundle: Mapping[str, Any],
+    *,
+    require_training_delta_coverage: bool = True,
 ) -> tuple[pd.DataFrame, tuple[date, ...], tuple[str, ...], dict[date, float]]:
     """Validate the materialised development panel without accepting aliases."""
 
@@ -428,7 +582,117 @@ def validate_input_bundle(
         benchmark[raw_day] = value
     if any(day not in benchmark for day in calendar):
         raise _fail(REASON_INPUT, "G2-A CSI300 calendar coverage differs", stage="input")
+    if require_training_delta_coverage:
+        _delta_feature_coverage_receipt(frame, calendar)
     return frame, calendar, sectors, benchmark
+
+
+def _delta_feature_coverage_receipt(
+    frame: pd.DataFrame,
+    calendar: Sequence[date],
+) -> dict[str, Any]:
+    """Validate that v1.4 cannot silently fall back to the v1.3 feature set."""
+
+    feature = "moneyflow_intensity_delta_5d"
+    scopes: list[dict[str, Any]] = []
+
+    def add_scope(name: str, dates: Sequence[date]) -> None:
+        if not dates:
+            raise _fail(REASON_FEATURE, "G2-A v1.4 feature coverage scope is empty", stage="input", scope=name)
+        values = frame.loc[(list(dates), slice(None)), feature].to_numpy(dtype=np.float64)
+        finite_count = int(np.isfinite(values).sum())
+        row_count = int(len(values))
+        coverage = finite_count / row_count if row_count else 0.0
+        scopes.append(
+            {
+                "scope": name,
+                "start": dates[0].isoformat(),
+                "end": dates[-1].isoformat(),
+                "row_count": row_count,
+                "finite_count": finite_count,
+                "coverage": coverage,
+            }
+        )
+        if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+            raise _fail(
+                REASON_FEATURE,
+                "G2-A v1.4 moneyflow delta coverage is insufficient",
+                stage="input",
+                scope=name,
+                row_count=row_count,
+                finite_count=finite_count,
+                coverage=coverage,
+                minimum_coverage=MINIMUM_DELTA_FEATURE_COVERAGE,
+            )
+
+    ordered = tuple(calendar)
+    add_scope("full-development", ordered)
+    for fold in fold_slices(ordered, horizon=10):
+        add_scope(f"{fold.name}:train", fold.train_dates)
+        add_scope(f"{fold.name}:validation", fold.validation_dates)
+    body = {
+        "feature": feature,
+        "minimum_coverage": MINIMUM_DELTA_FEATURE_COVERAGE,
+        "scopes": scopes,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _v16_feature_coverage_receipt(frame: pd.DataFrame, folds: Sequence[FoldSlice]) -> dict[str, Any]:
+    scopes: list[dict[str, Any]] = []
+    all_dates: list[date] = []
+    for fold in folds:
+        all_dates.extend(fold.validation_dates)
+        values = frame.loc[(list(fold.validation_dates), slice(None)), V16_SCORE_FEATURE].to_numpy(dtype=np.float64)
+        finite_count = int(np.isfinite(values).sum())
+        row_count = len(values)
+        coverage = finite_count / row_count
+        scopes.append(
+            {
+                "scope": f"{fold.name}:validation",
+                "start": fold.validation_dates[0].isoformat(),
+                "end": fold.validation_dates[-1].isoformat(),
+                "row_count": row_count,
+                "finite_count": finite_count,
+                "coverage": coverage,
+            }
+        )
+        if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+            raise _fail(
+                REASON_FEATURE,
+                "G2-A v1.6 validation moneyflow delta coverage is insufficient",
+                stage="input",
+                scope=fold.name,
+                coverage=coverage,
+            )
+    values = frame.loc[(all_dates, slice(None)), V16_SCORE_FEATURE].to_numpy(dtype=np.float64)
+    finite_count = int(np.isfinite(values).sum())
+    row_count = len(values)
+    coverage = finite_count / row_count
+    scopes.append(
+        {
+            "scope": "all-oof-validation",
+            "start": all_dates[0].isoformat(),
+            "end": all_dates[-1].isoformat(),
+            "row_count": row_count,
+            "finite_count": finite_count,
+            "coverage": coverage,
+        }
+    )
+    if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+        raise _fail(
+            REASON_FEATURE,
+            "G2-A v1.6 overall OOF moneyflow delta coverage is insufficient",
+            stage="input",
+            coverage=coverage,
+        )
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_v16_feature_coverage_v1",
+        "feature": V16_SCORE_FEATURE,
+        "minimum_coverage": MINIMUM_DELTA_FEATURE_COVERAGE,
+        "scopes": scopes,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def _sha256_file(path: Path) -> str:
@@ -638,6 +902,93 @@ def fold_slices(calendar: Sequence[date], *, horizon: int) -> tuple[FoldSlice, .
     return tuple(output)
 
 
+def build_rank_training_target(raw_target: pd.Series) -> tuple[pd.Series, dict[str, Any]]:
+    """Build the approved v1.5 train-only daily L1 rank target.
+
+    Ranking is performed on each complete 31-sector mature target cross-section
+    before feature eligibility is applied.  The raw target remains untouched and
+    authoritative for all development metrics/status metrics.
+    """
+
+    if (
+        not isinstance(raw_target, pd.Series)
+        or not isinstance(raw_target.index, pd.MultiIndex)
+        or tuple(raw_target.index.names) != ("trade_date", "sector_code")
+        or raw_target.index.has_duplicates
+        or raw_target.empty
+    ):
+        raise _fail(REASON_LABEL, "v1.5 rank target identity is invalid", stage="label_transform")
+    try:
+        values = raw_target.astype(np.float64).sort_index()
+    except (TypeError, ValueError) as exc:
+        raise _fail(REASON_LABEL, "v1.5 rank target is not numeric", stage="label_transform") from exc
+    counts = values.groupby(level="trade_date", sort=True).size()
+    finite_counts = values.groupby(level="trade_date", sort=True).agg(lambda item: int(np.isfinite(item).sum()))
+    sector_sets = values.groupby(level="trade_date", sort=True).apply(
+        lambda item: frozenset(str(code) for code in item.index.get_level_values("sector_code"))
+    )
+    if (
+        counts.empty
+        or not (counts == CANONICAL_SECTOR_COUNT).all()
+        or not (finite_counts == CANONICAL_SECTOR_COUNT).all()
+        or len(set(sector_sets)) != 1
+    ):
+        raise _fail(
+            REASON_LABEL,
+            "v1.5 rank target requires 31 finite mature sectors on every train date",
+            stage="label_transform",
+            minimum_sector_count=int(counts.min()) if not counts.empty else 0,
+            minimum_finite_sector_count=int(finite_counts.min()) if not finite_counts.empty else 0,
+        )
+    labels = values.groupby(level="trade_date", sort=False).rank(method="average", ascending=True)
+    labels = (labels - 1.0) / float(CANONICAL_SECTOR_COUNT - 1) - 0.5
+    if not np.isfinite(labels.to_numpy(dtype=np.float64)).all() or not labels.between(-0.5, 0.5).all():
+        raise _fail(REASON_LABEL, "v1.5 rank target transform is invalid", stage="label_transform")
+    identity_rows = [[day.isoformat(), str(code)] for day, code in labels.index]
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_training_target_receipt_v1",
+        "transform": V15_TARGET_TRANSFORM,
+        "source_target": "target_10d",
+        "tie_method": "average_exact_float64",
+        "sector_count": CANONICAL_SECTOR_COUNT,
+        "date_count": int(len(counts)),
+        "row_count": int(len(labels)),
+        "identity_sha256": canonical_sha256(identity_rows),
+        "raw_target_sha256": canonical_sha256(values.tolist()),
+        "training_target_sha256": canonical_sha256(labels.tolist()),
+        "fit_row_count": int(len(labels)),
+        "fit_identity_sha256": canonical_sha256(identity_rows),
+        "fit_training_target_sha256": canonical_sha256(labels.tolist()),
+        "minimum": float(labels.min()),
+        "maximum": float(labels.max()),
+    }
+    return labels, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _bind_rank_training_target_fit(
+    receipt: Mapping[str, Any],
+    training_target: pd.Series,
+) -> dict[str, Any]:
+    training_target = training_target.sort_index()
+    if (
+        training_target.empty
+        or training_target.index.has_duplicates
+        or not np.isfinite(training_target.to_numpy(dtype=np.float64)).all()
+    ):
+        raise _fail(REASON_LABEL, "v1.5 fitted rank target identity is invalid", stage="label_transform")
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    body.update(
+        {
+            "fit_row_count": int(len(training_target)),
+            "fit_identity_sha256": canonical_sha256(
+                [[day.isoformat(), str(code)] for day, code in training_target.index]
+            ),
+            "fit_training_target_sha256": canonical_sha256(training_target.tolist()),
+        }
+    )
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _market_raw_features(benchmark: Mapping[date, float], calendar: Sequence[date]) -> pd.DataFrame:
     ordered = tuple(calendar)
     rows: list[dict[str, Any]] = []
@@ -790,6 +1141,8 @@ def fit_market_context(
         "train_date_sha256": canonical_sha256([item.isoformat() for item in train_dates]),
         "mean": mean.tolist(),
         "std": std.tolist(),
+        "lower": np.min(values, axis=0).tolist(),
+        "upper": np.max(values, axis=0).tolist(),
         "centers": fit.centers.tolist(),
         "centers_sha256": canonical_sha256(fit.centers.tolist()),
         "jump_penalty": 4.0,
@@ -811,9 +1164,13 @@ def _with_market_signs(frame: pd.DataFrame, signs: Mapping[date, float]) -> pd.D
     return result
 
 
-def cross_section_rank_features(frame: pd.DataFrame) -> pd.DataFrame:
+def cross_section_rank_features(
+    frame: pd.DataFrame,
+    *,
+    continuous_features: Sequence[str] = CONTINUOUS_FEATURES,
+) -> pd.DataFrame:
     result = frame.copy()
-    for feature in CONTINUOUS_FEATURES:
+    for feature in continuous_features:
         grouped = result[feature].groupby(level="trade_date", sort=True)
         ranks = grouped.rank(method="average")
         counts = grouped.transform("count")
@@ -860,10 +1217,16 @@ def newey_west(values: Sequence[float], *, lag: int) -> dict[str, float]:
     }
 
 
-def _eligible_rows(frame: pd.DataFrame, *, ridge: bool) -> pd.Series:
+def _eligible_rows(
+    frame: pd.DataFrame,
+    *,
+    ridge: bool,
+    continuous_features: Sequence[str] = CONTINUOUS_FEATURES,
+    minimum_valid_continuous_features: int = MINIMUM_VALID_CONTINUOUS_FEATURES,
+) -> pd.Series:
     market = frame["market_regime_sign"].isin((-1.0, 1.0))
-    finite_continuous = np.isfinite(frame.loc[:, CONTINUOUS_FEATURES].to_numpy(dtype=np.float64)).sum(axis=1)
-    minimum = len(CONTINUOUS_FEATURES) if ridge else MINIMUM_VALID_CONTINUOUS_FEATURES
+    finite_continuous = np.isfinite(frame.loc[:, list(continuous_features)].to_numpy(dtype=np.float64)).sum(axis=1)
+    minimum = len(continuous_features) if ridge else minimum_valid_continuous_features
     return pd.Series(market.to_numpy() & (finite_continuous >= minimum), index=frame.index)
 
 
@@ -1004,17 +1367,18 @@ def require_formal_runtime() -> dict[str, Any]:
     }
 
 
-def run_ridge_battery(
+def _run_ridge_battery_impl(
     bundle: Mapping[str, Any],
     *,
     producer_commit: str,
+    progress: FitProgress,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
     if len(producer_commit) != 40 or any(character not in "0123456789abcdef" for character in producer_commit):
         raise _fail(REASON_INPUT, "G2-A producer commit is invalid", stage="battery")
     runtime = runtime_validator()
     frame, calendar, sectors, benchmark = validate_input_bundle(bundle)
-    ranked = cross_section_rank_features(frame)
+    ranked = cross_section_rank_features(frame, continuous_features=V14_CONTINUOUS_FEATURES)
     calendar_position = {day: index for index, day in enumerate(calendar)}
     market_contexts: dict[str, MarketContext] = {}
     for name, validation_start, _validation_end in FOLDS:
@@ -1032,8 +1396,11 @@ def run_ridge_battery(
                 | {day for day in calendar if validation_start <= day <= _validation_end}
             )
         )
-        market_contexts[name] = fit_market_context(
-            benchmark, calendar, train_dates=train_dates, apply_dates=apply_dates
+        market_contexts[name] = progress.execute(
+            f"battery:{name}:market_context",
+            lambda train_dates=train_dates, apply_dates=apply_dates: fit_market_context(
+                benchmark, calendar, train_dates=train_dates, apply_dates=apply_dates
+            ),
         )
     horizons: dict[str, Any] = {}
     for horizon in HORIZONS:
@@ -1048,7 +1415,10 @@ def run_ridge_battery(
             if not train_mask.any() or not validation_mask.any():
                 raise _fail(REASON_HORIZON, "Ridge complete-case fold is empty", stage="battery", fold=fold.name)
             estimator = Ridge(alpha=100.0, fit_intercept=True, solver="svd", tol=1e-4, max_iter=None, positive=False)
-            estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{horizon}d"])
+            progress.execute(
+                f"battery:{fold.name}:ridge_{horizon}d",
+                lambda: estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{horizon}d"]),
+            )
             scores = pd.Series(np.nan, index=validation.index, dtype=np.float64)
             scores.loc[validation_mask] = estimator.predict(validation.loc[validation_mask, FEATURES])
             predictions.append(scores)
@@ -1126,6 +1496,7 @@ def run_ridge_battery(
         "fit_count": 15,
         "ridge_fit_count": 10,
         "market_fit_count": 5,
+        "fit_progress": progress.receipt(),
         "market_context_receipts": [market_contexts[name].receipt for name, _start, _end in FOLDS],
         "horizons": horizons,
         "selection": {
@@ -1142,16 +1513,33 @@ def run_ridge_battery(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def run_ridge_battery(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    runtime_validator: Any = require_formal_runtime,
+) -> dict[str, Any]:
+    """Reject battery execution under the approved v1.4 contract."""
+
+    raise _fail(
+        REASON_HORIZON,
+        "G2-A v1.4 freezes 10D and forbids a new battery run",
+        stage="battery",
+    )
+
+
 def validate_battery_report(report: Mapping[str, Any], *, expected_identity: Mapping[str, Any]) -> None:
     body = {key: value for key, value in report.items() if key != "receipt_sha256"}
     if (
         report.get("schema_version") != "hmm_risk_rotation_l1_g2a_battery_v1"
-        or report.get("contract_version") != CONTRACT_VERSION
+        or report.get("contract_version") != V13_CONTRACT_VERSION
         or report.get("receipt_sha256") != canonical_sha256(body)
         or report.get("input_identity") != dict(expected_identity)
         or report.get("fit_count") != 15
         or report.get("ridge_fit_count") != 10
         or report.get("market_fit_count") != 5
+        or report.get("fit_progress")
+        != {"planned": 15, "started": 15, "completed": 15, "failed": 0, "active_fit": None}
         or not isinstance(report.get("producer_commit"), str)
         or len(report["producer_commit"]) != 40
         or any(character not in "0123456789abcdef" for character in report["producer_commit"])
@@ -1206,7 +1594,7 @@ def _lightgbm_profile() -> dict[str, Any]:
         "learning_rate": 0.03,
         "n_estimators": 240,
         "subsample_for_bin": 200000,
-        "min_child_samples": 310,
+        "min_child_samples": MINIMUM_LEAF_ROW_COUNT,
         "min_child_weight": 0.001,
         "min_split_gain": 0.0,
         "reg_alpha": 1.0,
@@ -1231,36 +1619,91 @@ def _lightgbm_profile() -> dict[str, Any]:
     }
 
 
-def _leaf_date_coverage(estimator: Any, features: pd.DataFrame, dates: Sequence[date]) -> dict[str, Any]:
+def _leaf_date_coverage(
+    estimator: Any,
+    features: pd.DataFrame,
+    dates: Sequence[date],
+    *,
+    fit_identity: str,
+) -> dict[str, Any]:
     leaves = np.asarray(estimator.predict(features, pred_leaf=True))
     if leaves.ndim == 1:
         leaves = leaves.reshape(-1, 1)
+    if (
+        leaves.ndim != 2
+        or leaves.shape[0] != len(features)
+        or leaves.shape[1] == 0
+        or len(dates) != len(features)
+        or not np.isfinite(leaves).all()
+        or np.any(leaves < 0)
+        or not np.equal(leaves, np.floor(leaves)).all()
+    ):
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf identity matrix is invalid",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            leaf_shape=list(leaves.shape),
+            feature_rows=len(features),
+            date_rows=len(dates),
+        )
     observations: list[tuple[int, int, int]] = []
     date_array = np.asarray(dates, dtype=object)
     for tree_index in range(leaves.shape[1]):
         for leaf_id in sorted(set(int(value) for value in leaves[:, tree_index])):
             distinct = len(set(date_array[leaves[:, tree_index] == leaf_id]))
             observations.append((tree_index, leaf_id, distinct))
+    if not observations:
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf coverage is empty",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+        )
     counts = np.asarray([item[2] for item in observations], dtype=np.float64)
-    violating = [[tree, leaf, count] for tree, leaf, count in observations if count < MINIMUM_LEAF_DISTINCT_DATES]
+    below_target = [[tree, leaf, count] for tree, leaf, count in observations if count < LEAF_DISTINCT_DATE_TARGET]
+    below_hard_floor = [
+        [tree, leaf, count] for tree, leaf, count in observations if count < MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+    ]
+    below_target_fraction = len(below_target) / len(observations)
+    distribution_budget_passed = len(below_target) * 100 <= len(observations)
+    contract_passed = not below_hard_floor and distribution_budget_passed
     body = {
-        "minimum": int(counts.min()) if len(counts) else 0,
-        "p05": float(np.quantile(counts, 0.05)) if len(counts) else 0.0,
-        "median": float(np.median(counts)) if len(counts) else 0.0,
+        "hard_floor_distinct_dates": MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR,
+        "target_distinct_dates": LEAF_DISTINCT_DATE_TARGET,
+        "maximum_below_target_leaf_fraction": MAXIMUM_BELOW_TARGET_LEAF_FRACTION,
+        "minimum": int(counts.min()),
+        "p01": float(np.quantile(counts, 0.01)),
+        "p05": float(np.quantile(counts, 0.05)),
+        "median": float(np.median(counts)),
         "leaf_count": len(observations),
-        "violating_leaf_ids": violating,
+        "below_target_leaf_count": len(below_target),
+        "below_target_leaf_fraction": below_target_fraction,
+        "below_target_leaf_ids": below_target,
+        "hard_floor_violating_leaf_ids": below_hard_floor,
+        "contract_passed": contract_passed,
         "distribution_sha256": canonical_sha256(observations),
     }
-    if violating:
-        raise _fail(REASON_LEAF, "GBDT leaf distinct-date coverage failed", stage="fit", summary=body)
+    if not contract_passed:
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf distinct-date distribution coverage failed",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            summary=body,
+        )
     return body
 
 
 def _contribution_receipt(
-    estimator: Any, features: pd.DataFrame, scores: np.ndarray
+    estimator: Any,
+    features: pd.DataFrame,
+    scores: np.ndarray,
+    *,
+    feature_names: Sequence[str] = FEATURES,
 ) -> tuple[dict[str, Any], np.ndarray]:
     contributions = np.asarray(estimator.predict(features, pred_contrib=True), dtype=np.float64)
-    if contributions.shape != (len(features), len(FEATURES) + 1) or not np.isfinite(contributions).all():
+    if contributions.shape != (len(features), len(feature_names) + 1) or not np.isfinite(contributions).all():
         raise _fail(REASON_SCORE, "GBDT feature contributions are invalid", stage="prediction")
     reconstructed = contributions[:, :-1].sum(axis=1) + contributions[:, -1]
     tolerance = 1e-12 + 1e-10 * np.maximum(1.0, np.abs(scores))
@@ -1274,22 +1717,252 @@ def _contribution_receipt(
     return receipt, contributions
 
 
-def run_gbdt_process(
+def require_deterministic_runtime() -> dict[str, Any]:
+    """Validate the numeric runtime without imposing a model-library dependency."""
+
+    if any(os.environ.get(name) != "1" for name in SINGLE_THREAD_ENVIRONMENT):
+        raise _fail(REASON_FIT, "formal runtime is not configured for one thread", stage="environment")
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError as exc:
+        raise _fail(REASON_FIT, "threadpoolctl is unavailable", stage="environment") from exc
+    pools = threadpool_info()
+    if any(int(item.get("num_threads", 0)) != 1 for item in pools):
+        raise _fail(REASON_FIT, "effective native threadpool count is not one", stage="environment", pools=pools)
+    return {
+        **runtime_identity(),
+        "thread_environment": {name: os.environ[name] for name in SINGLE_THREAD_ENVIRONMENT},
+        "pools": pools,
+    }
+
+
+def _development_summary(metrics: Mapping[str, Any], *, horizon: int) -> dict[str, Any]:
+    metric_rows = [item for item in metrics["daily"] if item["metric_valid"]]
+    metric_hac = newey_west([float(item["rank_ic"]) for item in metric_rows], lag=horizon - 1)
+    monthly_groups: dict[str, list[float]] = {}
+    for item in metric_rows:
+        month = str(item["trade_date"])[:7]
+        monthly_groups.setdefault(month, []).append(float(item["rank_ic"]))
+    monthly = [
+        {"month": month, "mean_rank_ic": float(np.mean(values)), "metric_date_count": len(values)}
+        for month, values in sorted(monthly_groups.items())
+    ]
+    return {
+        "mean_rank_ic": metrics["mean_rank_ic"],
+        "hac_lag": horizon - 1,
+        "hac_standard_error": metric_hac["standard_error"],
+        "hac_lower_two_sided_95pct": float(metric_hac["mean"] - 1.959963984540054 * metric_hac["standard_error"]),
+        "hac_upper_two_sided_95pct": float(metric_hac["mean"] + 1.959963984540054 * metric_hac["standard_error"]),
+        "monthly": monthly,
+        "positive_month_ratio": (
+            sum(float(item["mean_rank_ic"]) > 0 for item in monthly) / len(monthly) if monthly else None
+        ),
+        "worst_month": min(monthly, key=lambda item: float(item["mean_rank_ic"])) if monthly else None,
+        "promotion_gate_applied": False,
+    }
+
+
+def build_v16_scores(bundle: Mapping[str, Any]) -> tuple[pd.Series, tuple[FoldSlice, ...]]:
+    """Build the target-free v1.6 score authority from the frozen v1.4 feature."""
+
+    frame, calendar, _sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    folds = fold_slices(calendar, horizon=FIXED_HORIZON)
+    validation_dates = tuple(day for fold in folds for day in fold.validation_dates)
+    ranked = cross_section_rank_features(frame, continuous_features=(V16_SCORE_FEATURE,))
+    scores = ranked.loc[(list(validation_dates), slice(None)), V16_SCORE_FEATURE].sort_index()
+    if scores.index.has_duplicates or len(scores) != len(validation_dates) * CANONICAL_SECTOR_COUNT:
+        raise _fail(REASON_INPUT, "deterministic OOF denominator differs", stage="prediction")
+    finite_scores = scores[np.isfinite(scores.to_numpy(dtype=np.float64))]
+    if not finite_scores.empty and (float(finite_scores.min()) < -0.5 or float(finite_scores.max()) > 0.5):
+        raise _fail(REASON_SCORE, "deterministic rank score is outside the approved range", stage="prediction")
+    return scores, folds
+
+
+def _v16_oof_rows(
+    frame: pd.DataFrame,
+    calendar: Sequence[date],
+    scores: pd.Series,
+    states: Mapping[tuple[date, str], str],
+    *,
+    model_hash: str,
+) -> list[dict[str, Any]]:
+    calendar_position = {day: index for index, day in enumerate(calendar)}
+    rows: list[dict[str, Any]] = []
+    contribution_index = V14_FEATURES.index(V16_SCORE_FEATURE)
+    for (day, raw_code), raw_score in scores.items():
+        code = str(raw_code)
+        day_position = calendar_position.get(day)
+        if day_position is None or day_position == 0:
+            raise _fail(REASON_SCORE, "deterministic OOF row lacks causal as-of identity", stage="prediction")
+        score = float(raw_score)
+        base = {
+            "trade_date": day.isoformat(),
+            "as_of_date": calendar[day_position - 1].isoformat(),
+            "sector_code": code,
+            "model_hash": model_hash,
+        }
+        if math.isfinite(score):
+            state = states.get((day, code))
+            if state not in {"fading", "neutral", "trending"}:
+                raise _fail(REASON_SCORE, "deterministic available row lacks state", stage="prediction")
+            contributions = [0.0] * (len(V14_FEATURES) + 1)
+            contributions[contribution_index] = score
+            rows.append(
+                {
+                    **base,
+                    "availability": "available",
+                    "reason_code": None,
+                    "rotation_score": score,
+                    "forecast_state": state,
+                    "feature_contributions": contributions,
+                }
+            )
+        else:
+            raw_reason = frame.at[(day, raw_code), f"reason__{V16_SCORE_FEATURE}"]
+            reason = raw_reason if isinstance(raw_reason, str) and raw_reason else REASON_FEATURE
+            rows.append(
+                {
+                    **base,
+                    "availability": "unavailable",
+                    "reason_code": reason,
+                    "rotation_score": None,
+                    "forecast_state": None,
+                    "feature_contributions": None,
+                }
+            )
+    return rows
+
+
+def _run_v16_process(
     bundle: Mapping[str, Any],
     *,
-    battery_report: Mapping[str, Any],
+    producer_commit: str,
     process_index: int,
+    runtime_validator: Any = require_deterministic_runtime,
+) -> dict[str, Any]:
+    if (
+        process_index not in (1, 2)
+        or not isinstance(producer_commit, str)
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit)
+    ):
+        raise _fail(REASON_INPUT, "deterministic process identity differs", stage="input")
+    frame, calendar, sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    runtime = runtime_validator()
+    scoring_contract = _v16_scoring_contract()
+    model_text = canonical_json_bytes(scoring_contract).decode("utf-8")
+    model_hash = canonical_sha256(scoring_contract)
+
+    scores, folds = build_v16_scores(bundle)
+    delta_feature_coverage = _v16_feature_coverage_receipt(frame, folds)
+
+    states, state_receipt = project_states(scores)
+    metrics = _metrics(scores, frame.loc[scores.index, f"target_{FIXED_HORIZON}d"], sectors, states)
+    if not metrics["coverage_accepted"]:
+        raise _fail(REASON_COVERAGE, "deterministic development coverage failed", stage="research_product_gate")
+    development_summary = _development_summary(metrics, horizon=FIXED_HORIZON)
+    oof_rows = _v16_oof_rows(frame, calendar, scores, states, model_hash=model_hash)
+    fold_receipts = []
+    for fold in folds:
+        fold_scores = scores.loc[(list(fold.validation_dates), slice(None))]
+        fold_receipts.append(
+            {
+                **fold.receipt(),
+                "training_performed": False,
+                "prediction_row_count": len(fold_scores),
+                "available_prediction_row_count": int(np.isfinite(fold_scores.to_numpy(dtype=np.float64)).sum()),
+                "model_sha256": model_hash,
+            }
+        )
+    final_model = {
+        "model_kind": "deterministic_cross_section_rank",
+        "training_performed": False,
+        "model_sha256": model_hash,
+        "scoring_contract_sha256": model_hash,
+    }
+    payload = {
+        "contract_version": V16_CONTRACT_VERSION,
+        "selected_horizon": FIXED_HORIZON,
+        "horizon_authority": HORIZON_AUTHORITY,
+        "horizon_authority_sha256": canonical_sha256(HORIZON_AUTHORITY),
+        "input_feature_contract_version": V14_CONTRACT_VERSION,
+        "score_transform": V16_SCORE_TRANSFORM,
+        "scoring_contract": scoring_contract,
+        "scoring_contract_sha256": model_hash,
+        "profile": {"model_kind": "deterministic_cross_section_rank", "fit_required": False},
+        "runtime_identity": runtime,
+        "producer_commit": producer_commit,
+        "forward_power_status": FROZEN_FORWARD_POWER_STATUS,
+        "input_identity": dict(bundle["identity"]),
+        "delta_feature_coverage": delta_feature_coverage,
+        "folds": fold_receipts,
+        "market_context_receipts": [],
+        "metrics": metrics,
+        "development_summary": development_summary,
+        "state_projection": state_receipt,
+        "oof_prediction_rows": oof_rows,
+        "oof_prediction_rows_sha256": canonical_sha256(oof_rows),
+        "prediction_sha256": canonical_sha256(
+            [
+                [day.isoformat(), str(code), None if not math.isfinite(float(value)) else float(value)]
+                for (day, code), value in scores.items()
+            ]
+        ),
+        "research_product_gate": {"passed": True, "effect_threshold_applied": False},
+        "tail_access_gate": {
+            "passed": float(metrics["mean_rank_ic"]) >= BINDING_MBE_IC,
+            "binding_mbe_rank_ic": BINDING_MBE_IC,
+        },
+        "final_model": final_model,
+        "gbdt_fit_count": 0,
+        "market_fit_count": 0,
+        "fit_count": 0,
+        "fit_progress": {"planned": 0, "started": 0, "completed": 0, "failed": 0, "active_fit": None},
+        "tail_accessed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    body = {
+        "schema_version": V16_PROCESS_SCHEMA_VERSION,
+        "process_index": process_index,
+        "reproducibility_payload": payload,
+        "reproducibility_payload_sha256": canonical_sha256(payload),
+        "final_model_text": model_text,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def _run_gbdt_process_impl(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    process_index: int,
+    model_contract_version: str,
+    progress: FitProgress,
     estimator_factory: Any | None = None,
     runtime_validator: Any = require_formal_runtime,
 ) -> dict[str, Any]:
-    validate_battery_report(battery_report, expected_identity=bundle.get("identity", {}))
-    selection = battery_report["selection"]
-    selected_horizon = int(selection["selected_horizon"])
-    forward_power_status = str(battery_report["horizons"][str(selected_horizon)]["forward_power"]["status"])
-    if process_index not in (1, 2) or selected_horizon not in HORIZONS:
+    if model_contract_version not in {V14_CONTRACT_VERSION, V15_CONTRACT_VERSION}:
+        raise _fail(REASON_INPUT, "unsupported G2-A model contract", stage="input")
+    rank_target_enabled = model_contract_version == V15_CONTRACT_VERSION
+    selected_horizon = FIXED_HORIZON
+    forward_power_status = FROZEN_FORWARD_POWER_STATUS
+    if (
+        process_index not in (1, 2)
+        or not isinstance(producer_commit, str)
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit)
+    ):
         raise _fail(REASON_INPUT, "GBDT process identity differs", stage="input")
     frame, calendar, sectors, benchmark = validate_input_bundle(bundle)
-    ranked = cross_section_rank_features(frame)
+    delta_feature_coverage = _delta_feature_coverage_receipt(frame, calendar)
+    ranked = cross_section_rank_features(frame, continuous_features=V14_CONTINUOUS_FEATURES)
     runtime = runtime_validator()
     if estimator_factory is None:
         try:
@@ -1303,16 +1976,21 @@ def run_gbdt_process(
     fold_receipts: list[dict[str, Any]] = []
     market_receipts: list[Mapping[str, Any]] = []
     contributions_by_identity: dict[tuple[date, str], list[float]] = {}
+    model_hash_by_identity: dict[tuple[date, str], str] = {}
     validation_market_signs: dict[date, float] = {}
     profile = _lightgbm_profile()
     for fold in fold_slices(calendar, horizon=selected_horizon):
         first_index = calendar.index(fold.validation_dates[0])
         market_train_dates = calendar[first_index - ROLLING_WINDOW_OPEN_DAYS : first_index]
-        context = fit_market_context(
-            benchmark,
-            calendar,
-            train_dates=market_train_dates,
-            apply_dates=tuple(sorted(set(fold.train_dates) | set(market_train_dates) | set(fold.validation_dates))),
+        market_apply_dates = tuple(sorted(set(fold.train_dates) | set(market_train_dates) | set(fold.validation_dates)))
+        context = progress.execute(
+            f"process-{process_index}:{fold.name}:market_context",
+            lambda market_train_dates=market_train_dates, market_apply_dates=market_apply_dates: fit_market_context(
+                benchmark,
+                calendar,
+                train_dates=market_train_dates,
+                apply_dates=market_apply_dates,
+            ),
         )
         market_receipts.append(context.receipt)
         for day in fold.validation_dates:
@@ -1320,22 +1998,58 @@ def run_gbdt_process(
                 validation_market_signs[day] = context.signs[day]
         train = _with_market_signs(ranked.loc[(list(fold.train_dates), slice(None)), :], context.signs)
         validation = _with_market_signs(ranked.loc[(list(fold.validation_dates), slice(None)), :], context.signs)
-        train_mask = _eligible_rows(train, ridge=False) & np.isfinite(train[f"target_{selected_horizon}d"])
-        validation_mask = _eligible_rows(validation, ridge=False)
+        training_target_receipt: dict[str, Any] | None = None
+        training_target = train[f"target_{selected_horizon}d"]
+        if rank_target_enabled:
+            training_target, training_target_receipt = build_rank_training_target(training_target)
+        train_mask = _eligible_rows(
+            train,
+            ridge=False,
+            continuous_features=V14_CONTINUOUS_FEATURES,
+            minimum_valid_continuous_features=MINIMUM_VALID_CONTINUOUS_FEATURES,
+        ) & np.isfinite(train[f"target_{selected_horizon}d"])
+        validation_mask = _eligible_rows(
+            validation,
+            ridge=False,
+            continuous_features=V14_CONTINUOUS_FEATURES,
+            minimum_valid_continuous_features=MINIMUM_VALID_CONTINUOUS_FEATURES,
+        )
         if not train_mask.any() or not validation_mask.any():
             raise _fail(REASON_FIT, "GBDT eligible fold is empty", stage="fit", fold=fold.name)
+        if training_target_receipt is not None:
+            training_target_receipt = _bind_rank_training_target_fit(
+                training_target_receipt,
+                training_target.loc[train_mask],
+            )
         estimator = estimator_factory(**profile)
         try:
-            estimator.fit(train.loc[train_mask, FEATURES], train.loc[train_mask, f"target_{selected_horizon}d"])
-            raw_scores = np.asarray(estimator.predict(validation.loc[validation_mask, FEATURES]), dtype=np.float64)
+            progress.execute(
+                f"process-{process_index}:{fold.name}:gbdt",
+                lambda: estimator.fit(
+                    train.loc[train_mask, V14_FEATURES],
+                    training_target.loc[train_mask],
+                ),
+            )
         except Exception as exc:
-            raise _fail(REASON_FIT, "GBDT fit or prediction failed", stage="fit", fold=fold.name) from exc
+            raise _fail(REASON_FIT, "GBDT fit failed", stage="fit", fold=fold.name) from exc
+        try:
+            raw_scores = np.asarray(estimator.predict(validation.loc[validation_mask, V14_FEATURES]), dtype=np.float64)
+        except Exception as exc:
+            raise _fail(REASON_SCORE, "GBDT prediction failed", stage="prediction", fold=fold.name) from exc
         if raw_scores.shape != (int(validation_mask.sum()),) or not np.isfinite(raw_scores).all():
             raise _fail(REASON_SCORE, "GBDT score is non-finite or mis-shaped", stage="prediction", fold=fold.name)
         train_dates = train.loc[train_mask].index.get_level_values("trade_date")
-        leaf = _leaf_date_coverage(estimator, train.loc[train_mask, FEATURES], train_dates)
+        leaf = _leaf_date_coverage(
+            estimator,
+            train.loc[train_mask, V14_FEATURES],
+            train_dates,
+            fit_identity=f"process-{process_index}:{fold.name}:gbdt",
+        )
         contribution, contribution_values = _contribution_receipt(
-            estimator, validation.loc[validation_mask, FEATURES], raw_scores
+            estimator,
+            validation.loc[validation_mask, V14_FEATURES],
+            raw_scores,
+            feature_names=V14_FEATURES,
         )
         for identity, values in zip(
             validation.loc[validation_mask].index,
@@ -1349,17 +2063,21 @@ def run_gbdt_process(
         scores = pd.Series(np.nan, index=validation.index, dtype=np.float64)
         scores.loc[validation_mask] = raw_scores
         predictions.append(scores)
-        fold_receipts.append(
-            {
-                **fold.receipt(),
-                "fit_row_count": int(train_mask.sum()),
-                "prediction_row_count": int(validation_mask.sum()),
-                "leaf_date_coverage": leaf,
-                "feature_contributions": contribution,
-                "model_sha256": canonical_sha256(estimator.booster_.model_to_string()),
-                "market_context_receipt_sha256": context.receipt["receipt_sha256"],
-            }
-        )
+        fold_model_hash = canonical_sha256(estimator.booster_.model_to_string())
+        for identity in validation.index:
+            model_hash_by_identity[(identity[0], str(identity[1]))] = fold_model_hash
+        fold_receipt = {
+            **fold.receipt(),
+            "fit_row_count": int(train_mask.sum()),
+            "prediction_row_count": int(validation_mask.sum()),
+            "leaf_date_coverage": leaf,
+            "feature_contributions": contribution,
+            "model_sha256": fold_model_hash,
+            "market_context_receipt_sha256": context.receipt["receipt_sha256"],
+        }
+        if training_target_receipt is not None:
+            fold_receipt["training_target_receipt"] = training_target_receipt
+        fold_receipts.append(fold_receipt)
     all_predictions = pd.concat(predictions).sort_index()
     states, state_receipt = project_states(all_predictions)
     metrics = _metrics(
@@ -1398,29 +2116,51 @@ def run_gbdt_process(
     full_train_dates = calendar[full_train_end - ROLLING_WINDOW_OPEN_DAYS : full_train_end]
     if len(full_market_train) != ROLLING_WINDOW_OPEN_DAYS or len(full_train_dates) != ROLLING_WINDOW_OPEN_DAYS:
         raise _fail(REASON_FIT, "GBDT final rolling train is incomplete", stage="final_fit")
-    final_context = fit_market_context(
-        benchmark,
-        calendar,
-        train_dates=full_market_train,
-        apply_dates=tuple(sorted(set(full_train_dates) | set(full_market_train))),
+    final_apply_dates = tuple(sorted(set(full_train_dates) | set(full_market_train)))
+    final_context = progress.execute(
+        f"process-{process_index}:full-development:market_context",
+        lambda: fit_market_context(
+            benchmark,
+            calendar,
+            train_dates=full_market_train,
+            apply_dates=final_apply_dates,
+        ),
     )
     market_receipts.append(final_context.receipt)
     final_train = _with_market_signs(ranked.loc[(list(full_train_dates), slice(None)), :], final_context.signs)
-    final_mask = _eligible_rows(final_train, ridge=False) & np.isfinite(final_train[f"target_{selected_horizon}d"])
+    final_training_target_receipt: dict[str, Any] | None = None
+    final_training_target = final_train[f"target_{selected_horizon}d"]
+    if rank_target_enabled:
+        final_training_target, final_training_target_receipt = build_rank_training_target(final_training_target)
+    final_mask = _eligible_rows(
+        final_train,
+        ridge=False,
+        continuous_features=V14_CONTINUOUS_FEATURES,
+        minimum_valid_continuous_features=MINIMUM_VALID_CONTINUOUS_FEATURES,
+    ) & np.isfinite(final_train[f"target_{selected_horizon}d"])
     if not final_mask.any():
         raise _fail(REASON_FIT, "GBDT final eligible train is empty", stage="final_fit")
+    if final_training_target_receipt is not None:
+        final_training_target_receipt = _bind_rank_training_target_fit(
+            final_training_target_receipt,
+            final_training_target.loc[final_mask],
+        )
     final_estimator = estimator_factory(**profile)
     try:
-        final_estimator.fit(
-            final_train.loc[final_mask, FEATURES],
-            final_train.loc[final_mask, f"target_{selected_horizon}d"],
+        progress.execute(
+            f"process-{process_index}:full-development:gbdt",
+            lambda: final_estimator.fit(
+                final_train.loc[final_mask, V14_FEATURES],
+                final_training_target.loc[final_mask],
+            ),
         )
     except Exception as exc:
         raise _fail(REASON_FIT, "GBDT final fit failed", stage="final_fit") from exc
     final_leaf = _leaf_date_coverage(
         final_estimator,
-        final_train.loc[final_mask, FEATURES],
+        final_train.loc[final_mask, V14_FEATURES],
         final_train.loc[final_mask].index.get_level_values("trade_date"),
+        fit_identity=f"process-{process_index}:full-development:gbdt",
     )
     final_model_text = final_estimator.booster_.model_to_string()
     if not isinstance(final_model_text, str) or not final_model_text:
@@ -1434,11 +2174,19 @@ def run_gbdt_process(
         "model_sha256": canonical_sha256(final_model_text),
         "market_context": final_context.receipt,
     }
+    if final_training_target_receipt is not None:
+        final_model["training_target_receipt"] = final_training_target_receipt
     oof_rows: list[dict[str, Any]] = []
+    calendar_position = {day: index for index, day in enumerate(calendar)}
     for (day, raw_code), raw_score in all_predictions.items():
         code = str(raw_code)
         key = (day, code)
         score = float(raw_score)
+        fold_model_hash = model_hash_by_identity.get(key)
+        day_position = calendar_position.get(day)
+        if not isinstance(fold_model_hash, str) or day_position is None or day_position == 0:
+            raise _fail(REASON_SCORE, "GBDT OOF row lacks fold model identity", stage="prediction")
+        as_of_date = calendar[day_position - 1].isoformat()
         if math.isfinite(score):
             contribution_values = contributions_by_identity.get(key)
             state = states.get(key)
@@ -1447,12 +2195,14 @@ def run_gbdt_process(
             oof_rows.append(
                 {
                     "trade_date": day.isoformat(),
+                    "as_of_date": as_of_date,
                     "sector_code": code,
                     "availability": "available",
                     "reason_code": None,
                     "rotation_score": score,
                     "forecast_state": state,
                     "feature_contributions": contribution_values,
+                    "model_hash": fold_model_hash,
                 }
             )
         else:
@@ -1462,23 +2212,27 @@ def run_gbdt_process(
             oof_rows.append(
                 {
                     "trade_date": day.isoformat(),
+                    "as_of_date": as_of_date,
                     "sector_code": code,
                     "availability": "unavailable",
                     "reason_code": reason,
                     "rotation_score": None,
                     "forecast_state": None,
                     "feature_contributions": None,
+                    "model_hash": fold_model_hash,
                 }
             )
     payload = {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": model_contract_version,
         "selected_horizon": selected_horizon,
+        "horizon_authority": HORIZON_AUTHORITY,
+        "horizon_authority_sha256": canonical_sha256(HORIZON_AUTHORITY),
         "profile": profile,
         "runtime_identity": runtime,
-        "producer_commit": battery_report["producer_commit"],
-        "battery_receipt_sha256": battery_report["receipt_sha256"],
+        "producer_commit": producer_commit,
         "forward_power_status": forward_power_status,
         "input_identity": dict(bundle["identity"]),
+        "delta_feature_coverage": delta_feature_coverage,
         "folds": fold_receipts,
         "market_context_receipts": market_receipts,
         "metrics": metrics,
@@ -1501,10 +2255,14 @@ def run_gbdt_process(
         "gbdt_fit_count": 6,
         "market_fit_count": 6,
         "fit_count": 12,
+        "fit_progress": progress.receipt(),
         "tail_accessed": False,
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if rank_target_enabled:
+        payload["input_feature_contract_version"] = V14_CONTRACT_VERSION
+        payload["target_transform"] = V15_TARGET_TRANSFORM
     body = {
         "schema_version": PROCESS_SCHEMA_VERSION,
         "process_index": process_index,
@@ -1515,7 +2273,601 @@ def run_gbdt_process(
     return {**body, "report_sha256": canonical_sha256(body)}
 
 
+def run_gbdt_process(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    process_index: int,
+    model_contract_version: str = V14_CONTRACT_VERSION,
+    estimator_factory: Any | None = None,
+    runtime_validator: Any = require_formal_runtime,
+) -> dict[str, Any]:
+    if model_contract_version == V16_CONTRACT_VERSION:
+        deterministic_runtime_validator = (
+            require_deterministic_runtime if runtime_validator is require_formal_runtime else runtime_validator
+        )
+        return _run_v16_process(
+            bundle,
+            producer_commit=producer_commit,
+            process_index=process_index,
+            runtime_validator=deterministic_runtime_validator,
+        )
+    progress = FitProgress(planned=12)
+    try:
+        return _run_gbdt_process_impl(
+            bundle,
+            producer_commit=producer_commit,
+            process_index=process_index,
+            model_contract_version=model_contract_version,
+            progress=progress,
+            estimator_factory=estimator_factory,
+            runtime_validator=runtime_validator,
+        )
+    except Exception as exc:
+        raise _fit_progress_error(exc, progress) from exc
+
+
+def _valid_leaf_coverage_receipt(value: Any) -> bool:
+    expected_keys = {
+        "hard_floor_distinct_dates",
+        "target_distinct_dates",
+        "maximum_below_target_leaf_fraction",
+        "minimum",
+        "p01",
+        "p05",
+        "median",
+        "leaf_count",
+        "below_target_leaf_count",
+        "below_target_leaf_fraction",
+        "below_target_leaf_ids",
+        "hard_floor_violating_leaf_ids",
+        "contract_passed",
+        "distribution_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    leaf_count = value.get("leaf_count")
+    below_count = value.get("below_target_leaf_count")
+    below_fraction = value.get("below_target_leaf_fraction")
+    below_ids = value.get("below_target_leaf_ids")
+    hard_floor_ids = value.get("hard_floor_violating_leaf_ids")
+    summary_values = [value.get(name) for name in ("minimum", "p01", "p05", "median")]
+    if (
+        value.get("hard_floor_distinct_dates") != MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+        or value.get("target_distinct_dates") != LEAF_DISTINCT_DATE_TARGET
+        or value.get("maximum_below_target_leaf_fraction") != MAXIMUM_BELOW_TARGET_LEAF_FRACTION
+        or not isinstance(leaf_count, int)
+        or isinstance(leaf_count, bool)
+        or leaf_count <= 0
+        or not isinstance(below_count, int)
+        or isinstance(below_count, bool)
+        or not 0 <= below_count <= leaf_count
+        or not isinstance(below_ids, list)
+        or len(below_ids) != below_count
+        or not isinstance(hard_floor_ids, list)
+        or hard_floor_ids
+        or value.get("contract_passed") is not True
+        or not isinstance(below_fraction, (int, float))
+        or isinstance(below_fraction, bool)
+        or not math.isfinite(float(below_fraction))
+        or not all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(float(item))
+            for item in summary_values
+        )
+        or not (
+            MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+            <= float(summary_values[0])
+            <= float(summary_values[1])
+            <= float(summary_values[2])
+            <= float(summary_values[3])
+        )
+        or not math.isclose(
+            float(below_fraction),
+            below_count / leaf_count,
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )
+        or below_count * 100 > leaf_count
+        or not isinstance(value.get("distribution_sha256"), str)
+        or len(value["distribution_sha256"]) != 64
+        or any(character not in "0123456789abcdef" for character in value["distribution_sha256"])
+    ):
+        return False
+    for item in below_ids:
+        if (
+            not isinstance(item, list)
+            or len(item) != 3
+            or not all(isinstance(part, int) and not isinstance(part, bool) for part in item)
+            or item[0] < 0
+            or item[1] < 0
+            or not MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR <= item[2] < LEAF_DISTINCT_DATE_TARGET
+        ):
+            return False
+    minimum = int(summary_values[0])
+    if (not below_ids and minimum < LEAF_DISTINCT_DATE_TARGET) or (
+        below_ids and minimum != min(item[2] for item in below_ids)
+    ):
+        return False
+    return True
+
+
+def _valid_training_target_receipt(value: Any) -> bool:
+    expected_keys = {
+        "schema_version",
+        "transform",
+        "source_target",
+        "tie_method",
+        "sector_count",
+        "date_count",
+        "row_count",
+        "identity_sha256",
+        "raw_target_sha256",
+        "training_target_sha256",
+        "fit_row_count",
+        "fit_identity_sha256",
+        "fit_training_target_sha256",
+        "minimum",
+        "maximum",
+        "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    hashes = (
+        value.get("identity_sha256"),
+        value.get("raw_target_sha256"),
+        value.get("training_target_sha256"),
+        value.get("fit_identity_sha256"),
+        value.get("fit_training_target_sha256"),
+    )
+    return bool(
+        value.get("schema_version") == "hmm_risk_rotation_l1_g2a_training_target_receipt_v1"
+        and value.get("transform") == V15_TARGET_TRANSFORM
+        and value.get("source_target") == "target_10d"
+        and value.get("tie_method") == "average_exact_float64"
+        and value.get("sector_count") == CANONICAL_SECTOR_COUNT
+        and isinstance(value.get("date_count"), int)
+        and not isinstance(value.get("date_count"), bool)
+        and value["date_count"] > 0
+        and value.get("row_count") == value["date_count"] * CANONICAL_SECTOR_COUNT
+        and isinstance(value.get("fit_row_count"), int)
+        and not isinstance(value.get("fit_row_count"), bool)
+        and 0 < value["fit_row_count"] <= value["row_count"]
+        and all(
+            isinstance(item, str) and len(item) == 64 and all(character in "0123456789abcdef" for character in item)
+            for item in hashes
+        )
+        and isinstance(value.get("minimum"), (int, float))
+        and not isinstance(value.get("minimum"), bool)
+        and isinstance(value.get("maximum"), (int, float))
+        and not isinstance(value.get("maximum"), bool)
+        and math.isfinite(float(value["minimum"]))
+        and math.isfinite(float(value["maximum"]))
+        and -0.5 <= float(value["minimum"]) <= float(value["maximum"]) <= 0.5
+        and value.get("receipt_sha256") == canonical_sha256(body)
+    )
+
+
+def _valid_fold_receipt(
+    value: Any,
+    *,
+    expected: tuple[str, date, date],
+    horizon: int,
+    feature_count: int = len(V14_FEATURES),
+    rank_target_enabled: bool = False,
+) -> bool:
+    base_keys = {
+        "fold",
+        "train_start",
+        "train_end",
+        "train_count",
+        "train_date_sha256",
+        "purge_dates",
+        "validation_start",
+        "validation_end",
+        "validation_count",
+        "validation_date_sha256",
+    }
+    expected_keys = {
+        *base_keys,
+        "receipt_sha256",
+        "fit_row_count",
+        "prediction_row_count",
+        "leaf_date_coverage",
+        "feature_contributions",
+        "model_sha256",
+        "market_context_receipt_sha256",
+    }
+    if rank_target_enabled:
+        expected_keys.add("training_target_receipt")
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    try:
+        train_start = date.fromisoformat(str(value["train_start"]))
+        train_end = date.fromisoformat(str(value["train_end"]))
+        validation_start = date.fromisoformat(str(value["validation_start"]))
+        validation_end = date.fromisoformat(str(value["validation_end"]))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in value["purge_dates"])
+    except (TypeError, ValueError):
+        return False
+    contribution = value.get("feature_contributions")
+    expected_name, expected_start, expected_end = expected
+    return bool(
+        value["fold"] == expected_name
+        and validation_end == expected_end
+        and value["train_count"] == ROLLING_WINDOW_OPEN_DAYS
+        and isinstance(value["validation_count"], int)
+        and not isinstance(value["validation_count"], bool)
+        and value["validation_count"] > 0
+        and isinstance(value["fit_row_count"], int)
+        and not isinstance(value["fit_row_count"], bool)
+        and value["fit_row_count"] > 0
+        and isinstance(value["prediction_row_count"], int)
+        and not isinstance(value["prediction_row_count"], bool)
+        and value["prediction_row_count"] > 0
+        and len(purge_dates) == horizon
+        and purge_dates[-1] < expected_start <= validation_start
+        and purge_dates == tuple(sorted(set(purge_dates)))
+        and train_start <= train_end < purge_dates[0] <= purge_dates[-1] < validation_start <= validation_end
+        and value["receipt_sha256"] == canonical_sha256({key: value[key] for key in base_keys})
+        and all(
+            isinstance(value[field], str)
+            and len(value[field]) == 64
+            and all(character in "0123456789abcdef" for character in value[field])
+            for field in (
+                "train_date_sha256",
+                "validation_date_sha256",
+                "model_sha256",
+                "market_context_receipt_sha256",
+            )
+        )
+        and isinstance(contribution, Mapping)
+        and set(contribution) == {"shape", "canonical_sha256", "maximum_reconstruction_error"}
+        and contribution["shape"] == [value["prediction_row_count"], feature_count + 1]
+        and isinstance(contribution["maximum_reconstruction_error"], (int, float))
+        and not isinstance(contribution["maximum_reconstruction_error"], bool)
+        and math.isfinite(float(contribution["maximum_reconstruction_error"]))
+        and float(contribution["maximum_reconstruction_error"]) >= 0
+        and isinstance(contribution["canonical_sha256"], str)
+        and len(contribution["canonical_sha256"]) == 64
+        and all(character in "0123456789abcdef" for character in contribution["canonical_sha256"])
+        and _valid_leaf_coverage_receipt(value["leaf_date_coverage"])
+        and (
+            _valid_training_target_receipt(value.get("training_target_receipt"))
+            and value["training_target_receipt"]["fit_row_count"] == value["fit_row_count"]
+            if rank_target_enabled
+            else "training_target_receipt" not in value
+        )
+    )
+
+
+def _valid_delta_feature_coverage_receipt(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "feature",
+        "minimum_coverage",
+        "scopes",
+        "receipt_sha256",
+    }:
+        return False
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    scopes = value.get("scopes")
+    expected_scope_names = {
+        "full-development",
+        *(f"fold-{index}:{part}" for index in range(1, 6) for part in ("train", "validation")),
+    }
+    if (
+        value.get("feature") != "moneyflow_intensity_delta_5d"
+        or value.get("minimum_coverage") != MINIMUM_DELTA_FEATURE_COVERAGE
+        or value.get("receipt_sha256") != canonical_sha256(body)
+        or not isinstance(scopes, list)
+        or len(scopes) != len(expected_scope_names)
+    ):
+        return False
+    actual_names: set[str] = set()
+    for scope in scopes:
+        if not isinstance(scope, Mapping) or set(scope) != {
+            "scope",
+            "start",
+            "end",
+            "row_count",
+            "finite_count",
+            "coverage",
+        }:
+            return False
+        try:
+            start = date.fromisoformat(str(scope["start"]))
+            end = date.fromisoformat(str(scope["end"]))
+        except ValueError:
+            return False
+        row_count = scope.get("row_count")
+        finite_count = scope.get("finite_count")
+        coverage = scope.get("coverage")
+        if (
+            not isinstance(scope.get("scope"), str)
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count <= 0
+            or not isinstance(finite_count, int)
+            or isinstance(finite_count, bool)
+            or not 0 <= finite_count <= row_count
+            or not isinstance(coverage, (int, float))
+            or isinstance(coverage, bool)
+            or not math.isfinite(float(coverage))
+            or not math.isclose(float(coverage), finite_count / row_count, rel_tol=0.0, abs_tol=0.0)
+            or float(coverage) < MINIMUM_DELTA_FEATURE_COVERAGE
+            or start > end
+        ):
+            return False
+        actual_names.add(scope["scope"])
+    return actual_names == expected_scope_names
+
+
+def _valid_v16_feature_coverage_receipt(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "feature",
+        "minimum_coverage",
+        "scopes",
+        "receipt_sha256",
+    }:
+        return False
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    scopes = value.get("scopes")
+    expected_names = {"all-oof-validation", *(f"fold-{index}:validation" for index in range(1, 6))}
+    if (
+        value.get("schema_version") != "hmm_risk_rotation_l1_g2a_v16_feature_coverage_v1"
+        or value.get("feature") != V16_SCORE_FEATURE
+        or value.get("minimum_coverage") != MINIMUM_DELTA_FEATURE_COVERAGE
+        or value.get("receipt_sha256") != canonical_sha256(body)
+        or not isinstance(scopes, list)
+        or len(scopes) != len(expected_names)
+    ):
+        return False
+    actual_names = set()
+    for scope in scopes:
+        if not isinstance(scope, Mapping) or set(scope) != {
+            "scope",
+            "start",
+            "end",
+            "row_count",
+            "finite_count",
+            "coverage",
+        }:
+            return False
+        try:
+            start = date.fromisoformat(str(scope["start"]))
+            end = date.fromisoformat(str(scope["end"]))
+        except ValueError:
+            return False
+        row_count = scope.get("row_count")
+        finite_count = scope.get("finite_count")
+        coverage = scope.get("coverage")
+        if (
+            not isinstance(scope.get("scope"), str)
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count <= 0
+            or not isinstance(finite_count, int)
+            or isinstance(finite_count, bool)
+            or not 0 <= finite_count <= row_count
+            or not isinstance(coverage, (int, float))
+            or isinstance(coverage, bool)
+            or not math.isclose(float(coverage), finite_count / row_count, rel_tol=0.0, abs_tol=0.0)
+            or float(coverage) < MINIMUM_DELTA_FEATURE_COVERAGE
+            or start > end
+        ):
+            return False
+        actual_names.add(scope["scope"])
+    return actual_names == expected_names
+
+
+def _validated_v16_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
+    expected_child_keys = {
+        "schema_version",
+        "process_index",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "final_model_text",
+        "report_sha256",
+    }
+    body = {key: value for key, value in child.items() if key != "report_sha256"}
+    payload = child.get("reproducibility_payload")
+    if (
+        set(child) != expected_child_keys
+        or child.get("schema_version") != V16_PROCESS_SCHEMA_VERSION
+        or child.get("process_index") != expected_index
+        or not isinstance(payload, Mapping)
+        or child.get("reproducibility_payload_sha256") != canonical_sha256(payload)
+        or child.get("report_sha256") != canonical_sha256(body)
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic child envelope differs", stage="closure")
+
+    scoring_contract = _v16_scoring_contract()
+    model_hash = canonical_sha256(scoring_contract)
+    model_text = canonical_json_bytes(scoring_contract).decode("utf-8")
+    folds = payload.get("folds")
+    oof_rows = payload.get("oof_prediction_rows")
+    final_model = payload.get("final_model")
+    if (
+        payload.get("contract_version") != V16_CONTRACT_VERSION
+        or payload.get("selected_horizon") != FIXED_HORIZON
+        or payload.get("horizon_authority") != HORIZON_AUTHORITY
+        or payload.get("horizon_authority_sha256") != canonical_sha256(HORIZON_AUTHORITY)
+        or payload.get("input_feature_contract_version") != V14_CONTRACT_VERSION
+        or payload.get("score_transform") != V16_SCORE_TRANSFORM
+        or payload.get("scoring_contract") != scoring_contract
+        or payload.get("scoring_contract_sha256") != model_hash
+        or payload.get("profile") != {"model_kind": "deterministic_cross_section_rank", "fit_required": False}
+        or payload.get("forward_power_status") != FROZEN_FORWARD_POWER_STATUS
+        or not isinstance(payload.get("input_identity"), Mapping)
+        or not _valid_v16_feature_coverage_receipt(payload.get("delta_feature_coverage"))
+        or payload.get("market_context_receipts") != []
+        or payload.get("research_product_gate") != {"passed": True, "effect_threshold_applied": False}
+        or not isinstance(payload.get("tail_access_gate"), Mapping)
+        or not isinstance(payload["tail_access_gate"].get("passed"), bool)
+        or payload["tail_access_gate"].get("binding_mbe_rank_ic") != BINDING_MBE_IC
+        or payload.get("gbdt_fit_count") != 0
+        or payload.get("market_fit_count") != 0
+        or payload.get("fit_count") != 0
+        or payload.get("fit_progress") != {"planned": 0, "started": 0, "completed": 0, "failed": 0, "active_fit": None}
+        or payload.get("tail_accessed") is not False
+        or payload.get("database_write_performed") is not False
+        or payload.get("runtime_action_performed") is not False
+        or not isinstance(payload.get("producer_commit"), str)
+        or len(payload["producer_commit"]) != 40
+        or any(character not in "0123456789abcdef" for character in payload["producer_commit"])
+        or not isinstance(folds, list)
+        or len(folds) != len(FOLDS)
+        or not isinstance(oof_rows, list)
+        or not oof_rows
+        or payload.get("oof_prediction_rows_sha256") != canonical_sha256(oof_rows)
+        or child.get("final_model_text") != model_text
+        or final_model
+        != {
+            "model_kind": "deterministic_cross_section_rank",
+            "training_performed": False,
+            "model_sha256": model_hash,
+            "scoring_contract_sha256": model_hash,
+        }
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic child payload differs", stage="closure")
+
+    base_fold_keys = {
+        "fold",
+        "train_start",
+        "train_end",
+        "train_count",
+        "train_date_sha256",
+        "purge_dates",
+        "validation_start",
+        "validation_end",
+        "validation_count",
+        "validation_date_sha256",
+        "receipt_sha256",
+    }
+    validation_windows: list[tuple[date, date, str]] = []
+    for fold, expected in zip(folds, FOLDS, strict=True):
+        if not isinstance(fold, Mapping) or set(fold) != {
+            *base_fold_keys,
+            "training_performed",
+            "prediction_row_count",
+            "available_prediction_row_count",
+            "model_sha256",
+        }:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold receipt differs", stage="closure")
+        try:
+            validation_start = date.fromisoformat(str(fold["validation_start"]))
+            validation_end = date.fromisoformat(str(fold["validation_end"]))
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold dates differ", stage="closure") from exc
+        base = {key: fold[key] for key in base_fold_keys if key != "receipt_sha256"}
+        expected_name, expected_start, expected_end = expected
+        if (
+            fold["fold"] != expected_name
+            or validation_start < expected_start
+            or validation_end != expected_end
+            or fold["receipt_sha256"] != canonical_sha256(base)
+            or fold["training_performed"] is not False
+            or fold["prediction_row_count"] != fold["validation_count"] * CANONICAL_SECTOR_COUNT
+            or not isinstance(fold["available_prediction_row_count"], int)
+            or not 0 <= fold["available_prediction_row_count"] <= fold["prediction_row_count"]
+            or fold["model_sha256"] != model_hash
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold contract differs", stage="closure")
+        validation_windows.append((validation_start, validation_end, expected_name))
+
+    expected_row_keys = {
+        "trade_date",
+        "as_of_date",
+        "sector_code",
+        "availability",
+        "reason_code",
+        "rotation_score",
+        "forecast_state",
+        "feature_contributions",
+        "model_hash",
+    }
+    daily_codes: dict[date, set[str]] = {}
+    available_by_date: dict[date, int] = {}
+    as_of_by_date: dict[date, date] = {}
+    seen: set[tuple[date, str]] = set()
+    contribution_index = V14_FEATURES.index(V16_SCORE_FEATURE)
+    for row in oof_rows:
+        if not isinstance(row, Mapping) or set(row) != expected_row_keys:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF row shape differs", stage="closure")
+        try:
+            trade_date = date.fromisoformat(str(row["trade_date"]))
+            as_of_date = date.fromisoformat(str(row["as_of_date"]))
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF date differs", stage="closure") from exc
+        code = row.get("sector_code")
+        identity = (trade_date, str(code))
+        if (
+            not isinstance(code, str)
+            or not code
+            or as_of_date >= trade_date
+            or identity in seen
+            or row.get("model_hash") != model_hash
+            or sum(start <= trade_date <= end for start, end, _name in validation_windows) != 1
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF identity differs", stage="closure")
+        seen.add(identity)
+        daily_codes.setdefault(trade_date, set()).add(code)
+        existing_as_of = as_of_by_date.setdefault(trade_date, as_of_date)
+        if existing_as_of != as_of_date:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF as-of differs", stage="closure")
+        if row.get("availability") == "available":
+            score = row.get("rotation_score")
+            contributions = row.get("feature_contributions")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+                or not -0.5 <= float(score) <= 0.5
+                or row.get("forecast_state") not in {"fading", "neutral", "trending"}
+                or row.get("reason_code") is not None
+                or not isinstance(contributions, list)
+                or len(contributions) != len(V14_FEATURES) + 1
+                or not all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                    for value in contributions
+                )
+                or contributions[contribution_index] != score
+                or any(value != 0.0 for index, value in enumerate(contributions) if index != contribution_index)
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "deterministic available OOF row differs", stage="closure")
+            available_by_date[trade_date] = available_by_date.get(trade_date, 0) + 1
+        elif row.get("availability") == "unavailable":
+            if (
+                row.get("rotation_score") is not None
+                or row.get("forecast_state") is not None
+                or row.get("feature_contributions") is not None
+                or not isinstance(row.get("reason_code"), str)
+                or not row["reason_code"]
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "deterministic unavailable OOF row differs", stage="closure")
+        else:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF availability differs", stage="closure")
+    if not daily_codes or any(len(codes) != CANONICAL_SECTOR_COUNT for codes in daily_codes.values()):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF daily denominator differs", stage="closure")
+    for fold, (start, end, _name) in zip(folds, validation_windows, strict=True):
+        dates = tuple(sorted(day for day in daily_codes if start <= day <= end))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in fold["purge_dates"])
+        if (
+            len(dates) != fold["validation_count"]
+            or not dates
+            or sum(available_by_date.get(day, 0) for day in dates) != fold["available_prediction_row_count"]
+            or as_of_by_date[dates[0]] != purge_dates[-1]
+            or any(as_of_by_date[day] != previous for previous, day in zip(dates, dates[1:]))
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF calendar lineage differs", stage="closure")
+    return payload
+
+
 def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
+    payload = child.get("reproducibility_payload")
+    if isinstance(payload, Mapping) and payload.get("contract_version") == V16_CONTRACT_VERSION:
+        return _validated_v16_process(child, expected_index=expected_index)
     expected_keys = {
         "schema_version",
         "process_index",
@@ -1527,11 +2879,51 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
     body = {key: value for key, value in child.items() if key != "report_sha256"}
     payload = child.get("reproducibility_payload")
     model_text = child.get("final_model_text")
+    folds = payload.get("folds") if isinstance(payload, Mapping) else None
+    final_model = payload.get("final_model") if isinstance(payload, Mapping) else None
+    oof_rows = payload.get("oof_prediction_rows") if isinstance(payload, Mapping) else None
+    contract_version = payload.get("contract_version") if isinstance(payload, Mapping) else None
+    legacy = contract_version == V13_CONTRACT_VERSION
+    v14 = contract_version == V14_CONTRACT_VERSION
+    v15 = contract_version == V15_CONTRACT_VERSION
+    active = v14 or v15
+    feature_count = len(V13_FEATURES) if legacy else len(V14_FEATURES)
+    legacy_battery_sha = payload.get("battery_receipt_sha256") if isinstance(payload, Mapping) else None
+    contract_specific_valid = bool(
+        (
+            legacy
+            and child.get("schema_version") == V13_PROCESS_SCHEMA_VERSION
+            and payload.get("selected_horizon") in HORIZONS
+            and payload.get("forward_power_status") in {"INSUFFICIENT", "SUFFICIENT", "UNAVAILABLE"}
+            and isinstance(legacy_battery_sha, str)
+            and len(legacy_battery_sha) == 64
+            and all(character in "0123456789abcdef" for character in legacy_battery_sha)
+            and "horizon_authority" not in payload
+            and "delta_feature_coverage" not in payload
+        )
+        or (
+            active
+            and child.get("schema_version") == PROCESS_SCHEMA_VERSION
+            and payload.get("selected_horizon") == FIXED_HORIZON
+            and payload.get("horizon_authority") == HORIZON_AUTHORITY
+            and payload.get("horizon_authority_sha256") == canonical_sha256(HORIZON_AUTHORITY)
+            and payload.get("forward_power_status") == FROZEN_FORWARD_POWER_STATUS
+            and _valid_delta_feature_coverage_receipt(payload.get("delta_feature_coverage"))
+            and "battery_receipt_sha256" not in payload
+            and (
+                payload.get("input_feature_contract_version") == V14_CONTRACT_VERSION
+                and payload.get("target_transform") == V15_TARGET_TRANSFORM
+                if v15
+                else "input_feature_contract_version" not in payload and "target_transform" not in payload
+            )
+        )
+    )
     if (
         set(child) != expected_keys
-        or child.get("schema_version") != PROCESS_SCHEMA_VERSION
         or child.get("process_index") != expected_index
         or not isinstance(payload, Mapping)
+        or not contract_specific_valid
+        or payload.get("profile") != _lightgbm_profile()
         or child.get("reproducibility_payload_sha256") != canonical_sha256(payload)
         or child.get("report_sha256") != canonical_sha256(body)
         or not isinstance(model_text, str)
@@ -1539,48 +2931,519 @@ def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapp
         or payload.get("fit_count") != 12
         or payload.get("gbdt_fit_count") != 6
         or payload.get("market_fit_count") != 6
+        or payload.get("fit_progress")
+        != {"planned": 12, "started": 12, "completed": 12, "failed": 0, "active_fit": None}
         or payload.get("tail_accessed") is not False
         or payload.get("database_write_performed") is not False
         or payload.get("runtime_action_performed") is not False
-        or payload.get("selected_horizon") not in HORIZONS
-        or payload.get("forward_power_status") not in {"INSUFFICIENT", "SUFFICIENT", "UNAVAILABLE"}
         or not isinstance(payload.get("producer_commit"), str)
         or len(payload["producer_commit"]) != 40
         or any(character not in "0123456789abcdef" for character in payload["producer_commit"])
-        or not isinstance(payload.get("battery_receipt_sha256"), str)
-        or len(payload["battery_receipt_sha256"]) != 64
-        or any(character not in "0123456789abcdef" for character in payload["battery_receipt_sha256"])
         or payload.get("research_product_gate") != {"passed": True, "effect_threshold_applied": False}
         or not isinstance(payload.get("tail_access_gate"), Mapping)
         or not isinstance(payload["tail_access_gate"].get("passed"), bool)
         or payload["tail_access_gate"].get("binding_mbe_rank_ic") != BINDING_MBE_IC
-        or not isinstance(payload.get("final_model"), Mapping)
-        or payload["final_model"].get("model_sha256") != canonical_sha256(model_text)
+        or not isinstance(folds, list)
+        or len(folds) != len(FOLDS)
+        or any(
+            not _valid_fold_receipt(
+                fold,
+                expected=expected,
+                horizon=int(payload["selected_horizon"]),
+                feature_count=feature_count,
+                rank_target_enabled=v15,
+            )
+            for fold, expected in zip(folds, FOLDS, strict=True)
+        )
+        or not isinstance(oof_rows, list)
+        or not oof_rows
+        or payload.get("oof_prediction_rows_sha256") != canonical_sha256(oof_rows)
+        or not isinstance(final_model, Mapping)
+        or final_model.get("model_sha256") != canonical_sha256(model_text)
+        or not _valid_leaf_coverage_receipt(final_model.get("leaf_date_coverage"))
+        or (
+            not _valid_training_target_receipt(final_model.get("training_target_receipt"))
+            or final_model["training_target_receipt"]["fit_row_count"] != final_model.get("fit_row_count")
+            if v15
+            else "training_target_receipt" in final_model
+        )
     ):
         raise _fail(REASON_REPRODUCIBILITY, "GBDT child envelope or receipt differs", stage="closure")
+    fold_model_hashes = {fold.get("model_sha256") for fold in folds}
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in fold_model_hashes
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "GBDT fold model identity differs", stage="closure")
+    expected_oof_keys = {
+        "trade_date",
+        "as_of_date",
+        "sector_code",
+        "availability",
+        "reason_code",
+        "rotation_score",
+        "forecast_state",
+        "feature_contributions",
+        "model_hash",
+    }
+    fold_model_by_window: list[tuple[date, date, str]] = []
+    for fold in folds:
+        try:
+            start = date.fromisoformat(str(fold["validation_start"]))
+            end = date.fromisoformat(str(fold["validation_end"]))
+            model_hash = str(fold["model_sha256"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT fold validation identity differs", stage="closure") from exc
+        if start > end:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT fold validation range differs", stage="closure")
+        fold_model_by_window.append((start, end, model_hash))
+    daily_codes: dict[date, set[str]] = {}
+    as_of_by_date: dict[date, date] = {}
+    seen_oof: set[tuple[date, str]] = set()
+    for row in oof_rows:
+        if not isinstance(row, Mapping):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF lineage differs", stage="closure")
+        try:
+            trade_date = date.fromisoformat(str(row.get("trade_date")))
+            as_of_date = date.fromisoformat(str(row.get("as_of_date")))
+        except ValueError:
+            trade_date = None
+            as_of_date = None
+        if (
+            set(row) != expected_oof_keys
+            or trade_date is None
+            or as_of_date is None
+            or as_of_date >= trade_date
+            or not isinstance(row.get("sector_code"), str)
+            or not row["sector_code"]
+            or row.get("model_hash") not in fold_model_hashes
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF lineage differs", stage="closure")
+        expected_models = {model_hash for start, end, model_hash in fold_model_by_window if start <= trade_date <= end}
+        identity = (trade_date, row["sector_code"])
+        existing_as_of = as_of_by_date.setdefault(trade_date, as_of_date)
+        if (
+            len(expected_models) != 1
+            or row["model_hash"] not in expected_models
+            or identity in seen_oof
+            or existing_as_of != as_of_date
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF fold-model identity differs", stage="closure")
+        seen_oof.add(identity)
+        daily_codes.setdefault(trade_date, set()).add(row["sector_code"])
+        if row.get("availability") == "available":
+            score = row.get("rotation_score")
+            contributions = row.get("feature_contributions")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+                or row.get("forecast_state") not in {"fading", "neutral", "trending"}
+                or not isinstance(contributions, list)
+                or len(contributions) != feature_count + 1
+                or not all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                    for value in contributions
+                )
+                or row.get("reason_code") is not None
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "GBDT available OOF payload differs", stage="closure")
+        elif row.get("availability") == "unavailable":
+            if (
+                row.get("rotation_score") is not None
+                or row.get("forecast_state") is not None
+                or row.get("feature_contributions") is not None
+                or not isinstance(row.get("reason_code"), str)
+                or not row["reason_code"]
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "GBDT unavailable OOF payload differs", stage="closure")
+        else:
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF availability differs", stage="closure")
+    if not daily_codes or any(len(codes) != CANONICAL_SECTOR_COUNT for codes in daily_codes.values()):
+        raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF daily sector denominator differs", stage="closure")
+    for fold in folds:
+        validation_start = date.fromisoformat(str(fold["validation_start"]))
+        validation_end = date.fromisoformat(str(fold["validation_end"]))
+        validation_dates = tuple(sorted(day for day in daily_codes if validation_start <= day <= validation_end))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in fold["purge_dates"])
+        if (
+            len(validation_dates) != fold["validation_count"]
+            or not validation_dates
+            or as_of_by_date[validation_dates[0]] != purge_dates[-1]
+            or any(as_of_by_date[day] != previous for previous, day in zip(validation_dates, validation_dates[1:]))
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "GBDT OOF as-of calendar lineage differs", stage="closure")
     return payload
 
 
-def close_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, Any]:
+def _paired_v13_diagnostic(
+    v13_reference: Mapping[str, Any],
+    v14_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    baseline = _validated_process(v13_reference, expected_index=1)
+    if baseline.get("contract_version") != V13_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.3 process", stage="closure")
+    baseline_identity = baseline.get("input_identity")
+    candidate_identity = v14_payload.get("input_identity")
+    shared_identity_fields = {
+        "source_sha256",
+        "mapping_sha256",
+        "development_end",
+        "source_cutoff",
+        "tail_mature_decision_counts",
+        "tail_mature_date_sha256",
+    }
+    if (
+        not isinstance(baseline_identity, Mapping)
+        or not isinstance(candidate_identity, Mapping)
+        or any(baseline_identity.get(field) != candidate_identity.get(field) for field in shared_identity_fields)
+        or baseline_identity.get("feature_contract_sha256") == candidate_identity.get("feature_contract_sha256")
+    ):
+        raise _fail(REASON_INPUT, "paired v1.3/v1.4 source identity differs", stage="closure")
+
+    def daily_ic(payload: Mapping[str, Any]) -> dict[str, float]:
+        metrics = payload.get("metrics")
+        rows = metrics.get("daily") if isinstance(metrics, Mapping) else None
+        if not isinstance(rows, list):
+            raise _fail(REASON_INPUT, "paired metric evidence is missing", stage="closure")
+        result: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("metric_valid") is not True:
+                continue
+            day = str(row.get("trade_date") or "")
+            value = row.get("rank_ic")
+            if (
+                not day
+                or day in result
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                raise _fail(REASON_INPUT, "paired metric identity differs", stage="closure")
+            result[day] = float(value)
+        return result
+
+    baseline_ic = daily_ic(baseline)
+    candidate_ic = daily_ic(v14_payload)
+    common_dates = tuple(sorted(set(baseline_ic) & set(candidate_ic)))
+    if not common_dates:
+        raise _fail(REASON_INPUT, "paired v1.3/v1.4 metric dates are empty", stage="closure")
+    differences = [candidate_ic[day] - baseline_ic[day] for day in common_dates]
+    try:
+        paired_hac: Mapping[str, Any] = newey_west(differences, lag=FIXED_HORIZON - 1)
+        paired_hac_reason = None
+    except RotationL1G2AError as exc:
+        paired_hac = {}
+        paired_hac_reason = exc.reason_code
+
+    def contribution_summary(payload: Mapping[str, Any], feature_indexes: Mapping[str, int]) -> dict[str, Any]:
+        rows = payload.get("oof_prediction_rows")
+        if not isinstance(rows, list):
+            raise _fail(REASON_INPUT, "paired contribution evidence is missing", stage="closure")
+        shares = {name: [] for name in feature_indexes}
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("availability") != "available":
+                continue
+            values = row.get("feature_contributions")
+            if not isinstance(values, list) or not all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                for value in values
+            ):
+                raise _fail(REASON_INPUT, "paired contribution payload differs", stage="closure")
+            feature_values = np.abs(np.asarray(values[:-1], dtype=np.float64))
+            denominator = math.fsum(float(value) for value in feature_values)
+            for name, index in feature_indexes.items():
+                shares[name].append(float(feature_values[index] / denominator) if denominator > 0 else 0.0)
+        if not shares or any(not values for values in shares.values()):
+            raise _fail(REASON_INPUT, "paired contribution rows are empty", stage="closure")
+        return {
+            name: {
+                "available_row_count": len(values),
+                "mean_absolute_share": float(np.mean(values)),
+            }
+            for name, values in shares.items()
+        }
+
+    def monthly_summary(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        development = payload.get("development_summary")
+        rows = development.get("monthly") if isinstance(development, Mapping) else None
+        if not isinstance(rows, list) or not rows:
+            raise _fail(REASON_INPUT, "paired monthly evidence is missing", stage="closure")
+        for row in rows:
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != {"month", "mean_rank_ic", "metric_date_count"}
+                or not isinstance(row.get("month"), str)
+                or len(row["month"]) != 7
+                or not isinstance(row.get("mean_rank_ic"), (int, float))
+                or isinstance(row.get("mean_rank_ic"), bool)
+                or not math.isfinite(float(row["mean_rank_ic"]))
+                or not isinstance(row.get("metric_date_count"), int)
+                or isinstance(row.get("metric_date_count"), bool)
+                or row["metric_date_count"] <= 0
+            ):
+                raise _fail(REASON_INPUT, "paired monthly evidence differs", stage="closure")
+        return rows
+
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_v13_v14_paired_diagnostic_v1",
+        "baseline_contract_version": V13_CONTRACT_VERSION,
+        "candidate_contract_version": CONTRACT_VERSION,
+        "common_date_count": len(common_dates),
+        "common_date_sha256": canonical_sha256([*common_dates]),
+        "mean_daily_rank_ic_difference": float(np.mean(differences)),
+        "paired_difference_hac": dict(paired_hac),
+        "paired_difference_hac_reason_code": paired_hac_reason,
+        "contributions": {
+            "v1_3": contribution_summary(baseline, {"moneyflow_intensity_20d": 7}),
+            "v1_4": contribution_summary(
+                v14_payload,
+                {"moneyflow_intensity_20d": 7, "moneyflow_intensity_delta_5d": 8},
+            ),
+        },
+        "monthly": {
+            "v1_3": monthly_summary(baseline),
+            "v1_4": monthly_summary(v14_payload),
+        },
+        "binding_gate_applied": False,
+        "tail_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def validate_v13_process_reference(value: Mapping[str, Any]) -> None:
+    """Validate the frozen v1.3 comparison receipt before any v1.4 fit."""
+
+    payload = _validated_process(value, expected_index=1)
+    if payload.get("contract_version") != V13_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.3 process", stage="input")
+
+
+def validate_v14_process_reference(value: Mapping[str, Any]) -> None:
+    """Validate the frozen v1.4 comparison receipt before any v1.5 fit."""
+
+    payload = _validated_process(value, expected_index=1)
+    if payload.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="input")
+
+
+def _v15_training_target_authority(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    frame, calendar, _sectors, _benchmark = validate_input_bundle(bundle)
+    folds = []
+    for fold in fold_slices(calendar, horizon=FIXED_HORIZON):
+        _labels, receipt = build_rank_training_target(frame.loc[(list(fold.train_dates), slice(None)), "target_10d"])
+        folds.append({"fold": fold.name, "receipt": receipt})
+    full_train_end = len(calendar) - FIXED_HORIZON
+    full_train_dates = calendar[full_train_end - ROLLING_WINDOW_OPEN_DAYS : full_train_end]
+    if len(full_train_dates) != ROLLING_WINDOW_OPEN_DAYS:
+        raise _fail(REASON_LABEL, "v1.5 final rank target authority is incomplete", stage="closure")
+    _labels, final_receipt = build_rank_training_target(frame.loc[(list(full_train_dates), slice(None)), "target_10d"])
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_training_target_authority_v1",
+        "folds": folds,
+        "final": final_receipt,
+        "input_identity": dict(bundle["identity"]),
+    }
+    return {**body, "authority_sha256": canonical_sha256(body)}
+
+
+def _v16_score_authority(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    scores, folds = build_v16_scores(bundle)
+    frame, calendar, sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    states, state_receipt = project_states(scores)
+    metrics = _metrics(scores, frame.loc[scores.index, f"target_{FIXED_HORIZON}d"], sectors, states)
+    scoring_hash = canonical_sha256(_v16_scoring_contract())
+    oof_rows = _v16_oof_rows(frame, calendar, scores, states, model_hash=scoring_hash)
+    return {
+        "prediction_sha256": canonical_sha256(
+            [
+                [day.isoformat(), str(code), None if not math.isfinite(float(value)) else float(value)]
+                for (day, code), value in scores.items()
+            ]
+        ),
+        "state_projection": state_receipt,
+        "metrics": metrics,
+        "development_summary": _development_summary(metrics, horizon=FIXED_HORIZON),
+        "delta_feature_coverage": _v16_feature_coverage_receipt(frame, folds),
+        "oof_prediction_rows": oof_rows,
+        "oof_prediction_rows_sha256": canonical_sha256(oof_rows),
+        "tail_access_gate": {
+            "passed": float(metrics["mean_rank_ic"]) >= BINDING_MBE_IC,
+            "binding_mbe_rank_ic": BINDING_MBE_IC,
+        },
+    }
+
+
+def _validate_v15_training_target_authority(
+    payload: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+) -> str:
+    authority = _v15_training_target_authority(bundle)
+    if payload.get("input_identity") != authority["input_identity"]:
+        raise _fail(REASON_INPUT, "v1.5 label authority input identity differs", stage="closure")
+    authority_fields = {
+        "transform",
+        "source_target",
+        "tie_method",
+        "sector_count",
+        "date_count",
+        "row_count",
+        "identity_sha256",
+        "raw_target_sha256",
+        "training_target_sha256",
+        "minimum",
+        "maximum",
+    }
+    folds = payload.get("folds")
+    if not isinstance(folds, list) or len(folds) != len(authority["folds"]):
+        raise _fail(REASON_REPRODUCIBILITY, "v1.5 fold label authority differs", stage="closure")
+    for actual_fold, expected_fold in zip(folds, authority["folds"], strict=True):
+        actual = actual_fold.get("training_target_receipt") if isinstance(actual_fold, Mapping) else None
+        expected = expected_fold["receipt"]
+        if (
+            expected_fold["fold"] != actual_fold.get("fold")
+            or not isinstance(actual, Mapping)
+            or any(actual.get(field) != expected.get(field) for field in authority_fields)
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "v1.5 fold label authority differs", stage="closure")
+    final_model = payload.get("final_model")
+    actual_final = final_model.get("training_target_receipt") if isinstance(final_model, Mapping) else None
+    expected_final = authority["final"]
+    if not isinstance(actual_final, Mapping) or any(
+        actual_final.get(field) != expected_final.get(field) for field in authority_fields
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "v1.5 final label authority differs", stage="closure")
+    return str(authority["authority_sha256"])
+
+
+def _paired_v14_diagnostic(v14_reference: Mapping[str, Any], candidate_payload: Mapping[str, Any]) -> dict[str, Any]:
+    baseline = _validated_process(v14_reference, expected_index=1)
+    if baseline.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
+    candidate_version = candidate_payload.get("contract_version")
+    if candidate_version not in {V15_CONTRACT_VERSION, V16_CONTRACT_VERSION}:
+        raise _fail(REASON_INPUT, "paired candidate is not an approved v1.4 successor", stage="closure")
+    if baseline.get("input_identity") != candidate_payload.get("input_identity"):
+        raise _fail(REASON_INPUT, "paired v1.4 successor input identity differs", stage="closure")
+
+    def daily_ic(payload: Mapping[str, Any]) -> dict[str, float]:
+        metrics = payload.get("metrics")
+        rows = metrics.get("daily") if isinstance(metrics, Mapping) else None
+        if not isinstance(rows, list):
+            raise _fail(REASON_INPUT, "paired metric evidence is missing", stage="closure")
+        result: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("metric_valid") is not True:
+                continue
+            day = row.get("trade_date")
+            value = row.get("rank_ic")
+            if (
+                not isinstance(day, str)
+                or day in result
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                raise _fail(REASON_INPUT, "paired metric identity differs", stage="closure")
+            result[day] = float(value)
+        return result
+
+    baseline_ic = daily_ic(baseline)
+    candidate_ic = daily_ic(candidate_payload)
+    if tuple(baseline_ic) != tuple(candidate_ic):
+        raise _fail(REASON_INPUT, "paired v1.4 successor metric dates differ", stage="closure")
+    dates = tuple(baseline_ic)
+    differences = [candidate_ic[day] - baseline_ic[day] for day in dates]
+    try:
+        paired_hac: Mapping[str, Any] = newey_west(differences, lag=FIXED_HORIZON - 1)
+        paired_hac_reason = None
+    except RotationL1G2AError as exc:
+        paired_hac = {}
+        paired_hac_reason = exc.reason_code
+    body = {
+        "schema_version": (
+            "hmm_risk_rotation_l1_g2a_v14_v15_paired_diagnostic_v1"
+            if candidate_version == V15_CONTRACT_VERSION
+            else "hmm_risk_rotation_l1_g2a_v14_v16_paired_diagnostic_v1"
+        ),
+        "baseline_contract_version": V14_CONTRACT_VERSION,
+        "candidate_contract_version": candidate_version,
+        "common_date_count": len(dates),
+        "common_date_sha256": canonical_sha256([*dates]),
+        "baseline_mean_rank_ic": float(baseline["metrics"]["mean_rank_ic"]),
+        "candidate_mean_rank_ic": float(candidate_payload["metrics"]["mean_rank_ic"]),
+        "mean_daily_rank_ic_difference": float(np.mean(differences)),
+        "paired_difference_hac": dict(paired_hac),
+        "paired_difference_hac_reason_code": paired_hac_reason,
+        "binding_gate_applied": False,
+        "tail_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def close_processes(
+    first: Mapping[str, Any],
+    second: Mapping[str, Any],
+    *,
+    v13_reference: Mapping[str, Any] | None = None,
+    v14_reference: Mapping[str, Any] | None = None,
+    input_bundle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     first_payload = _validated_process(first, expected_index=1)
     second_payload = _validated_process(second, expected_index=2)
     if first.get("reproducibility_payload_sha256") != second.get("reproducibility_payload_sha256"):
-        raise _fail(REASON_REPRODUCIBILITY, "GBDT fresh-process payloads differ", stage="closure")
+        raise _fail(REASON_REPRODUCIBILITY, "fresh-process payloads differ", stage="closure")
     if first.get("final_model_text") != second.get("final_model_text") or first_payload != second_payload:
-        raise _fail(REASON_REPRODUCIBILITY, "GBDT fresh-process model or payload differs", stage="closure")
+        raise _fail(REASON_REPRODUCIBILITY, "fresh-process model or payload differs", stage="closure")
     payload = first_payload
     mean_ic = float(payload["metrics"]["mean_rank_ic"])
     tail_allowed = bool(payload["tail_access_gate"]["passed"])
     forward_power_status = str(payload["forward_power_status"])
+    legacy = payload["contract_version"] == V13_CONTRACT_VERSION
+    v15 = payload["contract_version"] == V15_CONTRACT_VERSION
+    v16 = payload["contract_version"] == V16_CONTRACT_VERSION
+    if not legacy and not v15 and not v16 and v13_reference is None:
+        raise _fail(REASON_INPUT, "v1.4 closure requires the frozen v1.3 diagnostic reference", stage="closure")
+    if v15 and (v14_reference is None or input_bundle is None):
+        raise _fail(
+            REASON_INPUT,
+            "v1.5 closure requires frozen v1.4 and input label authorities",
+            stage="closure",
+        )
+    if v16 and (v14_reference is None or input_bundle is None):
+        raise _fail(
+            REASON_INPUT,
+            "v1.6 closure requires frozen v1.4 and input score authorities",
+            stage="closure",
+        )
+    training_target_authority_sha256 = _validate_v15_training_target_authority(payload, input_bundle) if v15 else None
+    if v16:
+        score_authority = _v16_score_authority(input_bundle)
+        if any(payload.get(field) != score_authority[field] for field in score_authority):
+            raise _fail(REASON_REPRODUCIBILITY, "v1.6 score or metric authority differs", stage="closure")
     body = {
-        "schema_version": ACCEPTANCE_SCHEMA_VERSION,
-        "contract_version": CONTRACT_VERSION,
+        "schema_version": (
+            V13_ACCEPTANCE_SCHEMA_VERSION
+            if legacy
+            else V16_ACCEPTANCE_SCHEMA_VERSION
+            if v16
+            else ACCEPTANCE_SCHEMA_VERSION
+        ),
+        "contract_version": payload["contract_version"],
         "status": "development_complete",
         "selected_horizon": payload["selected_horizon"],
-        "research_surface_status": "AVAILABLE_EXPERIMENTAL",
-        "rotation_l1_capability_status": (
-            "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED" if tail_allowed else "NOT_AVAILABLE"
-        ),
+        # Offline closure proves deterministic model computation only.  The
+        # research surface becomes AVAILABLE_EXPERIMENTAL after the OOF rows
+        # have passed the transactional repository/readback and real API/UI
+        # product validation defined by G2-A v1.3.
+        "research_surface_status": "NOT_AVAILABLE",
+        "rotation_l1_capability_status": "NOT_AVAILABLE",
+        "model_effect_tail_access_eligible": tail_allowed,
         "forward_power_status": forward_power_status,
         "forward_confirmation": (
             "PENDING_INSUFFICIENT_POWER"
@@ -1592,14 +3455,37 @@ def close_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict
         "development_oof_mean_rank_ic": mean_ic,
         "tail_access_gate_passed": tail_allowed,
         "tail_accessed": False,
+        "research_product_compute_conditions_satisfied": True,
+        "research_product_gate_passed": False,
         "child_sha256s": [first["report_sha256"], second["report_sha256"]],
         "reproducibility_payload_sha256": first["reproducibility_payload_sha256"],
-        "battery_receipt_sha256": payload["battery_receipt_sha256"],
         "producer_commit": payload["producer_commit"],
         "model_write_performed": False,
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if legacy:
+        body["battery_receipt_sha256"] = payload["battery_receipt_sha256"]
+    elif v15:
+        body["horizon_authority"] = payload["horizon_authority"]
+        body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
+        body["input_feature_contract_version"] = payload["input_feature_contract_version"]
+        body["target_transform"] = payload["target_transform"]
+        body["training_target_authority_sha256"] = training_target_authority_sha256
+        body["paired_v14_diagnostic"] = _paired_v14_diagnostic(v14_reference, payload)
+    elif v16:
+        body["fit_count"] = payload["fit_count"]
+        body["horizon_authority"] = payload["horizon_authority"]
+        body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
+        body["input_feature_contract_version"] = payload["input_feature_contract_version"]
+        body["score_transform"] = payload["score_transform"]
+        body["scoring_contract_sha256"] = payload["scoring_contract_sha256"]
+        body["score_authority_sha256"] = score_authority["prediction_sha256"]
+        body["paired_v14_diagnostic"] = _paired_v14_diagnostic(v14_reference, payload)
+    else:
+        body["horizon_authority"] = payload["horizon_authority"]
+        body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
+        body["paired_v13_diagnostic"] = _paired_v13_diagnostic(v13_reference, payload)
     return {**body, "acceptance_sha256": canonical_sha256(body)}
 
 
@@ -1616,14 +3502,34 @@ def runtime_identity() -> dict[str, Any]:
 __all__ = [
     "ACCEPTANCE_SCHEMA_VERSION",
     "BINDING_MBE_IC",
+    "CONTRACT_VERSION",
     "CONTINUOUS_FEATURES",
     "FEATURES",
     "FOLDS",
+    "HORIZON_AUTHORITY",
     "HORIZONS",
     "INPUT_SCHEMA_VERSION",
     "PROCESS_SCHEMA_VERSION",
+    "V13_ACCEPTANCE_SCHEMA_VERSION",
+    "V13_CONTINUOUS_FEATURES",
+    "V13_CONTRACT_VERSION",
+    "V13_FEATURES",
+    "V13_PROCESS_SCHEMA_VERSION",
+    "V14_CONTRACT_VERSION",
+    "V14_CONTINUOUS_FEATURES",
+    "V14_FEATURES",
+    "V15_CONTRACT_VERSION",
+    "V15_TARGET_TRANSFORM",
+    "V16_CONTRACT_VERSION",
+    "V16_ACCEPTANCE_SCHEMA_VERSION",
+    "V16_PROCESS_SCHEMA_VERSION",
+    "V16_SCORE_FEATURE",
+    "V16_SCORE_TRANSFORM",
     "RotationL1G2AError",
+    "build_label_free_feature_panel",
     "build_materialised_panel",
+    "build_rank_training_target",
+    "build_v16_scores",
     "close_processes",
     "cross_section_rank_features",
     "fold_slices",
@@ -1632,10 +3538,13 @@ __all__ = [
     "project_states",
     "read_input_bundle",
     "require_formal_runtime",
+    "require_deterministic_runtime",
     "run_gbdt_process",
     "run_ridge_battery",
     "runtime_identity",
     "validate_battery_report",
     "validate_input_bundle",
+    "validate_v13_process_reference",
+    "validate_v14_process_reference",
     "write_input_bundle",
 ]

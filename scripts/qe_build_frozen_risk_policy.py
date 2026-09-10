@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -80,7 +81,10 @@ def _load_spec(cwd: Path) -> dict[str, Any]:
 def _verify_frozen_snapshot(provider_dir: Path, pins: dict[str, Any]) -> dict[str, Any]:
     meta_path = provider_dir / "meta_export.json"
     instruments_file = str(pins.get("instruments_file") or "all.txt")
-    if instruments_file not in {"all.txt", "stock_universe.txt"}:
+    if not re.fullmatch(
+        r"(?:all|stock_universe|index_pool__[a-z0-9_]+|index_pool__union_[0-9a-f]{12})\.txt",
+        instruments_file,
+    ):
         raise FrozenRiskPolicyBuildError(
             "reason_code=qe_frozen_build_spec_invalid: "
             f"unsupported instruments_file={instruments_file!r}"

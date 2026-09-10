@@ -8,6 +8,7 @@ import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import type { JsonObject } from "@/lib/paper-v2/types";
+import { qeArchiveApi, type ArchiveSourceItemStatus, type ArchiveTaskStatus } from "@/lib/qe-archive/api";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
@@ -50,6 +51,9 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
   const [enhancedError, setEnhancedError] = useState<string | null>(null);
   const [candidateBusy, setCandidateBusy] = useState(false);
   const [candidateMessage, setCandidateMessage] = useState<string | null>(null);
+  const [logTail, setLogTail] = useState<string[] | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceItemStatus | ArchiveTaskStatus | null>(null);
 
   useEffect(() => {
     if (!experimentId) return;
@@ -102,6 +106,18 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
       .finally(() => setLoading(false));
   }, [experimentId]);
 
+  useEffect(() => {
+    if (!experiment) return;
+    const taskId = String(experiment.qe_task_id || "").trim();
+    void qeArchiveApi.sourceStatus({
+      experiment_ids: taskId ? [] : [experimentId],
+      task_ids: taskId ? [taskId] : [],
+      include_recommendation: true,
+    }).then(status => {
+      setArchiveStatus(taskId ? (status.tasks?.[taskId] || null) : (status.experiments?.[experimentId] || null));
+    }).catch(() => setArchiveStatus(null));
+  }, [experiment, experimentId]);
+
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: "#f1f5f9" }}>
@@ -119,6 +135,11 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
   }
 
   const exp = experiment;
+  const customParams = exp.custom_params && typeof exp.custom_params === "object" ? exp.custom_params : {};
+  const registration = exp.registration_summary || customParams._qe_run_registration || {};
+  const retention = exp.artifact_retention || customParams._qe_artifact_retention || {};
+  const failureReason = exp.failure_reason || exp.reason_code || exp.result_metrics?.failure_reason || exp.result_metrics?.error || customParams.failure_reason;
+  const archiveReason = archiveStatus && "reason" in archiveStatus ? archiveStatus.reason : undefined;
   const em = enhanced;
   const rawSummary = em?.summary ?? {};
   const summary = {
@@ -148,6 +169,21 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
   };
 
   const factorNames: string[] = Array.isArray(exp.factor_names) ? exp.factor_names : [];
+
+  const loadLogTail = async () => {
+    setLogLoading(true);
+    try {
+      const response = await fetch(`${API}/quantevolver/experiments/${experimentId}/logs/tail?tail=200`);
+      const payload = await response.json();
+      if (!response.ok || payload?.detail) throw new Error(payload?.detail || `HTTP ${response.status}`);
+      const lines = payload?.data?.logs || payload?.logs || [];
+      setLogTail(Array.isArray(lines) ? lines.map(String) : [String(lines)]);
+    } catch (exc) {
+      setLogTail([`日志读取失败: ${apiErrorMessage(exc)}`]);
+    } finally {
+      setLogLoading(false);
+    }
+  };
 
   const addToCandidatePackages = async () => {
     setCandidateBusy(true);
@@ -267,6 +303,33 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
             <MetricCard label="策略" value={exp.strategy_id ?? "-"} />
             <MetricCard label="状态" value={exp.status ?? "-"} />
           </div>
+        </Section>
+
+        <Section title="统一登记与运行证据">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 13 }}>
+            <div>来源：{registration.source_type || "legacy"} / {registration.consumer_id || "qe_mainline"} / {registration.purpose || "未登记"}</div>
+            <div>节点：{registration.node_id || customParams.execution_node_id || "-"}</div>
+            <div>数据版本：{registration.dataset_release_id || "-"}</div>
+            <div>数据截止：{registration.dataset_cutoff || "-"}</div>
+            <div>股票池：{Array.isArray(registration.universe_pool_ids) && registration.universe_pool_ids.length ? registration.universe_pool_ids.join("、") : (registration.universe_mode || "-")}</div>
+            <div>执行：{registration.execution_algo || "-"} / {registration.execution_frequency || "-"}</div>
+            <div>Seed：{registration.random_seed ?? "-"}</div>
+            <div>Label：{registration.label_horizon ?? "-"}</div>
+            <div>制品：{retention.status || "available"}{retention.cleaned_at ? `（${new Date(retention.cleaned_at).toLocaleString("zh-CN")}）` : ""}</div>
+            <div>数仓：{archiveStatus?.archive_status || "not_archived"}{archiveReason ? `（${archiveReason}）` : ""}</div>
+            <div>创建：{exp.created_at ? new Date(exp.created_at).toLocaleString("zh-CN") : "-"}</div>
+            <div>开始：{exp.started_at ? new Date(exp.started_at).toLocaleString("zh-CN") : "-"}</div>
+            <div>完成：{exp.completed_at ? new Date(exp.completed_at).toLocaleString("zh-CN") : "-"}</div>
+          </div>
+          {failureReason && <div style={{ marginTop: 12, color: "#b91c1c", fontSize: 12 }}>失败原因：{String(failureReason)}</div>}
+          <button type="button" onClick={() => void loadLogTail()} disabled={logLoading} style={{ marginTop: 12, padding: "6px 12px" }}>
+            {logLoading ? "读取中..." : "查看日志"}
+          </button>
+          {logTail && (
+            <pre data-testid="qe-detail-log-tail" style={{ marginTop: 10, maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap", background: "#0f172a", color: "#e2e8f0", padding: 12, borderRadius: 6 }}>
+              {logTail.join("\n")}
+            </pre>
+          )}
         </Section>
 
         {/* § 策略与执行配置 */}

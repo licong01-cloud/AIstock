@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.mcp.gateway import self_check_payload
-from scripts.aistock_mcp_gateway_doctor import process_inventory_payload, run_doctor
+from scripts.aistock_mcp_gateway_doctor import migrate_known_client_configs, process_inventory_payload, run_doctor
 
 
 def _run_json(*args: str) -> dict:
@@ -23,10 +23,10 @@ def test_gateway_cli_list_tools_profiles() -> None:
     qlib = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qlib_data")
     data_full = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=data_full")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 388
-    assert full["tool_count"] == 394
+    assert full["legacy_tool_count"] == 371
+    assert full["tool_count"] == 377
     assert validation["tool_count"] == 20
-    assert qe["tool_count"] == 98
+    assert qe["tool_count"] == 101
     assert qlib["modules"] == ["qlib_export"]
     assert qlib["tool_count"] == 15
     assert data_full["modules"] == ["local_data", "qlib_export"]
@@ -174,6 +174,176 @@ enabled = true
     assert payload["status"] == "fail"
     assert payload["client_configs"]["findings"][0]["code"] == "full_profile_client_config"
     assert any("client config drift" in item for item in payload["errors"])
+
+
+def test_gateway_doctor_flags_retired_profile_with_exact_replacement(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.aistock-paper-v2-monitor]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_monitor"]
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    payload = run_doctor(client_config_paths=[config], fail_on_client_drift=True)
+
+    assert payload["status"] == "fail"
+    assert payload["client_configs"]["finding_count"] == 1
+    finding = payload["client_configs"]["findings"][0]
+    assert finding["code"] == "retired_gateway_profile"
+    assert finding["replacement_profile"] == "simulation_runtime_monitor"
+    assert finding["replacement_server"] == "aistock-simulation-runtime-monitor"
+    assert finding["auto_migration_available"] is True
+
+
+def test_gateway_doctor_uses_active_codex_home_by_default(tmp_path: Path, monkeypatch) -> None:
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        """
+[mcp_servers.aistock-paper-v2-monitor]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_monitor"]
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    payload = run_doctor(fail_on_client_drift=True)
+
+    assert payload["status"] == "fail"
+    assert payload["client_configs"]["configs"][0]["path"] == str(codex_home / "config.toml")
+    assert payload["client_configs"]["findings"][0]["code"] == "retired_gateway_profile"
+
+
+def test_gateway_doctor_flags_unknown_profile_without_guessing_replacement(tmp_path: Path) -> None:
+    config = tmp_path / ".mcp.json"
+    config.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "aistock-custom": {
+                        "command": "python",
+                        "args": ["scripts/aistock_mcp_gateway.py", "--profile=does_not_exist"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = run_doctor(client_config_paths=[config], fail_on_client_drift=True)
+
+    finding = payload["client_configs"]["findings"][0]
+    assert payload["status"] == "fail"
+    assert finding["code"] == "unknown_gateway_profile"
+    assert finding["replacement_profile"] is None
+    assert finding["auto_migration_available"] is False
+
+
+def test_known_codex_profile_migration_is_explicit_and_preserves_unrelated_text(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    original = """
+model = "gpt-test"
+
+[mcp_servers.aistock-paper-v2-stable]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_stable"]
+
+[mcp_servers.aistock-paper-v2-stable.env]
+AISTOCK_MCP_BASE_URL = "http://127.0.0.1:8001/api/v1"
+
+[mcp_servers.unrelated]
+command = "keep-me"
+""".strip()
+    config.write_text(original, encoding="utf-8")
+
+    planned = migrate_known_client_configs([config])
+    assert planned["status"] == "planned"
+    assert planned["applied"] is False
+    assert config.read_text(encoding="utf-8") == original
+
+    applied = migrate_known_client_configs([config], apply=True)
+    updated = config.read_text(encoding="utf-8")
+    assert applied["status"] == "applied"
+    assert applied["migration_count"] == 1
+    assert "aistock-paper-v2-stable" not in updated
+    assert "paper_v2_stable" not in updated
+    assert "[mcp_servers.aistock-simulation-stable]" in updated
+    assert "--profile=simulation_stable" in updated
+    assert '[mcp_servers.unrelated]\ncommand = "keep-me"' in updated
+
+
+def test_known_codex_profile_migration_preserves_bom_and_crlf(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    original = (
+        "[mcp_servers.aistock-paper-v2-monitor]\r\n"
+        'command = "python"\r\n'
+        'args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_monitor"]\r\n'
+        "\r\n"
+        "# unrelated comment\r\n"
+    )
+    config.write_bytes(b"\xef\xbb\xbf" + original.encode("utf-8"))
+
+    result = migrate_known_client_configs([config], apply=True)
+    updated = config.read_bytes()
+
+    assert result["status"] == "applied"
+    assert updated.startswith(b"\xef\xbb\xbf")
+    assert updated.count(b"\r\n") == original.count("\r\n")
+    assert b"# unrelated comment\r\n" in updated
+
+
+def test_known_codex_profile_migration_blocks_target_collision(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.aistock-paper-v2-monitor]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_monitor"]
+
+[mcp_servers.aistock-simulation-runtime-monitor]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=simulation_runtime_monitor"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = migrate_known_client_configs([config], apply=True)
+
+    assert result["status"] == "blocked"
+    assert result["applied"] is False
+    assert "target server key 'aistock-simulation-runtime-monitor' already exists" in result["blocking"]
+
+
+def test_gateway_doctor_cli_applies_one_exact_known_migration(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.aistock-paper-v2-monitor]
+command = "python"
+args = ["scripts/aistock_mcp_gateway.py", "--profile=paper_v2_monitor"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    payload = _run_json(
+        "scripts/aistock_mcp_gateway_doctor.py",
+        "--client-config",
+        str(config),
+        "--fail-on-client-drift",
+        "--migrate-known-client-drift",
+        "--apply",
+        "--json",
+    )
+
+    assert payload["status"] == "pass"
+    assert payload["client_migration"]["status"] == "applied"
+    assert payload["client_migration"]["migration_count"] == 1
+    assert payload["client_configs"]["finding_count"] == 0
 
 
 def test_process_inventory_classifies_legacy_full_and_llm_processes() -> None:
