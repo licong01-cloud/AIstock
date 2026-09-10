@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1422",
-  "closed_at": null,
+  "closed_at": "2026-09-10T17:26:32.591679Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-09-10T06:07:04.471056Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "94910540898b6d046f0e603a2f2f81f0b1f5d46c",
+  "fixed_at": "2026-09-10T06:41:42Z",
   "github_issue_number": 4505,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4505",
   "last_seen_at": "2026-09-10T06:07:04.471056Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4508",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -137,9 +138,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1422/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1422",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "24a8733f49f24764d2dd4f22c226d1f49f8b671fc578a9e5ddf49809fbbb8ce0",
+      "contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+      "expected_identity": "94910540898b6d046f0e603a2f2f81f0b1f5d46c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-10T17:25:24.156491Z",
+      "mode": "read_only",
+      "observed_identity": "6448a35c7272bb7126a9d59042f0ac6569b26733",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "830377f1550f41c786083bf6e2b8d2af991d0fb38a8bc782d6038e46d244a4b5",
+      "receipt_sha256": "a00454abb81ac2c72718dd32948a95c34c76446d8b7cd682744cc3ddcacb94f2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "25fa45ddcf2556e9207bc887cba62514e222265f8326f4a796b771c68584454d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -149,7 +173,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1422",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "69b57d8faa8a2103",
+    "recorded_at": "2026-09-10T06:43:43.785419Z",
+    "runtime_contract_digest": "91e8466a471b1c0cad82da400eea3839d3c020db15f79493883a260e331a9fa8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f49a22c4e65cc4f570a9033589c48e77248ecda5",
+    "source_merge_commit": "94910540898b6d046f0e603a2f2f81f0b1f5d46c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4508",
+    "validation_evidence": [
+      "python -m nox -s qe_read_backend -> passed: 416 passed, 1 skipped",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0",
+      "python -m nox -s l0 -> passed: guardrail findings=0 blocking=0"
+    ],
+    "validation_evidence_digest": "3f26fb214de23d795232feb0f8bab180f5e22ced9f2418ce8f724866c42c523c"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qe"
   ],
@@ -158,6 +205,11 @@
     "fingerprint": "f9da4cab11f479d89511c67a",
     "source_event_id": "FE-20260910-f9da4cab11f4"
   },
+  "validation_evidence": [
+    "python -m nox -s qe_read_backend -> passed: 416 passed, 1 skipped",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0",
+    "python -m nox -s l0 -> passed: guardrail findings=0 blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
