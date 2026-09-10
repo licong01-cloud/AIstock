@@ -1109,6 +1109,62 @@ def test_daily_basic_audit_without_required_field_receipt_is_not_ready():
     assert result.summary()["error_message"] == "daily_basic required-field coverage receipt is missing or invalid"
 
 
+def test_daily_basic_audit_without_receipt_uses_physical_table_fallback():
+    """BUG-1425: historical audit rows without the receipt must not hard-fail
+    closed when the physical table proves full coverage."""
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    checker._verify_daily_basic_coverage_from_table = lambda **kwargs: {
+        "schema_version": "daily_basic_required_field_coverage_v1",
+        "field": "turnover_rate_f",
+        "finite_count": 5549,
+        "row_count": 5549,
+        "ratio": 1.0,
+        "required_ratio": 0.95,
+    }
+
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 8),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 8),
+            "row_count": 5549,
+            "quality_status": "ok",
+            "metadata": {"tushare_api": "daily_basic", "mode": "by_date"},
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "ok"
+    assert result.is_fresh is True
+    assert result.failure_category is None
+
+
+def test_daily_basic_audit_without_receipt_fails_closed_when_table_mismatch():
+    """BUG-1425: fallback must not fabricate evidence when physical rows
+    disagree with the audit row count."""
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    checker._verify_daily_basic_coverage_from_table = lambda **kwargs: None
+
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 8),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 8),
+            "row_count": 5549,
+            "quality_status": "ok",
+            "metadata": {"tushare_api": "daily_basic", "mode": "by_date"},
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "low_coverage"
+    assert result.failure_category == "required_field_coverage_unproven"
+
+
 def test_daily_basic_fetch_declares_full_provider_field_contract() -> None:
     calls: list[dict[str, object]] = []
 
