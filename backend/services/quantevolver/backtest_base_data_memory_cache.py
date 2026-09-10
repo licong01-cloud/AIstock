@@ -254,9 +254,9 @@ def _replace_static_margin_columns(
     margin_columns: list[Any],
 ) -> pd.DataFrame:
     output = static.copy(deep=False)
-    for column in margin_columns:
-        if column in projected_margin.columns:
-            output[column] = projected_margin[column].reindex(output.index)
-        else:
-            output[column] = float("nan")
+    replacement = projected_margin.reindex(
+        index=output.index,
+        columns=margin_columns,
+    )
+    output[margin_columns] = replacement
     return output
