@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.25
-> 日期：2026-09-09
+> 版本：v2.26
+> 日期：2026-09-10
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_013_REPLAY_COMPLETE_INCONCLUSIVE`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_014_SOURCE_IMPLEMENTED_REPLAY_PENDING`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -39,6 +39,8 @@ v2.23 启动 `PT-NEXT-012`，不继续追加第五个信息块，先对 ATR、�
 v2.24 回填同一冻结诊断的正式 receipt，并据此只冻结 `PT-NEXT-013/ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1` 一个后续假设。四个 block 的增强 OOF 整体 Spearman 仅 `0.0066～0.0159`，但选择变化 `12.84%～23.03%`、连续动作变化 `31.51%～36.20%`，说明弱预测响应被现行正值动作策略放大；更关键的是各 block 的 ENTRY 预测正值动作真实均值为正，而 EXIT 均值为负。下一假设因此不加因子、不改模型 family，只限制模型 authority 为 `OPEN/ADD`，卖出仅保留已冻结规则风险退出；本版只冻结、不运行。
 
 v2.25 完成 `PT-NEXT-013`。实现只给现有纯决策与连续回放增加显式 policy-authority，另增一个 timing-owned immutable 研究管线和直接测试；没有新增 API、页面、数据库、模型服务、调度器或其他模块改动。首个 request `338b84ea4b9111929474bb2e37d3ccb4fca9aa9c5bb397423d139feab3265859` 因错误要求两种政策的 `decision_input_status/reason` 也相同而 fail closed、未生成 bundle；这两个字段会受策略持仓状态和风险退出短路影响，不属于共同源身份。修订后仍要求 symbol/date/sleeve、基线财富、公司行动、源与模型训练 identity 完全相同。正式 request `e822e89b454a868bfdd03759f0c3b12a75b154d0c7fc8982425c9f640d0deda2` 绑定干净提交 `cd24cd9a693a8097eb7fa91f7fa2179ba7ae57a1`，复用权威 v4 的 53,825 条训练行与 39,032 条 OOF，并确认 OOF 数值等价；entry-only 与 full-v4 authority 两条新路径同时使用 PT-NEXT-010 的外生初始持仓，形成相同的 84 条 sleeve、199,752 行和 1,189 个交易日，基线/公司行动完整键严格一致且 `path_unknown=0`。候选相对 buy-and-hold 为 `+0.8938 bps/日`、97.5% family-wise 区间 `[-0.7621,+2.5339]`；相对 frozen L1 为 `+4.3295 bps/日`、区间 `[-6.7670,+15.6227]`，联合结论仍为 `INCONCLUSIVE`、selected=0。候选相对 full-v4 authority 的 `+2.9554 bps/日` 只作机制诊断，不计 trial。该结果是同源 `EXPLORATORY_HYPOTHESIS_GENERATED`，不发布 serving，不改变现有规则卡或实验建议。
+
+v2.26 启动 `PT-NEXT-014`，用未参与既有 action-value 正式 request 的股票检验已冻结 entry-only 政策能否跨股票迁移。source-only 清点不能只排除权威 v4 的 64 股：21 份既有 v2/v3/v4、increment 与 entry-only request 的股票并集为 105 只，原先简单取排名第 65～128 位会错误包含已经研究过的 `002211.SZ`、`688200.SH` 等股票。本版因此冻结为：读取并 hash-bound 这 21 份 request、只从其声明人口构造禁用并集，不读取新股票 outcome；在同一 5,144 股票 candidate 和 `seed=20260907` 排名中剔除禁用并集后取前 64 只，当前与既有人口重叠为 0，其中 40 只仅按 PIT span 判断在共同起点 2021-10-08 active。训练仍只使用 PT-NEXT-013 所绑定 v4 的 53,825 行和 39,032 条 OOF，模型 family/超参/core 特征、entry-only authority、成本、外生初始持仓、两个 co-primary comparator 与 family-wise 统计均不改变。该项只能称 cross-symbol held-out，同市场日期意味着它不是 temporal holdout；本任务不发布 serving、不改 L1/L1a、不新增 API/页面/数据库/调度器/HMM/事件或分钟能力。
 
 ## 1. Background / 背景与结论
 
@@ -922,6 +924,16 @@ candidate 没有逐行精确历史 ingestion timestamp，故可见性保守冻�
 
 正式结果见 `EVID-ACTION-ENTRY-ONLY-FORMAL-20260909`。两个 co-primary family-wise 区间都跨零，联合结论为 `INCONCLUSIVE`，因此本轮到此结束，不按点估计追加阈值、信息块或运行发布。候选相对 full-v4 authority 的动作变化率 `70.56%` 与 `+2.9554 bps/日` 只说明移除模型卖出显著改变了机制，不能替代两个 alpha 基线，也不能从同一历史样本推导独立确认。
 
+### 6.15 PT-NEXT-014：冻结政策的跨股票 held-out 历史确认
+
+本项只回答一个问题：`ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1` 在完全未进入既有 action-value 正式 request 的股票上，成本后相对 buy-and-hold 与 frozen L1 是否仍同时为正。禁用人口不是单一父 bundle 的 64 股，而是 timing-owned `action_value_v2`、`action_value_incremental_v1`、`action_value_entry_only_v1` 三类目录在 request 冻结时全部合法不可变 request 所声明股票的并集；每个 request 的 schema、self hash、文件 hash、股票集合 hash 与目录完整清单共同绑定。任何新增、删除或修改既有 request 都使尚未运行的本 request typed fail closed，禁止用结果后更换禁用集合。诊断类 request 不另含股票人口，其父 bundle 已由上述集合覆盖。
+
+评价人口使用同一 candidate 全体 PIT symbol、同一 `seed=20260907` 的 SHA-256 排名，先剔除上述禁用并集再取前 64 只；选择过程只读 symbol/PIT/source identity，`outcomes_read=false`，不按上市年限、特征完整度、历史收益或最终可评价性换股。共同连续起点不 active 或 core 不完整的股票由既有 replay 如实计入 `pit_or_core`，不以候补股票替换。训练人口严格保持父 v4 的原 64 股，评价股票不得进入训练行；仍从 immutable `training_rows.parquet` 重训同规格 59 个 expanding 模型，并要求 39,032 条父人口 OOF 键精确、数值容差 `1e-10` 等价后，才允许对 held-out 股票推断。
+
+唯一候选政策、逐腿成本、公司行动、停牌、外生初始持仓、交易约束和两个 co-primary comparator 均沿用 PT-NEXT-013。统计仍按交易日聚合、25 日 circular moving block、5,000 次 bootstrap、97.5% family-wise 区间，seed 固定为 `20260910`，经济阈值为成本后 `0.0 bps`；两个 adjusted lower bound 都大于 0 才为 `SUPPORTED`，任一 adjusted upper bound 小于 0 为联合 `NEGATIVE`，其余为 `INCONCLUSIVE`。这是股票维度的独立确认但共享 2018-08-01～2026-08-31 市场日期，不得表述为时间外推、全市场普适或实盘收益证明。
+
+实现只允许新增 `position_timing/action_value_heldout.py` 与直接测试、更新本蓝图，并写 timing-owned `research/action_value_heldout_v1/{requests,bundles}` 及新 held-out 人口的 immutable 公司行动 snapshot。禁止 registry/current/model artifact/card/alert/order/database/runtime 写入；无论 `SUPPORTED/NEGATIVE/INCONCLUSIVE` 都完成本项研究且不自动 serving，L1/L1a 不受影响。因果或身份错误只使该次计算 fail closed，不成为等待 HMM、最新交易日、人工审批或其他模块改造的门禁。
+
 ## 7. 分钟研究：既有独立审计与后续机制
 
 §7.1～§7.2 是已完成的真实 risk-exit SELL-only L4b-1 契约，不覆盖所有日频触发建议。§6.6.5/§9.7 的日频计划离线分钟回放属于执行真实性验证，不生成分钟新方向，也不修改本节历史 audit 的人口/receipt。
@@ -1116,6 +1128,10 @@ factor 只承担复权比例和源一致性校验，不能凭名称或单次变�
 
 本项按 §6.14 在一个实施块内完成最小 policy 扩展、历史因果回放、正式 receipt 与蓝图回填；没有拆数据平台、模型平台、服务接线或 prospective 等待阶段。修改面仅为 `action_value_advice.py`、`action_value_research.py`、新增单一离线 `action_value_entry_only.py`、直接测试和本蓝图。正式结果、exact retry 与隔离 hash 见 `EVID-ACTION-ENTRY-ONLY-FORMAL-20260909`；联合 `INCONCLUSIVE` 结束这一项单假设研究，没有根据点估计追加阈值、信息块或 serving。
 
+### 9.17 执行中：PT-NEXT-014 跨股票 held-out 历史确认
+
+本项按 §6.15 在一个实施块内完成 source-only 禁用人口清点、最小离线管线、直接测试、正式历史回放和蓝图回填。实现不复制训练或交易算法：继续调用现有 `walk_forward_action_values` 与 `replay_continuous_cohorts`，新增文件只负责 prior-request 人口身份、held-out 选择、父证据绑定和 immutable bundle 交付。正式 request 必须绑定干净提交后才可运行；本版冻结时尚未读取 held-out outcome，正式 point estimate、区间、coverage、inspect/exact retry 和隔离 hash 待同一实施块回填。
+
 ## 10. Verification Plan / 验证方案
 
 ### 10.1 文档 gate
@@ -1267,6 +1283,15 @@ git diff --check
 4. 直接测试、完整 position-timing、集中 nox、F2 validator、bundle inspect/exact retry 与隔离 hash readback通过；无 API/UI/DB/依赖/调度/进程变化。
 5. 已执行结果：直接测试 8 项、完整 position-timing 219 项与集中 nox 通过；F2 validator 43/43、warnings=0。正式 bundle inspect 与 exact retry 通过；39,032 条 OOF 数值等价，两条路径完整基线 identity 一致，N0/timing protected hash 前后不变。收益区间与 `INCONCLUSIVE/selected=0` 见 `EVID-ACTION-ENTRY-ONLY-FORMAL-20260909`。
 
+### 10.16 PT-NEXT-014 验证契约
+
+1. prior-request reader 必须穷举三个冻结目录中全部合法 request，验证 schema/self hash/file hash，输出 request 数、禁用股票并集与 aggregate identity；不读取 receipt、parquet 或 outcome。缺目录、未知 schema、损坏 identity、运行前目录变化均 typed fail closed。
+2. 评价人口必须由同一 candidate symbol、同一 seed 在剔除完整禁用并集后确定性取得 64 只；与训练人口、禁用并集重叠均为 0。不得按 core complete、收益或 replay 成败候补换股；共同起点不可评价必须保留 coverage 计数。
+3. 训练只读取父 v4 immutable training rows；父 entry-only/v4 request、receipt、manifest、训练行和 OOF 文件均 hash-bound。重训后父人口 OOF 键精确、数值 `1e-10` 等价，评价股票不得进入训练行。
+4. held-out replay 只运行已冻结 entry-only policy 和两个既有基线；外生持仓、公司行动、停牌、成本、guard、统计 family 均不变。跨股票证据与 temporal/prospective 证据分开，不把同市场日期包装为完整独立确认。
+5. 直接测试至少覆盖 prior union、损坏 request、确定性零重叠选择、人口不足、写标志/人口篡改、三态联合结论、immutable inspect/exact retry 与文件损坏；随后运行完整 position-timing、集中 nox、F2 validator、`git diff --check` 和隔离 hash readback。
+6. 无论统计结论为何，registry/current/model artifact/card/alert/order/database/runtime 均为零写入，不自动 serving、不改 L1/L1a，也不触发后端重启或生产数据库操作。
+
 | 轮次 | 已发现并修订的设计偏差 | 对照位置 |
 |---|---|---|
 | 1 目标/产品 | shadow 无个股闭环、自动交易禁令误伤本地模型、scope 已实现却写待实施、强制 12 字段制造依赖 | §1～§5、§6.6.2/4、§9 |
@@ -1281,6 +1306,7 @@ git diff --check
 | 10 筹码价格/PIT | 筹码成本与同源日 raw close 先成无量纲距离，再保守滞后一全局交易日；不把 T 日价格与 T-1 成本混基准，不把九个筹码字段变成搜索空间 | §6.12、§9.14、§10.13 |
 | 11 模型/政策瓶颈 | 四份 immutable bundle 统一诊断，不重训或重算 CI；弱 OOF 响应、动作变化与 ENTRY/EXIT 不对称分开，下一步只冻结 entry-only 一个同源生成假设 | §6.13～§6.14、§9.15～§9.16、§10.14～§10.15 |
 | 12 entry-only 身份 | 权威 v4 的训练/OOF 身份与其早于 PT-NEXT-010 的旧连续起点分开；候选/full authority 同时采用外生持仓，允许政策导致的 decision status 不同，但基线/公司行动/键集必须完全一致 | §6.14、§9.16、§10.15、`EVID-ACTION-ENTRY-ONLY-FORMAL-20260909` |
+| 13 held-out 人口 | 仅排除父 v4 的 64 股会重新包含增量研究股票；改为绑定全部既有 action-value request 并排除其 105 股并集。跨股票独立与同日期市场历史分开，禁止冒充 temporal holdout | §6.15、§9.17、§10.16 |
 
 DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本文件，不存在另一份未同步实施计划。§10.5 的真实代码/API/UI/研究证据已经交付，但研究支持态与生产运行激活仍须按 receipt 和部署事实分别报告。
 
@@ -1393,6 +1419,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-041 | PT-NEXT-011 | HARD | 只检验 `CHIP_MEDIAN_COST_DISTANCE_LAG1_V1` 一个冻结字段与一个 matched-core 假设；同源日 raw close/cost50 成比率后整体滞后一全局交易日，完整 source identity、无同族搜索、无 runtime serving、其他模块零修改 |
 | F-042 | PT-NEXT-012 | HARD | 只读诊断四份既有 immutable increment bundle 的 OOF 响应、动作选择与连续路径转换；新 request/receipt 内容寻址但 trial=0，不重训、不改 registry/current/runtime；只在结果后冻结一个下一假设 |
 | F-043 | PT-NEXT-013 | HARD | 只检验 `ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1` 一个候选政策；模型仅控制 OPEN/ADD、规则 risk exit 保持优先，core 数据/模型/成本不变，候选与 full authority 使用共同外生持仓路径身份；无因子或阈值搜索、无 runtime serving |
+| F-044 | PT-NEXT-014 | HARD | 冻结 PT-NEXT-013 政策后，只在所有既有 action-value request 股票并集之外确定性选取 64 只评价股票；父 v4 训练人口/行、core/模型/成本/政策/双基线/统计不变，cross-symbol 与 temporal 证据分开，零 runtime/registry/current/DB 写入 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1443,6 +1470,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-041 | §6.12 筹码 reader、单字段 feature contract、既有 single-block profile 与隔离边界 | `backend/tests/position_timing/test_action_value_chip.py`；`backend/tests/position_timing/test_action_value_incremental.py`；§9.14；§10.13；source-only coverage `108652/108634`、`outcomes_read=false`；`EVID-ACTION-CHIP-COST-INCREMENT-FORMAL-20260909`；bundle inspect 与 exact retry | ACTION_VALUE_CHIP_COST_INCREMENT_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-042 | `action_value_diagnostics.py` immutable request/bundle、三层固定指标与零副作用边界 | `backend/tests/position_timing/test_action_value_diagnostics.py`（8 项）；§9.15；§10.14；`EVID-ACTION-VALUE-DIAGNOSTIC-FORMAL-20260909`；bundle inspect/exact retry/隔离 hash readback | ACTION_VALUE_DIAGNOSTIC_FORMAL_VERIFIED_NO_TRIAL | none |
 | F-043 | `action_value_advice.py`/`action_value_research.py` 的显式 policy authority；`action_value_entry_only.py` 单一 immutable 历史管线；两个 co-primary alpha comparator 与同源生成边界 | §9.16；§10.15；`backend/tests/position_timing/test_action_value_entry_only_policy.py`（8 项）；完整 219 项与集中 nox；`EVID-ACTION-ENTRY-ONLY-FORMAL-20260909`；bundle inspect/exact retry/隔离 hash readback | ACTION_VALUE_ENTRY_ONLY_FORMAL_VERIFIED_INCONCLUSIVE | none |
+| F-044 | `action_value_heldout.py` prior-request union、确定性评价人口、父训练/OOF 绑定与 immutable bundle；只复用既有训练和 replay 纯实现 | §6.15；§9.17；§10.16；`backend/tests/position_timing/test_action_value_heldout.py`（8 项）；正式 request/receipt 与完整验证待同一实施块回填 | DESIGN_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
