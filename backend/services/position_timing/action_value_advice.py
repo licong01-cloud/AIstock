@@ -19,6 +19,7 @@ from .action_value import (
     market_features, money, policy_sha256_for, risk_exit_plan, state_features,
 )
 from .action_value_model import HEADS, LocalActionModel
+from .action_value_add_model import ADD_OBJECTIVE, AddActionModel
 from .contracts import canonical_sha256
 
 
@@ -26,6 +27,9 @@ DIRECTION_REFERENCE_NOTIONAL_CNY = Decimal(100000)
 FULL_MODEL_ACTION_AUTHORITY = "FULL_ACTION_VALUE_V4"
 ENTRY_ONLY_MODEL_ACTION_AUTHORITY = "ENTRY_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
 OPEN_ONLY_MODEL_ACTION_AUTHORITY = "OPEN_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1"
+STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY = (
+    "STATE_MATCHED_ADD_MODEL_WITH_FROZEN_RISK_EXIT_V1"
+)
 ENTRY_ONLY_MODEL_ACTION_CONTRACT = {
     "policy_id": ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
     "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
@@ -43,6 +47,17 @@ OPEN_ONLY_MODEL_ACTION_CONTRACT = {
     "existing_holding_without_risk_exit": "HOLD",
     "cash_without_positive_open": "WAIT",
 }
+STATE_MATCHED_ADD_MODEL_ACTION_CONTRACT = {
+    "policy_id": STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
+    "risk_exit_priority": "FROZEN_RULE_RISK_OVERRIDE",
+    "cash_state_model_head": HEADS[0],
+    "held_state_model_head": ADD_OBJECTIVE,
+    "model_allowed_directions": ("OPEN", "ADD"),
+    "model_minimum_net_action_value_bps": 0.0,
+    "model_state_support": "ENTRY_CASH_ONLY_ADD_HELD_ONLY",
+    "existing_holding_without_positive_add": "HOLD",
+    "cash_without_positive_open": "WAIT",
+}
 
 
 def _restricted_action_contract(model_action_authority: str) -> dict[str, Any] | None:
@@ -50,6 +65,8 @@ def _restricted_action_contract(model_action_authority: str) -> dict[str, Any] |
         return ENTRY_ONLY_MODEL_ACTION_CONTRACT
     if model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
         return OPEN_ONLY_MODEL_ACTION_CONTRACT
+    if model_action_authority == STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY:
+        return STATE_MATCHED_ADD_MODEL_ACTION_CONTRACT
     return None
 
 
@@ -94,6 +111,7 @@ def action_name(state: PositionState, delta: int) -> str:
 def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
                      benchmark: pd.Series, decision_as_of: datetime,
                       model: LocalActionModel | None, max_exposure: Decimal = Decimal(1),
+                      add_model: AddActionModel | None = None,
                       delist_risk: bool = False,
                       target_state: PositionState | None = None,
                       target_reference: Decimal | None = None,
@@ -147,9 +165,18 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
         )
         return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, translated.delta), translated,
                                    "FROZEN_RULE_RISK_OVERRIDE", None, policy_sha256, (), ("RISK_EXIT_OVERRIDE",))
-    if model is None:
-        raise ActionValueError("MODEL_UNAVAILABLE_RULE_FALLBACK")
-    if model.metadata.get("information_block", CORE_INFORMATION_BLOCK) != information_block:
+    state_matched_add = (
+        model_action_authority == STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY
+    )
+    active_model = add_model if state_matched_add and planning_state.quantity else model
+    if active_model is None:
+        code = (
+            "ADD_MODEL_UNAVAILABLE_RULE_FALLBACK"
+            if state_matched_add and planning_state.quantity
+            else "MODEL_UNAVAILABLE_RULE_FALLBACK"
+        )
+        raise ActionValueError(code)
+    if active_model.metadata.get("information_block", CORE_INFORMATION_BLOCK) != information_block:
         raise ActionValueError("MODEL_INFORMATION_BLOCK_MISMATCH")
     if current_market is not None:
         try:
@@ -193,19 +220,34 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
         if plan.delta
         and (
             model_action_authority == FULL_MODEL_ACTION_AUTHORITY
-            or (plan.delta > 0 and open_only_has_cash_state)
+            or (
+                plan.delta > 0
+                and open_only_has_cash_state
+                and (
+                    not state_matched_add
+                    or (planning_state.quantity == 0 and model is not None)
+                    or (planning_state.quantity > 0 and add_model is not None)
+                )
+            )
         )
     ]
     values = {0: 0.0}
     if actionable:
         frame = pd.DataFrame([{**current.to_dict(), **state_features(planning_state, plan)} for plan in actionable],
                              columns=feature_order)
-        objectives = [HEADS[0] if plan.delta > 0 else HEADS[1] for plan in actionable]
-        predictions = model.predict(frame, objectives, decision_as_of=decision_as_of)
+        if state_matched_add and planning_state.quantity:
+            objectives = [ADD_OBJECTIVE] * len(actionable)
+            predictions = add_model.predict(frame, decision_as_of=decision_as_of)
+        else:
+            objectives = [HEADS[0] if plan.delta > 0 else HEADS[1] for plan in actionable]
+            predictions = model.predict(frame, objectives, decision_as_of=decision_as_of)
         values.update({plan.delta: float(value) for plan, value in zip(actionable, predictions)})
     else:
         # Validate model identity/time even when no executable quantity exists.
-        model.predict(pd.DataFrame(columns=feature_order), [], decision_as_of=decision_as_of)
+        if state_matched_add and planning_state.quantity:
+            add_model.predict(pd.DataFrame(columns=feature_order), decision_as_of=decision_as_of)
+        else:
+            model.predict(pd.DataFrame(columns=feature_order), [], decision_as_of=decision_as_of)
     eligible_plans = [
         plan
         for plan in plans
@@ -226,15 +268,23 @@ def decide_stock_day(*, symbol: str, state: PositionState, bars: pd.DataFrame,
     )
     candidates = tuple({"action": action_name(planning_state, plan.delta),
                         "planned_delta_qty": plan.delta, "estimated_net_action_value_bps": values[plan.delta],
-                        "objective": HEADS[0] if plan.delta > 0 else HEADS[1] if plan.delta < 0 else "NO_ACTION"}
+                        "objective": (
+                            ADD_OBJECTIVE
+                            if state_matched_add and planning_state.quantity and plan.delta > 0
+                            else HEADS[0] if plan.delta > 0
+                            else HEADS[1] if plan.delta < 0
+                            else "NO_ACTION"
+                        )}
                        for plan in eligible_plans)
     reason_codes = ["MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE"]
     if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
         reason_codes.append("MODEL_EXIT_AUTHORITY_REMOVED")
     elif model_action_authority == OPEN_ONLY_MODEL_ACTION_AUTHORITY:
         reason_codes.extend(("MODEL_EXIT_AUTHORITY_REMOVED", "MODEL_ADD_AUTHORITY_REMOVED"))
+    elif model_action_authority == STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY:
+        reason_codes.extend(("MODEL_EXIT_AUTHORITY_REMOVED", "STATE_MATCHED_ADD_HEAD"))
     return DailyActionDecision(symbol, decision_as_of, action_name(planning_state, selected.delta), selected,
-                               "LOCAL_MODEL_ESTIMATE", model.metadata["model_sha256"], policy_sha256, candidates,
+                               "LOCAL_MODEL_ESTIMATE", active_model.metadata["model_sha256"], policy_sha256, candidates,
                                tuple(reason_codes))
 
 

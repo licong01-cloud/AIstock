@@ -43,6 +43,7 @@ from .action_value_corporate_actions import (
     apply_corporate_action_with_audit,
 )
 from .action_value_model import HEADS, LocalActionModel, fit_local_model, monthly_training_windows
+from .action_value_add_model import ADD_OBJECTIVE, AddActionModel
 from .contracts import canonical_sha256
 
 
@@ -471,10 +472,159 @@ def walk_forward_action_values(
     return WalkForwardResult(frame, tuple(models), diagnostics)
 
 
+def build_state_matched_add_rows(
+    candidate: DailyCandidate,
+    spec: ActionValuePopulationSpec,
+    *,
+    entry_models: Sequence[LocalActionModel],
+    symbols: Sequence[str],
+    corporate_actions: CorporateActionBook | None = None,
+    information_block: str = CORE_INFORMATION_BLOCK,
+) -> ActionValueRows:
+    """Create ADD-vs-HOLD labels from causal OPEN-only policy states.
+
+    State inclusion depends only on the already-available ENTRY model, current
+    position, current features, frozen risk exit, and legal positive ADD
+    candidates.  Future bars are read only after that decision state has been
+    fixed, to mature the T+20 action-value label.
+    """
+
+    from .action_value_advice import OPEN_ONLY_MODEL_ACTION_AUTHORITY
+
+    ordered_models = sorted(entry_models, key=lambda item: item.metadata["available_at"])
+    requested_symbols = tuple(symbols)
+    if (
+        not ordered_models
+        or not requested_symbols
+        or len(requested_symbols) != len(set(requested_symbols))
+        or not set(requested_symbols).issubset(set(candidate.symbols))
+    ):
+        raise ActionValueError("ADD_LABEL_INPUT_INVALID")
+    action_book = corporate_actions or CorporateActionBook.empty()
+    calendar_dates = [day.date() for day in candidate.calendar]
+    date_to_index = {day: index for index, day in enumerate(calendar_dates)}
+    model_start = datetime.fromisoformat(ordered_models[0].metadata["available_at"]).date()
+    start_day = max(spec.start, model_start)
+    start_ordinal = date_to_index.get(start_day)
+    requested_end = date_to_index.get(spec.end)
+    if start_ordinal is None or requested_end is None:
+        raise ActionValueError("ADD_LABEL_CALENDAR_MISMATCH")
+    end_ordinal = min(requested_end, len(calendar_dates) - spec.primary_horizon - 1)
+    if end_ordinal <= start_ordinal:
+        raise ActionValueError("ADD_LABEL_RANGE_EMPTY")
+
+    benchmark = candidate.bars(BENCHMARK)["close"]
+    records: list[dict[str, Any]] = []
+    counts: dict[str, Any] = {
+        "requested_symbols": len(requested_symbols),
+        "eligible_sleeves": 0,
+        "pit_or_core_excluded_sleeves": 0,
+        "source_factor_invalid_sleeves": 0,
+        "unbound_material_factor_change_sleeves": 0,
+        "state_decisions": 0,
+        "held_state_decisions": 0,
+        "risk_exit_state_decisions": 0,
+        "positive_add_candidate_states": 0,
+        "fill_unknown_rows": 0,
+        "terminal_unavailable_states": 0,
+        "label_unbound_material_factor_change_states": 0,
+        "rows": 0,
+    }
+    for symbol in requested_symbols:
+        bars = candidate.bars(symbol)
+        features = market_features(
+            bars, benchmark, information_block=information_block
+        )
+        path = bars.iloc[start_ordinal : end_ordinal + spec.primary_horizon + 1]
+        if (
+            not bool(bars.iloc[start_ordinal].get("pit_active"))
+            or features.iloc[start_ordinal].isna().any()
+        ):
+            counts["pit_or_core_excluded_sleeves"] += 2
+            continue
+        factors = pd.to_numeric(path["factor"], errors="coerce")
+        observed_price = path[["open", "high", "low", "close"]].notna().any(axis=1)
+        invalid_factor = factors.isna() | factors.le(0)
+        if (
+            invalid_factor
+            & observed_price
+            & ~path["is_suspended"].astype(bool)
+        ).any():
+            counts["source_factor_invalid_sleeves"] += 2
+            continue
+        if _has_unbound_material_factor_change(
+            symbol=symbol,
+            bars=bars,
+            start_ordinal=start_ordinal,
+            end_ordinal=end_ordinal + spec.primary_horizon,
+            corporate_actions=action_book,
+        ):
+            counts["unbound_material_factor_change_sleeves"] += 2
+            continue
+        for initial_state in ("CASH_START", "HOLDING_START"):
+            counts["eligible_sleeves"] += 1
+            _replay_one_sleeve(
+                symbol=symbol,
+                bars=bars,
+                benchmark=benchmark,
+                features=features,
+                calendar_dates=calendar_dates,
+                start_ordinal=start_ordinal,
+                end_ordinal=end_ordinal,
+                models=ordered_models,
+                add_models=(),
+                initial_state=initial_state,
+                corporate_actions=action_book,
+                information_block=information_block,
+                initial_holding_policy_id=EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+                model_action_authority=OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+                add_label_records=records,
+                add_label_counts=counts,
+                add_label_terminal_max_defer=spec.terminal_max_defer,
+            )
+    if not records:
+        raise ActionValueError("STATE_MATCHED_ADD_POPULATION_EMPTY")
+    rows = pd.DataFrame.from_records(records).sort_values(
+        ["decision_as_of", "symbol", "sleeve_id", "planned_delta_qty"]
+    ).reset_index(drop=True)
+    keys = ["sleeve_id", "symbol", "decision_as_of", "planned_delta_qty"]
+    if rows.duplicated(keys).any():
+        raise ActionValueError("STATE_MATCHED_ADD_LABEL_KEY_DUPLICATE")
+    counts["rows"] = len(rows)
+    _, feature_order, feature_spec_sha256 = feature_contract(information_block)
+    coverage = {
+        "schema_version": "position_timing_state_matched_add_population_v1",
+        "objective": ADD_OBJECTIVE,
+        "state_path_policy": OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+        "state_selection_outcomes_read": False,
+        "decision_grid": "EVERY_ELIGIBLE_TRADING_DAY",
+        "baseline_action": "HOLD",
+        "feature_order": feature_order,
+        "feature_spec_sha256": feature_spec_sha256,
+        "entry_model_hashes": tuple(
+            model.metadata["model_sha256"] for model in ordered_models
+        ),
+        "population_spec": {
+            "start": spec.start.isoformat(),
+            "end": spec.end.isoformat(),
+            "primary_horizon": spec.primary_horizon,
+            "terminal_max_defer": spec.terminal_max_defer,
+            "reference_capital_cny": str(spec.reference_capital_cny),
+            "initial_holding_policy_id": EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
+            "corporate_action_snapshot_sha256": action_book.snapshot_sha256,
+        },
+        "symbols": requested_symbols,
+        "counts": counts,
+    }
+    coverage["coverage_sha256"] = canonical_sha256(coverage)
+    return ActionValueRows(rows=rows, coverage=coverage)
+
+
 def replay_continuous_cohorts(
     candidate: DailyCandidate,
     *,
     models: Sequence[LocalActionModel],
+    add_models: Sequence[AddActionModel] = (),
     symbols: Sequence[str],
     corporate_actions: CorporateActionBook | None = None,
     horizon: int = PRIMARY_HORIZON,
@@ -484,6 +634,8 @@ def replay_continuous_cohorts(
     information_block: str = CORE_INFORMATION_BLOCK,
     initial_holding_policy_id: str = LEGACY_INITIAL_HOLDING_POLICY_ID,
     model_action_authority: str = "FULL_ACTION_VALUE_V4",
+    evaluation_start: date | None = None,
+    evaluation_end: date | None = None,
 ) -> ContinuousReplayResult:
     """Replay one continuous OOT sleeve per symbol and initial state.
 
@@ -497,6 +649,7 @@ def replay_continuous_cohorts(
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         FULL_MODEL_ACTION_AUTHORITY,
         OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+        STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
         action_authority_policy_sha256,
     )
 
@@ -506,6 +659,7 @@ def replay_continuous_cohorts(
         FULL_MODEL_ACTION_AUTHORITY,
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+        STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
     }:
         raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
     if initial_holding_policy_id not in {
@@ -515,13 +669,40 @@ def replay_continuous_cohorts(
         raise ActionValueError("INITIAL_HOLDING_POLICY_UNSUPPORTED")
     market_feature_names, _, feature_spec_sha256 = feature_contract(information_block)
     ordered_models = sorted(models, key=lambda item: item.metadata["available_at"])
+    ordered_add_models = sorted(
+        add_models, key=lambda item: item.metadata["available_at"]
+    )
     action_book = corporate_actions or CorporateActionBook.empty()
     if not ordered_models or len(set(symbols)) != len(symbols):
         raise ActionValueError("CONTINUOUS_REPLAY_INPUT_INVALID")
     calendar_dates = [day.date() for day in candidate.calendar]
     date_to_index = {day: index for index, day in enumerate(calendar_dates)}
+    state_matched_add = (
+        model_action_authority == STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY
+    )
+    if state_matched_add and not ordered_add_models:
+        raise ActionValueError("ADD_MODEL_UNAVAILABLE_RULE_FALLBACK")
     first_day = datetime.fromisoformat(ordered_models[0].metadata["available_at"]).date()
     last_model_day = datetime.fromisoformat(ordered_models[-1].metadata["available_at"]).date()
+    if state_matched_add:
+        first_day = max(
+            first_day,
+            datetime.fromisoformat(
+                ordered_add_models[0].metadata["available_at"]
+            ).date(),
+        )
+        last_model_day = min(
+            last_model_day,
+            datetime.fromisoformat(
+                ordered_add_models[-1].metadata["available_at"]
+            ).date(),
+        )
+    if evaluation_start is not None:
+        first_day = max(first_day, evaluation_start)
+    if evaluation_end is not None:
+        last_model_day = min(last_model_day, evaluation_end)
+    if first_day > last_model_day:
+        raise ActionValueError("CONTINUOUS_REPLAY_RANGE_EMPTY")
     start_ordinal = date_to_index.get(first_day)
     last_model_ordinal = date_to_index.get(last_model_day)
     if start_ordinal is None or last_model_ordinal is None or start_ordinal + horizon >= len(calendar_dates):
@@ -587,6 +768,7 @@ def replay_continuous_cohorts(
                     start_ordinal=start_ordinal,
                     end_ordinal=end_ordinal,
                     models=ordered_models,
+                    add_models=ordered_add_models,
                     initial_state=initial_state,
                     corporate_actions=action_book,
                     information_block=information_block,
@@ -742,14 +924,18 @@ def replay_continuous_cohorts(
     if model_action_authority in {
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+        STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
     }:
         receipt.update(
             {
-                "schema_version": (
-                    "position_timing_entry_only_continuous_policy_receipt_v1"
-                    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY
-                    else "position_timing_open_only_continuous_policy_receipt_v1"
-                ),
+                "schema_version": {
+                    ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+                    "position_timing_entry_only_continuous_policy_receipt_v1",
+                    OPEN_ONLY_MODEL_ACTION_AUTHORITY:
+                    "position_timing_open_only_continuous_policy_receipt_v1",
+                    STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY:
+                    "position_timing_state_matched_add_continuous_policy_receipt_v1",
+                }[model_action_authority],
                 "policy_sha256": action_authority_policy_sha256(
                     information_block, model_action_authority
                 ),
@@ -993,11 +1179,15 @@ def _replay_one_sleeve(
     start_ordinal: int,
     end_ordinal: int,
     models: Sequence[LocalActionModel],
+    add_models: Sequence[AddActionModel],
     initial_state: str,
     corporate_actions: CorporateActionBook,
     information_block: str,
     initial_holding_policy_id: str,
     model_action_authority: str,
+    add_label_records: list[dict[str, Any]] | None = None,
+    add_label_counts: dict[str, Any] | None = None,
+    add_label_terminal_max_defer: int = TERMINAL_MAX_DEFER,
 ) -> list[dict[str, Any]]:
     from .action_value_advice import decide_stock_day
 
@@ -1130,6 +1320,7 @@ def _replay_one_sleeve(
             )
 
         decision = None
+        add_model = _add_model_available_for(add_models, decision_as_of)
         if decision_input_status == "AVAILABLE":
             try:
                 decision = decide_stock_day(
@@ -1139,6 +1330,7 @@ def _replay_one_sleeve(
                     benchmark=benchmark,
                     decision_as_of=decision_as_of,
                     model=model,
+                    add_model=add_model,
                     target_state=policy_target_state,
                     target_reference=target_reference,
                     current_market=features.iloc[decision_ordinal],
@@ -1150,6 +1342,27 @@ def _replay_one_sleeve(
                     raise
                 decision_input_status = "UNAVAILABLE"
                 decision_reason = exc.code
+        if add_label_records is not None:
+            if add_label_counts is None:
+                raise ActionValueError("ADD_LABEL_COUNTS_MISSING")
+            _collect_state_matched_add_labels(
+                records=add_label_records,
+                counts=add_label_counts,
+                decision=decision,
+                symbol=symbol,
+                sleeve_id=sleeve_id,
+                initial_state=initial_state,
+                state=policy_target_state,
+                reference=target_reference,
+                market=features.iloc[decision_ordinal],
+                bars=bars,
+                decision_ordinal=decision_ordinal,
+                corporate_actions=corporate_actions,
+                calendar_dates=calendar_dates,
+                terminal_max_defer=add_label_terminal_max_defer,
+                target_fractional_share_discarded=policy_fractional,
+                information_block=information_block,
+            )
         if decision is None:
             policy_plan = ActionPlan(symbol, 0, target_reference)
             policy_action = "HOLD" if policy_target_state.quantity else "WAIT"
@@ -1340,6 +1553,116 @@ def _model_available_for(models: Sequence[LocalActionModel], decision_as_of: dat
     return available[-1] if available else None
 
 
+def _add_model_available_for(
+    models: Sequence[AddActionModel], decision_as_of: datetime
+) -> AddActionModel | None:
+    available = [
+        model
+        for model in models
+        if datetime.fromisoformat(model.metadata["available_at"]) <= decision_as_of
+    ]
+    return available[-1] if available else None
+
+
+def _collect_state_matched_add_labels(
+    *,
+    records: list[dict[str, Any]],
+    counts: dict[str, Any],
+    decision: Any | None,
+    symbol: str,
+    sleeve_id: str,
+    initial_state: str,
+    state: PositionState,
+    reference: Decimal,
+    market: pd.Series,
+    bars: pd.DataFrame,
+    decision_ordinal: int,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+    terminal_max_defer: int,
+    target_fractional_share_discarded: Decimal,
+    information_block: str,
+) -> None:
+    """Append future labels only after the causal path decision is frozen."""
+
+    counts["state_decisions"] += 1
+    if decision is None or state.quantity <= 0:
+        return
+    counts["held_state_decisions"] += 1
+    if decision.plan.risk_exit or decision.authority == "FROZEN_RULE_RISK_OVERRIDE":
+        counts["risk_exit_state_decisions"] += 1
+        return
+    plans = tuple(
+        plan for plan in action_candidates(symbol, state, reference) if plan.delta > 0
+    )
+    if not plans:
+        return
+    counts["positive_add_candidate_states"] += 1
+
+    nominal = decision_ordinal + PRIMARY_HORIZON
+    if nominal >= len(calendar_dates):
+        counts["terminal_unavailable_states"] += 1
+        return
+    terminal_ordinal = _effective_terminal_ordinal(
+        bars,
+        nominal,
+        max_defer=terminal_max_defer,
+        symbol=symbol,
+        corporate_actions=corporate_actions,
+        calendar_dates=calendar_dates,
+    )
+    if terminal_ordinal is None:
+        counts["terminal_unavailable_states"] += 1
+        return
+    if _has_unbound_material_factor_change(
+        symbol=symbol,
+        bars=bars,
+        start_ordinal=decision_ordinal,
+        end_ordinal=terminal_ordinal,
+        corporate_actions=corporate_actions,
+    ):
+        counts["label_unbound_material_factor_change_states"] += 1
+        return
+    market_feature_names, _, _ = feature_contract(information_block)
+    label_available_at = cutoff_on(calendar_dates[terminal_ordinal])
+    for plan in plans:
+        row = _action_row(
+            symbol=symbol,
+            objective=ADD_OBJECTIVE,
+            state=state,
+            plan=plan,
+            market=market,
+            bars=bars,
+            decision_ordinal=decision_ordinal,
+            terminal_ordinal=terminal_ordinal,
+            label_available_at=label_available_at,
+            corporate_actions=corporate_actions,
+            calendar_dates=calendar_dates,
+            target_fractional_share_discarded=target_fractional_share_discarded,
+            market_feature_names=market_feature_names,
+        )
+        if row is None:
+            counts["fill_unknown_rows"] += 1
+            continue
+        row.update(
+            {
+                "sleeve_id": sleeve_id,
+                "initial_state": initial_state,
+                "baseline_action": "HOLD",
+                "state_path_policy_id": "OPEN_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1",
+                "state_path_action": decision.action,
+                "state_path_model_sha256": decision.model_sha256,
+                "state_selection_outcomes_read": False,
+                "label_terminal_trade_date": calendar_dates[
+                    terminal_ordinal
+                ].isoformat(),
+                "pre_quantity": state.quantity,
+                "pre_sellable_qty": state.sellable,
+            }
+        )
+        records.append(row)
+
+
 def _mark_to_market(state: PositionState, symbol: str, price: Decimal) -> Decimal:
     fee = leg_fee(symbol, -state.quantity, price, full_exit=True) if state.quantity else Decimal(0)
     return state.cash + state.quantity * price - fee
@@ -1424,6 +1747,7 @@ __all__ = [
     "ContinuousReplayResult",
     "WalkForwardResult",
     "build_action_value_rows",
+    "build_state_matched_add_rows",
     "deterministic_symbols",
     "replay_continuous_cohorts",
     "walk_forward_action_values",
