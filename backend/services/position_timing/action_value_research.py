@@ -496,6 +496,7 @@ def replay_continuous_cohorts(
     from .action_value_advice import (
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         FULL_MODEL_ACTION_AUTHORITY,
+        OPEN_ONLY_MODEL_ACTION_AUTHORITY,
         action_authority_policy_sha256,
     )
 
@@ -504,6 +505,7 @@ def replay_continuous_cohorts(
     if model_action_authority not in {
         FULL_MODEL_ACTION_AUTHORITY,
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
+        OPEN_ONLY_MODEL_ACTION_AUTHORITY,
     }:
         raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
     if initial_holding_policy_id not in {
@@ -737,10 +739,17 @@ def replay_continuous_cohorts(
                 "initial_holding_policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
             }
         )
-    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY:
+    if model_action_authority in {
+        ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
+        OPEN_ONLY_MODEL_ACTION_AUTHORITY,
+    }:
         receipt.update(
             {
-                "schema_version": "position_timing_entry_only_continuous_policy_receipt_v1",
+                "schema_version": (
+                    "position_timing_entry_only_continuous_policy_receipt_v1"
+                    if model_action_authority == ENTRY_ONLY_MODEL_ACTION_AUTHORITY
+                    else "position_timing_open_only_continuous_policy_receipt_v1"
+                ),
                 "policy_sha256": action_authority_policy_sha256(
                     information_block, model_action_authority
                 ),
