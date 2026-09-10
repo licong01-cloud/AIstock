@@ -344,11 +344,21 @@ class CorrelationEngine:
                 )
             min_cov = non_nan_ratio.min() if len(non_nan_ratio) else 0
             if min_cov == 0:
-                zero_cov = non_nan_ratio[non_nan_ratio == 0].index.tolist()
-                raise ValueError(
-                    f"{len(zero_cov)} 个因子在当前窗口内全为 NaN, 无法计算相关: "
-                    f"{zero_cov[:10]}{'...' if len(zero_cov) > 10 else ''}"
+                zero_cov = set(non_nan_ratio[non_nan_ratio == 0].index.tolist())
+                factor_names = [name for name in factor_names if name not in zero_cov]
+                panel = panel.loc[:, factor_names]
+                K = len(factor_names)
+                logger.warning(
+                    "%s 个因子在当前窗口内全为 NaN，已分类为 degenerate_nan 并排除: %s%s",
+                    len(zero_cov),
+                    sorted(zero_cov)[:10],
+                    "..." if len(zero_cov) > 10 else "",
                 )
+                if K < 2:
+                    raise ValueError(
+                        "排除当前窗口全 NaN 因子后，可计算相关性的因子不足 2 个: "
+                        f"remaining={K}, degenerate_nan={sorted(zero_cov)}"
+                    )
 
         # 逐日计算截面 Spearman 相关
         daily_corrs = []
