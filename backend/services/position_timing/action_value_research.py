@@ -300,7 +300,7 @@ def build_deferred_entry_timing_rows(
                     try:
                         deferred_state = apply_fill(deferred_target, deferred_fill)
                     except ActionValueError as exc:
-                        if exc.code != "POSITION_CAPITAL_INVALID":
+                        if exc.code != "CASH_OR_POSITION_INVARIANT":
                             raise
                         raise ActionValueError(
                             "DEFERRED_ENTRY_CASH_INSUFFICIENT",
@@ -335,7 +335,6 @@ def build_deferred_entry_timing_rows(
                         or exc.code
                         in {
                             "PATH_VALUATION_UNKNOWN",
-                            "POSITION_CAPITAL_INVALID",
                             "DEFERRED_ENTRY_CASH_INSUFFICIENT",
                         }
                     ):
