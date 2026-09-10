@@ -125,6 +125,146 @@ def test_base_data_memory_cache_reads_allowed_files_once(tmp_path):
     assert "sha256_16" not in cache.manifest()["files"]["daily_pv.h5"]
 
 
+def test_base_data_memory_cache_projects_margin_detail_to_next_trading_day(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2026-04-02", "2026-04-03", "2026-04-07", "2026-04-08"])
+    instruments = ["000001.SZ", "000002.SZ"]
+    daily_index = pd.MultiIndex.from_product(
+        [dates, instruments], names=["datetime", "instrument"]
+    )
+    daily = pd.DataFrame({"close": range(1, len(daily_index) + 1)}, index=daily_index)
+    margin_index = pd.MultiIndex.from_tuples(
+        [
+            (dates[0], "000001.SZ"),
+            (dates[0], "000002.SZ"),
+            (dates[1], "000001.SZ"),
+            (dates[2], "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    margin = pd.DataFrame(
+        {"md_rzye": [10.0, 20.0, 999.0, 30.0]}, index=margin_index
+    )
+    static = pd.DataFrame(
+        {
+            "md_rzye": [1000.0 + i for i in range(len(daily_index))],
+            "db_pb": [2.0 + i for i in range(len(daily_index))],
+        },
+        index=daily_index,
+    )
+    daily.to_hdf(data_dir / "daily_pv.h5", key="data")
+    margin.to_hdf(data_dir / "margin_detail.h5", key="data")
+    static.to_parquet(data_dir / "static_factors.parquet")
+
+    cache = BacktestBaseDataMemoryCache.load_once(
+        data_dir, "2026-04-03", "2026-04-07"
+    )
+
+    expected_margin = pd.DataFrame(
+        {"md_rzye": [10.0, 20.0, 999.0]},
+        index=pd.MultiIndex.from_tuples(
+            [
+                (dates[1], "000001.SZ"),
+                (dates[1], "000002.SZ"),
+                (dates[2], "000001.SZ"),
+            ],
+            names=["datetime", "instrument"],
+        ),
+    )
+    pd.testing.assert_frame_equal(cache.get("margin_detail.h5"), expected_margin)
+
+    actual_static = cache.get("static_factors.parquet")
+    assert actual_static.loc[(dates[1], "000001.SZ"), "md_rzye"] == 10.0
+    assert actual_static.loc[(dates[1], "000002.SZ"), "md_rzye"] == 20.0
+    assert actual_static.loc[(dates[2], "000001.SZ"), "md_rzye"] == 999.0
+    assert pd.isna(actual_static.loc[(dates[2], "000002.SZ"), "md_rzye"])
+    pd.testing.assert_series_equal(
+        actual_static["db_pb"], static.loc[actual_static.index, "db_pb"]
+    )
+    pd.testing.assert_frame_equal(pd.read_hdf(data_dir / "margin_detail.h5"), margin)
+
+
+def test_offline_code_text_executor_observes_projected_margin_detail(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2026-04-03", "2026-04-07", "2026-04-08"])
+    daily_index = pd.MultiIndex.from_product(
+        [dates, ["000001.SZ"]], names=["datetime", "instrument"]
+    )
+    margin_index = pd.MultiIndex.from_tuples(
+        [(dates[0], "000001.SZ"), (dates[1], "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=daily_index).to_hdf(
+        data_dir / "daily_pv.h5", key="data"
+    )
+    pd.DataFrame({"md_rzye": [10.0, 999.0]}, index=margin_index).to_hdf(
+        data_dir / "margin_detail.h5", key="data"
+    )
+    cache = BacktestBaseDataMemoryCache.load_once(
+        data_dir, "2026-04-03", "2026-04-07"
+    )
+    code_text = """
+import pandas as pd
+margin = pd.read_hdf('margin_detail.h5')
+result = margin[['md_rzye']].rename(columns={'md_rzye': 'value'})
+"""
+
+    result = OfflineCodeTextFactorExecutor(cache).compute_factor(
+        "factor_margin", code_text
+    )
+
+    assert result.success is True
+    expected_index = pd.MultiIndex.from_tuples(
+        [(dates[1], "000001.SZ")], names=["datetime", "instrument"]
+    )
+    pd.testing.assert_index_equal(result.dataframe.index, expected_index)
+    assert result.dataframe["value"].tolist() == [10.0]
+
+
+def test_margin_projection_requires_canonical_daily_calendar(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-04-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"md_rzye": [10.0]}, index=index).to_hdf(
+        data_dir / "margin_detail.h5", key="data"
+    )
+
+    with pytest.raises(RuntimeError, match="requires daily_pv.h5 trading calendar"):
+        BacktestBaseDataMemoryCache.load_once(
+            data_dir,
+            "2026-04-03",
+            "2026-04-07",
+            allowed_files=("margin_detail.h5",),
+        )
+
+
+def test_static_margin_columns_require_projected_margin_source(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-04-07"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"close": [1.0]}, index=index).to_hdf(
+        data_dir / "daily_pv.h5", key="data"
+    )
+    pd.DataFrame({"md_rzye": [999.0]}, index=index).to_parquet(
+        data_dir / "static_factors.parquet"
+    )
+
+    with pytest.raises(RuntimeError, match="require margin_detail.h5"):
+        BacktestBaseDataMemoryCache.load_once(
+            data_dir,
+            "2026-04-07",
+            "2026-04-07",
+        )
+
+
 def test_offline_code_text_executor_redirects_pandas_reads_to_memory(tmp_path):
     data_dir = tmp_path / "factor_data"
     data_dir.mkdir()
