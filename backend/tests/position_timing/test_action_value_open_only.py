@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
 from pathlib import Path
 
 import numpy as np
@@ -175,6 +176,7 @@ def test_label_support_diagnostic_binds_cash_training_and_observed_add(tmp_path:
     assert diagnostic["diagnostic_sha256"] == canonical_sha256(
         {key: value for key, value in diagnostic.items() if key != "diagnostic_sha256"}
     )
+    assert canonical_sha256(json.loads(canonical_json_bytes(diagnostic))) == canonical_sha256(diagnostic)
 
 
 def test_label_support_diagnostic_rejects_non_cash_entry_support(tmp_path: Path) -> None:
@@ -320,3 +322,21 @@ def test_open_only_receipt_joint_classification_is_conservative() -> None:
             "FROZEN_L1_V1": {"effect_evidence": "SUPPORTED"},
         }
     ) == "NEGATIVE"
+
+
+def test_cli_reports_typed_action_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        open_only,
+        "run_open_only_request",
+        lambda _: (_ for _ in ()).throw(ActionValueError("EXPECTED_FAILURE", detail="bounded")),
+    )
+
+    assert open_only.main(["run", "--request", str(tmp_path / "missing.json")]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "status": "FAILED",
+        "error_code": "EXPECTED_FAILURE",
+        "details": {"detail": "bounded"},
+    }

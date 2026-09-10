@@ -376,9 +376,9 @@ def _validate_parents(request: Mapping[str, Any]) -> tuple[Path, dict[str, Any]]
     ):
         raise ActionValueError("OPEN_ONLY_PARENT_HELDOUT_IDENTITY_MISMATCH")
     v4_bundle, v4 = _validate_bound_parents(request)
-    if label_support_diagnostic(v4_bundle=v4_bundle, heldout_bundle=heldout_bundle) != request[
-        "hypothesis_evidence"
-    ]:
+    if canonical_sha256(
+        label_support_diagnostic(v4_bundle=v4_bundle, heldout_bundle=heldout_bundle)
+    ) != canonical_sha256(request["hypothesis_evidence"]):
         raise ActionValueError("OPEN_ONLY_HYPOTHESIS_EVIDENCE_CHANGED")
     return v4_bundle, v4
 
@@ -661,9 +661,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             result = {"status": "BUNDLE_VALID", **inspect_open_only_bundle(args.bundle)}
     except ActionValueError as exc:
-        print(json.dumps({"status": "FAILED", "error": exc.as_dict()}, ensure_ascii=False, sort_keys=True))
-        return 1
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str))
+        print(
+            json.dumps(
+                {"status": "FAILED", "error_code": exc.code, "details": exc.details},
+                ensure_ascii=False,
+            )
+        )
+        return 2
+    print(json.dumps(result, ensure_ascii=False, default=str))
     return 0
 
 
