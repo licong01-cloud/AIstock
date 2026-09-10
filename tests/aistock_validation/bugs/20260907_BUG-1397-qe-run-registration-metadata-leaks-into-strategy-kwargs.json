@@ -21,6 +21,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260907-671b3cd52b62",
       "timestamp": "2026-09-07T12:50:15.906998Z"
+    },
+    {
+      "action": "recover_merged_source_evidence",
+      "actor": "Codex",
+      "note": "PR #4410 is merged. A fresh AIstock process at current main passed all 41 registered-submission tests, including the regression proving _qe_run_registration remains control-plane metadata and is absent from generated strategy kwargs. Required QE validation plans also passed.",
+      "timestamp": "2026-09-10T06:27:00Z"
     }
   ],
   "evidence_uris": [
@@ -100,9 +106,9 @@
     ]
   },
   "first_seen_at": "2026-09-07T12:50:15.907014Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-1397-qe-run-registration-metadata-leaks-into-strategy-20260907",
+  "fix_commit": "83feb6b507c8a626cb3464b6d2e9aa7df13ac767",
+  "fixed_at": "2026-09-07T13:16:04Z",
   "github_issue_number": 4406,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4406",
   "last_seen_at": "2026-09-07T12:50:15.907014Z",
@@ -110,6 +116,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4410",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -124,11 +131,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "A fresh AIstock Python process at main 142e4f907 executed backend/tests/quantevolver/test_qe_registered_submission.py and passed 41/41 tests; the required validation_module_registry_l0, qe_sector_risk_overlay_backend, qe_read_backend, and qe_mcp_backend nox plans also passed.",
+      "Fresh AIstock process at HEAD 06de4e773 loaded the merged persistent ConfigComposer fix and backend/tests/quantevolver/test_qe_registered_submission.py passed 41/41."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -138,7 +154,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -147,6 +163,13 @@
     "fingerprint": "671b3cd52b6246c090965f8f",
     "source_event_id": "FE-20260907-671b3cd52b62"
   },
+  "validation_evidence": [
+    "validation-receipt: current main 142e4f907 fresh-process registered submission regression passed 41/41",
+    "validation-receipt: current main 142e4f907 validation_module_registry_l0 passed 8/8",
+    "validation-receipt: current main 142e4f907 qe_sector_risk_overlay_backend passed 91/91",
+    "validation-receipt: current main 142e4f907 qe_read_backend passed 412/412 with one expected skip",
+    "validation-receipt: current main 142e4f907 qe_mcp_backend passed 49/49"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
