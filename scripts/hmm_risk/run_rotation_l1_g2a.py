@@ -1,9 +1,10 @@
-"""Build and execute the approved G2-A v1.4/v1.5 development contracts.
+"""Build and execute approved G2-A v1.4/v1.5/v1.6 development contracts.
 
 The parent mode launches exactly two 12-fit model processes as fresh Python
-processes.  Horizon 10D is frozen by the approved v1.3 authority; v1.5 must be
-selected explicitly and paired with the frozen v1.4 receipt.  This CLI has no
-battery path and never reads the sealed tail, a database, or a runtime service.
+processes.  Horizon 10D is frozen by the approved v1.3 authority; v1.5/v1.6
+must be selected explicitly and paired with the frozen v1.4 receipt.  The v1.6
+children execute zero fits.  This CLI has no battery path and never reads the
+sealed tail, a database, or a runtime service.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
     RotationL1G2AError,
     V14_CONTRACT_VERSION,
     V15_CONTRACT_VERSION,
+    V16_CONTRACT_VERSION,
     canonical_sha256,
     close_processes,
     read_input_bundle,
@@ -130,7 +132,7 @@ def _failure(
     return {**body, "failure_sha256": canonical_sha256(body)}
 
 
-def _parent_fit_progress(output: Path) -> dict[str, Any]:
+def _parent_fit_progress(output: Path, *, contract_version: str = V14_CONTRACT_VERSION) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
     for name in ("fresh_process_1", "fresh_process_2"):
         success_path = output / f"{name}.json"
@@ -149,7 +151,7 @@ def _parent_fit_progress(output: Path) -> dict[str, Any]:
             payload = _load_object(failure_path)
             progress = payload.get("fit_progress")
             status = "failed"
-        expected_planned = 12
+        expected_planned = 0 if contract_version == V16_CONTRACT_VERSION else 12
         if status == "not_started":
             progress = {
                 "planned": expected_planned,
@@ -188,7 +190,7 @@ def _parent_fit_progress(output: Path) -> dict[str, Any]:
             }
         components.append({"component": name, "status": status, "readback_valid": readback_valid, **progress})
     body = {
-        "planned": 24,
+        "planned": expected_planned * 2,
         "started": sum(int(item["started"]) for item in components),
         "completed": sum(int(item["completed"]) for item in components),
         "failed": sum(int(item["failed"]) for item in components),
@@ -298,9 +300,9 @@ def _run_child(command: list[str], failure_path: Path, *, contract_version: str 
 def _run_parent(args: argparse.Namespace) -> int:
     model_contract_version = getattr(args, "model_contract_version", V14_CONTRACT_VERSION)
     v14_process_file = getattr(args, "v14_process_file", None)
-    if model_contract_version == V15_CONTRACT_VERSION:
+    if model_contract_version in {V15_CONTRACT_VERSION, V16_CONTRACT_VERSION}:
         if v14_process_file is None or args.v13_process_file is not None:
-            raise RuntimeError("v1.5 requires only --v14-process-file")
+            raise RuntimeError("v1.5/v1.6 requires only --v14-process-file")
         v14_reference = _load_v14_reference(v14_process_file)
         v13_reference = None
         input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
@@ -346,7 +348,7 @@ def _run_parent(args: argparse.Namespace) -> int:
                 _failure(
                     exc,
                     stage="parent",
-                    fit_progress=_parent_fit_progress(output),
+                    fit_progress=_parent_fit_progress(output, contract_version=model_contract_version),
                     contract_version=model_contract_version,
                 ),
             )
@@ -357,7 +359,7 @@ def _run_parent(args: argparse.Namespace) -> int:
             {
                 "status": "development_complete",
                 "output_root": str(output),
-                "fit_count": 24,
+                "fit_count": 0 if model_contract_version == V16_CONTRACT_VERSION else 24,
                 "acceptance_sha256": acceptance["acceptance_sha256"],
                 "tail_accessed": False,
             },
@@ -383,7 +385,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--v14-process-file", type=Path)
     run.add_argument(
         "--model-contract-version",
-        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION),
+        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION, V16_CONTRACT_VERSION),
         default=V14_CONTRACT_VERSION,
     )
     run.add_argument("--producer-commit", required=True)
@@ -394,7 +396,7 @@ def _parser() -> argparse.ArgumentParser:
     child.add_argument("--producer-commit", required=True)
     child.add_argument(
         "--model-contract-version",
-        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION),
+        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION, V16_CONTRACT_VERSION),
         default=V14_CONTRACT_VERSION,
     )
     return parser

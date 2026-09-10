@@ -690,6 +690,175 @@ def test_v15_cli_failure_receipt_keeps_explicit_contract_identity(tmp_path) -> N
     assert failure["contract_version"] == subject.V15_CONTRACT_VERSION
 
 
+def test_v16_score_is_target_free_average_rank_and_row_order_invariant() -> None:
+    bundle = _bundle()
+    expected, folds = subject.build_v16_scores(bundle)
+    changed = copy.deepcopy(bundle)
+    changed["panel"]["target_10d"] = changed["panel"]["target_10d"] * -17.0
+    actual, changed_folds = subject.build_v16_scores(changed)
+
+    pd.testing.assert_series_equal(actual, expected)
+    assert changed_folds == folds
+    first_day = folds[0].validation_dates[0]
+    day = expected.loc[(first_day, slice(None))]
+    assert float(day.min()) == pytest.approx(-0.5)
+    assert float(day.max()) == pytest.approx(0.5)
+
+    reordered = copy.deepcopy(bundle)
+    reordered["panel"] = reordered["panel"].sample(frac=1.0, random_state=42)
+    reordered_scores, _ = subject.build_v16_scores(reordered)
+    pd.testing.assert_series_equal(reordered_scores, expected)
+
+
+def test_v16_does_not_gate_on_unused_historical_training_feature_coverage() -> None:
+    bundle = _bundle()
+    oof_dates = {
+        day for fold in subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON) for day in fold.validation_dates
+    }
+    historical_dates = [day for day in _calendar() if day not in oof_dates][:300]
+    index = (historical_dates, slice(None))
+    bundle["panel"].loc[index, "moneyflow_intensity_delta_5d"] = np.nan
+    bundle["panel"].loc[index, "reason__moneyflow_intensity_delta_5d"] = "historical_not_used"
+
+    with pytest.raises(subject.RotationL1G2AError) as legacy_gate:
+        subject.validate_input_bundle(bundle)
+    assert legacy_gate.value.reason_code == subject.REASON_FEATURE
+
+    scores, _folds = subject.build_v16_scores(bundle)
+    assert np.isfinite(scores.to_numpy(dtype=np.float64)).all()
+
+
+def test_v16_zero_fit_process_closes_against_input_and_v14_authorities() -> None:
+    def forbidden_estimator(**_kwargs):
+        raise AssertionError("v1.6 must not construct or fit an estimator")
+
+    bundle = _bundle()
+    v14_reference = subject.run_gbdt_process(
+        bundle,
+        producer_commit="e" * 40,
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+    children = [
+        subject.run_gbdt_process(
+            bundle,
+            producer_commit="e" * 40,
+            process_index=index,
+            model_contract_version=subject.V16_CONTRACT_VERSION,
+            estimator_factory=forbidden_estimator,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    payload = children[0]["reproducibility_payload"]
+    assert payload["fit_count"] == 0
+    assert payload["gbdt_fit_count"] == 0
+    assert payload["market_fit_count"] == 0
+    assert payload["fit_progress"] == {
+        "planned": 0,
+        "started": 0,
+        "completed": 0,
+        "failed": 0,
+        "active_fit": None,
+    }
+    assert payload["market_context_receipts"] == []
+    assert payload["scoring_contract"]["feature"] == "moneyflow_intensity_delta_5d"
+    assert payload["scoring_contract"]["training_performed"] is False
+    assert payload["scoring_contract"]["target_accessed_for_score"] is False
+    assert payload["scoring_contract"]["market_context_accessed_for_score"] is False
+    assert children[0]["reproducibility_payload_sha256"] == children[1]["reproducibility_payload_sha256"]
+
+    acceptance = subject.close_processes(
+        *children,
+        v14_reference=v14_reference,
+        input_bundle=bundle,
+    )
+    assert acceptance["schema_version"] == subject.V16_ACCEPTANCE_SCHEMA_VERSION
+    assert acceptance["contract_version"] == subject.V16_CONTRACT_VERSION
+    assert acceptance["fit_count"] == 0
+    assert acceptance["score_transform"] == subject.V16_SCORE_TRANSFORM
+    assert acceptance["paired_v14_diagnostic"]["candidate_contract_version"] == subject.V16_CONTRACT_VERSION
+    assert acceptance["tail_accessed"] is False
+
+    forged = copy.deepcopy(children)
+    for child in forged:
+        child["reproducibility_payload"]["development_summary"]["mean_rank_ic"] += 0.01
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
+        child["report_sha256"] = subject.canonical_sha256(
+            {key: value for key, value in child.items() if key != "report_sha256"}
+        )
+    with pytest.raises(subject.RotationL1G2AError) as forged_summary:
+        subject.close_processes(*forged, v14_reference=v14_reference, input_bundle=bundle)
+    assert forged_summary.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+    with pytest.raises(subject.RotationL1G2AError) as missing_input:
+        subject.close_processes(*children, v14_reference=v14_reference)
+    assert missing_input.value.reason_code == subject.REASON_INPUT
+
+    changed = copy.deepcopy(bundle)
+    first_day = subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON)[0].validation_dates[0]
+    first_sector = changed["panel"].index.get_level_values("sector_code")[0]
+    changed["panel"].loc[(first_day, first_sector), "moneyflow_intensity_delta_5d"] = 1_000_000.0
+    with pytest.raises(subject.RotationL1G2AError) as drift:
+        subject.close_processes(*children, v14_reference=v14_reference, input_bundle=changed)
+    assert drift.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+    changed_target = copy.deepcopy(bundle)
+    changed_target["panel"]["target_10d"] *= -1.0
+    with pytest.raises(subject.RotationL1G2AError) as metric_drift:
+        subject.close_processes(*children, v14_reference=v14_reference, input_bundle=changed_target)
+    assert metric_drift.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
+def test_v16_missing_score_is_unavailable_without_neutral_fallback() -> None:
+    bundle = _bundle()
+    first_day = subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON)[0].validation_dates[0]
+    first_sector = bundle["panel"].index.get_level_values("sector_code")[0]
+    bundle["panel"].loc[(first_day, first_sector), "moneyflow_intensity_delta_5d"] = np.nan
+    bundle["panel"].loc[(first_day, first_sector), "reason__moneyflow_intensity_delta_5d"] = "source_missing"
+
+    child = subject.run_gbdt_process(
+        bundle,
+        producer_commit="e" * 40,
+        process_index=1,
+        model_contract_version=subject.V16_CONTRACT_VERSION,
+        runtime_validator=_test_runtime,
+    )
+    row = next(
+        row
+        for row in child["reproducibility_payload"]["oof_prediction_rows"]
+        if row["trade_date"] == first_day.isoformat() and row["sector_code"] == first_sector
+    )
+    assert row["availability"] == "unavailable"
+    assert row["reason_code"] == "source_missing"
+    assert row["rotation_score"] is None
+    assert row["forecast_state"] is None
+    assert row["feature_contributions"] is None
+
+
+def test_cli_requires_explicit_v16_and_keeps_zero_fit_parent_progress(tmp_path) -> None:
+    args = cli._parser().parse_args(
+        [
+            "model-child",
+            "--input-root",
+            "input",
+            "--output-file",
+            "output.json",
+            "--process-index",
+            "1",
+            "--producer-commit",
+            "e" * 40,
+            "--model-contract-version",
+            subject.V16_CONTRACT_VERSION,
+        ]
+    )
+    assert args.model_contract_version == subject.V16_CONTRACT_VERSION
+    progress = cli._parent_fit_progress(tmp_path, contract_version=subject.V16_CONTRACT_VERSION)
+    assert progress["planned"] == 0
+    assert all(component["planned"] == 0 for component in progress["components"])
+
+
 def _leaf_distribution(*, sparse_tree_count: int, sparse_date_count: int) -> tuple[object, pd.DataFrame, pd.Index]:
     dates = pd.Index(pd.bdate_range("2024-01-02", periods=504).date, name="trade_date")
     repeated_dates = dates.repeat(subject.CANONICAL_SECTOR_COUNT)
