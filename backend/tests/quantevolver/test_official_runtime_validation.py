@@ -47,6 +47,7 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
             {"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0, "swap_mb": 0.0},
         ],
         resource_failures=[],
+        resource_actions=[],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
         end_date="2026-04-30",
@@ -58,6 +59,7 @@ def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
     assert report["checks"]["single_cache_released"] is True
     assert report["checks"]["timeout_gate_available"] is True
     assert report["checks"]["resource_gate_ok"] is True
+    assert report["resource_actions"] == []
     assert report["timeout_per_factor_sec"] == 1800
     assert report["optimization_profile"]["requested_worker_values"] == [4]
     assert report["optimization_profile"]["effective_worker_values"] == [2]
@@ -92,6 +94,7 @@ def test_official_factor_runtime_validation_classifies_failures() -> None:
         batch_count=1,
         memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 100.0}],
         resource_failures=[],
+        resource_actions=[],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
         end_date="2026-04-30",
@@ -117,6 +120,10 @@ def test_official_factor_runtime_validation_reports_resource_gate_failure() -> N
         "rss_mb": 1024.0,
         "swap_growth_mb": 1200.0,
     }
+    resource_action = {
+        "action": "cancel_pending",
+        "reason": "swap_growth_hard_stop_exceeded",
+    }
 
     report = service._build_runtime_validation_report(
         cfg=cfg,
@@ -139,6 +146,7 @@ def test_official_factor_runtime_validation_reports_resource_gate_failure() -> N
         batch_count=1,
         memory_samples=[{"event": "batch_released", "single_cache_entries": 0, "rss_mb": 1024.0, "swap_mb": 1200.0}],
         resource_failures=[resource_failure],
+        resource_actions=[resource_action],
         universe_meta={"universe_key": "shsz_st_pit_active_v1", "index_policy": "st_pit_buy_eligible_reindexed_v1"},
         start_date="2018-08-01",
         end_date="2026-04-30",
@@ -148,6 +156,7 @@ def test_official_factor_runtime_validation_reports_resource_gate_failure() -> N
     assert report["checks"]["resource_gate_ok"] is False
     assert report["failure_summary"] == {RESOURCE_GATE_FAILED: 1}
     assert report["resource_failures"] == [resource_failure]
+    assert report["resource_actions"] == [resource_action]
     assert report["timeout_per_factor_sec"] == 60
 
 
