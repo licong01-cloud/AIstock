@@ -35,6 +35,7 @@ non_runtime_source_paths:
   - scripts/advisory_short_rebound_batch_b.py
   - scripts/aistock_bug_id_allocator.py
   - scripts/aistock_guardrail_scan.py
+  - scripts/aistock_mcp_gateway_doctor.py
   - scripts/aistock_runner_health.py
   - scripts/bug_registry_metadata_check.py
   - scripts/build_stock_universe_pit_spans.py
