@@ -113,10 +113,10 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4406",
   "last_seen_at": "2026-09-07T12:50:15.907014Z",
   "module": "quantevolver",
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4410",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4410",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,7 +134,8 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
     "fresh_process_evidence": [
-      "A fresh AIstock Python process at main 142e4f907 executed backend/tests/quantevolver/test_qe_registered_submission.py and passed 41/41 tests; the required validation_module_registry_l0, qe_sector_risk_overlay_backend, qe_read_backend, and qe_mcp_backend nox plans also passed."
+      "A fresh AIstock Python process at main 142e4f907 executed backend/tests/quantevolver/test_qe_registered_submission.py and passed 41/41 tests; the required validation_module_registry_l0, qe_sector_risk_overlay_backend, qe_read_backend, and qe_mcp_backend nox plans also passed.",
+      "Fresh AIstock process at HEAD 06de4e773 loaded the merged persistent ConfigComposer fix and backend/tests/quantevolver/test_qe_registered_submission.py passed 41/41."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -143,6 +144,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
