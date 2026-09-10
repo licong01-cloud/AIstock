@@ -187,12 +187,20 @@ def prepare_state_matched_add_request(
     start = date.fromisoformat(population["start"])
     end = date.fromisoformat(population["end"])
     snapshot_symbols = tuple(sorted(set(training_symbols).union(evaluation_symbols)))
-    corporate_action_path, suspension_path = _freeze_source_snapshots(
-        timing_root=timing_root,
-        symbols=snapshot_symbols,
-        start=start,
-        end=end,
-    )
+    try:
+        corporate_action_path, suspension_path = _freeze_source_snapshots(
+            timing_root=timing_root,
+            symbols=snapshot_symbols,
+            start=start,
+            end=end,
+        )
+    except ActionValueError:
+        raise
+    except Exception as exc:
+        raise ActionValueError(
+            "STATE_MATCHED_ADD_SOURCE_SNAPSHOT_UNAVAILABLE",
+            exception_type=type(exc).__name__,
+        ) from exc
     request = {
         "schema_version": REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
@@ -877,6 +885,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--timing-root", required=True, type=Path)
     prepare.add_argument("--repository-root", required=True, type=Path)
     prepare.add_argument("--parent-open-only-bundle", required=True, type=Path)
+    prepare.add_argument("--env-file", type=Path)
     run = commands.add_parser("run")
     run.add_argument("--request", required=True, type=Path)
     inspect = commands.add_parser("inspect")
@@ -884,6 +893,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
+            from dotenv import load_dotenv
+
+            env_file = args.env_file or args.repository_root.resolve() / ".env"
+            load_dotenv(env_file, override=False)
             result = {
                 "status": "PREPARED",
                 "request": prepare_state_matched_add_request(

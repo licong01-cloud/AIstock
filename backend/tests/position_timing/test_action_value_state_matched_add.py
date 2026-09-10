@@ -431,3 +431,61 @@ def test_three_comparison_interval_and_cli_failure_are_typed(
         '{"status": "FAILED", "error_code": "EXPECTED_FAILURE", '
         '"details": {"detail": "bounded"}}'
     )
+
+
+def test_prepare_source_snapshot_failure_is_typed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.services.position_timing.action_value_pipeline._clean_repository_commit",
+        lambda _: "a" * 40,
+    )
+    parent = {
+        "request": {
+            "candidate_root": (tmp_path / "candidate").as_posix(),
+        }
+    }
+    monkeypatch.setattr(study, "inspect_open_only_bundle", lambda _: parent)
+    monkeypatch.setattr(study, "_validate_parent_open_only", lambda _: None)
+    monkeypatch.setattr(
+        study,
+        "prior_request_identity",
+        lambda *_args, **_kwargs: {
+            "forbidden_symbols": frozenset({"000002.SZ"}),
+        },
+    )
+    monkeypatch.setattr(
+        study.DailyCandidate,
+        "open",
+        lambda _: type("Candidate", (), {"symbols": ("000001.SZ", "000002.SZ")})(),
+    )
+    monkeypatch.setattr(
+        study,
+        "select_heldout_symbols",
+        lambda *_args, **_kwargs: ("000002.SZ",),
+    )
+    parent["request"].update(
+        {
+            "population_spec": {
+                "start": "2024-01-01",
+                "end": "2024-12-31",
+                "seed": 7,
+            },
+            "training_symbols": ("000001.SZ",),
+            "evaluation_symbols": ("000002.SZ",),
+        }
+    )
+    monkeypatch.setattr(
+        study,
+        "_freeze_source_snapshots",
+        lambda **_kwargs: (_ for _ in ()).throw(ConnectionError("not connected")),
+    )
+
+    with pytest.raises(
+        ActionValueError, match="STATE_MATCHED_ADD_SOURCE_SNAPSHOT_UNAVAILABLE"
+    ) as exc_info:
+        study.prepare_state_matched_add_request(
+            timing_root=tmp_path / "timing",
+            repository_root=tmp_path,
+            parent_open_only_bundle=tmp_path / "parent",
+        )
+
+    assert exc_info.value.details == {"exception_type": "ConnectionError"}
