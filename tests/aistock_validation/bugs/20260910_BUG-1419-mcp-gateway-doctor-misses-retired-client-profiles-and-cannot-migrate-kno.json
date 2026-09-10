@@ -1,6 +1,8 @@
 {
   "actual": "Both retired profiles exit 2 with Unknown MCP profile, but doctor reports status=pass and finding_count=0.",
   "allowed_write_scope": [
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "scripts/aistock_mcp_gateway_doctor.py",
     "tests/mcp/test_mcp_gateway_cli.py",
     "tests/aistock_validation/bugs/20260910_BUG-1419-mcp-gateway-doctor-misses-retired-client-profiles-and-cannot-migrate-kno.json"
@@ -21,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260910-62101ba3434e",
       "timestamp": "2026-09-10T02:31:19.155245Z"
+    },
+    {
+      "action": "register_scope_expansion",
+      "actor": "Codex",
+      "note": "Classify only the MCP gateway doctor as an offline development diagnostic and add the focused runtime-classifier regression; no runtime target, backend, database, or business source is changed.",
+      "timestamp": "2026-09-10T02:43:00Z"
     }
   ],
   "evidence_uris": [],
@@ -28,12 +36,16 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/aistock_mcp_gateway_doctor.py",
       "tests/mcp/test_mcp_gateway_cli.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         "scripts/aistock_mcp_gateway_doctor.py",
         "tests/mcp/test_mcp_gateway_cli.py"
       ],
@@ -77,17 +89,23 @@
         "high"
       ],
       "suggested_scope": [
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         "scripts/aistock_mcp_gateway_doctor.py",
         "tests/mcp/test_mcp_gateway_cli.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/aistock_mcp_gateway_doctor.py",
       "tests/mcp/test_mcp_gateway_cli.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/aistock_mcp_gateway_doctor.py",
       "tests/mcp/test_mcp_gateway_cli.py"
     ]

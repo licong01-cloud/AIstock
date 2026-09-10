@@ -1515,6 +1515,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     client = workflow._classify_runtime_impact([".codex/skills/fix-aistock-issue/SKILL.md"], root=isolated_workflow_root)
     mcp_client = workflow._classify_runtime_impact(["scripts/aistock_mcp_server.py"], root=isolated_workflow_root)
     allocator_tool = workflow._classify_runtime_impact(["scripts/aistock_bug_id_allocator.py"], root=isolated_workflow_root)
+    mcp_gateway_doctor = workflow._classify_runtime_impact(
+        ["scripts/aistock_mcp_gateway_doctor.py"],
+        root=isolated_workflow_root,
+    )
     bug_registry_metadata_tool = workflow._classify_runtime_impact(
         ["scripts/bug_registry_metadata_check.py"],
         root=isolated_workflow_root,
@@ -1633,6 +1637,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert client["runtime_impact"] == "client"
     assert mcp_client["runtime_impact"] == "client"
     assert allocator_tool["runtime_impact"] == "none"
+    assert mcp_gateway_doctor["runtime_impact"] == "none"
+    assert mcp_gateway_doctor["runtime_files"] == []
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
