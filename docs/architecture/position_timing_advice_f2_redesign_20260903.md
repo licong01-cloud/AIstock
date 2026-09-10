@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.30
+> 版本：v2.31
 > 日期：2026-09-11
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_016_FORMAL_INCONCLUSIVE`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_017_DESIGN_FROZEN_IMPLEMENTATION_PENDING`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -47,6 +47,8 @@ v2.27 冻结 `PT-NEXT-015/OPEN_ONLY_MODEL_WITH_FROZEN_RISK_EXIT_V1` 一个结构
 v2.28 完成同一 `PT-NEXT-015`。最终 request `897ed6c95956fef75309dfc1fc66e0bd25183834a0fb7df2824a6b2729c7b0cd` 绑定干净提交 `1887b9be476b3d4a5a5ee46957eaf4c976296e69`、24 份更早 request/169 股禁用并集和第三批 64 股零重叠人口；父 39,032 条 OOF 键和值等价。13 股在共同连续起点因 PIT/core 不满足按预注册 coverage 排除，剩余 51 股形成 102 sleeves、242,556 sleeve-days、1,189 个有效交易日，`path_unknown=0`、`coverage_can_support_policy=true`；策略实际 `ADD=0`。候选减 buy-and-hold 为 `+0.2711 bps/日`、97.5% 区间 `[-1.4873,+2.1495]`；减 frozen L1 为 `+2.8814 bps/日`、区间 `[-4.7946,+10.8668]`，联合仍为 `INCONCLUSIVE/selected=0`。收窄状态支持修复了 policy/label 错配，但没有形成可称 alpha 的证据；不发布 serving，下一研发方向转向 ENTRY 标签与动作价值估计结构，不在 OPEN-only 上继续调仓位或阈值。
 
 v2.29 冻结并实现 `PT-NEXT-016`：不改旧双头模型，在父训练股真实 OPEN-only 因果持仓路径上构造同状态 `ADD-vs-HOLD` 单头监督，并把唯一复合 authority 写死为 risk exit→空仓 ENTRY→持仓 ADD；第四批评价人口、三项 family-wise 比较、零 serving/registry/current/runtime 写入均在运行前固定。v2.30 回填同一设计的正式历史结果。准备阶段发现 `300456.SZ` 同一除权事件存在经济字段完全相同、仅实施公告日相差一天的两条源修订；择时公司行动适配器据既有“经济字段确定性收敛”契约，以最早非空实施公告日作为已相同经济条款的 causal availability，并继续把全部修订绑定进 source hash，对空日期、晚于除权日和经济冲突保持 fail-closed。最终 request `22bc8888161161fe9d4ffdba734d910606c102649a340ff41042d9351b5ee710` 绑定干净提交 `7302a4e912b3c952f3ccfba9d78366b6ee0b0af2`、26 份 prior request/233 股禁用并集和第四批 64 股零重叠人口；93,203 条状态匹配 ADD 标签训练出 57 个月度单头模型。评价形成 98 sleeves、225,596 sleeve-days、1,151 日，`path_unknown=0`、coverage 可解释，实际 `ADD=2,364`。候选相对 buy-and-hold、frozen L1、同窗口 OPEN-only 的 98.3333% 区间分别为 `[-1.8613,+0.3415]`、`[-7.5038,+10.7609]`、`[-2.7540,+1.4907] bps/日`，三者均 `INCONCLUSIVE`，联合 `INCONCLUSIVE/selected=0`。状态支持已对齐但仍无成本后 alpha 或 ADD component 支持，因此不发布该 authority，不追加同 family 调参。
+
+v2.31 冻结 `PT-NEXT-017/OPEN_NOW_VS_DEFER_ONE_SESSION_THEN_OPEN_V1` 一个机制不同的 ENTRY timing 假设。父 v4 的 ENTRY 标签比较 T+1 OPEN 后持有至 T+20 与全程现金，26,915 条标签标准差约 838.83 bps；19,516 条 OOF 的预测与目标 Pearson/Spearman 仅约 `-0.0063/+0.0081`，而 NO_FILL 只占 3.36%，说明主要问题不是未成交零标签，而是目标同时混入“股票未来方向”与“现在是否优于稍后买入”。新目标固定同一股票、同一计划数量：候选 T+1 入场，反事实基线 T+1 等待并以 T+1 收盘参考在 T+2 尝试相同数量，随后两侧使用同一冻结 risk exit、公司行动、停牌、逐腿成本和共同 T+20 终值。只训练一个独立 `ENTRY_TIMING_VALUE_V1` 单头，不改旧双头/ADD 单头；正式评价在纳入 PT-NEXT-016 后全部 prior request 的 297 股禁用并集外 source-only 固定第五批 64 股，不同时测试其他 defer horizon、因子、阈值、仓位或模型 family。
 
 ## 1. Background / 背景与结论
 
@@ -967,6 +969,18 @@ ADD 训练状态由父训练 64 股上已经可用的 OPEN-only 历史政策连�
 
 正式结果见 `EVID-ACTION-STATE-MATCHED-ADD-FORMAL-20260911`。第四批评价人口与父训练及此前 233 股禁用并集零重叠，93,203 条标签训练出 57 个 ADD 模型；98 条连续 sleeve 的 `path_unknown=0` 且 coverage 可解释。实际 2,364 次 ADD 证明复合 authority 被真实执行，但相对 buy-and-hold、frozen L1 和同窗口 OPEN-only 的三个校正区间全部跨零，联合为 `INCONCLUSIVE/selected=0`。故本项只证明状态支持、因果时钟和连续评价已闭合，不证明 ADD 或整体政策带来超额收益；不得发布模型、改 L1/L1a 或沿同一 family 继续调参。
 
+### 6.18 PT-NEXT-017：同股延后一交易日的 ENTRY timing 动作价值
+
+本项不再把“买该股还是持有现金”的 20 日方向收益继续当作纯择时标签，也不沿既有 ENTRY/ADD family 追加因子。唯一 objective 为 `ENTRY_TIMING_VALUE_V1`，单条标签在 T 日 20:00 冻结同一股票和同一正计划数量：立即路径以 T 日收盘为 reference，在 T+1 使用 `daily_fill`；仅当立即路径真实 `FILLED` 时形成监督候选，`UNKNOWN` 或 `NO_FILL` 分别以 typed coverage 原因保留而不伪造成零收益。延后路径在 T+1 保持现金，以 T+1 收盘为新 reference，在 T+2 对相同数量执行同一 guard、board-lot 与 componentized parent-order cost；延后 `UNKNOWN` 使该标签不可评价，延后 `NO_FILL` 则保持现金，是预注册反事实的真实结果而非缺失。
+
+两条路径在各自入场后都只执行冻结规则 risk exit 或 HOLD，使用相同公司行动、显式停牌、原始价格、T+1 可卖约束和 common terminal。共同 nominal terminal 是 T+20，最多顺延 5 个交易日；任何 unbound factor change、公司行动、路径估值或终值退出未知均 typed fail closed。输入特征只取 T 日 decision cutoff 已可见的父 core 与现金状态/action 特征；T+1/T+2 及以后数据只成熟已冻结反事实，`label_available_at` 必须晚于 `decision_as_of` 且不晚于训练 cutoff。这个标签是“一步立即入场相对固定延后一日入场”的优势，不被表述为无限期最优 stopping time 或个股上涨概率。
+
+模型为 timing-owned 独立单头，复用 LightGBM 4.6.0 固定参数、原 core feature order、中位数处理和月度 expanding window，但不修改 `action_value_model.HEADS/MODEL_SCHEMA`、`action_value_add_model`、`models_v2` 或旧 OOF。离线候选 `DEFERRED_ENTRY_TIMING_MODEL_WITH_FROZEN_RISK_EXIT_V1` 在现金状态逐日重新评分合法 OPEN 计划：最高 OOF timing value 严格大于 0 才 OPEN，否则 WAIT；一旦入场，仅规则 risk exit/HOLD，不生成 ADD/REDUCE/model EXIT。阈值 0 来自成本后动作价值定义，不从历史结果选择。
+
+训练只使用父 v4 的 64 股与新目标，不读取第五批 outcome。正式评价 request 必须把 `action_value_state_matched_add_v1` 纳入既有 prior-request union；冻结前 source-only 预检得到 27 份 request、297 股禁用并集，并能从原 candidate 确定性选择第五批 64 股，重叠为 0。第五批选择只读 request 人口和 source identity，禁止按标签、coverage 或收益换股，同市场日期仍只称 cross-symbol held-out。
+
+统计 family 一次性固定三项：候选减 buy-and-hold、候选减 frozen L1、候选减 `ALWAYS_OPEN_FIRST_ELIGIBLE_WITH_FROZEN_RISK_EXIT_V1`。按交易日聚合、25 日 circular moving block、5,000 bootstrap、seed `20260911`、三项 Bonferroni 98.3333% simultaneous interval、成本后经济阈值 0；前两项形成 alpha evidence，第三项形成 timing component evidence，三项均 `SUPPORTED` 才能联合支持。任一对应 adjusted upper bound `<=0` 为该项 `NEGATIVE`，其他为 `INCONCLUSIVE`。工程合入不取决于收益分类；无论结果如何都发布真实 immutable research receipt，但不自动 serving、不写 registry/current/model artifact/card/event/alert/order/DB/runtime，也不依据结果追加延后 3/5 日、因子、阈值、仓位、模型或第六批股票。
+
 ## 7. 分钟研究：既有独立审计与后续机制
 
 §7.1～§7.2 是已完成的真实 risk-exit SELL-only L4b-1 契约，不覆盖所有日频触发建议。§6.6.5/§9.7 的日频计划离线分钟回放属于执行真实性验证，不生成分钟新方向，也不修改本节历史 audit 的人口/receipt。
@@ -1175,6 +1189,10 @@ factor 只承担复权比例和源一致性校验，不能凭名称或单次变�
 
 最终 request、三项区间、coverage、inspect/exact retry 和隔离 readback 见 `EVID-ACTION-STATE-MATCHED-ADD-FORMAL-20260911`。状态监督闭合后实际产生 2,364 次 ADD，但相对 OPEN-only 的 ADD component 区间与两个 alpha 比较区间全部跨零，三项、分解证据与联合结论均为 `INCONCLUSIVE/selected=0`。因此该模型只保留不可变研究证据，不写运行模型、registry/current、card/event/alert/order、DB 或 runtime，不改变 L1/L1a，也不依据点估计继续调整 ADD 阈值、仓位、特征或评价股票。
 
+### 9.20 进行中：PT-NEXT-017 同股延迟入场历史研究
+
+本项在一个实施块完成 F-047 设计、`ENTRY_TIMING_VALUE_V1` 单头、同量 T+1-vs-T+2 反事实标签、第五批历史人口、正式回放、三轮复核和蓝图结果回填。最小源码面为一个 dedicated 单头模型、`action_value_research.py` 的纯标签/路径扩展、一个 prepare/run/inspect immutable pipeline 和直接测试；不新增 router、页面、scheduler、worker、数据库表、外部模块接线或运行模型。正式结果形成前只声明设计/实现状态，不声明该目标更可学或能带来超额收益。
+
 ## 10. Verification Plan / 验证方案
 
 ### 10.1 文档 gate
@@ -1357,6 +1375,17 @@ git diff --check
 7. 完整 `backend/tests/position_timing`、Ruff、compile、F2 validator、集中 nox 与 GitHub CI 通过后才进入合入；正式结果无论正负均不自动 serving。
 8. 已执行结果：最终 request 固定 26 份 prior request/233 股禁用并集，第四批 64 股与父训练及禁用人口重叠均为 0；父 39,032 条 OOF 键和值等价。93,203 条状态匹配标签形成 90,946 条 OOF/57 个 ADD 模型；98 sleeves、225,596 sleeve-days、1,151 日均无未知路径且 coverage 可解释，实际 `ADD=2,364`。三个 98.3333% 区间分别为 `[-1.8613,+0.3415]`、`[-7.5038,+10.7609]`、`[-2.7540,+1.4907] bps/日`，均 `INCONCLUSIVE`，联合 `INCONCLUSIVE/selected=0`；bundle inspect 与 exact retry 已通过，正式身份见 `EVID-ACTION-STATE-MATCHED-ADD-FORMAL-20260911`。直接测试 17 项、完整 position-timing 248 项、Ruff、compile、集中 nox（同一 248 项、TypeScript、lint、production build、目标 Playwright 2 项）与 F2 validator（46/46、0 warnings）均已通过；GitHub CI 以本次 PR 记录为准。
 
+### 10.19 PT-NEXT-017 验证契约
+
+1. 单元测试逐项证明同一 symbol/quantity、T+1 immediate、T+2 deferred、common T+20、立即未成交不入监督、延后未成交保持现金、未知 typed，以及两侧相同 risk-exit/成本/公司行动/停牌语义。
+2. 每条训练行必须是现金状态、正 planned quantity、`objective=ENTRY_TIMING_VALUE_V1`、`baseline_action=DEFER_ONE_SESSION_THEN_OPEN_SAME_QUANTITY`，且 `label_available_at>decision_as_of`；训练 cutoff 只能消费已成熟标签。
+3. 新单头使用父 core feature order 与固定 LightGBM 4.6.0 规格；旧 `HEADS/MODEL_SCHEMA`、旧模型 hash/行为、ADD 单头和 `models_v2` 文件不变。
+4. 第五批 64 股与父训练及全部 prior request 禁用并集零重叠；选择 `outcomes_read=false`，request 绑定训练/评价日线、公司行动、停牌、父 evidence 和代码身份。
+5. 连续候选只在现金状态产生 OPEN/WAIT，入场后只允许 risk exit/HOLD；always-open comparator 使用相同人口、初始状态、开始/结束、源与基线路径。
+6. 三项预注册比较同时报告 nominal/adjusted interval、effect/power、alpha/timing component/joint evidence；测试、coverage、动作数或累计点估计不得替代收益证据。
+7. request/bundle 内容寻址、首写不可变、inspect 与 exact retry；N0、timing registry/current、旧模型、card/event/alert/order、DB 与 runtime hash/readback 不变。
+8. 完整 `backend/tests/position_timing`、Ruff、compile、quality guardrail、F2 validator、集中 nox 与 GitHub CI 通过后合入；结果无论正负均不自动 serving，正常 `backend_restart=noop`。
+
 | 轮次 | 已发现并修订的设计偏差 | 对照位置 |
 |---|---|---|
 | 1 目标/产品 | shadow 无个股闭环、自动交易禁令误伤本地模型、scope 已实现却写待实施、强制 12 字段制造依赖 | §1～§5、§6.6.2/4、§9 |
@@ -1489,6 +1518,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-044 | PT-NEXT-014 | HARD | 冻结 PT-NEXT-013 政策后，只在所有既有 action-value request 股票并集之外确定性选取 64 只评价股票；父 v4 训练人口/行、core/模型/成本/政策/双基线/统计不变。candidate 停牌缺口只以新 request 绑定 DB 显式 `S` snapshot 纠错，不换人口或从 NaN 推断；cross-symbol 与 temporal 证据分开，零 runtime/registry/current/DB 写入 |
 | F-045 | PT-NEXT-015 | HARD | ENTRY head 只在正式空仓标签支持内控制 OPEN；已有持仓无风险退出时 HOLD，不用 ENTRY head 外推 ADD。第三批评价股票排除全部更早 action-value request 人口；父训练/OOF/模型/成本/双基线/统计不变，零 serving/runtime/registry/current/DB 写入 |
 | F-046 | PT-NEXT-016 | HARD | 保持旧双头/模型 artifact 不变，以父训练股真实 OPEN-only 连续路径形成 PIT、逐腿成本后的 ADD-vs-HOLD 单头监督；复合政策按 risk exit→空仓 ENTRY→持仓 ADD 路由，在全部更早 request 人口外的第四批 64 股做三项 family-wise 比较。无因子/阈值搜索、无自动 serving、零 registry/current/card/order/DB/runtime 写入 |
+| F-047 | PT-NEXT-017 | HARD | 独立 `ENTRY_TIMING_VALUE_V1` 比较同股同量 T+1 立即入场与 T+2 延后一交易日入场，两侧共享冻结 risk-exit、成本、公司行动、停牌和 common T+20；在全部 prior request 外第五批 64 股做 buy-and-hold、frozen L1、always-open 三项 family-wise 比较。单一 defer horizon/模型/阈值，无自动 serving、零 protected/runtime/DB 写入 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1542,6 +1572,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-044 | `action_value_heldout.py` prior-request union、确定性评价人口、父训练/OOF/显式停牌 snapshot 绑定、v1/v2 兼容边界与 immutable bundle；只复用既有训练和 replay 纯实现 | §6.15；§9.17；§10.16；`backend/tests/position_timing/test_action_value_heldout.py`（9 项）与 `test_action_value_suspensions.py`（合计 13 项）；完整 position-timing 228 项与集中 nox；`EVID-ACTION-HELDOUT-FORMAL-20260910`；bundle inspect/exact retry/隔离 readback | ACTION_VALUE_HELDOUT_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-045 | `action_value_advice.py` OPEN-only authority；`action_value_open_only.py` 结构诊断、第三批 held-out 人口与 immutable bundle；复用既有训练/replay | §6.16；§9.18；§10.17；`backend/tests/position_timing/test_action_value_open_only.py`（9 项）；`EVID-ACTION-OPEN-ONLY-FORMAL-20260910`；bundle inspect/exact retry/隔离 readback；完整 position-timing、集中 nox 与 F2 validator | ACTION_VALUE_OPEN_ONLY_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-046 | `action_value_add_model.py` 独立单头；`action_value_advice.py` 状态路由；`action_value_research.py` 真实路径标签/复合 replay；`action_value_state_matched_add.py` 单一 immutable 管线；等价公司行动修订归并 | §6.17；§9.19；§10.18；`backend/tests/position_timing/test_action_value_state_matched_add.py`；`test_action_value_corporate_actions.py`；`EVID-ACTION-STATE-MATCHED-ADD-FORMAL-20260911`；bundle inspect/exact retry、248 项完整模块回归与隔离 readback | ACTION_VALUE_STATE_MATCHED_ADD_FORMAL_VERIFIED_INCONCLUSIVE | none |
+| F-047 | `action_value_entry_timing_model.py` 独立单头；`action_value_research.py` 同量 T+1/T+2 标签与连续路径；`action_value_deferred_entry.py` immutable pipeline | §6.18；§9.20；§10.19；`backend/tests/position_timing/test_action_value_deferred_entry.py`；正式 request/receipt、inspect/exact retry、隔离 readback待同块完成 | DESIGN_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
