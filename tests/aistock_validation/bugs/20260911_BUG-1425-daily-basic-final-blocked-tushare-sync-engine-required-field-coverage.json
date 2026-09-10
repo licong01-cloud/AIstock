@@ -4,7 +4,8 @@
     "backend/services/tushare_sync_engine.py",
     "backend/services/audit_backed_data_health.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-    "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json"
+    "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json",
+    "backend/tests/test_tushare_sync_engine.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1425",
@@ -22,6 +23,27 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260911-6e644148b146",
       "timestamp": "2026-09-10T17:32:34.026100Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "fix_agent",
+      "added_files": [
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "note": "新增 backend/tests/test_tushare_sync_engine.py 作为 allowed_write_scope 成员，用于承载 BUG-1425 引擎级回执回归测试（_sync_by_date 写回执 + NaN 字符串处理）",
+      "timestamp": "2026-09-11T00:00:00Z"
+    },
+    {
+      "action": "source_fixed",
+      "actor": "fix_agent",
+      "note": "PR#4516 merged-ready; source fix commit 4a653615a; pending user restart for runtime verification",
+      "timestamp": "2026-09-11T09:30:00Z"
+    },
+    {
+      "action": "source_fixed_runtime_pending",
+      "actor": "fix_agent",
+      "note": "PR#4516 ready to merge; runtime verification pending user restart of backend-main",
+      "timestamp": "2026-09-11T09:35:00Z"
     }
   ],
   "evidence_uris": [
@@ -29,18 +51,28 @@
   ],
   "expected": "daily_basic 增量同步成功写入审计行后，门禁能验证字段覆盖率，不产生 required_field_coverage_unproven 误报 final_blocked",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1425-daily-basic-final-blocked-tushare-sync-engine-required-field-coverage.json",
       "backend/services/audit_backed_data_health.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
         "backend/services/audit_backed_data_health.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_tushare_sync_engine.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -91,26 +123,51 @@
       "suggested_scope": [
         "backend/services/tushare_sync_engine.py",
         "backend/services/audit_backed_data_health.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_tushare_sync_engine.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/tushare_sync_engine.py",
       "backend/services/audit_backed_data_health.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/tushare_sync_engine.py",
       "backend/services/audit_backed_data_health.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py"
     ]
   },
   "first_seen_at": "2026-09-10T17:32:34.026116Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix": {
+    "changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
+    "fix_commit": null,
+    "fixed_at": "2026-09-11",
+    "post_restart_verify": "重启后对 daily_basic 目标执行 23:00 auto-retry，确认不再产生 required_field_coverage_unproven final_blocked",
+    "runtime_pending_reason": "backend-main 需用户重启加载修复后的 tushare_sync_engine 与 audit_backed_data_health；重启后 final_blocked 目标须经 auto_retry 或 reconcile 自然解除",
+    "runtime_restart_owner": "user",
+    "runtime_restart_required": true,
+    "summary": "tushare_sync_engine._sync_by_date 写入 daily_basic 审计行时附加 daily_basic_required_field_coverage_v1 回执；audit_backed_data_health._status_from_audit 在回执缺失时回退从物理表现场验证覆盖率（仅当物理行数与审计行数一致才采信，否则保持 fail-closed）。",
+    "validation_evidence": [
+      "pytest backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 123 passed, 0 failed, 1 skipped",
+      "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 67 passed, 0 failed, 1 skipped",
+      "ruff check backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> All checks passed",
+      "py_compile on all four changed files -> COMPILE_OK",
+      "git diff --check -> clean"
+    ]
+  },
+  "fix_branch": "bug/BUG-1425-daily-basic-final-blocked-tushare-sync-engine-re-20260911",
+  "fix_commit": "4a653615a",
+  "fixed_at": "2026-09-11T09:30:00Z",
   "github_issue_number": 4515,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4515",
   "last_seen_at": "2026-09-10T17:32:34.026116Z",
@@ -130,11 +187,23 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/targets?dataset=daily_basic&limit=50",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/daily_basic/status",
+    "fresh_process_evidence": [
+      "python -c \"import backend.services.tushare_sync_engine; import backend.services.audit_backed_data_health; print(receipt sample)\" -> both modules loaded OK, receipt schema=daily_basic_required_field_coverage_v1, sample ratio correct",
+      "python -c import backend.services.tushare_sync_engine; import backend.services.audit_backed_data_health -> both modules loaded OK in fresh process"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -144,7 +213,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -153,6 +222,15 @@
     "fingerprint": "6e644148b146c5dc21aedc8b",
     "source_event_id": "FE-20260911-6e644148b146"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 123 passed",
+    "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 67 passed",
+    "nox -s data_sync_autonomy_backend -> 327 passed",
+    "nox -s validation_module_registry_l0 -> 8 passed",
+    "ruff check backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
+    "python -m compileall backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
+    "git diff --check -> ok"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
