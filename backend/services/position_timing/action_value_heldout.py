@@ -597,7 +597,10 @@ def run_heldout_request(request_path: Path) -> dict[str, Any]:
             "bundle": bundle.as_posix(),
             **inspect_heldout_bundle(bundle),
         }
-    if prior_request_identity(timing_root / "research") != request["prior_request_identity"]:
+    observed_prior = prior_request_identity(timing_root / "research")
+    if canonical_sha256(observed_prior) != canonical_sha256(
+        request["prior_request_identity"]
+    ):
         raise ActionValueError("HELDOUT_PRIOR_REQUEST_SET_CHANGED")
     v4_bundle, v4 = _validate_bound_parents(request)
     symbols = tuple(request["evaluation_symbols"])

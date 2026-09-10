@@ -63,6 +63,8 @@ def test_prior_request_identity_uses_union_and_reads_no_outcomes(tmp_path: Path)
     assert identity["aggregate_sha256"] == canonical_sha256(
         {key: value for key, value in identity.items() if key != "aggregate_sha256"}
     )
+    serialized = json.loads(canonical_json_bytes(identity))
+    assert canonical_sha256(serialized) == canonical_sha256(identity)
 
 
 def test_prior_request_identity_rejects_unbound_request(tmp_path: Path) -> None:
