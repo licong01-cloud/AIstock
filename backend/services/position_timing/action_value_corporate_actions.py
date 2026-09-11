@@ -20,7 +20,9 @@ from .artifact_store import PositionTimingArtifactStore
 from .contracts import canonical_json_bytes, canonical_sha256
 
 
-SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
+LEGACY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
+SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
+SUPPORTED_SNAPSHOT_SCHEMAS = (LEGACY_SNAPSHOT_SCHEMA, SNAPSHOT_SCHEMA)
 IMPLEMENTED_DIVIDEND = "\u5b9e\u65bd"
 SOURCE_QUERY_IDENTITY = {
     "table": "market.dividend",
@@ -29,6 +31,10 @@ SOURCE_QUERY_IDENTITY = {
     "account_cash_component": "cash_div (after-tax per local DDL contract)",
     "reference_price_cash_component": "cash_div_tax (pre-tax per local DDL contract)",
     "stock_component": "stk_div=stk_bo_rate+stk_co_rate",
+    "same_day_canonicalization": (
+        "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_BASE_RECORD_IDENTITY_"
+        "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
+    ),
 }
 
 
@@ -44,6 +50,7 @@ class CorporateAction:
     source_available_at: datetime
     source_row_count: int
     source_rows_sha256: str
+    source_economic_action_count: int = 1
 
     def __post_init__(self) -> None:
         if (
@@ -56,6 +63,7 @@ class CorporateAction:
             or not self.reference_price_cash_yuan_per_share.is_finite()
             or self.source_available_at.tzinfo is None
             or self.source_row_count <= 0
+            or self.source_economic_action_count <= 0
             or len(self.source_rows_sha256) != 64
         ):
             raise ActionValueError("CORPORATE_ACTION_CONTRACT_INVALID", symbol=self.symbol)
@@ -90,7 +98,7 @@ class CorporateActionBook:
             raise ActionValueError("CORPORATE_ACTION_SNAPSHOT_UNAVAILABLE") from exc
         identity = {key: value for key, value in payload.items() if key != "snapshot_sha256"}
         if (
-            payload.get("schema_version") != SNAPSHOT_SCHEMA
+            payload.get("schema_version") not in SUPPORTED_SNAPSHOT_SCHEMAS
             or payload.get("snapshot_sha256") != canonical_sha256(identity)
         ):
             raise ActionValueError("CORPORATE_ACTION_SNAPSHOT_IDENTITY_MISMATCH")
@@ -109,6 +117,7 @@ class CorporateActionBook:
                     source_available_at=datetime.fromisoformat(item["source_available_at"]),
                     source_row_count=int(item["source_row_count"]),
                     source_rows_sha256=str(item["source_rows_sha256"]),
+                    source_economic_action_count=int(item.get("source_economic_action_count", 1)),
                 )
                 for item in payload["actions"]
             )
@@ -296,31 +305,66 @@ def _snapshot_payload(
 
     actions: list[dict[str, Any]] = []
     equivalent_revisions = 0
+    canonical_economic_actions = 0
+    combined_same_day_actions = 0
     for (symbol, effective), versions in sorted(grouped.items()):
-        economics = {_economic_identity(row) for row in versions}
-        if len(economics) != 1:
-            raise ActionValueError(
-                "CORPORATE_ACTION_ECONOMIC_CONFLICT",
-                symbol=symbol,
-                effective_trade_date=effective.isoformat(),
-                economic_action_count=len(economics),
+        distributions: dict[tuple[str | None, str | None, str | None], list[dict[str, Any]]] = {}
+        for row in versions:
+            distributions.setdefault(_distribution_identity(row), []).append(row)
+
+        canonical_distributions: list[
+            tuple[tuple[str, str, str, str | None, str | None], date]
+        ] = []
+        for distribution_identity, revisions in sorted(
+            distributions.items(), key=lambda item: tuple(value or "" for value in item[0])
+        ):
+            economics = {_economic_identity(row) for row in revisions}
+            if len(economics) != 1:
+                raise ActionValueError(
+                    "CORPORATE_ACTION_ECONOMIC_CONFLICT",
+                    symbol=symbol,
+                    effective_trade_date=effective.isoformat(),
+                    distribution_identity=distribution_identity,
+                    economic_action_count=len(economics),
+                )
+            implementation_dates = {row["imp_ann_date"] for row in revisions}
+            if None in implementation_dates:
+                raise ActionValueError("CORPORATE_ACTION_AVAILABILITY_CONFLICT", symbol=symbol)
+            # Equivalent source revisions can carry a later implementation
+            # announcement date without changing any economic term.  The
+            # earliest revision reveals that one distribution.  A same-day
+            # aggregate is available only when every distinct distribution is
+            # available, hence the outer max below.
+            distribution_available_at = min(
+                date.fromisoformat(value) for value in implementation_dates
             )
-        (
-            stock_dividend,
-            account_cash_dividend,
-            reference_price_cash_dividend,
-            pay_date,
-            listing_date,
-        ) = next(iter(economics))
-        implementation_dates = {row["imp_ann_date"] for row in versions}
-        if None in implementation_dates:
-            raise ActionValueError("CORPORATE_ACTION_AVAILABILITY_CONFLICT", symbol=symbol)
-        # Equivalent source revisions can carry a later implementation
-        # announcement date without changing any economic term.  The earliest
-        # retained implementation announcement is the causal availability time
-        # of those already-identical economics; later revisions remain bound in
-        # source_rows_sha256 rather than delaying the event artificially.
-        implementation_date = min(date.fromisoformat(value) for value in implementation_dates)
+            canonical_distributions.append((next(iter(economics)), distribution_available_at))
+            equivalent_revisions += len(revisions) - 1
+
+        stock_dividend = sum(
+            (Decimal(economics[0]) for economics, _ in canonical_distributions), Decimal(0)
+        )
+        account_cash_dividend = sum(
+            (Decimal(economics[1]) for economics, _ in canonical_distributions), Decimal(0)
+        )
+        reference_price_cash_dividend = sum(
+            (Decimal(economics[2]) for economics, _ in canonical_distributions), Decimal(0)
+        )
+        cash_dates = [
+            economics[3]
+            for economics, _ in canonical_distributions
+            if Decimal(economics[1]) > 0
+        ]
+        pay_date = None if any(value is None for value in cash_dates) else max(cash_dates, default=None)
+        listing_dates = [
+            economics[4]
+            for economics, _ in canonical_distributions
+            if Decimal(economics[0]) > 0
+        ]
+        listing_date = (
+            None if any(value is None for value in listing_dates) else max(listing_dates, default=None)
+        )
+        implementation_date = max(available for _, available in canonical_distributions)
         if implementation_date > effective:
             raise ActionValueError("CORPORATE_ACTION_AVAILABLE_AFTER_EFFECTIVE_DATE", symbol=symbol)
         stable_rows = sorted(versions, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
@@ -328,24 +372,28 @@ def _snapshot_payload(
             {
                 "symbol": symbol,
                 "effective_trade_date": effective.isoformat(),
-                "quantity_multiplier": str(Decimal(1) + Decimal(stock_dividend)),
-                "cashflow_yuan_per_share": account_cash_dividend,
-                "reference_price_cash_yuan_per_share": reference_price_cash_dividend,
+                "quantity_multiplier": str(Decimal(1) + stock_dividend),
+                "cashflow_yuan_per_share": str(account_cash_dividend),
+                "reference_price_cash_yuan_per_share": str(reference_price_cash_dividend),
                 "cash_pay_date": pay_date,
                 "share_listing_date": listing_date,
                 "source_available_at": cutoff_on(implementation_date).isoformat(),
                 "source_row_count": len(stable_rows),
                 "source_rows_sha256": canonical_sha256(stable_rows),
+                "source_economic_action_count": len(canonical_distributions),
             }
         )
-        equivalent_revisions += len(stable_rows) - 1
+        canonical_economic_actions += len(canonical_distributions)
+        combined_same_day_actions += len(canonical_distributions) - 1
     identity = {
         "schema_version": SNAPSHOT_SCHEMA,
         "source_query": SOURCE_QUERY_IDENTITY,
         "scope": {"symbols": list(symbols), "start": start.isoformat(), "end": end.isoformat()},
         "raw_source_row_count": sum(len(items) for items in grouped.values()),
         "canonical_action_count": len(actions),
+        "canonical_economic_action_count": canonical_economic_actions,
         "canonicalized_equivalent_revision_count": equivalent_revisions,
+        "combined_same_day_economic_action_count": combined_same_day_actions,
         "actions": actions,
     }
     return {**identity, "snapshot_sha256": canonical_sha256(identity)}
@@ -372,6 +420,14 @@ def _economic_identity(
         row["cash_pay_date"],
         row["share_listing_date"],
     )
+
+
+def _distribution_identity(
+    row: Mapping[str, Any],
+) -> tuple[str | None, str | None, str | None]:
+    """Identify one distribution plan before announcement-revision collapse."""
+
+    return row["end_date"], row["base_date"], row["record_date"]
 
 
 def _date_text(value: Any) -> str | None:

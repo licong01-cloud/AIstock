@@ -1,7 +1,7 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.2；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
-> 状态：`ENGINEERING_IMPLEMENTED_DEV_SMOKE_VERIFIED_FORMAL_RUN_PENDING_AUTHORIZED_READONLY_SNAPSHOT_NOT_SERVING`
+> 版本：v1.3；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
+> 状态：`ENGINEERING_IMPLEMENTED_READONLY_SNAPSHOT_FROZEN_FORMAL_RUN_PENDING_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
@@ -59,7 +59,7 @@
 
 request展开并绑定candidate manifest、全局calendar hash、实际列/文件hash、公司行动与停牌snapshot、费用和guard snapshot及代码commit；bundle级request/manifest提供统一`source_identity`。事件、成交、连续净值和模型标签行显式携带`decision_as_of/feature_available_at`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
 
-记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。
+记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。同一股票同一除权日允许存在多个独立实施方案：先按 `(end_date, base_date, record_date)` 区分方案、在方案内归并经济字段相同的公告修订，再按行动前每股口径相加现金与送转比例；聚合行动的可见时间取各方案最早实施公告日中的最晚者。相同方案内经济字段仍不一致、实施公告日晚于除权日或字段缺失时继续 typed fail-closed，禁止任选一条或静默覆盖。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
 
@@ -240,7 +240,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 可直接复用的已核验接口：`DailyCandidate.open(root)`、`daily_fill(plan,bar,*,sellable,parent_count=1,full_exit=False,slippage_bps=0)`、`estimator_parameters()`、`monthly_training_windows(calendar,initial_sessions=756)`与既有prepare/run/inspect不可变写入模式。`replay_continuous_cohorts`当前接受models和固定model_action_authority，没有任意`policy_callback`参数；必须在本模块真实增加显式扩展点并保持旧默认路径，不得调用想象中的参数。`circular_block_interval`当前是有限数值序列均值bootstrap，不支持稀疏事件比值；须在本模块增加专用小函数或明确mode实现§5.3，不把NaN填0交给旧函数。
 
-实际新增四个职责文件：`pattern_strategy.py`（特征/模板/事件/动作）、`pattern_research.py`（反事实/CLI/报告）、`pattern_optimizer.py`（训练期模板选择）、`pattern_model.py`（同状态训练与推断），以及对应四个直接测试文件。没有修改`action_value_research.py`或任何其他模块源文件；复用既有纯实现并保持旧入口不变。allowed_write_scope仍仅为本模块源码、直接测试与两份设计文档。
+实际新增四个职责文件：`pattern_strategy.py`（特征/模板/事件/动作）、`pattern_research.py`（反事实/CLI/报告）、`pattern_optimizer.py`（训练期模板选择）、`pattern_model.py`（同状态训练与推断），以及对应四个直接测试文件。授权只读快照首次真实输入又暴露 `603259.SH/2025-05-21` 同日两项独立现金分红被旧适配器误判为冲突；本任务据§4契约最小修正同属 `position_timing` 的 `action_value_corporate_actions.py` 及其直接测试，不修改生产表或其他模块。没有修改`action_value_research.py`或既有公开入口；allowed_write_scope仍仅为本模块源码、直接测试与两份设计文档。
 
 研究预算固定：源人口按§5.3的64训练股/至多64评价股；8个规则模板仅在开发人口中选择；core/增强两组各2个head，每个可训练月最多4次fit，不追加种子/模型搜索。原型4项与第二块5项比较分别绑定独立family；所有实际尝试可追溯，不能把两family中任一赢家当作经过整个研发历史校正的最终最优。数据、形态特征和未变化的基线在hash一致时复用；初始只运行1个研究计算进程，线程上限4，实测首个小批次耗时与内存后更新完成时间估计，不在共享机器上同时拉起多套训练。
 
@@ -250,21 +250,21 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 任务结束交付：可运行CLI和测试；原型及优化/模型的不可变request、receipt、逐日连续净值、事件/成交/费用明细、月度模板与模型身份；固定SHA排序的前20条可评价入场/退出案例及全部类型失败计数（不按收益选案例）；逐股历史建议；一份中文结果报告与更新的蓝图/验收矩阵；源码PR、CI及合入状态。病例不足20条按实际交付。数值不足以训练某head时交付已实现代码、真实零/稀疏样本统计和`MODEL_NOT_ESTIMABLE`原因，明确“训练未成功/模型效力不可判定”，不报虚假的模型完成；规则和其他独立比较继续。
 
-本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。工程已完成并进入合入前复核；原型、优化和模型的正式证据仍统一标为`NOT_RUN`，原因仅是新版公司行动/停牌快照的生产库只读操作需用户单独授权，而不是等待最新交易日或结果门禁。
+本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。工程已完成并进入合入前复核；用户已授权且新版公司行动/停牌只读快照已经冻结，原型、优化和模型的正式证据仍统一标为`NOT_RUN`，仅因包含快照修复的源码尚需先形成干净提交再生成唯一request，不是等待最新交易日或结果门禁。
 
 ### 9.2 当前实施读回
 
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
-- 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。修复均有直接反例，不改变预注册阈值或评价人口。
-- 验证状态：四个直接测试文件当前29项通过；整个`backend/tests/position_timing`最终本地回归为284项通过。ruff与`git diff --check`的本地结果不替代最终CI。
-- 正式运行：尚未创建本研究request/bundle、没有读取新评价人口outcome、没有研究模型current或selected；获得只读快照授权后，以干净源码提交准备唯一request并一次性运行两个family。
+- 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。授权快照还暴露同日多个独立实施方案，现按方案身份先归并修订、再合并同日经济行动；相同方案内的真实冲突仍拒绝。修复均有直接反例，不改变预注册阈值或评价人口。
+- 验证状态：四个形态直接测试文件当前29项通过，公司行动适配器直接测试9项通过；整个`backend/tests/position_timing`最终本地回归为286项通过。ruff与`git diff --check`的本地结果不替代最终CI。
+- 正式运行：用户授权的只读快照已冻结；公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 含753条原始行、744项独立经济行动、739个同日规范行动、9条等价修订和5项同日合并，停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 含446个键。尚未创建本研究request/bundle、没有读取新评价人口outcome、没有研究模型current或selected；快照修复提交后立即准备唯一request并一次性运行两个family。
 
 ## 10. Verification Plan / 测试与验收
 
 直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`；当前29项通过，覆盖如下：
 
-1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量。
+1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量；同日独立分红相加而同一方案冲突继续拒绝。
 2. 状态与动作：不确认、假突破、一次入场、过期、退出边沿、持仓不可ADD、风险退出优先；EXIT目标与可卖/部分成交区别；真实成本未知不伪称盈利。
 3. 对照与账本：从b锚定，保留无回踩和未成交；s复制完全相同持仓；预算不足保留现金；逐腿父订单最低佣、分红送转、停牌、终值共同顺延与未知覆盖；等待错失上涨和提前卖飞的反例必须得到负增量。
 4. 研究身份：四项比较与family一致；source漂移拒绝复用；retry只返回既有bundle；旧研究/模型/current/N0/card/alert hash不变。稀疏事件统计不把非事件日当零收益、不按非等间隔事件序号抽块。
@@ -296,7 +296,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | 本文§1、§2、§9；主蓝图§9.21 | `backend/tests/position_timing/test_pattern_research.py` | ENGINEERING_VERIFIED | none |
-| F-002 | `pattern_strategy.py::pattern_feature_frame`；`action_value.py::market_features` | `backend/tests/position_timing/test_pattern_strategy.py` | ENGINEERING_VERIFIED | none |
+| F-002 | `pattern_strategy.py::pattern_feature_frame`；`action_value.py::market_features`；`action_value_corporate_actions.py::_snapshot_payload` | `backend/tests/position_timing/test_pattern_strategy.py`；`test_action_value_corporate_actions.py` | ENGINEERING_VERIFIED | none |
 | F-003 | `pattern_strategy.py::breakout_observed/advance_entry_event`；`pattern_research.py` | `backend/tests/position_timing/test_pattern_strategy.py`；`test_pattern_research.py` | ENGINEERING_VERIFIED | none |
 | F-004 | `pattern_strategy.py::acceleration_volume_exit`；`pattern_research.py::_simulate_exit_pair` | `backend/tests/position_timing/test_pattern_strategy.py`；`test_pattern_research.py` | ENGINEERING_VERIFIED | none |
 | F-005 | `pattern_research.py::evaluate_entry_and_exit_mechanisms/replay_prototype` | `backend/tests/position_timing/test_pattern_research.py` | ENGINEERING_VERIFIED | none |

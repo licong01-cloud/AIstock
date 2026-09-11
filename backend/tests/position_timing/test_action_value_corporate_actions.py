@@ -11,6 +11,7 @@ from backend.services.position_timing.action_value import ActionValueError, Posi
 from backend.services.position_timing.action_value_corporate_actions import (
     CorporateAction,
     CorporateActionBook,
+    LEGACY_SNAPSHOT_SCHEMA,
     _snapshot_payload,
     apply_corporate_action,
     apply_corporate_action_with_audit,
@@ -100,7 +101,9 @@ def test_snapshot_collapses_equivalent_rows_and_round_trips(tmp_path: Path) -> N
     )
     assert payload["raw_source_row_count"] == 2
     assert payload["canonical_action_count"] == 1
+    assert payload["canonical_economic_action_count"] == 1
     assert payload["canonicalized_equivalent_revision_count"] == 1
+    assert payload["combined_same_day_economic_action_count"] == 0
     assert payload["snapshot_sha256"] == canonical_sha256(
         {key: value for key, value in payload.items() if key != "snapshot_sha256"}
     )
@@ -111,6 +114,80 @@ def test_snapshot_collapses_equivalent_rows_and_round_trips(tmp_path: Path) -> N
     assert book.actions[0].quantity_multiplier == Decimal("1.3")
     assert book.actions[0].cashflow_yuan_per_share == Decimal("0.5")
     assert book.actions[0].reference_price_cash_yuan_per_share == Decimal("0.5")
+
+
+def test_snapshot_sums_distinct_same_day_distributions_after_revision_collapse(
+    tmp_path: Path,
+) -> None:
+    second = {
+        "end_date": date(2026, 3, 31),
+        "imp_ann_date": date(2026, 5, 22),
+        "stk_div": Decimal("0.1"),
+        "stk_bo_rate": Decimal("0.04"),
+        "stk_co_rate": Decimal("0.06"),
+        "cash_div": Decimal("0.2"),
+        "cash_div_tax": Decimal("0.25"),
+    }
+    payload = _snapshot_payload(
+        [
+            _row(),
+            _row(ann_date=None),
+            _row(**second),
+            _row(ann_date=None, **{**second, "imp_ann_date": date(2026, 5, 23)}),
+        ],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+
+    assert payload["raw_source_row_count"] == 4
+    assert payload["canonical_action_count"] == 1
+    assert payload["canonical_economic_action_count"] == 2
+    assert payload["canonicalized_equivalent_revision_count"] == 2
+    assert payload["combined_same_day_economic_action_count"] == 1
+    path = tmp_path / "same-day-actions.json"
+    path.write_bytes(canonical_json_bytes(payload))
+    action = CorporateActionBook.open(path).actions[0]
+    assert action.quantity_multiplier == Decimal("1.4")
+    assert action.cashflow_yuan_per_share == Decimal("0.7")
+    assert action.reference_price_cash_yuan_per_share == Decimal("0.75")
+    assert action.source_row_count == 4
+    assert action.source_economic_action_count == 2
+    assert action.source_available_at == cutoff_on(date(2026, 5, 22))
+
+
+def test_v1_snapshot_remains_readable_after_same_day_contract_upgrade(tmp_path: Path) -> None:
+    payload = _snapshot_payload(
+        [_row()],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+    legacy = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "snapshot_sha256",
+            "canonical_economic_action_count",
+            "combined_same_day_economic_action_count",
+        }
+    }
+    legacy["schema_version"] = LEGACY_SNAPSHOT_SCHEMA
+    legacy["source_query"] = {
+        key: value
+        for key, value in legacy["source_query"].items()
+        if key != "same_day_canonicalization"
+    }
+    legacy["snapshot_sha256"] = canonical_sha256(legacy)
+    path = tmp_path / "legacy-v1.json"
+    path.write_bytes(canonical_json_bytes(legacy))
+
+    action = CorporateActionBook.open(path).actions[0]
+
+    assert action.quantity_multiplier == Decimal("1.3")
+    assert action.cashflow_yuan_per_share == Decimal("0.5")
+    assert action.source_economic_action_count == 1
 
 
 def test_snapshot_uses_earliest_availability_for_equivalent_revisions() -> None:
