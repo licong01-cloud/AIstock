@@ -31,15 +31,24 @@
   ],
   "expected": "Nightly L3/DR 与安全扫描解耦；代码智能只保留一个权威工作流；安全 runner 不可用时在获取该 runner 前快速给出明确失败证据而不是无限排队。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1439-nightly-runner.json"
+    ],
     "added_files": [],
     "changed_files": [
-      ".github/workflows/nightly.yml",
-      ".github/workflows/codeql.yml",
       ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "scripts/ci_workflow_policy_scan.py",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      "tests/aistock_validation/bugs/20260911_BUG-1439-nightly-runner.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -158,10 +167,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
