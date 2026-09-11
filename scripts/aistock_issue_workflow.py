@@ -19260,8 +19260,7 @@ def build_close_sync_plan(
     )
     close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
     if create_registry_worktree and apply:
-        rel_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
-        target_source = close_sync_root / rel_source
+        target_source = _issue_json_path_for_worktree(source_path, close_sync_root)
         if not target_source.exists():
             raise WorkflowError(f"BUG JSON does not exist in close-sync worktree: {target_source}")
         record = _load_json(target_source)
