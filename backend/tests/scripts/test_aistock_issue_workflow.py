@@ -953,7 +953,6 @@ def test_start_validation_budget_defers_broad_required_plans(
 
     assert payload["required_verification"] == [
         "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
-        "miniqmt_execution_runtime_l2",
     ]
     assert payload["deferred_nightly_plans"] == [
         "paper_v2_backend",
@@ -961,6 +960,7 @@ def test_start_validation_budget_defers_broad_required_plans(
         "miniqmt_sim_stub_l3",
     ]
     task_card_text = (isolated_workflow_root / payload["task_card_md"]).read_text(encoding="utf-8")
+    assert "ci_premerge_plans: `miniqmt_execution_runtime_l2`" in task_card_text
     assert (
         "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3`"
     ) in task_card_text
@@ -968,7 +968,7 @@ def test_start_validation_budget_defers_broad_required_plans(
     assert state["task_card_availability"]["available"] is True
 
 
-def test_validation_budget_keeps_changed_file_primary_module_plan_and_drops_fixed_l0() -> None:
+def test_validation_budget_routes_changed_file_module_plan_to_ci_once() -> None:
     budgeted = workflow._apply_validation_budget(
         record={"required_verification": ["l0", "hmm_risk_backend"]},
         validation={
@@ -977,16 +977,48 @@ def test_validation_budget_keeps_changed_file_primary_module_plan_and_drops_fixe
         },
     )
 
-    assert budgeted["required_plans"] == ["hmm_risk_backend"]
+    assert budgeted["required_plans"] == ["l0"]
     assert budgeted["recommended_plans"] == []
     assert budgeted["deferred_nightly_plans"] == []
-    assert budgeted["validation_budget_gate"]["premerge_required"] == ["hmm_risk_backend"]
+    assert budgeted["ci_premerge_plans"] == ["hmm_risk_backend"]
+    assert budgeted["external_premerge_plans"] == []
+    assert budgeted["validation_budget_gate"]["premerge_required"] == ["l0"]
     record_budget = workflow._verification_budget_for_record(
         {"module": "hmm.risk", "required_verification": ["hmm_risk_backend"]},
         validation_budget=budgeted,
     )
-    assert record_budget["premerge_required_plans"] == ["hmm_risk_backend"]
+    assert record_budget["premerge_required_plans"] == ["l0"]
+    assert record_budget["ci_premerge_plans"] == ["hmm_risk_backend"]
+    assert record_budget["external_premerge_plans"] == []
     assert record_budget["deferred_nightly_verification"]["plans"] == []
+
+
+def test_validation_budget_keeps_dev_db_plan_as_external_premerge_requirement() -> None:
+    budgeted = workflow._apply_validation_budget(
+        record={"required_verification": ["l0", "factor_research_dev_db"]},
+        validation={
+            "required_plans": ["l0", "factor_research_dev_db"],
+            "recommended_plans": [],
+        },
+    )
+
+    assert budgeted["required_plans"] == ["factor_research_dev_db"]
+    assert budgeted["ci_premerge_plans"] == []
+    assert budgeted["external_premerge_plans"] == ["factor_research_dev_db"]
+
+
+def test_validation_budget_reports_recommended_regression_as_nightly() -> None:
+    budgeted = workflow._apply_validation_budget(
+        record={"required_verification": ["l0", "ra_phase1_memory_tree"]},
+        validation={
+            "required_plans": ["l0", "ra_phase1_memory_tree"],
+            "recommended_plans": ["research_assistant_backend"],
+        },
+    )
+
+    assert budgeted["required_plans"] == ["l0"]
+    assert budgeted["ci_premerge_plans"] == ["ra_phase1_memory_tree"]
+    assert budgeted["deferred_nightly_plans"] == ["research_assistant_backend"]
 
 
 def test_validation_budget_does_not_restore_stale_inapplicable_module_or_dev_plans() -> None:

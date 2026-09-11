@@ -1156,14 +1156,12 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def qe_long_trend_phase3_platform(session: nox.Session) -> None:
-    """Run F-014 Phase 3 persistence, snapshot, API, MCP, and Phase 2 compatibility contracts."""
+    """Run only F-014 Phase 3 persistence, snapshot, API, and MCP contracts."""
     _run_pytest(
         session,
         "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
         "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
         "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py",
-        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
-        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
         "backend/tests/mcp/test_qe_archive_module.py",
         "backend/tests/test_qe_archive_schema.py",
         "-q",
@@ -1705,15 +1703,6 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     )
     session.run(
         sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/mcp_gateway_phase5_assistant_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
-    )
-    session.run(
-        sys.executable,
         "scripts/aistock_module_ownership_scan.py",
         *_validation_artifact_args(
             output_json="tmp/validation/module_ownership/mcp_gateway_phase5_assistant_paths.json",
@@ -1742,7 +1731,7 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def ra_phase0_baseline(session: nox.Session) -> None:
-    """Run Phase 0 baseline, scaffold, catalog, and ownership gates."""
+    """Run only the Phase 0 baseline and ownership contract."""
     phase0_paths = [
         "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
         "docs/process/research_assistant_baseline_verification_20260531.md",
@@ -1767,19 +1756,10 @@ def ra_phase0_baseline(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
-        "backend/tests/research_assistant",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
         "-q",
         "-p",
         "no:cacheprovider",
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase0_baseline_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
     )
     session.run(
         sys.executable,
@@ -1848,15 +1828,6 @@ def ra_phase1_memory_tree(session: nox.Session) -> None:
     )
     session.run(
         sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase1_memory_tree_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
-    )
-    session.run(
-        sys.executable,
         "scripts/aistock_module_ownership_scan.py",
         *_validation_artifact_args(
             output_json="tmp/validation/module_ownership/ra_phase1_memory_tree_paths.json",
@@ -1906,15 +1877,6 @@ def ra_phase2_graph_context(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase2_graph_context_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
     )
     session.run(
         sys.executable,
@@ -1981,15 +1943,6 @@ def ra_phase3_react_grounding(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase3_react_grounding_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
     )
     session.run(
         sys.executable,
@@ -2086,15 +2039,6 @@ def ra_phase4_external_research(session: nox.Session) -> None:
     )
     session.run(
         sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase4_external_research_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
-    )
-    session.run(
-        sys.executable,
         "scripts/aistock_module_ownership_scan.py",
         *_validation_artifact_args(
             output_json="tmp/validation/module_ownership/ra_phase4_external_research_paths.json",
@@ -2167,15 +2111,6 @@ def ra_phase5_agent_teams(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase5_agent_teams_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
     )
     session.run(
         sys.executable,
@@ -2263,15 +2198,6 @@ def ra_phase6_qe_autonomy(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json",
-        ),
-        "--fail-on-warning",
-        external=True,
     )
     session.run(
         sys.executable,
@@ -2405,15 +2331,6 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         *_validation_artifact_args(
             output_json="tmp/validation/research_assistant/phase7/crosscheck.json",
         ),
-        external=True,
-    )
-    session.run(
-        sys.executable,
-        "scripts/aistock_validation_catalog_integrity.py",
-        *_validation_artifact_args(
-            output_json="tmp/validation/research_assistant/phase7/catalog_integrity.json",
-        ),
-        "--fail-on-warning",
         external=True,
     )
     session.run(
@@ -2605,23 +2522,7 @@ def position_timing_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def position_timing_first_release(session: nox.Session) -> None:
-    """Run the one concentrated source gate for the human-only first release."""
-
-    session.run(
-        "python",
-        "-m",
-        "compileall",
-        "backend/services/position_timing",
-        "backend/routers/position_timing.py",
-        external=True,
-    )
-    _run_pytest(
-        session,
-        "backend/tests/position_timing",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    """Run only the human-advice first-release frontend contracts."""
     _ensure_frontend_node_modules(session)
     frontend_env = _env(
         {

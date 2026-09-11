@@ -227,19 +227,38 @@ def _is_non_behavioral_validation_path(path: str) -> bool:
 def _plan_change_applicability(
     plan: dict[str, Any],
     changed_files: list[str],
+    *,
+    ownership_rule_by_file: dict[str, str] | None = None,
 ) -> tuple[bool, list[str], str]:
     """Evaluate optional declarative changed-file triggers for one test plan."""
 
+    candidate_files = list(changed_files)
+    ci_lane = str(plan.get("ci_lane") or "").strip().lower()
+    if ci_lane == "frontend":
+        candidate_files = [path for path in candidate_files if _norm_path(path).startswith("frontend/")]
+    elif ci_lane == "backend":
+        candidate_files = [path for path in candidate_files if not _norm_path(path).startswith("frontend/")]
+    if changed_files and not candidate_files:
+        return False, [], f"plan_ci_lane_{ci_lane}_does_not_match_changed_files"
+
     applicability = plan.get("change_applicability")
     if not isinstance(applicability, dict):
-        return True, list(changed_files), "module_required_on_change"
+        reason = "matched_plan_ci_lane" if ci_lane else "module_required_on_change"
+        return True, candidate_files, reason
     includes = [str(item) for item in _as_list(applicability.get("include")) if str(item).strip()]
     excludes = [str(item) for item in _as_list(applicability.get("exclude")) if str(item).strip()]
+    ownership_rules = {
+        str(item).strip()
+        for item in _as_list(applicability.get("ownership_rules"))
+        if str(item).strip()
+    }
+    rule_by_file = ownership_rule_by_file or {}
     matched = [
         path
-        for path in changed_files
+        for path in candidate_files
         if (not includes or any(_pattern_matches(pattern, path) for pattern in includes))
         and not any(_pattern_matches(pattern, path) for pattern in excludes)
+        and (not ownership_rules or rule_by_file.get(path) in ownership_rules)
     ]
     if matched:
         return True, matched, "matched_plan_change_applicability"
@@ -463,11 +482,13 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     recommended: list[str] = []
     primary_required: set[str] = set()
     module_files: dict[str, list[str]] = {}
+    ownership_rule_by_file: dict[str, str] = {}
     for matched in ownership.get("matched_rules") or []:
         primary_module = str(matched.get("primary_module") or "")
         file_path = str(matched.get("file") or "")
         if primary_module and file_path:
             module_files.setdefault(primary_module, []).append(file_path)
+            ownership_rule_by_file[file_path] = str(matched.get("rule_id") or "")
     plan_trigger_reasons: dict[str, list[dict[str, Any]]] = {}
     inapplicable_plans: list[str] = []
     inapplicable_reasons: dict[str, str] = {}
@@ -490,6 +511,7 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
             applicable, matched_files, reason = _plan_change_applicability(
                 plan,
                 behavioral_files or owned_files,
+                ownership_rule_by_file=ownership_rule_by_file,
             )
         if not applicable:
             inapplicable_plans.append(plan_key)

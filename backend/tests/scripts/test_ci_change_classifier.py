@@ -530,8 +530,9 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert qe_multi_alpha_frontend_payload["classification"] == "targeted_ci_required"
+    assert qe_multi_alpha_frontend_payload["classification"] == "frontend_ci_required"
     assert qe_multi_alpha_frontend_payload["frontend_required"] is True
+    assert qe_multi_alpha_frontend_payload["backend_required"] is False
     assert qe_multi_alpha_frontend_payload["unmapped_code_files"] == []
 
     hmm_payload = classifier.classify_changed_files(
@@ -788,10 +789,10 @@ def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "targeted_ci_required"
+    assert payload["classification"] == "frontend_ci_required"
     assert payload["frontend_required"] is True
     assert payload["frontend_test_targets"] == ["tests/hmm-evolution"]
-    assert payload["backend_sessions"] == ["hmm_evolution_backend"]
+    assert payload["backend_sessions"] == []
     assert payload["catalog_impacted_modules"][0] == "hmm.evolution"
     assert payload["unmapped_code_files"] == []
 
@@ -821,7 +822,7 @@ def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp
     assert "data_quality_deep" in payload["backend_plan_keys"]
 
 
-def test_selected_mcp_and_research_assistant_plans_have_windows_executors() -> None:
+def test_selected_gateway_and_research_assistant_plans_have_windows_executors() -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/tests/research_assistant/test_service.py",
@@ -833,7 +834,6 @@ def test_selected_mcp_and_research_assistant_plans_have_windows_executors() -> N
     expected_sessions = {
         "mcp_gateway_manifest_quality",
         "research_assistant_backend",
-        "research_assistant_mcp_contract",
     }
     assert set(payload["backend_sessions"]) == expected_sessions
     assert payload["backend_required"] is True
@@ -1187,11 +1187,11 @@ def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Pa
         ["frontend/src/app/watchlist/page.tsx"],
         repo_root=tmp_path,
     )
-    assert frontend["classification"] == "targeted_ci_required"
+    assert frontend["classification"] == "frontend_ci_required"
     assert frontend["frontend_required"] is True
     assert frontend["frontend_test_targets"] == ["tests/watchlist"]
-    assert frontend["backend_required"] is True
-    assert frontend["backend_sessions"] == ["watchlist_backend"]
+    assert frontend["backend_required"] is False
+    assert frontend["backend_sessions"] == []
     assert frontend["obsolete_surface_removal"] is False
 
     go = classifier.classify_changed_files(
