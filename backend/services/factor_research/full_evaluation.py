@@ -12,7 +12,7 @@ from .models import ResearchError, json_object
 from .runner import load_values
 
 
-_FACTOR_NAME = re.compile(r"[a-z][a-z0-9_]{2,80}")
+_FACTOR_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,80}")
 
 
 def validate_full_evaluation_spec(

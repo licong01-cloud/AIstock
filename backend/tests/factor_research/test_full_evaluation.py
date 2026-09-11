@@ -48,7 +48,10 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
     reference = tmp_path / "reference.h5"
     reference.write_bytes(b"not-read-by-validation")
     value = {
-        "reference_value_artifacts": {"m_reference": str(reference)},
+        "reference_value_artifacts": {
+            "m_reference": str(reference),
+            "CORD10": str(reference),
+        },
         "correlation_batch_size": 2,
         "correlation_half_life": 4,
         "correlation_min_stocks": 3,
@@ -59,6 +62,7 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
         value, candidate_names={"m_candidate"}, repo_root=Path(__file__).parents[3]
     )
     assert normalized["reference_value_artifacts"] == {
+        "CORD10": str(reference.resolve()),
         "m_reference": str(reference.resolve())
     }
 
