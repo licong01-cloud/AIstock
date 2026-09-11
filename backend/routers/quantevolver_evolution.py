@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -1344,8 +1344,13 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
 
         # 为 loops 配置分配 loop_index
         loops_config = []
+        from ..services.quantevolver.qe_active_dataset_profile import (
+            QEActiveDatasetProfileError,
+            enforce_qe_universe_topk,
+        )
+
         for i, loop_cfg in enumerate(req.loops, start=1):
-            cfg_dict = loop_cfg.dict()
+            cfg_dict = _model_to_dict(loop_cfg)
             _reject_nested_runtime_flags(
                 cfg_dict.get("strategy_params"),
                 f"strategy_loop[{i}].strategy_params",
@@ -1356,6 +1361,21 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
                 cfg_dict.get("execution_algo"),
                 f"strategy_loop[{i}].execution_algo",
             )
+            try:
+                cfg_dict["strategy_params"] = enforce_qe_universe_topk(
+                    cfg_dict.get("strategy_params"),
+                    universe_selection=cfg_dict.get("universe_selection"),
+                    stock_pool=cfg_dict.get("stock_pool"),
+                )
+            except QEActiveDatasetProfileError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "reason_code": exc.reason_code,
+                        "message": str(exc),
+                        "context": {"loop": i, **exc.context},
+                    },
+                ) from exc
             loops_config.append(cfg_dict)
 
         new_task_id = await scheduler.strategy_fork_task(
@@ -1533,6 +1553,10 @@ class UniverseComparisonCreateRequest(BaseModel):
     node_parallelism: Optional[Dict[str, int]] = None
     auto_start: bool = False
     long_trend_profile_id: Optional[str] = None
+    topk_by_pool: Optional[Dict[str, StrictInt]] = Field(
+        None,
+        description="Explicit per-arm TopK overrides; STAR50 must be 20",
+    )
 
 
 class CustomEvoConfigUpdateRequest(BaseModel):
@@ -1765,6 +1789,7 @@ async def _prepare_custom_evo_loop_configs(
 
     from ..services.quantevolver.qe_active_dataset_profile import (
         QEActiveDatasetProfileError,
+        enforce_qe_universe_topk,
         load_active_qe_profile,
         reject_client_dataset_internals,
         resolve_and_apply_active_qe_dataset,
@@ -1874,6 +1899,23 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict["custom_params"] = active_params
             cfg_dict["stock_pool"] = active_params.get("stock_pool")
             cfg_dict["resolved_dataset"] = summary
+
+    for pos, cfg_dict in enumerate(loops_config, start=1):
+        try:
+            cfg_dict["strategy_params"] = enforce_qe_universe_topk(
+                cfg_dict.get("strategy_params"),
+                universe_selection=cfg_dict.get("universe_selection"),
+                stock_pool=cfg_dict.get("stock_pool"),
+            )
+        except QEActiveDatasetProfileError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": exc.reason_code,
+                    "message": str(exc),
+                    "context": {"loop": pos, **exc.context},
+                },
+            ) from exc
 
     synced_stock_pool_keys: set[tuple[str, str]] = set()
     for cfg_dict in loops_config:
@@ -2023,6 +2065,11 @@ async def create_universe_comparison_task(
 ):
     """Reuse custom-evo orchestration; only the selected universe may vary by arm."""
 
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QEActiveDatasetProfileError,
+        enforce_qe_universe_topk,
+    )
+
     base = _model_to_dict(req.base_loop)
     if base.get("stock_pool") or base.get("universe_selection") is not None:
         raise HTTPException(
@@ -2035,9 +2082,21 @@ async def create_universe_comparison_task(
             status_code=400,
             detail="pool_ids must contain at least two unique non-empty pools",
         )
+    topk_by_pool = dict(req.topk_by_pool or {})
+    unknown_topk_pools = sorted(set(topk_by_pool) - set(pool_ids))
+    if unknown_topk_pools:
+        raise HTTPException(
+            status_code=400,
+            detail=f"topk_by_pool contains pools outside pool_ids: {unknown_topk_pools}",
+        )
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in topk_by_pool.values()):
+        raise HTTPException(
+            status_code=400,
+            detail="topk_by_pool values must be positive integers",
+        )
     group_id = f"qeucmp_{uuid.uuid4().hex[:20]}"
     loops: list[CustomEvoLoopConfig] = []
-    arm_summaries: list[dict[str, str]] = []
+    arm_summaries: list[dict[str, Any]] = []
     for pool_id in pool_ids:
         arm = dict(base)
         arm["label"] = f"universe:{pool_id}"
@@ -2046,16 +2105,41 @@ async def create_universe_comparison_task(
             if pool_id == "stock_universe"
             else {"mode": "single_index", "pool_ids": [pool_id]}
         )
+        if pool_id in topk_by_pool:
+            strategy_params = dict(arm.get("strategy_params") or {})
+            strategy_params["topk"] = topk_by_pool[pool_id]
+            arm["strategy_params"] = strategy_params
+        try:
+            arm["strategy_params"] = enforce_qe_universe_topk(
+                arm.get("strategy_params"),
+                universe_selection=arm["universe_selection"],
+            )
+        except QEActiveDatasetProfileError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": exc.reason_code,
+                    "message": str(exc),
+                    "context": {"pool_id": pool_id, **exc.context},
+                },
+            ) from exc
         flags = dict(arm.get("runtime_flags") or {})
         flags["qe_universe_comparison"] = {
             "schema_version": "qe_universe_comparison_arm_v1",
             "comparison_group_id": group_id,
             "comparison_mode": "separate_runs",
             "arm_label": pool_id,
+            "arm_topk": (arm.get("strategy_params") or {}).get("topk"),
         }
         arm["runtime_flags"] = flags
         loops.append(CustomEvoLoopConfig(**arm))
-        arm_summaries.append({"pool_id": pool_id, "arm_label": pool_id})
+        arm_summaries.append(
+            {
+                "pool_id": pool_id,
+                "arm_label": pool_id,
+                "topk": (arm.get("strategy_params") or {}).get("topk"),
+            }
+        )
 
     result = await create_custom_evolution_task(
         CustomEvolutionCreateRequest(

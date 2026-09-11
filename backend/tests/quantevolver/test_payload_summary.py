@@ -13,6 +13,7 @@ from backend.services.quantevolver.payload_summary import (
     compact_experiment_row,
     compact_loop_row,
     compact_metric_summary,
+    compact_policy_summary,
     derive_position_summary_from_enhanced_metrics,
 )
 from backend.services.quantevolver.qe_evolution_agents import EvolutionAgents
@@ -41,6 +42,33 @@ def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
     assert summary["unfilled_handler_params"]["backup_depth"] == 15
     assert "candidate_symbols" not in summary["strategy_params"]
     assert "factor_list" not in summary
+
+
+def test_compact_config_summary_reads_nested_dataset_binding_and_marks_star50_history() -> None:
+    summary = compact_config_summary(
+        {
+            "strategy_params": {"topk": 50},
+            "model_params": {
+                "_qe_active_dataset_summary": {
+                    "generation": "20260911-v6",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "cutoff": "2026-08-31",
+                },
+                "_qe_direct_v2_dataset_binding": {
+                    "selection_pins": {
+                        "mode": "single_index",
+                        "pool_ids": ["star50"],
+                        "instrument_name": "index_pool__star50",
+                    }
+                },
+            },
+        }
+    )
+
+    assert summary["dataset"]["generation"] == "20260911-v6"
+    assert summary["universe"]["pool_ids"] == ["star50"]
+    assert summary["universe"]["star50_top20_eligible"] is False
+    assert summary["universe"]["protocol_status"] == "historical_star50_non_top20"
 
 
 def test_compact_metric_summary_drops_large_enhanced_payloads() -> None:
@@ -98,6 +126,68 @@ def test_compact_metric_summary_keeps_enhanced_scalars_only() -> None:
     assert enhanced["position_summary"]["final_stock_value"] == 9000.0
     assert "return_curves" not in enhanced
     assert "stock_trades" not in enhanced
+
+
+def test_compact_metric_summary_keeps_absolute_and_active_sources_separate() -> None:
+    summary = compact_metric_summary(
+        {
+            "annualized_return": 0.31,
+            "information_ratio": 1.42,
+            "max_drawdown": -0.09,
+            "enhanced_metrics": {
+                "absolute_returns": {
+                    "cagr": 0.12,
+                    "sharpe": 0.61,
+                    "max_drawdown": -0.22,
+                }
+            },
+        },
+        row={"cagr": 0.99, "max_drawdown": -0.01, "information_ratio": 9.9},
+    )
+
+    assert summary["cagr"] == 0.12
+    assert summary["sharpe"] == 0.61
+    assert summary["max_drawdown"] == -0.22
+    assert summary["calmar"] == pytest.approx(0.12 / 0.22)
+    assert summary["annualized_return"] == 0.31
+    assert summary["information_ratio"] == 9.9
+    assert summary["metric_contract"]["absolute_source"] == "enhanced_metrics.absolute_returns"
+    assert summary["metric_contract"]["information_ratio_is_sharpe"] is False
+
+
+def test_compact_metric_summary_never_uses_information_ratio_as_sharpe() -> None:
+    summary = compact_metric_summary({"information_ratio": 1.5})
+
+    assert summary["information_ratio"] == 1.5
+    assert "sharpe" not in summary
+    assert "sharpe" in summary["metric_contract"]["absolute_missing"]
+
+
+def test_compact_policy_summary_reports_enablement_and_effect_evidence() -> None:
+    summary = compact_policy_summary(
+        {
+            "enable_sector_hmm": True,
+            "sector_blacklist": ["801080.SI"],
+        },
+        {
+            "enhanced_metrics": {
+                "policy_diagnostics": {
+                    "hmm_trigger_count": 0,
+                    "blacklist_excluded_count": 7,
+                }
+            }
+        },
+    )
+
+    assert summary["hmm"] == {
+        "requested": True,
+        "enabled": True,
+        "effective": False,
+        "trigger_count": 0,
+        "effective_reason": "enabled_no_action",
+    }
+    assert summary["sector_blacklist"]["effective"] is True
+    assert summary["sector_blacklist"]["action_count"] == 7
 
 
 def test_compact_enhanced_summary_derives_position_counts_from_stock_trades() -> None:
@@ -363,6 +453,8 @@ def test_compact_experiment_row_uses_existing_scalar_columns_without_result_metr
     assert compact["experiment_id"] == "qe_1"
     assert compact["ic"] == 0.02
     assert compact["rank_ic"] == 0.03
-    assert compact["metrics_summary"] == {"ic": 0.02, "rank_ic": 0.03}
+    assert compact["metrics_summary"]["ic"] == 0.02
+    assert compact["metrics_summary"]["rank_ic"] == 0.03
+    assert compact["metrics_summary"]["metric_contract"]["absolute_source"] == "legacy_summary_unverified"
     assert "result_metrics" not in compact
 

@@ -128,6 +128,7 @@ def test_qe_universe_comparison_task_create_preserves_arm_contract() -> None:
             {
                 "task_name": "same strategy pools",
                 "pool_ids": ["000300.SH", "000905.SH"],
+                "topk_by_pool": {"000300.SH": 20, "000905.SH": 20},
                 "base_loop": {
                     "factor_keys": ["Alpha001"],
                     "model_id": "model_lgbm_v1",

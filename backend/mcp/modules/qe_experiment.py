@@ -861,6 +861,10 @@ def register(registry: "ModuleRegistry") -> None:
             {
                 "task_name": task_name,
                 "pool_ids": list(pool_ids),
+                "topk_by_pool": {
+                    pool_id: 20 if str(pool_id).strip().lower() == "star50" else int(topk)
+                    for pool_id in pool_ids
+                },
                 "base_loop": _comparison_base_loop(
                     factor_keys=factor_keys,
                     model_id=model_id,
