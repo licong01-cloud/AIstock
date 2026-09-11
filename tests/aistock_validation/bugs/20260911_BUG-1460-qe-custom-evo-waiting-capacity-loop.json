@@ -82,7 +82,8 @@
     "fresh_process_evidence": [
       "fresh pytest process: capacity/zombie/parallelism focused matrix -> 12 passed",
       "fresh pytest process: backend/tests/unified_engine/test_qe_config_truth.py -> 139 passed, 38 skipped",
-      "fresh pytest process: backend/tests/test_qe_evolution_scheduler.py -> 2 passed"
+      "fresh pytest process: backend/tests/test_qe_evolution_scheduler.py -> 2 passed",
+      "HEAD ffa172def fresh Python imported qe_evolution_service and targeted recovery tests passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
