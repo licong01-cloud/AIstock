@@ -2,19 +2,19 @@
 
 > Feature ID：`qe_unified_experiment_registry_selective_warehouse_v1`
 > Feature tier：F2
-> 设计版本：v1.1（3 个交付批次）
-> 日期：2026-09-07
-> 状态：`BATCH_A_RUNTIME_READY_BATCH_B_SOURCE_LOCAL_REVIEW_PASS`
-> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.14
+> 设计版本：v1.2（3 个交付批次；失败/精确重复清理与可比指标增量修订）
+> 日期：2026-09-11
+> 状态：`BATCH_A_RUNTIME_READY_BATCH_B_V1_1_SOURCE_MERGED_V1_2_DELTA_DESIGN_READY`
+> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.15
 > 既有入仓设计：`docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md`
 
 ## 1. Background / 背景与问题
 
 ### 1.1 用户目标
 
-从本功能生效开始，所有正式 QE 实验都必须在 AIstock UI 中可见进度、终态和历史详情；具备长期研究价值的实验由用户在 UI 选择，或由用户明确授权 Codex/Claude Code 后进入 QE Archive 数仓。该能力必须同时覆盖 WSL `wsl2-5080` 与远端 `rdagent-node1`，并保持策略演进为唯一研究 P0。
+从本功能生效开始，所有正式 QE 实验在执行期间都必须在 AIstock UI 中可见进度、终态和详情；终态后只长期保留成功、非精确重复且具有研究价值的实验。失败、无有效结果、验证噪声和精确重复实验不进入长期历史或 QE Archive，并通过有界清理从控制面、数仓和制品目录一致删除。具备长期研究价值的成功实验按价值等级保存；完整入仓仍由用户在 UI 选择，或由用户明确授权 Codex/Claude Code。该能力必须同时覆盖 WSL `wsl2-5080` 与远端 `rdagent-node1`，并保持策略演进为唯一研究 P0。
 
-本设计是用户明确批准的必要基础架构例外，不受父蓝图原“禁止 UI/Archive 平台工作”的限制；该例外只覆盖新正式实验的前瞻登记、状态可见和选择性入仓，不恢复历史补账、全量归档或通用平台建设。
+本设计是用户明确批准的必要基础架构例外，不受父蓝图原“禁止 UI/Archive 平台工作”的限制；该例外只覆盖新正式实验的前瞻登记、状态可见、价值分级、选择性入仓、失败/精确重复清理，以及演进轨迹的股票池和收益可比性，不恢复历史补账、全量归档或通用平台建设。
 
 ### 1.2 已确认的现状
 
@@ -28,7 +28,7 @@
 
 真实缺口是入口不统一：部分 Codex/Claude 长任务直接在 WSL 或远端执行 qrun，任务 manifest 会明确记录 `backend_used=false`、`ui_used=false`、`scheduler_used=false`。这类任务虽然生成了 workspace、配置和回测结果，却没有 `qe_experiments`、task/loop 或 Archive source identity，UI 自然无法发现。部分 Multi-Alpha 路径也在装配后才持久化 parent，尚未形成“登记成功后才允许分发”的统一不变量。
 
-QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每个大型 workspace。但“所有正式实验都有轻量运行历史”和“只有有价值实验完整入仓”是两个层次，不能再把后者的人工选择策略误用为前者缺失的理由。
+QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每个大型 workspace。v1.1 曾把“所有正式终态长期保留轻量运行历史”作为统一可观察性的组成部分；用户在 2026-09-11 明确修订该规则：运行中和刚形成终态的可观察性继续保留，但失败、无有效结果和精确重复实验不再作为长期研究历史。成功且唯一的实验才进入价值分级，失败诊断如需长期跟踪应进入独立 BUG/Issue，而不是占用 QE 实验历史与制品空间。
 
 ### 1.3 设计结论
 
@@ -41,8 +41,9 @@ QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每
   -> 现有 WSL 或 remote dispatcher
   -> 现有节点状态与 artifact receipt
   -> 按变化收敛到 qe_experiments / task / loop
-  -> UI 全历史与详情
-  -> 规则只推荐，用户 UI 操作或明确授权后写 QE Archive
+  -> UI 展示在途对象和成功、唯一的长期历史
+  -> 失败/无结果/精确重复经安全分类后清理
+  -> 成功唯一实验按价值等级保存；规则只推荐，用户 UI 操作或明确授权后完整写 QE Archive
 ```
 
 ## 2. Scope / 范围
@@ -53,16 +54,16 @@ QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每
 2. UI、Backend/Scheduler、Codex MCP、Claude Code MCP 最终复用同一控制面身份和执行入口。
 3. WSL 与远端节点在计算开始前取得已持久化的 experiment/task/loop identity，不允许先运行后补身份。
 4. UI 能以日期、类型、状态、节点、模型、因子族、股票池、数据 release 和执行算法搜索全部正式实验，无需人工输入内部 ID 或 JSON。
-5. completed、failed、cancelled、interrupted 和父任务 partial/failed 下的成功 child 均保留轻量历史，不以成功任务为唯一样本。
+5. completed 且非精确重复的实验保留轻量历史；父任务 partial/failed 下的成功 child 不得被父状态覆盖。failed 及被成功 retry 取代的失败 attempt 在结构化根因已投递 BUG/日志后进入清理候选，不作为长期实验样本。
 6. Backend 重启不终止已分发的 WSL/远端计算；恢复后通过既有协调器和节点回执幂等收敛，不重复提交。
-7. 所有终态实验保留轻量研究事实；用户选择或明确授权的高价值实验才进入完整 QE Archive。
-8. workspace 后续清理不级联删除正式实验历史；UI 明示 artifact 可用、已清理或缺失状态。
+7. 成功、非重复实验按 A/B/C 三档保存：A 为完整策略锚点，B 为紧凑有效研究，C 为最小成功摘要；失败、无有效结果、验证噪声和精确重复为 X 档并删除。
+8. 普通 workspace cleanup 不删除 A/B/C 控制面历史；X 档清理必须同时覆盖控制面、数仓和精确制品引用，禁止留下 UI 有记录但文件丢失或文件存在但记录已删的半状态。
 9. 正常未变化心跳不追加事件；UI 未打开不产生前端轮询；节点探测与状态核对不短于 60 秒。
 10. 训练、预测、回测数据面继续只读版本化 Bin/H5/Parquet/sidecar，数据库只承担控制面和结果面。
 
 ### 2.2 正式实验定义
 
-只要一次执行的结果会参与 Alpha、模型、因子、股票池、策略、成本、执行算法或策略包比较，就属于正式实验，必须登记。正式实验包括成功和失败 trial，不因结果弱或失败而退出历史。
+只要一次执行的结果会参与 Alpha、模型、因子、股票池、策略、成本、执行算法或策略包比较，就属于正式实验，必须在计算前登记。登记保证运行时可观察性，不等于永久保存资格：成功且非重复的 trial 才进入 A/B/C 长期历史；失败、无有效结果和精确重复在终态分类后进入 X 档清理。结果弱但成功且唯一的 trial 不是失败，可作为负对照或最小研究摘要保留。
 
 单元测试、fixture、开发期极小 smoke 可以不进入研究历史，但必须显式标记 `purpose=validation`，不得被报告为正式实验结论。任何生成可用于研究比较的完整预测或组合指标的运行，不得借 `smoke` 名义绕过登记。
 
@@ -87,8 +88,8 @@ QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每
 |---|---|---|---|
 | 控制面登记 | `qe_experiments`、`qe_evolution_tasks`、`qe_evolution_loops`、Multi-Alpha durable tables | 全部正式实验身份、配置摘要、节点、生命周期和终态 | 保存训练/回测输入数据 |
 | 节点执行 | `QEWorkspaceClient`、现有 WSL/remote dispatcher、RD-Agent loop | 使用已登记 identity 执行并返回阶段/终态/artifact receipt | 自建孤儿 experiment identity、写业务表 |
-| UI 历史 | `/quantevolver/experiments`、evolution/task/loop 详情与结果接口 | 搜索、分组、进度、失败、核心指标、入仓状态 | 扫描节点目录发现实验、写状态 |
-| 长期数仓 | `qe_archive` schema、backfill preview/execute、source-status | 只保存用户选择或明确授权的完整研究样本 | 自动全量入仓、替代运行控制面 |
+| UI 历史 | `/quantevolver/experiments`、evolution/task/loop 详情与结果接口 | 搜索、分组、在途进度、A/B/C 长期结果、价值等级与 X 清理预览 | 扫描节点目录发现实验、写状态、把 X 档长期伪装成研究样本 |
+| 长期数仓 | `qe_archive` schema、backfill preview/execute、source-status | 只保存用户选择或明确授权的 A 档完整样本；B/C 使用既有轻量结果面 | 自动全量入仓、替代运行控制面、保存失败或精确重复实验 |
 
 ### 3.2 统一登记适配器
 
@@ -125,11 +126,9 @@ QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每
 - 同一 identity 的 retry/resume 不得重复启动已 running/succeeded 的 remote attempt；未知远端状态保持 unknown/reconciling，不伪造 failed 或 completed。
 - WSL 全局并行度不超过 2、图模型单槽串行的现有资源合同不变；本功能不提高并发。
 
-### 3.5 两级持久化
+### 3.5 A/B/C/X 价值分级与持久化
 
-#### Level 0：所有正式实验的控制面历史
-
-复用既有运行态表，至少保留：
+正式实验在执行期间仍复用既有运行态表，至少记录：
 
 - experiment/task/loop identity 与 parent-child 关系；
 - 来源类型：UI、MCP、scheduler，以及 single/custom/strategy/auto/multi-alpha；
@@ -137,24 +136,37 @@ QE Archive 的现行手动入仓原则是正确的：数仓不应自动保存每
 - model、factor set、seed、label、data split、strategy 和 minute execution 摘要；
 - active dataset release/profile generation、universe、benchmark 与节点；
 - created/started/completed 时间和 canonical 状态；
-- 终态核心指标摘要或结构化失败 reason code；
+- 终态核心指标摘要或结构化失败 reason code（仅用于终态分类与故障投递）；
 - workspace 与 artifact manifest 的受控引用及 retention 状态；
-- Archive 状态投影。
+- Archive 状态和价值等级投影。
 
-Level 0 不复制大文件。正式记录不得因 workspace 清理而删除，也不得用数据库 DELETE 作为普通 UI 清理动作。需要排除测试噪声时，使用 purpose/visibility 标记和 UI 筛选，不销毁历史事实。
+终态形成后按下表分类。分类只决定保存深度，不改变实验指标，也不是新的研究准入审批：
 
-#### Level 1：选择性 QE Archive
+| 等级 | 定义 | 长期保存 |
+|---|---|---|
+| A | 当前冠军、Pareto 前沿、策略包锚点、决定性 matched baseline/variant，或用户点名的高价值成功实验 | 完整结构化结果与经用户确认的 QE Archive 制品 |
+| B | 成功、唯一、能回答预注册假设的研究样本，包括决定性负对照、跨 seed/vintage/股票池/release 的代表样本 | 配置、身份、核心指标、必要曲线/归因摘要；大 workspace 可清理 |
+| C | 成功、唯一但当前增量有限，仍可作为基线或后续比较引用 | 最小配置摘要、数据/股票池/执行身份、核心指标和 retention 状态 |
+| X | failed、cancelled 且无有效结果、无终态指标、validation smoke/fixture、被成功 retry 取代的失败 attempt，或精确重复实验 | 在安全清理后不保留于 QE 历史、数仓或制品目录；必要根因进入 BUG/Issue |
 
-继续以现有 `qe_archive` 为唯一长期分析数仓。只有以下动作能够触发完整写仓：
+“精确重复”必须同时满足：相同 data release/cutoff、股票池与 benchmark、模型与超参数、因子集合 digest、seed、label/data split、Top-K/成本/分钟执行合同，并且结果或 prediction digest 相同，或属于已确认的一次 retry lineage。不同 seed、股票池、日期、release、执行算法均不是重复；相同配置但结果 hash 不同属于确定性异常，必须登记问题，禁止自动删除。
+
+父 task/experiment 为 partial 或 failed 时逐 child 分类：成功且唯一的 sibling 进入 A/B/C；失败 child 可进入 X。不得因父级状态删除成功 child，也不得把失败父级整体保留为有价值实验。
+
+分类顺序必须确定且可解释：先用状态、结果完整性、purpose、retry lineage 与 duplicate key 判定 X；再把已被当前冠军/Pareto/策略包/正式 matched comparison 引用或用户点名的成功对象列为 A；能够回答预注册假设、代表跨 seed/vintage/股票池/release 对照或构成成功负对照的对象列为 B；其余成功、唯一、身份完整的对象列为 C。不得新增 CAGR、Sharpe、IC 等硬阈值作为自动删除条件。无法确定身份、digest、引用或等级时保持可见并标记 `classification_pending`，禁止删除。
+
+继续以现有 `qe_archive` 为唯一完整分析数仓。只有以下动作能够触发 A 档完整写仓：
 
 1. 用户在 UI 勾选 experiment/task/loop，查看 preview 后确认；
 2. 用户明确授权 Codex/Claude Code，客户端调用 existing confirmed execute MCP。
 
-系统规则只生成推荐和原因，不自动执行。写仓按 loop/experiment 粒度幂等；task 只作为批量选择入口，不把多个 loop 合并为一条 run。
+系统规则只生成价值等级、推荐和原因，不自动执行完整入仓。写仓按 loop/experiment 粒度幂等；task 只作为批量选择入口，不把多个 loop 合并为一条 run。B/C 只使用既有控制面/结果面字段，不新建第二数仓。
 
 ### 3.6 不进行历史补账
 
 本功能验收只覆盖生效后的正式实验。已存在但未登记的直接 WSL/remote 目录不自动扫描、不自动创建 DB 记录。若未来需要补录，只能针对用户点名、配置与结果完整、路径和 digest 可回读的精确 run 独立 preview 和授权；它不属于本 Feature 完成条件，也不得阻断新 Alpha 实验。
+
+“不补账”不等于既有 X 永久保留。实现完成后，可对数据库已登记、identity 与制品引用可精确回读的既有失败/无结果/validation/精确重复记录生成一次性 cleanup inventory；该 inventory 只分类已有记录，不扫描目录发现对象，不补造身份或指标。实际删除必须逐批 preview、DEV 验证、用户授权和生产 readback，无法确定 canonical survivor、跨节点路径或保护引用的对象保持不动并报告 blocker。
 
 ## 4. Contracts / API、DB、UI 与 MCP 契约
 
@@ -186,12 +198,12 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 | running | 至少一个当前 attempt 正在执行 |
 | finalizing | 计算终态已出现，结果收集/一致性回读尚未完成 |
 | completed | 结果和要求的终态摘要已持久化 |
-| failed | 结构化失败，成功 sibling 不被覆盖 |
-| cancelled | 已确认取消；未知远端状态不得冒充 cancelled |
+| failed | 结构化失败；在故障投递与安全分类完成前可见，随后进入 X 清理；成功 sibling 不被覆盖 |
+| cancelled | 已确认取消；未知远端状态不得冒充 cancelled；无有效结果者进入 X 清理 |
 | interrupted | 节点或进程中断有直接证据，可按既有 retry 语义恢复 |
 | reconciling | Backend 恢复后正在核对远端；不是失败 |
 
-父 task/experiment 同时展示 child 总数和 planned/queued/running/completed/failed/cancelled 数量。父级 failed/partial 不得让已完成 child 从 UI 或数仓候选中消失。
+父 task/experiment 同时展示 child 总数和 planned/queued/running/completed/failed/cancelled 数量。父级 failed/partial 不得让已完成 child 从 UI 或数仓候选中消失；X child 清理后父级计数与聚合状态必须在同一操作中重算，禁止留下悬空引用。
 
 ### 4.3 状态写入与查询频率
 
@@ -215,7 +227,8 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 - dataset release；
 - universe/pool；
 - execution algorithm；
-- archived/recommended/not-archived。
+- archived/recommended/not-archived；
+- value tier（A/B/C）与 cleanup candidate（X，只在清理前短期可见）。
 
 `detail=summary` 不返回大 JSONB；详情页按需读取配置摘要、指标、日志 tail、child grid 与 archive status。API 输出人类可读 display fields，并保留内部 identity 供页面路由，不要求用户复制粘贴。
 
@@ -223,12 +236,16 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 
 `/quantevolver/experiments` 继续作为正式实验历史入口，复用现有 shadcn-compatible 组件：
 
-1. 默认按创建时间倒序显示全部正式 parent/task；可展开 child/loop。
+1. 默认按创建时间倒序显示在途实验和 A/B/C 正式 parent/task；可展开 child/loop。X 只在清理预览与短期故障处置中可见，清理成功后不再进入历史列表。
 2. 顶部使用日期、类型、状态、节点、模型、数据 release、股票池和入仓状态控件；没有裸 ID 或 JSON 输入框。
-3. 列表显示进度计数、当前阶段、最近状态时间、数据 release、节点和 Archive 状态。
+3. 列表显示进度计数、当前阶段、最近状态时间、数据 release、节点、价值等级和 Archive 状态。
 4. 详情展示配置摘要、数据/股票池/TWAP 身份、时间线、失败 reason code、核心指标、曲线、child、日志 tail 与 artifact retention。
 5. 用户可勾选 experiment/loop，先看 Archive preview，再确认写仓；推荐只是默认勾选建议，不是审批门禁。
-6. workspace 已清理时详情仍展示 Level 0 历史；相关制品标记 `cleaned`，不返回 404 或删除数据库记录。
+6. A/B/C 的 workspace 已清理时详情仍展示相应长期摘要，相关制品标记 `cleaned`；X 清理成功后不提供历史详情。
+7. evolution trajectory 汇总的每个 loop 必须显示运行时冻结的 `universe_mode`、`universe_pool_ids` 与 benchmark，禁止用当前 active profile 推断历史股票池。旧记录缺少该证据时显示“历史未记录”，不得填成默认股票池。
+8. trajectory 同时显示并明确命名：绝对 CAGR、同窗口 benchmark 年化收益、扣费超额年化收益与该超额序列 IR；IC/RankIC 继续保留。`annualized_return` 不得在绝对收益和超额收益间复用同一标签。
+
+收益字段的权威来源如下：绝对 CAGR 读取 `enhanced_metrics.absolute_returns.cagr`；benchmark 年化收益必须由同一 benchmark、同一评价窗口的权威回测序列给出；扣费超额年化收益读取 `1day.excess_return_with_cost.annualized_return`，IR 读取同一扣费超额序列的 information ratio。禁止通过两个年化收益相减伪造超额收益；缺少同窗口权威 benchmark 时显示“不可计算”并保留 reason code。现有 `payload_summary.py` 对 `annualized_return` 的别名只能作为兼容读取，不得作为 UI 无限定标签。
 
 ### 4.6 MCP 与 Codex/Claude 契约
 
@@ -243,32 +260,35 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 
 系统只计算 `recommended`、`not_recommended` 或 `manual_only` 及原因，不自动写仓。
 
-优先推荐：
+只有 `completed`、身份完整、结果可复现且非精确重复的实验才进入 A/B/C 与推荐计算。优先推荐：
 
 - 当前冠军、Pareto 前沿或策略包候选；
 - matched comparison 的代表性 baseline/variant；
 - 新 Alpha、模型、股票池、data release 或执行算法的正式基线；
 - 多 seed、跨 vintage、LOO、成本容量、regime/staleness、右尾捕获中的代表样本；
-- 决定性负对照或能够证伪研究假设的实验；
-- 对失败根因有长期复现价值且证据完整的诊断 run。
+- 决定性负对照或能够证伪研究假设的成功实验。
 
 默认不推荐：
 
 - purpose=validation 的 smoke/fixture；
-- 配置、prediction 和指标完全重复的 run；
+- 精确重复 run；
+- failed/cancelled 且无有效结果、被成功 retry 取代的失败 attempt；
 - 缺失 canonical config、dataset identity 或终态证据的异常运行；
 - 日频 `CLOSE_PRICE` companion；
 - 缺分钟 TWAP、费用、停牌/涨跌停或可复现制品的收益结果。
 
-用户可以选择 `manual_only` 或技术完整的 `not_recommended` 样本入仓，但不能绕过 schema、identity、配置完整性和幂等约束。失败的技术完整性检查必须 loud fail，并保留 Level 0 历史。
+用户可以选择 `manual_only` 或技术完整的 B/C 样本升为 A 档完整入仓，但不能绕过 schema、identity、配置完整性和幂等约束。失败的技术完整性检查必须 loud fail；若其根因值得保留，投递独立 BUG/Issue，而不是保留失败实验。
 
 ### 4.8 清理与保留契约
 
-- 正式控制面记录长期保留，不由普通 workspace cleanup 删除。
-- workspace、日志、缓存和模型文件仍按各自有界 retention/精确 manifest 清理。
-- 清理后只更新 artifact retention 状态，不改写实验的模型、因子、指标或失败原因。
-- 已入仓 artifact 由 QE Archive 自己的 manifest 和 retention 管理；运行 workspace 不是数仓权威。
-- 不允许通配符、目录级自动发现或数据库记录与文件目录的双向猜测。
+- running、planned、queued、finalizing、reconciling、paused 或远端状态 unknown 的对象全部受保护，不进入 X 分类。
+- A/B/C 的控制面摘要长期保留；其 workspace、日志、缓存和模型文件按价值等级及现有有界 retention/精确 manifest 清理，清理只更新 artifact retention。
+- X 清理必须以精确 experiment/task/loop identity 和 artifact manifest 为输入，先生成只读 preview，验证没有 tracked file、symlink/junction、活动进程引用、Archive/冠军/策略包/下游任务等受保护引用，再执行节点制品清理与数据库事务。任一引用不确定即 fail closed。
+- X 清理的事务边界必须保证：远端/本地精确制品删除成功后，才删除数仓与控制面记录；任一步失败则保留可重试 receipt，不允许出现 UI 有记录但文件丢失或数据库已删而制品残留的伪成功。跨节点部分失败时保持 `cleanup_incomplete`，不得从 UI 隐藏。
+- 对 exact duplicate 先确定 canonical survivor：优先已入仓/已被引用者，其次终态证据完整且最早成功者；只删除重复副本。相同配置但 digest 不同不得自动去重。
+- partial/failed parent 逐 child 清理并重算父级；成功 sibling 与其引用始终保留。
+- 已入仓 artifact 由 QE Archive 自身 manifest 与 retention 管理；除非明确取消保护并经用户授权，不进入自动 X 清理。
+- 不允许通配符、目录级自动发现、递归删除，或数据库记录与文件目录的双向猜测。
 
 ## 5. Design Acceptance Index / 设计验收索引
 
@@ -279,18 +299,18 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 | F-003 | Codex/Claude 正式实验只走 QE MCP/控制面，不再裸跑无登记 qrun |
 | F-004 | WSL 与远端使用同一逻辑身份和 release，node-specific path 不泄漏到另一节点 |
 | F-005 | Backend 重启不终止或重复分发在途实验，恢复后状态幂等收敛 |
-| F-006 | 成功、失败、取消、中断和 partial parent 下的成功 child 全部保留轻量历史 |
-| F-007 | UI 支持业务字段搜索、进度、详情、失败和 parent-child 展开，无人工 ID/JSON 输入 |
+| F-006 | 所有正式实验执行期间可见；终态后只保留 A/B/C，X 经安全清理删除；partial/failed parent 下的成功 child 必须保留 |
+| F-007 | UI 支持业务字段搜索、进度、详情、parent-child 展开，无人工 ID/JSON 输入；trajectory 显示每个 loop 的实际股票池、绝对/benchmark/扣费超额收益与 IR |
 | F-008 | GET、UI 关闭和未变化心跳不产生无意义 DB 写入，远端检查不高于每对象每 60 秒 |
-| F-009 | 所有正式 run 保存数据、模型、因子、seed、股票池、分钟 TWAP 和节点摘要 |
+| F-009 | 所有正式 run 在分类前保存数据、模型、因子、seed、run-scoped 股票池、benchmark、分钟 TWAP 和节点摘要，历史不得由当前 profile 反推 |
 | F-010 | QE 数据面继续只读 Bin/H5/Parquet/sidecar，数据库仅用于控制面和结果面 |
-| F-011 | 所有正式终态保留 Level 0，只有 UI 人工选择或用户明确授权的样本进入 Level 1 Archive |
+| F-011 | 成功且唯一的实验按 A/B/C 保存；只有 UI 人工选择或用户明确授权的 A 档样本进入完整 Archive；X 不长期保存 |
 | F-012 | Archive 写入复用现有 preview/confirmed execute、source-status 和 experiment/loop 粒度幂等语义 |
-| F-013 | 推荐规则覆盖冠军、代表性 matched、负对照和新基线，但推荐不自动写仓 |
-| F-014 | workspace cleanup 不删除正式实验历史，只更新 artifact retention 状态 |
+| F-013 | 价值分类覆盖冠军、代表性 matched、成功负对照和新基线；推荐不自动完整入仓，失败诊断转入 BUG/Issue |
+| F-014 | A/B/C workspace cleanup 只更新 artifact retention；X 以精确 manifest 跨节点与 DB 一致清理，受保护引用 fail closed |
 | F-015 | 不恢复全量历史补账；旧孤儿 workspace 的精确补录不是 Feature 完成条件 |
 | F-016 | 不新增通用平台、第二数仓、事件仓、心跳表、daemon 或非必要审批 |
-| F-017 | WSL/remote、成功/失败/取消、Backend 重启恢复、UI 与授权 MCP 入仓均有真实验收 |
+| F-017 | WSL/remote、成功与 X 清理、partial parent、Backend 重启恢复、UI 股票池/收益字段与授权 MCP 入仓均有真实验收 |
 | F-018 | 代码合入、运行时生效、客户端同步、数仓写入和实验启动保持独立状态 |
 | F-019 | 实施必须逐项满足 DESIGN-COMPLIANCE-001，不得以部分入口或 mock-only 冒充完成 |
 
@@ -301,8 +321,8 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 | 批次 | 默认交付物 | 主要验收项 | 唯一结束标识 |
 |---|---|---|---|
 | A：统一登记与状态收敛 | 1 个 Backend/MCP/最小 Frontend source PR；必要运行态 readback 独立记录 | F-001～F-006、F-007 最小可见性、F-008～F-010、F-015～F-016 | `BATCH_A_REGISTERED_RUNTIME_READY`：所有正式入口先登记、现有 UI/API 可发现最小记录与进度、双节点状态可收敛；若需用户重启则在重启前保持 pending |
-| B：统一历史 UI 与选择性入仓 | 1 个 Backend/Frontend/MCP source PR | F-007 完整业务体验、F-011～F-014，并回归 A 的 identity/read-only 合同 | `BATCH_B_UI_ARCHIVE_RUNTIME_READY`：完整业务筛选历史 UI 和 preview/confirmed selective Archive 运行态可用 |
-| C：真实验收与上线 | 1 份绑定最终 HEAD 的验收 receipt；默认无 source PR | F-017～F-019，并汇总 F-001～F-016 | `FEATURE_RUNTIME_VERIFIED`：WSL/remote、用户重启恢复、UI 与授权 MCP 入仓全部形成真实证据 |
+| B：统一历史 UI、价值分级与选择性入仓 | 既有 v1.1 source 加 1 个最小 v1.2 Backend/Frontend 增量 PR | F-007 完整业务体验、F-011～F-014，并回归 A 的 identity/read-only 合同 | `BATCH_B_VALUE_RETENTION_RUNTIME_READY`：业务筛选、trajectory 可比字段、A/B/C/X、精确清理与 preview/confirmed Archive 运行态可用 |
+| C：真实验收与上线 | 1 份绑定最终 HEAD 的验收 receipt；默认无 source PR | F-017～F-019，并汇总 F-001～F-016 | `FEATURE_RUNTIME_VERIFIED`：WSL/remote、用户重启恢复、UI、X 清理与授权 MCP 入仓全部形成真实证据 |
 
 结束标识是技术状态摘要，不是新增的人工审批或研究准入条件。Batch A 验证完成即可恢复 registered 策略实验；Batch B/C 的完成只控制本 Feature 自身的完成声明。
 
@@ -321,16 +341,18 @@ UI 使用一套 canonical 展示状态映射现有表和节点状态，不要求
 
 Batch A 的 source 与所需运行态验证完成后，新正式策略实验即可继续，并且必须走 registered path；不等待 Batch B 的 UI 完整展示或选择性 Archive 验收。Batch B 可以与已登记实验运行并行。
 
-### Delivery Batch B：统一历史 UI 与选择性入仓
+### Delivery Batch B：统一历史 UI、价值分级与选择性入仓
 
-目标：在 Batch A 的唯一 identity/状态源上一次交付人类可用的全部正式实验历史，以及用户选择或明确授权后的既有 QE Archive 入仓。
+目标：在 Batch A 的唯一 identity/状态源上保留执行期可观察性，长期只展示 A/B/C，并交付用户选择或明确授权后的既有 QE Archive 入仓，以及失败/无结果/validation/精确重复 X 档的安全一致清理。
 
-1. 扩展现有实验列表 API 的服务端分页和业务筛选；复用实验/evolution/Multi-Alpha 详情组件，统一显示状态、progress counts、数据 release、股票池、模型、因子、seed、节点、分钟 TWAP 和 artifact retention。
+1. 扩展现有实验列表 API 的服务端分页和业务筛选；复用实验/evolution/Multi-Alpha 详情组件，统一显示状态、progress counts、数据 release、股票池、模型、因子、seed、节点、分钟 TWAP、价值等级和 artifact retention。
 2. 禁止内部 ID/JSON 作为普通用户主流程；以日期、类型、状态、节点、模型、因子族、股票池、release 和执行算法完成搜索、展开和选择。
-3. 复用 source-status、backfill preview/execute 与既有 Archive assembler；UI 支持 experiment/task/loop 多选、推荐原因、preview 和 confirm。
+3. 复用 source-status、backfill preview/execute 与既有 Archive assembler；UI 支持 experiment/task/loop 多选、价值等级、推荐原因、preview 和 confirm。
 4. 扩展 MCP 业务筛选和用户明确授权后的 confirmed execute；推荐规则只生成候选，不自动入仓。
-5. 覆盖重复入仓幂等、部分入仓、failed/cancelled、已清理 workspace、artifact cleaned 和正式控制记录不可普通删除的语义。
-6. 完成本批 Backend/Frontend/MCP 聚焦测试、可访问性与业务流 CI；运行态激活仍按 changed-files 合同分别报告，不与 source merge 合并。
+5. 在 trajectory 每个 loop 明示 run-scoped 股票池与 benchmark，并把绝对 CAGR、benchmark 年化收益、扣费超额年化收益和 IR 分列；缺少权威来源显示不可计算，不做字段猜测。
+6. 实现 A/B/C/X 分类、精确重复 canonical survivor、partial parent child 级清理、受保护引用 fail-closed、跨节点制品与 DB 一致清理；不引入通用 GC、daemon 或新数仓。
+7. 覆盖重复入仓幂等、部分入仓、X 清理幂等、跨节点部分失败、已清理 workspace、artifact cleaned 和 A/B/C 长期摘要语义。
+8. 完成本批 Backend/Frontend/MCP 聚焦测试、可访问性与业务流 CI；运行态激活仍按 changed-files 合同分别报告，不与 source merge 合并。
 
 ### Delivery Batch C：真实验收、上线与策略主线持续运行
 
@@ -339,21 +361,24 @@ Batch A 的 source 与所需运行态验证完成后，新正式策略实验即�
 1. 确认 Batch A/B 的 source、CI、运行态身份和客户端状态分别完成；任何未完成状态单列，不伪造整体验收。
 2. WSL 与 remote 各运行一条正式短实验，验证分发前 UI/控制面已有记录、状态完整收敛、provider binding 正确且不突破现有并行上限。
 3. 由用户执行一次 Backend 重启，验证外部节点任务继续、恢复后 canonical identity 不变、无重复 attempt、GET 仍只读。
-4. UI 和用户明确授权的 MCP 各完成一次选择性入仓，验证 preview、confirmed execute、source-status、幂等和 Level 0 历史在 workspace cleanup 后仍可读。
-5. 汇总 19 项实现证据与 DESIGN-COMPLIANCE-001 四项，形成最终 receipt；不启动批量历史补账、全量 artifact 复制或通用平台建设。
-6. 策略主线在 Batch A 验证后已经恢复；Batch C 完成只代表本 Feature 全量验收，不是 LSTM 多 seed、现实两层板块/lead-lag 或右尾实验的启动门禁。
+4. UI 和用户明确授权的 MCP 各完成一次选择性入仓，验证 preview、confirmed execute、source-status、幂等和 A/B/C 摘要在 workspace cleanup 后仍可读。
+5. 对一条失败无结果、一条精确重复和一个 partial parent 做 X 清理验收，确认成功 sibling 保留、UI/DB/数仓/双节点制品一致且保护引用会 fail closed。
+6. 汇总 19 项实现证据与 DESIGN-COMPLIANCE-001 四项，形成最终 receipt；不启动批量历史补账、全量 artifact 复制或通用平台建设。
+7. 策略主线在 Batch A 验证后已经恢复；Batch C 完成只代表本 Feature 全量验收，不是 LSTM 多 seed、现实两层板块/lead-lag 或右尾实验的启动门禁。
 
 ## 7. Verification Plan / 验证方案
 
 ### 7.1 代码和合同测试
 
 - `backend/tests/quantevolver/test_qe_registered_submission.py`：各入口 reservation-before-dispatch、登记失败不执行、source/purpose 摘要。
-- `backend/tests/quantevolver/test_qe_experiment_history_contract.py`：服务端筛选、parent-child、失败/取消/partial、artifact retention。
+- `backend/tests/quantevolver/test_qe_experiment_history_contract.py`：服务端筛选、parent-child、A/B/C/X 分类、失败/取消/partial、artifact retention。
 - `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`：60 秒节流、变化才写、重启后幂等、不重提交。
 - `backend/tests/multi_alpha/test_durable_orchestrator_restart.py`：Multi-Alpha parent/child 先登记、restart recovery。
 - `backend/tests/qe_archive/test_manual_ingestion_selection.py`：preview/confirmed execute、loop 粒度、部分/全部入仓、幂等。
 - `backend/tests/test_aistock_qe_mcp_servers.py`：业务筛选、create/run、用户授权入仓与 server-owned 字段拒绝。
-- `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`：业务筛选、进度、详情、无 ID/JSON、Archive preview/confirm。
+- `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`：业务筛选、进度、详情、无 ID/JSON、价值等级、Archive preview/confirm。
+- `frontend/tests/quantevolver/qe_evolution_trajectory_metrics.spec.ts`（实现时新增或映射到现有同职责测试）：loop 实际股票池、legacy 未记录、绝对 CAGR、benchmark 年化、扣费超额年化、IR 与 IC/RankIC 的字段语义。
+- X 清理聚焦测试：精确重复 canonical survivor、不同 seed/universe 不误删、相同配置但不同 digest 阻断、partial parent 成功 sibling 保留、受保护引用 fail closed、跨节点部分失败可重试、DB/文件一致回读。
 
 ### 7.2 数据面隔离测试
 
@@ -368,11 +393,13 @@ Batch A 的 source 与所需运行态验证完成后，新正式策略实验即�
 | WSL 正式实验 | UI 在分发前出现记录，planned/queued/running/completed 收敛，详情可读 |
 | remote 正式实验 | 同一合同，provider path 为 remote binding，不出现 `/mnt/x` |
 | 双节点并行 | parent/child 节点与 progress counts 正确，不突破现有并行上限 |
-| failed/cancelled | 终态、阶段和 reason code 可见，成功 sibling 保留 |
+| failed/cancelled | 清理前终态、阶段和 reason code 可见；故障投递后 X 被一致删除，成功 sibling 保留 |
 | Backend 重启 | 用户重启期间节点继续，恢复后 identity 不变、无重复 attempt |
 | UI 入仓 | 业务筛选后勾选、preview、确认、source-status=archived |
 | 授权 MCP 入仓 | 用户明确授权后 confirmed execute，重复执行不产生重复 run |
-| workspace cleanup | Level 0 详情仍可读，artifact 标记 cleaned，不删除历史 |
+| trajectory 可比性 | 每个 loop 回读实际股票池/benchmark；绝对 CAGR、benchmark 年化、扣费超额年化和 IR 不混义 |
+| A/B/C workspace cleanup | 长期摘要仍可读，artifact 标记 cleaned |
+| X cleanup | 精确对象在 UI/控制面/数仓/双节点制品一致消失；受保护引用和不确定状态 fail closed |
 
 Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须绑定实现分支最终 HEAD。mock 或静态检查只能证明局部合同，不能替代双节点和 UI 运行态验收。
 
@@ -385,18 +412,18 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | F-003 | `backend/mcp/modules/qe_experiment.py`; `backend/services/qe_templates/materializer.py` | `backend/tests/mcp/test_domain_modules.py`; `backend/tests/test_aistock_qe_mcp_servers.py` | batch_a_source_test_pass | none |
 | F-004 | `qe_run_registry.py` portable registration；active dataset binding | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_active_dataset_profile.py` | batch_a_source_test_pass | none |
 | F-005 | 现有 reconciliation coordinator 与 durable readback adapter | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `backend/tests/multi_alpha/test_durable_orchestrator_restart.py` | batch_a_source_test_pass | none |
-| F-006 | `qe_run_registry.py::project_history`; `payload_summary.py` | `backend/tests/quantevolver/test_qe_experiment_history_contract.py` | batch_a_source_test_pass | none |
-| F-007 | `config_composer.py`; `frontend/src/app/quantevolver/experiments/page.tsx`; detail page | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`（TypeScript syntax check；完整浏览器验收归 Batch C） | batch_b_source_local_test_pass | none |
+| F-006 | `qe_run_registry.py::project_history`；v1.2 价值分类/清理 service 待实现 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `backend/tests/quantevolver/test_qe_value_retention_cleanup.py` | v1_2_delta_design_ready | none |
+| F-007 | `config_composer.py`; experiment pages；`EvolutionTrajectory.tsx` 与 trajectory API 待增量实现 | `backend/tests/quantevolver/test_qe_evolution_trajectory_contract.py`; `frontend/tests/quantevolver/qe_evolution_trajectory_metrics.spec.ts`；完整浏览器验收归 Batch C | v1_2_delta_design_ready | none |
 | F-008 | persisted-only GET；60 秒 coordinator；可见页 30 秒 fallback；隐藏页零轮询 | `backend/tests/quantevolver/test_qe_reconciliation_coordinator.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_a_source_ready_for_ci | none |
-| F-009 | `qe_run_registry.py::build_qe_run_registration` | `backend/tests/quantevolver/test_qe_registered_submission.py` | batch_a_source_test_pass | none |
+| F-009 | `qe_run_registry.py::build_qe_run_registration`；trajectory run-scoped 投影待实现 | `backend/tests/quantevolver/test_qe_registered_submission.py`; `backend/tests/quantevolver/test_qe_evolution_trajectory_contract.py` | v1_2_delta_design_ready | none |
 | F-010 | 控制面登记不进入 qrun 数据面；既有 subprocess DB 隔离保持 | `backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py` | batch_a_source_test_pass | none |
-| F-011 | existing Level 0 records + selective Archive UI | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts` | batch_b_source_local_test_pass | none |
+| F-011 | existing control/result records + selective Archive UI；A/B/C/X 待实现 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `backend/tests/quantevolver/test_qe_value_retention_cleanup.py` | v1_2_delta_design_ready | none |
 | F-012 | existing `qe_archive` source-status/backfill service and list-page preview/execute | `pytest -q backend/tests/qe_archive/test_manual_ingestion_selection.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`；真实幂等写仓验收归 Batch C | batch_b_source_local_test_pass | none |
-| F-013 | source-status recommendation reason projected to list/detail; no automatic execute | `pytest -q backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`；真实推荐回读归 Batch C | batch_b_source_local_test_pass | none |
-| F-014 | registered DELETE route becomes artifact cleanup and writes `_qe_artifact_retention`; legacy rows retain old behavior | `pytest -q backend/tests/unified_engine/test_qe_cleanup_path_policy.py backend/tests/quantevolver/test_qe_payload_summary_services.py`；运行态 cleanup 验收归 Batch C | batch_b_source_local_test_pass | none |
+| F-013 | existing source-status recommendation；价值分类与失败诊断投递待修订 | `backend/tests/quantevolver/test_qe_experiment_history_contract.py`; `backend/tests/quantevolver/test_qe_value_retention_cleanup.py`；真实推荐回读归 Batch C | v1_2_delta_design_ready | none |
+| F-014 | existing registered artifact cleanup；X exact cleanup 与保护引用待实现 | `backend/tests/unified_engine/test_qe_cleanup_path_policy.py`; `backend/tests/quantevolver/test_qe_value_retention_cleanup.py`；运行态 cleanup 验收归 Batch C | v1_2_delta_design_ready | none |
 | F-015 | §3.6、§2.3；实现不扫描/补写旧 workspace | validation-receipt: F2 feature validator PASS；本 Feature 不执行批量历史补账 | batch_a_source_test_pass | none |
 | F-016 | 仅复用现有 QE 表、接口、coordinator 与 bounded log | `python -m nox -s l0` | batch_a_source_ready_for_ci | none |
-| F-017 | §7.3 | `frontend/tests/quantevolver/qe_experiment_history_registry.spec.ts`; validation-receipt: dual-node-restart-and-archive-e2e | design_review_pass | none |
+| F-017 | §7.3 | `frontend/tests/quantevolver/qe_evolution_trajectory_metrics.spec.ts`; validation-receipt: dual-node-restart-archive-and-x-cleanup-e2e | v1_2_delta_design_ready | none |
 | F-018 | §2.3、§9 | `python -m nox -s validation_module_registry_l0` | design_review_pass | none |
 | F-019 | §11 | validation-receipt: F2 feature validator PASS；DESIGN-COMPLIANCE-001 四项逐项审核 | design_review_pass | none |
 
@@ -404,18 +431,18 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 ### 9.1 发布顺序
 
-1. 合入 v1.1 的三批次设计修订；不产生运行时影响。
+1. 合入 v1.2 设计增量；文档不产生运行时影响，v1.1 已合入事实保持。
 2. Delivery Batch A 一次交付登记与状态收敛；测试、CI、source merge、用户重启和 post-restart readback 分开记录。
 3. Batch A 运行态验证后，新正式实验立即走 registered path，策略主线无需等待 Batch B/C。
-4. Delivery Batch B 一次交付统一历史 UI 与选择性入仓；若 changed files 推断多个 runtime target，分别报告激活状态。
-5. Delivery Batch C 以最终 HEAD 完成 WSL/remote、用户重启恢复、UI 与授权 MCP 的真实验收；默认不新增代码。
+4. Delivery Batch B 以最小增量交付价值分级、X 精确清理、trajectory 股票池/收益可比字段；若 changed files 推断多个 runtime target，分别报告激活状态。
+5. Delivery Batch C 以最终 HEAD 完成 WSL/remote、用户重启恢复、UI、X 清理与授权 MCP 的真实验收；默认不新增代码。
 
 ### 9.2 回滚
 
 - 文档异常：revert 文档 merge commit，不影响实验和数据。
-- source 异常：revert 对应 source merge，用户按 runtime contract 决定重启；不删除已经登记的历史。
+- source 异常：revert 对应 source merge，用户按 runtime contract 决定重启；回滚前停止新的 X apply，只允许读取已生成 receipt 并完成一致性恢复。
 - 状态协调异常：停止新的统一入口写入，保留节点在途任务；恢复旧读取能力但禁止新增未登记正式任务。
-- Archive 入口异常：关闭新的选择入口，保留已入仓 run 和 Level 0 历史；禁止通过删除数仓数据回滚。
+- Archive 入口异常：关闭新的选择入口，保留已入仓 run 和 A/B/C 摘要；禁止通过删除数仓数据回滚。
 - 任何回滚不得恢复裸跑正式实验、数据库数据面、旧路径 fallback 或日频收益基线。
 
 ## 10. Production Gates / 生产边界
@@ -432,21 +459,22 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Archive write | noop | 只在 UI 用户确认或明确授权后执行 |
 | dependency install | noop | 不预期新增依赖 |
 | dataset writes/activation | 0 / noop | 全程禁止 |
-| cleanup/delete | noop | 不删除历史、workspace 或数据 |
+| cleanup/delete | noop | 本设计 PR 不删除任何数据；后续 X apply 属独立生产 DML/文件删除动作，必须先 DEV 验证、精确 preview、用户授权与 readback |
 
 ## 11. Risks / Failure Modes / 风险与失败模式
 
 | 风险 | 设计处理 | 禁止做法 |
 |---|---|---|
 | 直接 qrun 继续产生孤儿实验 | 正式入口 inventory + MCP/Backend registered path + test guard | 运行后手工拼 DB 记录 |
-| 登记成功但分发失败 | 保留 planned/failed-dispatch 历史和 reason code | 删除记录伪装未发生 |
+| 登记成功但分发失败 | 故障处置前保留 reason code；投递 BUG/Issue 后按 X 一致清理 | 未投递诊断就删除，或把失败长期当研究样本 |
 | 先分发后登记 | reservation readback 是分发前技术不变量 | 异步“以后再补身份” |
 | Backend 重启重复提交 | remote identity、attempt fencing、CAS reconciliation | 看到 running 就无条件重新启动 |
 | UI GET 触发 DB/节点写入 | persisted read-only endpoint + background owner | 每次刷新都 reconcile |
 | 高频健康检查膨胀事件表 | 60 秒节流、未变化不写、终态退出 | 2 秒轮询和每次 heartbeat append |
-| 所有 run 自动归档造成磁盘膨胀 | Level 0/Level 1 分层、用户选择完整入仓 | 复制全部 workspace |
-| 只归档成功 run 产生幸存者偏差 | 全终态 Level 0；决定性负对照可推荐 Level 1 | 删除 failed/cancelled |
-| workspace 清理后 UI 404 | 历史与 artifact retention 分离 | DB/file 级联删除 |
+| 所有 run 自动归档造成磁盘膨胀 | A/B/C/X 分层，只有授权 A 完整入仓 | 复制全部 workspace |
+| 删除失败导致研究偏差 | DSR/PBO 与研究结论只使用成功且可评价的唯一实验；决定性成功负对照进入 B，X 仅保留聚合清理计数与 BUG 根因 | 把无收益指标的 failed 当成策略表现，或删除成功负对照 |
+| X 清理造成半状态 | 精确 manifest、跨节点回执、保护引用、先制品后 DB 与可重试 `cleanup_incomplete` | DB/file 猜测、宽泛级联或伪成功 |
+| A/B/C workspace 清理后 UI 404 | 长期摘要与 artifact retention 分离 | 删除 A/B/C 控制面摘要 |
 | 人工 ID/JSON 不可用 | 业务筛选、勾选和内部 identity 路由 | 暴露 ID 输入作为主流程 |
 | 双节点混用 release/path | run-scoped binding + node resolver + hash identity | WSL path 发送远端或静默回落 |
 | 功能挤占策略主线 | Batch A 运行态验证后恢复 registered 正式实验，Batch B/C 与实验并行；禁止历史补账 | 等全平台完善才允许运行 Alpha |
@@ -456,9 +484,9 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 | 检查项 | 结论 | 直接依据 |
 |---|---|---|
-| 禁止简化版、子集、POC、占位或 mock-only 冒充完成 | PASS（设计） | 单/多 Alpha、全部 evolution、UI/MCP、WSL/remote、成功/失败/取消、重启恢复、选择性入仓和清理后历史均进入 19 项验收；最终还要求真实双节点和 UI 证据 |
-| 禁止静默错误或伪成功 | PASS（设计） | 登记失败不分发；未知远端不伪造终态；配置/release/identity/Archive 不完整 loud fail；workspace 清理状态显式展示 |
-| 禁止未经确认改变业务逻辑 | PASS（设计） | 不改模型、因子、seed、label、股票池、分钟 TWAP、成本或策略；只统一控制面身份、可观察性和已有人工入仓原则 |
+| 禁止简化版、子集、POC、占位或 mock-only 冒充完成 | PASS（设计） | 单/多 Alpha、全部 evolution、UI/MCP、WSL/remote、A/B/C/X、partial parent、重启恢复、选择性入仓和精确清理均进入 19 项验收；最终还要求真实双节点和 UI 证据 |
+| 禁止静默错误或伪成功 | PASS（设计） | 登记失败不分发；未知远端不伪造终态；相同配置不同 digest 不误删；保护引用与跨节点部分失败 loud fail；收益缺权威来源显示不可计算 |
+| 禁止未经确认改变业务逻辑 | PASS（设计） | 不改模型、因子、seed、label、股票池、分钟 TWAP、成本或策略；价值保留与 UI 指标口径来自用户 2026-09-11 明确要求 |
 | 禁止私增门禁、审批或人工确认 | PASS（设计） | reservation 是防止孤儿实验的技术一致性条件；Archive 人工确认来自用户明确要求并沿用现有语义；不新增收益阈值、研究准入或平台完成门禁 |
 
 ## 13. Review History / 多轮审核记录
@@ -491,6 +519,13 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | Review-22 | Playwright 折叠卡片合同 | 列表默认只展示登记与进度摘要，操作按钮位于展开区；测试直接查找“查看日志”会把正确折叠行为误判为缺失 | 按真实用户路径先点击实验卡片展开，再显式打开日志；产品折叠/按需日志合同保持不变 | resolved |
 | Review-23 | Playwright 日志协议 | 运行态日志由浏览器 `EventSource` 消费，JSON `route.fulfill` 会被正确识别为断流并重连，无法代表终态 tail 合同 | 在“查看日志”按钮已可见后把 mock 状态切为 `completed`，再点击并验证只发起一次 `/logs/tail` 读取；不伪造 SSE 或改变运行态重连逻辑 | resolved |
 | Review-24 | 最终 HEAD 与 CI 证据 | 前两次 Playwright 失败分别暴露折叠卡片和日志协议夹具偏差，不能以 Backend-only 结果宣称可合入 | 修正真实用户交互与终态 tail 合同后，最终源码 HEAD 的 AIstock CI run `34101195705` 全绿；PR #4382 为 `MERGEABLE/CLEAN` | passed |
+| Review-25 | 用户最新保留原则 | v1.1“全部终态永久保留”与用户要求删除失败、无价值重复实验直接冲突 | 改为执行期全可见、终态 A/B/C/X 分级；失败诊断进入 BUG/Issue，X 不进入长期 QE 历史 | resolved |
+| Review-26 | 去重与 partial 安全性 | 只按配置去重会误删不同 seed/股票池/结果，按父级删除会误删成功 sibling | 定义完整 duplicate key、相同配置不同 digest 阻断、canonical survivor 优先级与 child 级清理 | resolved |
+| Review-27 | 收益口径与股票池可比性 | `annualized_return` 现有别名会混淆绝对/超额收益，当前 profile 也不能代表历史 loop 股票池 | 指定权威字段来源、禁止年化值相减、缺失显示不可计算；股票池只读 run-scoped binding，legacy 显示历史未记录 | resolved |
+| Review-28 | 删除一致性与权限边界 | UI/DB/双节点制品分步失败可能形成半状态，文档合入不能推导生产删除权限 | 设计精确 preview、保护引用、先制品后 DB、可重试 receipt；本 PR cleanup/delete 与 DDL/DML 全部 noop | resolved |
+| Review-29 | 过度工程化与主线优先级 | 新规则可能被扩张为通用 GC、事件仓或历史治理工程 | 只复用既有 registry/result/archive/cleanup，禁止 daemon、新数仓、宽泛扫描；v1.2 作为 Batch B 最小增量，不阻断策略实验 | resolved |
+| Review-30 | 当前源码可实施性 | 需确认股票池、收益源和精确节点清理不是文档假设 | 当前 `qe_run_registry.py` 已登记 universe/benchmark，`payload_summary.py` 已暴露 absolute/excess-with-cost 来源，`qe_evolution_service.py` 已有节点 API 后清 DB 的精确清理先例；设计只做最小增量 | passed |
+| Review-31 | 最终结构与跨文档一致性 | 需确认 19 项 F2 索引、v6.15/F2 v1.2、生产边界和未实现状态不互相矛盾 | F2 validator 19/19、module registry 8 passed、diff-check 通过；v1.1 merged 与 v1.2 design-ready 分开，cleanup/DDL/DML/restart 均为 noop | passed |
 
 ## 14. Delivery Batch A 实施状态
 
@@ -503,10 +538,18 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 ## 15. Delivery Batch B 实施状态
 
-- 当前源码状态：`BATCH_B_SOURCE_LOCAL_REVIEW_PASS`；尚未提交 PR、尚未合入、尚未运行态激活。
+- v1.1 源码状态：已通过 PR #4397 合入，merge commit `7ccf06a9e`；本设计未重新核验其当前运行态身份，因此只确认 source merged，不推导 runtime ready。
+- v1.2 增量状态：`VALUE_RETENTION_DELTA_DESIGN_READY`；失败/精确重复 X 清理、A/B/C 分类、trajectory 实际股票池与四类收益字段尚未实现，不能把 v1.1 的“全部正式终态保留”能力宣称为满足最新要求。
 - 已实现：日期、来源、实验类型、Alpha 模式、用途、canonical 状态、节点、模型、因子、数据 release、股票池、分钟执行算法、Archive 状态和业务文本的服务端筛选；父级稳定分页；UI 不再默认全量拉取；MCP 暴露相同的人类可读筛选。
 - 已实现：列表与详情展示登记、节点、release/cutoff、股票池、seed、label、分钟执行、时间线、失败原因、artifact retention 和 Archive 推荐/状态；日志只在显式点击后读取。
-- 已实现：正式登记 experiment/task/loop 的 workspace 清理保留 Level 0 控制记录和指标，并写入 `_qe_artifact_retention.status=cleaned`；未登记 legacy 行继续保持既有删除兼容性。
+- v1.1 已实现：正式登记 experiment/task/loop 的 workspace 清理保留控制记录和指标，并写入 `_qe_artifact_retention.status=cleaned`；未登记 legacy 行继续保持既有删除兼容性。该行为在 v1.2 中仍适用于 A/B/C，但不能用于 X 的一致删除。
 - 本地证据：聚焦 Backend/MCP/cleanup/Archive 状态合同 58 passed；`qe_read_backend` 294 passed / 1 skipped；`qe_data_contract_backend` 46 passed；F2 validator 19/19；L0 blocking=0；changed-files ownership 15/15；CI classifier 本地复验 `targeted_ci_required`、`unmapped_code_files=[]`、`unexecuted_test_files=[]`；`test_noxfile_validation_env.py` 17 passed；validation catalog/module registry 均通过；Ruff、py_compile、TypeScript syntax transpile 和 diff-check 通过。Archive 状态筛选在释放历史查询连接后再调用现有 Archive service，测试确认单次请求不存在双连接重叠占用。
 - 验证委托：worktree 未安装依赖、未启动本地前后端；TypeScript 类型检查、Lint、精确 mocked Playwright、Archive 全回归和跨模块业务流交由最终 PR CI。Batch C 的真实 WSL/remote、用户重启恢复、UI 与授权 MCP Archive 写入仍不在本批源码结论内。
 - 生产边界：DDL/DML=noop，dependency install=noop，Archive write=noop，experiment submission=noop，dataset write=0，backend/worker/frontend process control=false。
+
+## 16. v1.2 增量实施顺序
+
+1. 先实现只读价值分类与 trajectory 投影：复用现有注册摘要，输出 A/B/C/X candidate、实际股票池/benchmark 与分列收益字段；不得在 GET 中执行清理或状态写入。
+2. 再实现 X cleanup preview/apply：精确 identity/manifest、canonical survivor、保护引用和跨节点可重试 receipt；若现有 schema 无法原子表达，必须先单独提出 DEV DDL 方案，不得在实现中静默加表或直接生产修改。
+3. 完成聚焦合同测试、F2 验证、changed-files ownership、CI 与 DESIGN-COMPLIANCE-001；source merge、用户重启、运行态 readback 和生产历史清理分别报告。
+4. 运行态通过后，只清理经用户选择或明确授权的精确 X 集合；不扫描补账旧孤儿目录，不触碰其他模块，不阻断新的注册式策略实验。
