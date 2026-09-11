@@ -132,7 +132,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",

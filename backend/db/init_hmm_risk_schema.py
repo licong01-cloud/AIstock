@@ -681,7 +681,8 @@ TABLE_DDL = (
           (availability='available' AND rotation_score IS NOT NULL
             AND rotation_score>'-Infinity'::double precision AND rotation_score<'Infinity'::double precision
             AND forecast_state IS NOT NULL AND feature_contributions IS NOT NULL
-            AND jsonb_typeof(feature_contributions)='array' AND jsonb_array_length(feature_contributions)=10
+            AND jsonb_typeof(feature_contributions)='array'
+            AND jsonb_array_length(feature_contributions) IN (10,11)
             AND NOT jsonb_path_exists(feature_contributions,'$[*] ? (@.type() != "number")')
             AND reason_code IS NULL)
           OR (availability='unavailable' AND rotation_score IS NULL AND forecast_state IS NULL
@@ -1114,6 +1115,16 @@ def verify_rotation_l1_prediction_schema(conn: Any) -> None:
         for row in constraints
     ):
         raise RuntimeError("hmm_risk_rotation_l1_schema_drift: constraint definitions")
+    availability_definition = next(
+        str(row[1]) for row in constraints if row[0] == "ck_hmm_risk_rotation_l1_prediction_availability"
+    )
+    compact_availability_definition = "".join(availability_definition.lower().split())
+    accepted_length_fragments = (
+        "jsonb_array_length(feature_contributions)=any(array[10,11])",
+        "jsonb_array_length(feature_contributions)in(10,11)",
+    )
+    if not any(fragment in compact_availability_definition for fragment in accepted_length_fragments):
+        raise RuntimeError("hmm_risk_rotation_l1_schema_drift: contribution dimensions")
     if not table_row or table_row[0] != (
         "Append-only G2-A L1 rotation prediction revisions; scores are not probabilities."
     ):
