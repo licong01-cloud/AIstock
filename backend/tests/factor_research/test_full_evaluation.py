@@ -98,7 +98,10 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
     reference = tmp_path / "reference.h5"
     reference.write_bytes(b"not-read-by-validation")
     value = {
-        "reference_value_artifacts": {"m_reference": str(reference)},
+        "reference_value_artifacts": {
+            "m_reference": str(reference),
+            "CORD10": str(reference),
+        },
         "correlation_batch_size": 2,
         "correlation_half_life": 4,
         "correlation_min_stocks": 3,
@@ -109,6 +112,7 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
         value, candidate_names={"m_candidate"}, repo_root=Path(__file__).parents[3]
     )
     assert normalized["reference_value_artifacts"] == {
+        "CORD10": str(reference.resolve()),
         "m_reference": str(reference.resolve())
     }
 
@@ -221,6 +225,12 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
         "st_pit_eligible_mask": close.notna(),
         "data_start": str(dates[0].date()),
         "data_end": str(dates[-1].date()),
+        "instrument_coverage": {
+            "requested_instrument_count": len(instruments),
+            "physical_price_instrument_count": len(instruments),
+            "missing_price_instrument_count": 0,
+            "missing_price_instruments": [],
+        },
     }
     calls: list[dict] = []
 
@@ -235,6 +245,7 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
     full = result["full_evaluation"]
     assert full["scope"] == "research_only_not_official_metrics_correlations_or_qe_result"
     assert full["official_database_writes"] == 0
+    assert full["all_requested_instruments_have_physical_prices"] is True
     assert full["correlations"]["reference_reference_pairs_computed"] == 0
     assert all(
         window["requested_pairs"] == 1
