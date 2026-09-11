@@ -24,19 +24,13 @@ from backend.services.factor_research.runner import (
 
 
 def _write_values(path: Path, name: str, dates: pd.DatetimeIndex, instruments: list[str]) -> None:
-    index = pd.MultiIndex.from_product(
-        [dates, instruments], names=["datetime", "instrument"]
-    )
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
     values = np.tile(np.arange(1.0, len(instruments) + 1.0), len(dates))
     pd.DataFrame({name: values}, index=index).to_hdf(path, key="data")
 
 
-def _write_reference_values(
-    path: Path, dates: pd.DatetimeIndex, instruments: list[str]
-) -> None:
-    index = pd.MultiIndex.from_product(
-        [dates, instruments], names=["datetime", "instrument"]
-    )
+def _write_reference_values(path: Path, dates: pd.DatetimeIndex, instruments: list[str]) -> None:
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
     values = np.tile(np.arange(1.0, len(instruments) + 1.0), len(dates))
     pd.DataFrame({"value": values}, index=index).to_parquet(path)
 
@@ -54,9 +48,7 @@ def test_reference_loader_accepts_only_official_value_schema(tmp_path: Path) -> 
     assert loaded["m_reference"].tolist() == [1.0, 2.0] * len(dates)
 
     wrong_column = tmp_path / "wrong-column.parquet"
-    pd.read_parquet(valid).rename(columns={"value": "m_reference"}).to_parquet(
-        wrong_column
-    )
+    pd.read_parquet(valid).rename(columns={"value": "m_reference"}).to_parquet(wrong_column)
     with pytest.raises(ResearchError, match="official value column"):
         load_reference_values(wrong_column, "m_reference")
 
@@ -75,11 +67,35 @@ def test_reference_loader_accepts_only_official_value_schema(tmp_path: Path) -> 
         load_values(valid, "m_candidate")
 
 
+def test_reference_loader_excludes_infinities_with_explicit_quality_report(
+    tmp_path: Path,
+) -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3)
+    instruments = ["000001.SZ", "000002.SZ"]
+    path = tmp_path / "nonfinite.parquet"
+    _write_reference_values(path, dates, instruments)
+    frame = pd.read_parquet(path)
+    frame.iloc[0, 0] = np.inf
+    frame.iloc[1, 0] = -np.inf
+    frame.iloc[2, 0] = np.nan
+    frame.to_parquet(path)
+
+    loaded = load_reference_values(path, "m_reference")
+
+    assert loaded["m_reference"].iloc[:3].isna().tolist() == [True, True, True]
+    assert loaded.attrs["reference_value_quality"] == {
+        "rows": 6,
+        "preexisting_missing_values": 1,
+        "infinite_values_excluded": 2,
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
+    with pytest.raises(ResearchError, match="Infinite candidate values"):
+        load_values(path, "value")
+
+
 def test_standard_windows_use_actual_calendar_boundaries() -> None:
     dates = pd.bdate_range("2023-12-27", "2026-08-31")
-    windows = build_standard_windows(
-        dates, signal_start="2023-12-27", signal_end="2026-08-31"
-    )
+    windows = build_standard_windows(dates, signal_start="2023-12-27", signal_end="2026-08-31")
 
     assert windows["full"] == {
         "start": "2023-12-27",
@@ -113,17 +129,26 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
     )
     assert normalized["reference_value_artifacts"] == {
         "CORD10": str(reference.resolve()),
-        "m_reference": str(reference.resolve())
+        "m_reference": str(reference.resolve()),
     }
 
     value["correlation_min_effective_days"] = 0
     with pytest.raises(ResearchError, match="positive integer"):
-        validate_full_evaluation_spec(
-            value, candidate_names={"m_candidate"}, repo_root=Path(__file__).parents[3]
-        )
+        validate_full_evaluation_spec(value, candidate_names={"m_candidate"}, repo_root=Path(__file__).parents[3])
 
 
-def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_path: Path) -> None:
+def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(monkeypatch, tmp_path: Path) -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    daily_calls = 0
+    original = CorrelationEngine.compute_selected_daily_submatrix
+
+    def counted(self, *args, **kwargs):
+        nonlocal daily_calls
+        daily_calls += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(CorrelationEngine, "compute_selected_daily_submatrix", counted)
     dates = pd.bdate_range("2024-01-02", periods=4)
     instruments = ["000001.SZ", "000002.SZ", "000003.SZ"]
     paths = {}
@@ -134,9 +159,7 @@ def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_pat
     reference_path = tmp_path / "m_reference.parquet"
     _write_reference_values(reference_path, dates, instruments)
     paths["m_reference"] = reference_path
-    windows = build_standard_windows(
-        dates, signal_start=str(dates[0].date()), signal_end=str(dates[-1].date())
-    )
+    windows = build_standard_windows(dates, signal_start=str(dates[0].date()), signal_end=str(dates[-1].date()))
     result = compute_correlation_views(
         {name: paths[name] for name in ("m_candidate_a", "m_candidate_b")},
         {
@@ -151,6 +174,12 @@ def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_pat
 
     assert result["reference_reference_pairs_computed"] == 0
     assert result["reference_names"] == ["m_reference"]
+    assert result["reference_value_quality"]["m_reference"] == {
+        "rows": 12,
+        "preexisting_missing_values": 0,
+        "infinite_values_excluded": 0,
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
     assert all(not name.startswith("month_") for name in result["window_names"])
     assert all(
         window["requested_pairs"] == 1
@@ -158,6 +187,7 @@ def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_pat
         and window["records"][0]["reference"] == "m_candidate_b"
         for window in result["candidate_candidate_windows"]
     )
+    assert daily_calls == 2
 
 
 def test_runner_full_evaluation_is_opt_in_and_computes_only_selected_pairs(
@@ -248,11 +278,10 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
     assert full["all_requested_instruments_have_physical_prices"] is True
     assert full["correlations"]["reference_reference_pairs_computed"] == 0
     assert all(
-        window["requested_pairs"] == 1
-        and window["available_pairs"] == 1
-        and window["records"][0]["correlation"] == 1.0
+        window["requested_pairs"] == 1 and window["available_pairs"] == 1 and window["records"][0]["correlation"] == 1.0
         for window in full["correlations"]["windows"]
     )
-    assert json.loads((output / "execution.json").read_text(encoding="utf-8"))["request"][
-        "full_evaluation"
-    ] == spec["full_evaluation"]
+    assert (
+        json.loads((output / "execution.json").read_text(encoding="utf-8"))["request"]["full_evaluation"]
+        == spec["full_evaluation"]
+    )
