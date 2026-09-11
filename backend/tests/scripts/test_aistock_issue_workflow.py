@@ -98,10 +98,12 @@ def _write_runtime_catalog(root: Path) -> Path:
     )
     authority = yaml.safe_load(authority_path.read_text(encoding="utf-8"))
     non_runtime_source_paths = tuple(authority["non_runtime_source_paths"])
+    source_role_rules = list(authority.get("source_role_rules") or [])
     for source_name in non_runtime_source_paths:
         source_path = root / source_name
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text("# offline source fixture\n", encoding="utf-8")
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -109,6 +111,7 @@ def _write_runtime_catalog(root: Path) -> Path:
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
                 "non_runtime_source_paths": list(non_runtime_source_paths),
+                "source_role_rules": source_role_rules,
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
@@ -134,6 +137,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                     "worker-scheduler": {
                         "runtime_kind": "worker_scheduler",
                         "source_globs": [
+                            "scripts/**/*scheduler*.py",
                             "scripts/dataset_release_worker.py",
                             "scripts/dataset_release_source_stage.py",
                         ],
@@ -1733,7 +1737,7 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         "backend/qlib_exporter/authoritative_bin_exporter.py"
     ]
     assert qlib_authoritative_mixed["target_ids"] == ["backend-main"]
-    assert dataset_audit_neighbor["runtime_impact"] == "unknown"
+    assert dataset_audit_neighbor["runtime_impact"] == "none"
     assert dataset_audit_neighbor["runtime_files"] == []
     assert dataset_worker["runtime_impact"] == "worker_scheduler"
     assert dataset_worker["target_ids"] == ["worker-scheduler"]
@@ -1742,7 +1746,7 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert mixed_advisory_and_backend["runtime_impact"] == "backend"
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]
-    assert unmapped_script["runtime_impact"] == "unknown"
+    assert unmapped_script["runtime_impact"] == "none"
     assert nightly_intake["runtime_impact"] == "none"
     assert nightly_intake["runtime_files"] == []
     assert ci_policy_tool["runtime_impact"] == "none"
@@ -2019,7 +2023,7 @@ def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_
     assert workflow._classify_runtime_impact(
         ["scripts/unlisted_operator.py"],
         root=isolated_workflow_root,
-    )["runtime_impact"] == "unknown"
+    )["runtime_impact"] == "none"
 
     payload = workflow.build_finish_plan(
         bug_id=None,
@@ -2036,7 +2040,7 @@ def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_
         code_intelligence_summary_override=_fake_code_intelligence_summary(),
     )
 
-    assert payload["closure_ready"] is True
+    assert payload["closure_ready"] is True, payload["validation_evidence_errors"]
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["runtime_contract"]["runtime_impact"] == "none"
     assert payload["runtime_contract"]["blocking"] == []
@@ -2071,6 +2075,82 @@ def test_runtime_catalog_non_runtime_paths_are_exact_and_cannot_override_exact_r
     catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
     with pytest.raises(workflow.WorkflowError, match="overlaps an exact runtime source"):
         workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_runtime_catalog_source_roles_use_specificity_without_weakening_backend_fail_closed(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+
+    loaded = workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert {rule["rule_id"] for rule in loaded["source_role_rules"]} == {
+        "offline-backend-research-families",
+        "offline-operator-scripts",
+    }
+    assert workflow._classify_runtime_impact(
+        ["scripts/new_offline_operator.py"], root=isolated_workflow_root
+    )["runtime_impact"] == "none"
+    assert workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy.py"], root=isolated_workflow_root
+    )["runtime_impact"] == "backend"
+    assert workflow._classify_runtime_impact(
+        ["scripts/new_dataset_scheduler.py"], root=isolated_workflow_root
+    )["runtime_impact"] == "worker_scheduler"
+    assert workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/market_relative_future.py"], root=isolated_workflow_root
+    )["runtime_impact"] == "none"
+    assert workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/new_runtime_service.py"], root=isolated_workflow_root
+    )["runtime_impact"] == "backend"
+
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["source_role_rules"].append(
+        {
+            "rule_id": "ambiguous-script-role",
+            "role": "non_runtime",
+            "source_globs": ["scripts/*a.py"],
+        }
+    )
+    catalog["targets"]["backend-main"]["source_globs"].append("scripts/a*.py")
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    ambiguous = workflow._classify_runtime_impact(
+        ["scripts/aa.py"], root=isolated_workflow_root
+    )
+    assert ambiguous["runtime_impact"] == "unknown"
+    assert ambiguous["runtime_files"] == ["scripts/aa.py"]
+
+
+def test_runtime_catalog_source_roles_reject_ambiguous_or_unbounded_rules(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+
+    invalid_rules = [
+        (
+            [{"rule_id": "all-backend", "role": "non_runtime", "source_globs": ["backend/services/**/*.py"]}],
+            "bounded to one exact service directory",
+        ),
+        (
+            [
+                {
+                    "rule_id": "runtime-duplicate",
+                    "role": "non_runtime",
+                    "source_globs": ["scripts/score_weighted_strategy.py"],
+                }
+            ],
+            "duplicates a runtime target pattern",
+        ),
+        (
+            [{"rule_id": "bad-role", "role": "runtime", "source_globs": ["scripts/**/*.py"]}],
+            "only supports non_runtime",
+        ),
+    ]
+    for source_role_rules, expected_message in invalid_rules:
+        catalog["source_role_rules"] = source_role_rules
+        catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+        with pytest.raises(workflow.WorkflowError, match=expected_message):
+            workflow._load_runtime_target_catalog(isolated_workflow_root)
 
 
 def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_entries(
@@ -2225,7 +2305,7 @@ def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
-def test_bug_1383_rotation_g2a_offline_sources_use_catalog_and_preserve_fail_closed_neighbors() -> None:
+def test_bug_1383_rotation_g2a_offline_sources_use_catalog_and_preserve_backend_fail_closed() -> None:
     changed_files = [
         "backend/services/hmm_risk/rotation_l1_gbdt.py",
         "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
@@ -2265,7 +2345,7 @@ def test_bug_1383_rotation_g2a_offline_sources_use_catalog_and_preserve_fail_clo
     assert contract["blocking"] == []
     assert neighboring_backend["runtime_impact"] == "backend"
     assert neighboring_backend["target_ids"] == ["backend-main"]
-    assert neighboring_script["runtime_impact"] == "unknown"
+    assert neighboring_script["runtime_impact"] == "none"
     assert neighboring_script["target_ids"] == []
 
 
@@ -2460,7 +2540,7 @@ def test_bug_1125_offline_hmm_holdout_runtime_contract_is_none_and_exact() -> No
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
-def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> None:
+def test_bug_1113_offline_subset_and_script_role_preserve_global_backend_runtime() -> None:
     changed_files = [
         "backend/services/announcements/title_classifier.py",
         "backend/services/event_signal/st_announcement_adapter.py",
@@ -2512,7 +2592,7 @@ def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> Non
     assert contract["blocking"] == []
     assert nearby_backend["runtime_impact"] == "backend"
     assert nearby_backend["target_ids"] == ["backend-main"]
-    assert nearby_script["runtime_impact"] == "unknown"
+    assert nearby_script["runtime_impact"] == "none"
     assert actual_runtime["runtime_impact"] == "backend"
     assert actual_runtime["runtime_files"] == [
         "backend/services/canonical_equity_pit.py",
@@ -2521,7 +2601,7 @@ def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> Non
     assert actual_runtime["target_ids"] == ["backend-main"]
 
 
-def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend() -> None:
+def test_bug_1114_repair_script_role_is_non_runtime_but_adapter_change_is_backend() -> None:
     repair = workflow._classify_runtime_impact(
         ["scripts/repair_announcement_event_signal_issuer_binding.py"]
     )
@@ -2546,11 +2626,11 @@ def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backe
         "backend/services/event_signal/announcement_adapter.py"
     ]
     assert mixed["target_ids"] == ["backend-main"]
-    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["runtime_impact"] == "none"
     assert nearby["target_ids"] == []
 
 
-def test_bug_1120_namechange_sync_is_exact_non_runtime_but_service_change_is_backend() -> None:
+def test_bug_1120_namechange_script_role_is_non_runtime_but_service_change_is_backend() -> None:
     sync = workflow._classify_runtime_impact(["scripts/sync_stock_namechange.py"])
     mixed = workflow._classify_runtime_impact(
         [
@@ -2569,7 +2649,7 @@ def test_bug_1120_namechange_sync_is_exact_non_runtime_but_service_change_is_bac
     assert mixed["runtime_impact"] == "backend"
     assert mixed["runtime_files"] == ["backend/services/stock_universe_pit_service.py"]
     assert mixed["target_ids"] == ["backend-main"]
-    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["runtime_impact"] == "none"
     assert nearby["target_ids"] == []
 
 
@@ -5182,13 +5262,13 @@ def test_resolve_record_runtime_changed_files_legacy_fallback_stays_fail_closed(
     record = _runtime_bug(isolated_workflow_root)
     record["allowed_write_scope"] = [
         "backend/services/example.py",
-        "scripts/unclassified_executable_tool.py",
+        "tools/unclassified_executable_tool.py",
     ]
     if file_scope_contract is not None:
         record["file_scope_contract"] = file_scope_contract
 
     resolved = workflow.resolve_record_runtime_changed_files(record)
-    assert resolved == ["backend/services/example.py", "scripts/unclassified_executable_tool.py"]
+    assert resolved == ["backend/services/example.py", "tools/unclassified_executable_tool.py"]
     contract = workflow.build_runtime_contract(
         record=record,
         changed_files=resolved,
@@ -5200,7 +5280,7 @@ def test_resolve_record_runtime_changed_files_legacy_fallback_stays_fail_closed(
     assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
 
 
-def test_runtime_contract_keeps_unknown_executable_blocking_with_actual_changed_files(
+def test_runtime_contract_ignores_offline_operator_script_with_actual_backend_change(
     isolated_workflow_root: Path,
 ) -> None:
     _write_runtime_catalog(isolated_workflow_root)
@@ -5215,9 +5295,9 @@ def test_runtime_contract_keeps_unknown_executable_blocking_with_actual_changed_
         root=isolated_workflow_root,
         fresh_process_evidence=["isolated port 8012 import smoke passed"],
     )
-    assert contract["runtime_impact"] == "unknown"
-    assert contract["pre_pr_ready"] is False
-    assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
+    assert contract["runtime_impact"] == "backend"
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
 
 
 def test_export_suspend_d_candidate_classified_as_non_runtime_offline_tool(
@@ -5397,7 +5477,7 @@ def test_post_restart_verify_executes_probes_for_bug989_contract(
     assert receipt["tracked_files_written"] is False
 
 
-def test_runtime_classification_matrix_unchanged_for_known_target_kinds(
+def test_runtime_classification_matrix_preserves_known_targets_and_structural_script_role(
     isolated_workflow_root: Path,
 ) -> None:
     catalog_path = _write_runtime_catalog(isolated_workflow_root)
@@ -5426,7 +5506,7 @@ def test_runtime_classification_matrix_unchanged_for_known_target_kinds(
         (["migrations/20260807_example.sql"], "database", []),
         (["backend/migrations/20260807_example.sql"], "database", []),
         ([".claude/commands/fix-aistock-issue.md"], "client", []),
-        (["scripts/other_unclassified_export.py"], "unknown", []),
+        (["scripts/other_unclassified_export.py"], "none", []),
     ]
     for files, expected_impact, expected_targets in cases:
         inference = workflow._classify_runtime_impact(files, root=isolated_workflow_root)
@@ -10788,7 +10868,7 @@ def test_resume_runtime_preflight_surfaces_unknown_actual_diff_without_adding_st
     issue = _write_json(
         isolated_workflow_root / "bug.json",
         _bug(
-            allowed_write_scope=["scripts/hmm_risk/unregistered_runtime_candidate.py"],
+            allowed_write_scope=["tools/unregistered_runtime_candidate.py"],
             runtime_contract={
                 "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
                 "runtime_impact": "none",
@@ -10797,7 +10877,7 @@ def test_resume_runtime_preflight_surfaces_unknown_actual_diff_without_adding_st
     )
 
     def fake_run(command: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
-        stdout = "scripts/hmm_risk/unregistered_runtime_candidate.py\n" if "origin/main...HEAD" in command else ""
+        stdout = "tools/unregistered_runtime_candidate.py\n" if "origin/main...HEAD" in command else ""
         return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": ""}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
@@ -15046,6 +15126,10 @@ def test_close_sync_apply_can_create_registry_worktree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     merge_commit = "a" * 40
+    source_root = isolated_workflow_root / "source-worktree"
+    source_root.mkdir()
+    _write_runtime_catalog(source_root)
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
         _bug(status="in_progress"),
@@ -16091,6 +16175,56 @@ def test_cleanup_evidence_finalization_requires_structured_receipt(
     )
     assert mismatch["status"] == "bug_record_identity_mismatch"
     assert mismatch["durable_receipt_present"] is False
+
+
+def test_cleanup_evidence_finalization_uses_exact_origin_main_record_when_source_is_stale(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = isolated_workflow_root / "source-worktree"
+    canonical_root = isolated_workflow_root / "canonical"
+    source_path = _write_json(
+        source_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(status="in_progress", validation_evidence=[]),
+    )
+    canonical_path = canonical_root / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    canonical_path.parent.mkdir(parents=True)
+    fixed_record = _bug(
+        status="fixed",
+        fix_commit="a" * 40,
+        pr_url="https://github.example/pull/199",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical_root)
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (json.loads(source_path.read_text(encoding="utf-8")), source_path),
+    )
+
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_run(command: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        calls.append((command, cwd))
+        assert command == ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"]
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(fixed_record), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    finalization = workflow._cleanup_evidence_finalization("BUG-199")
+
+    assert finalization["durable_receipt_present"] is True
+    assert finalization["status"] == "finalized_legacy_closed_bug"
+    assert finalization["evidence_source"] == "origin_main_exact_bug_record"
+    assert finalization["local_status"] == "missing_durable_receipt"
+    assert calls == [
+        (
+            ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"],
+            canonical_root,
+        )
+    ]
 
 
 def test_merged_pr_validation_receipt_profile_is_compact(
