@@ -153,9 +153,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python imported qe_eval_v2_metric_engine and correlation_engine at final source HEAD; qe_read_backend passed 439 tests with 1 pre-existing skip"
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -163,6 +165,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
