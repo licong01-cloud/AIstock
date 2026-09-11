@@ -26,12 +26,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1459-hmm-single-date-qlib-bin-reader-interprets-global-indices-against-sliced.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1459-hmm-single-date-qlib-bin-reader-interprets-global-indices-against-sliced.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -42,9 +44,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1459-hmm-single-date-qlib-bin-reader-interprets-global-indices-against-sliced.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1459-hmm-single-date-qlib-bin-reader-interprets-global-indices-against-sliced.json"
+    ]
   },
   "first_seen_at": "2026-09-11T15:53:28.751158Z",
   "fix_branch": null,
