@@ -59,7 +59,7 @@
 
 request展开并绑定candidate manifest、全局calendar hash、实际列/文件hash、公司行动与停牌snapshot、费用和guard snapshot及代码commit；bundle级request/manifest提供统一`source_identity`。事件、成交、连续净值和模型标签行显式携带`decision_as_of/feature_available_at`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
 
-记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。同一股票同一除权日允许存在多个独立实施方案：先按 `(end_date, base_date, record_date)` 区分方案、在方案内归并经济字段相同的公告修订，再按行动前每股口径相加现金与送转比例；聚合行动的可见时间取各方案最早实施公告日中的最晚者。相同方案内经济字段仍不一致、实施公告日晚于除权日或字段缺失时继续 typed fail-closed，禁止任选一条或静默覆盖。
+记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。同一股票同一除权日允许存在多个独立实施方案：先按 `(end_date, base_date, record_date)` 区分方案、在方案内归并经济字段相同的公告修订，再按行动前每股口径相加现金与送转比例；聚合行动的可见时间取各方案最早实施公告日中的最晚者。每个方案优先使用最早非空 `imp_ann_date`；若全部修订均缺该字段，仅在唯一 `record_date` 严格早于除权日时，以其日频cutoff作为保守可见代理，并在行动与快照分别记录代理计数。相同方案内经济字段不一致、代理日期不可证明早于除权日或实施公告日晚于除权日时继续 typed fail-closed，禁止任选一条、使用更早的普通公告日或静默覆盖。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
 
@@ -257,9 +257,10 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
 - 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。授权快照还暴露同日多个独立实施方案，现按方案身份先归并修订、再合并同日经济行动；相同方案内的真实冲突仍拒绝。修复均有直接反例，不改变预注册阈值或评价人口。
-- 验证状态：首次正式运行后的最小修复直接测试为 `test_pattern_research.py` 15项、`test_pattern_model.py` 5项通过；完整 `backend/tests/position_timing` 回归为287项通过，ruff、F1/F2 validator 与 `git diff --check` 均通过。上述本地结果不替代最终CI。
+- 验证状态：首次正式运行后的最小修复直接测试为 `test_pattern_research.py` 15项、`test_pattern_model.py` 5项通过，公司行动适配器直接测试11项通过；完整 `backend/tests/position_timing` 回归为289项通过，ruff、F1/F2 validator 与 `git diff --check` 均通过。上述本地结果不替代最终CI。
 - 首次正式运行：request `df591f237f6263873e720a678218b59042cc9490c63a0f482ffd0891c60d4a12` 绑定提交 `888a6576e2fa54cccfcfbac91cbcc2c92c3e9be5`、64训练股、64只此前未评价股票、2个family和9项比较。计算生成了receipt与模型文件，但根 manifest 构造使用 `path.name != "manifest.json"`，错误排除了114个模型子目录 manifest；inspect得到 `PATTERN_BUNDLE_FILE_SET_MISMATCH`，故整份bundle按fail-closed处理，不读取或报告其中收益。这是artifact完整性缺陷，不是统计结论；旧request、bundle与评价人口永久保留，禁止原地补manifest。
 - 修复与重跑：根 manifest 只排除bundle根自身的 `manifest.json`，嵌套模型manifest必须进入文件集并绑定hash；Pattern专属LightGBM参数只增加 `verbosity=-1` 以压制重复日志，不改树、目标、样本、阈值或预测语义。新request须绑定修复后的干净提交，并把首次64只评价股票纳入prior-request禁用集合后确定性选择新评价人口；所需公司行动/停牌快照重新按新128股范围只读冻结。首次公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 与停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 仅属于失败request的输入谱系，不覆盖未来新人口。没有研究模型current、selected或任何运行态写入。
+- 新人口数据适配：新评价股 `600803.SH` 的 `2025-07-22` 已实施分红行缺少 `imp_ann_date`，但唯一 `record_date=2025-07-21`。快照按§4的record-date保守代理契约升级为v3并显式留证；不删除该股票、不使用更早 `ann_date=2025-03-27` 推定最终条款，也不修改生产数据。v1/v2不可变快照继续只读兼容。
 
 ## 10. Verification Plan / 测试与验收
 

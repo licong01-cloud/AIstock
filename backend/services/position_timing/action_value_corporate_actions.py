@@ -21,8 +21,13 @@ from .contracts import canonical_json_bytes, canonical_sha256
 
 
 LEGACY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
-SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
-SUPPORTED_SNAPSHOT_SCHEMAS = (LEGACY_SNAPSHOT_SCHEMA, SNAPSHOT_SCHEMA)
+SAME_DAY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
+SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v3"
+SUPPORTED_SNAPSHOT_SCHEMAS = (
+    LEGACY_SNAPSHOT_SCHEMA,
+    SAME_DAY_SNAPSHOT_SCHEMA,
+    SNAPSHOT_SCHEMA,
+)
 IMPLEMENTED_DIVIDEND = "\u5b9e\u65bd"
 SOURCE_QUERY_IDENTITY = {
     "table": "market.dividend",
@@ -35,6 +40,7 @@ SOURCE_QUERY_IDENTITY = {
         "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_BASE_RECORD_IDENTITY_"
         "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
     ),
+    "availability_policy": "EARLIEST_IMP_ANN_ELSE_RECORD_DATE_STRICTLY_BEFORE_EX_DATE",
 }
 
 
@@ -51,6 +57,7 @@ class CorporateAction:
     source_row_count: int
     source_rows_sha256: str
     source_economic_action_count: int = 1
+    source_record_date_proxy_count: int = 0
 
     def __post_init__(self) -> None:
         if (
@@ -64,6 +71,7 @@ class CorporateAction:
             or self.source_available_at.tzinfo is None
             or self.source_row_count <= 0
             or self.source_economic_action_count <= 0
+            or not 0 <= self.source_record_date_proxy_count <= self.source_economic_action_count
             or len(self.source_rows_sha256) != 64
         ):
             raise ActionValueError("CORPORATE_ACTION_CONTRACT_INVALID", symbol=self.symbol)
@@ -118,6 +126,7 @@ class CorporateActionBook:
                     source_row_count=int(item["source_row_count"]),
                     source_rows_sha256=str(item["source_rows_sha256"]),
                     source_economic_action_count=int(item.get("source_economic_action_count", 1)),
+                    source_record_date_proxy_count=int(item.get("source_record_date_proxy_count", 0)),
                 )
                 for item in payload["actions"]
             )
@@ -313,7 +322,7 @@ def _snapshot_payload(
             distributions.setdefault(_distribution_identity(row), []).append(row)
 
         canonical_distributions: list[
-            tuple[tuple[str, str, str, str | None, str | None], date]
+            tuple[tuple[str, str, str, str | None, str | None], date, bool]
         ] = []
         for distribution_identity, revisions in sorted(
             distributions.items(), key=lambda item: tuple(value or "" for value in item[0])
@@ -327,44 +336,62 @@ def _snapshot_payload(
                     distribution_identity=distribution_identity,
                     economic_action_count=len(economics),
                 )
-            implementation_dates = {row["imp_ann_date"] for row in revisions}
-            if None in implementation_dates:
-                raise ActionValueError("CORPORATE_ACTION_AVAILABILITY_CONFLICT", symbol=symbol)
+            implementation_dates = {
+                date.fromisoformat(row["imp_ann_date"])
+                for row in revisions
+                if row["imp_ann_date"] is not None
+            }
             # Equivalent source revisions can carry a later implementation
             # announcement date without changing any economic term.  The
             # earliest revision reveals that one distribution.  A same-day
             # aggregate is available only when every distinct distribution is
             # available, hence the outer max below.
-            distribution_available_at = min(
-                date.fromisoformat(value) for value in implementation_dates
+            uses_record_date_proxy = not implementation_dates
+            if uses_record_date_proxy:
+                record_dates = {row["record_date"] for row in revisions}
+                if None in record_dates or len(record_dates) != 1:
+                    raise ActionValueError(
+                        "CORPORATE_ACTION_AVAILABILITY_UNVERIFIABLE", symbol=symbol
+                    )
+                distribution_available_at = date.fromisoformat(next(iter(record_dates)))
+                if distribution_available_at >= effective:
+                    raise ActionValueError(
+                        "CORPORATE_ACTION_AVAILABILITY_UNVERIFIABLE", symbol=symbol
+                    )
+            else:
+                distribution_available_at = min(implementation_dates)
+            canonical_distributions.append(
+                (next(iter(economics)), distribution_available_at, uses_record_date_proxy)
             )
-            canonical_distributions.append((next(iter(economics)), distribution_available_at))
             equivalent_revisions += len(revisions) - 1
 
         stock_dividend = sum(
-            (Decimal(economics[0]) for economics, _ in canonical_distributions), Decimal(0)
+            (Decimal(economics[0]) for economics, _, _ in canonical_distributions), Decimal(0)
         )
         account_cash_dividend = sum(
-            (Decimal(economics[1]) for economics, _ in canonical_distributions), Decimal(0)
+            (Decimal(economics[1]) for economics, _, _ in canonical_distributions), Decimal(0)
         )
         reference_price_cash_dividend = sum(
-            (Decimal(economics[2]) for economics, _ in canonical_distributions), Decimal(0)
+            (Decimal(economics[2]) for economics, _, _ in canonical_distributions), Decimal(0)
         )
         cash_dates = [
             economics[3]
-            for economics, _ in canonical_distributions
+            for economics, _, _ in canonical_distributions
             if Decimal(economics[1]) > 0
         ]
         pay_date = None if any(value is None for value in cash_dates) else max(cash_dates, default=None)
         listing_dates = [
             economics[4]
-            for economics, _ in canonical_distributions
+            for economics, _, _ in canonical_distributions
             if Decimal(economics[0]) > 0
         ]
         listing_date = (
             None if any(value is None for value in listing_dates) else max(listing_dates, default=None)
         )
-        implementation_date = max(available for _, available in canonical_distributions)
+        implementation_date = max(available for _, available, _ in canonical_distributions)
+        record_date_proxy_count = sum(
+            1 for _, _, uses_proxy in canonical_distributions if uses_proxy
+        )
         if implementation_date > effective:
             raise ActionValueError("CORPORATE_ACTION_AVAILABLE_AFTER_EFFECTIVE_DATE", symbol=symbol)
         stable_rows = sorted(versions, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
@@ -381,6 +408,7 @@ def _snapshot_payload(
                 "source_row_count": len(stable_rows),
                 "source_rows_sha256": canonical_sha256(stable_rows),
                 "source_economic_action_count": len(canonical_distributions),
+                "source_record_date_proxy_count": record_date_proxy_count,
             }
         )
         canonical_economic_actions += len(canonical_distributions)
@@ -394,6 +422,9 @@ def _snapshot_payload(
         "canonical_economic_action_count": canonical_economic_actions,
         "canonicalized_equivalent_revision_count": equivalent_revisions,
         "combined_same_day_economic_action_count": combined_same_day_actions,
+        "record_date_availability_proxy_count": sum(
+            item["source_record_date_proxy_count"] for item in actions
+        ),
         "actions": actions,
     }
     return {**identity, "snapshot_sha256": canonical_sha256(identity)}

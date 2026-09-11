@@ -12,6 +12,7 @@ from backend.services.position_timing.action_value_corporate_actions import (
     CorporateAction,
     CorporateActionBook,
     LEGACY_SNAPSHOT_SCHEMA,
+    SAME_DAY_SNAPSHOT_SCHEMA,
     _snapshot_payload,
     apply_corporate_action,
     apply_corporate_action_with_audit,
@@ -205,6 +206,54 @@ def test_snapshot_uses_earliest_availability_for_equivalent_revisions() -> None:
     assert payload["actions"][0]["source_available_at"] == cutoff_on(
         date(2026, 5, 20)
     ).isoformat()
+
+
+def test_snapshot_uses_typed_record_date_proxy_when_implementation_date_missing() -> None:
+    payload = _snapshot_payload(
+        [_row(imp_ann_date=None)],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+
+    assert payload["record_date_availability_proxy_count"] == 1
+    assert payload["actions"][0]["source_record_date_proxy_count"] == 1
+    assert payload["actions"][0]["source_available_at"] == cutoff_on(
+        date(2026, 5, 26)
+    ).isoformat()
+
+    with pytest.raises(ActionValueError, match="CORPORATE_ACTION_AVAILABILITY_UNVERIFIABLE"):
+        _snapshot_payload(
+            [_row(imp_ann_date=None, record_date=date(2026, 5, 27))],
+            symbols=("000001.SZ",),
+            start=date(2026, 1, 1),
+            end=date(2026, 12, 31),
+        )
+
+
+def test_v2_snapshot_without_record_date_proxy_fields_remains_readable(tmp_path: Path) -> None:
+    payload = _snapshot_payload(
+        [_row()],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+    legacy = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"snapshot_sha256", "record_date_availability_proxy_count"}
+    }
+    legacy["schema_version"] = SAME_DAY_SNAPSHOT_SCHEMA
+    legacy["source_query"] = {
+        key: value for key, value in legacy["source_query"].items() if key != "availability_policy"
+    }
+    for action in legacy["actions"]:
+        action.pop("source_record_date_proxy_count")
+    legacy["snapshot_sha256"] = canonical_sha256(legacy)
+    path = tmp_path / "legacy-v2.json"
+    path.write_bytes(canonical_json_bytes(legacy))
+
+    assert CorporateActionBook.open(path).actions[0].source_record_date_proxy_count == 0
 
 
 def test_snapshot_separates_account_cash_from_reference_price_cash(tmp_path: Path) -> None:
