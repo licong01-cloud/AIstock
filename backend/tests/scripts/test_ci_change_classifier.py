@@ -1821,7 +1821,7 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
 
     workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
-    assert list(jobs) == ["codeql-nightly"]
+    assert list(jobs) == ["security-runner-preflight", "codeql-nightly"]
     verdict = jobs["codeql-nightly"]
     verdict_steps = verdict["steps"]
     prepare_steps = [
@@ -1830,7 +1830,7 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
 
     assert verdict["name"] == "CodeQL nightly full scan"
     assert verdict["runs-on"] == ["self-hosted", "Windows", "aistock-ci-security"]
-    assert "needs" not in verdict
+    assert verdict["needs"] == "security-runner-preflight"
     assert "strategy" not in verdict
     assert len(prepare_steps) == 1
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
@@ -1983,7 +1983,7 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
         assert any(step.get("name") == detect_name for step in steps)
 
 
-def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
+def test_pr_ci_has_no_failure_issue_writer_and_nightly_owns_failure_intake() -> None:
     import yaml
 
     ci = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
@@ -1993,11 +1993,10 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert "pr-ci-failure-issue-context" not in registrar_text
     assert "actions/upload-artifact@" not in registrar_text
 
-    issue_writer = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
-    issue_writer_text = Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8")
-    assert issue_writer["permissions"]["issues"] == "write"
-    assert "github.rest.issues.create" in issue_writer_text
-    assert "workflow_run:" in issue_writer_text
+    assert not Path(".github/workflows/issue-on-test-fail.yml").exists()
+    nightly_text = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+    assert "Build Nightly failure issue context" in nightly_text
+    assert "Auto-register failure as actionable GitHub Issue" in nightly_text
 
     guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
     guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")
@@ -2034,8 +2033,7 @@ def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> No
         assert "pull_request:" not in text
         assert "workflow_dispatch:" in text
 
-    issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
-    assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
+    assert not Path(".github/workflows/issue-auto-link.yml").exists()
 
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
