@@ -15126,6 +15126,10 @@ def test_close_sync_apply_can_create_registry_worktree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     merge_commit = "a" * 40
+    source_root = isolated_workflow_root / "source-worktree"
+    source_root.mkdir()
+    _write_runtime_catalog(source_root)
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
         _bug(status="in_progress"),
