@@ -423,6 +423,13 @@ def build_contract_evidence(
             and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
             and "--required-label aistock-ci" in nightly_text
         ),
+        "redundant_issue_event_workflows_retired": (
+            "issue-auto-link.yml" not in workflow_text
+            and "issue-on-test-fail.yml" not in workflow_text
+            and "github.rest.issues.create" not in test_text
+            and "Build Nightly failure issue context" in nightly_text
+            and "Auto-register failure as actionable GitHub Issue" in nightly_text
+        ),
         "javascript_actions_use_approved_native_node24_majors": all(
             set(re.findall(rf"{re.escape(prefix)}v\d+", combined_workflow_text)) == {expected}
             for prefix, expected in {

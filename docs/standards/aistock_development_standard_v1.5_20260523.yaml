@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: e7658f89cecc3ce6784e29c9c6cebaa690198a1688eda087ae77ef11e6ef54df
+source_sha256: 6f3b5c1a3c6ff7ea334f3e66fa30cc4f493e8fd7a86e67a5891495df6f605bd4
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-09-11"
@@ -709,6 +709,10 @@ rules:
         - persistent_fix_basis
         - durable_fresh_process_load_evidence_in_bug_and_pr
         - runtime_target_catalog_ref
+        - structured_source_role_rules_prefer_specific_matches
+        - scripts_default_non_runtime_with_explicit_runtime_target_override
+        - backend_unknown_source_remains_runtime_fail_closed
+        - equal_specificity_role_conflict_is_unknown
         - existing_repo_operator_runbook_ref
         - runtime_source_pr_uses_refs_not_closes
         - runtime_batch_path_blocked
@@ -721,7 +725,7 @@ rules:
         - github_issue_open_while_runtime_pending
         - close_sync_worktree_current_with_origin_main
     baseline_policy: block_issue_verified_until_post_restart_passed
-    remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
+    remediation: Classify changed files through the runtime target catalog and bounded source_role_rules without accumulating per-file script exceptions; preserve explicit runtime targets and unknown backend fail-closed behavior. Then keep runtime BUGs fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
 
   - rule_id: CI-ENVIRONMENT-PARITY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-environment-parity-001
@@ -762,6 +766,9 @@ rules:
         - codeql_pr_merge_gate_removed
         - code_intelligence_refresh_is_scheduled_or_manual_only
         - code_intelligence_refresh_has_no_external_artifact_action_dependency
+        - security_workflows_fail_fast_before_runner_allocation
+        - nightly_code_intelligence_has_single_scheduled_owner
+        - redundant_issue_event_workflows_retired
         - javascript_actions_use_approved_native_node24_majors
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency
@@ -777,7 +784,7 @@ rules:
         - nightly_retries_failed_or_missing_sessions_plus_new_impact
         - nightly_change_scoped_l0_uses_explicit_receipt_paths
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and make CI verdict the only merge-quality context consumed by branch protection and the automatic merger. PR Quality, Semgrep, secret leakage, and dangerous workflow checks execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Do not trigger or require CodeQL for pull_request or push events and do not classify high-risk PRs. Run one daily scheduled full scan of the latest main plus explicit workflow_dispatch, analyze Python and JavaScript/TypeScript sequentially in one security-runner allocation, upload SARIF, and keep Nightly failures visible without blocking completed or unrelated PRs. Register each Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata CI verdict. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in any CI or Nightly job.
+    remediation: Require PR-based main updates and make CI verdict the only merge-quality context consumed by branch protection and the automatic merger. PR Quality, Semgrep, secret leakage, and dangerous workflow checks execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Use native GitHub closing keywords plus issue workflow/finalizer verification instead of a per-PR auto-link comment workflow; keep PR CI failures on CI verdict and route Nightly failures through the full-summary deduplicated candidate chain instead of a per-completion workflow_run listener. Do not trigger or require CodeQL for pull_request or push events and do not classify high-risk PRs. Run one daily scheduled full scan of the latest main plus explicit workflow_dispatch, analyze Python and JavaScript/TypeScript sequentially in one security-runner allocation, upload SARIF, and keep Nightly failures visible without blocking completed or unrelated PRs. Give each scheduled security or code-intelligence task one authoritative workflow owner and use a GitHub-hosted role preflight so an offline security runner fails quickly instead of queuing indefinitely. Register each Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata CI verdict. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in any CI or Nightly job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
