@@ -1,6 +1,6 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.0；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
+> 版本：v1.1；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
 > 状态：`DESIGN_ONLY_NOT_IMPLEMENTED_NOT_RUN_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
@@ -178,6 +178,8 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 保留两个单独监督头：入场在突破b预测“等待固定回踩政策E1相对立即E0”的成本后价值，输入只能来自b；不能把未来是否回踩成功输入b的模型。出场在真实持仓s预测X1相对X0的成本后价值，持仓状态、浮盈和可卖数量必须与监督一致。入场模型正值选E1，否则E0；出场模型正值执行X1，否则X0。模型阈值固定0，不把相关系数当成功率。旧ENTRY/EXIT heads不换标签、不覆盖旧model artifact。
 
+出场训练人口同时取原训练股E0入场与R0回踩入场两条冻结因果路径的可评价持仓，按`(symbol,decision_as_of,state_sha256)`去重；每条标签从其自身真实状态复制X0/X1。原型机制对照仍只用§5.1的E0人口，不把这项模型训练扩展倒写为原型结果。未覆盖的持仓状态或事件时钟须记录分布差异，尤其不能把空仓ENTRY头用于ADD；模型运行路径、训练人口与原型事件人口的覆盖分别报告。
+
 比较两组固定模型：同目标core-only与core+形态块；每组包含上述两个头，使用同一LightGBM 4.6.0规格，完整参数由`estimator_parameters()`在prepare显式展开并hash-bound，early-stopping=false、无搜索。每月expanding训练，初始756session；仅使用`label_available_at <= training_cutoff < prediction_as_of`的已成熟标签，预处理只拟合训练集，缺头/缺模型显式不可用。联合政策在相同可预测日期评价，并报告全计划窗口覆盖。
 
 形态块字段固定候选为：低点年龄、距低点ATR倍数、距MA5/MA10的ATR倍数、两条MA的一日斜率/ATR、当日low距上一日MA10的ATR倍数、加速度a、同股数volume_ratio。全为当前可算的连续值；不增加未来事件标签、不做百指标特征筛选。MA/ATR/量比已有正式因子可经语义与PIT核对后读取同值列，否则本模块纯计算；全局因子桥接不是前置平台任务。
@@ -218,6 +220,35 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | 块二：有界优化、模型条件化与历史解释 | 8模板训练期选择、同状态两头监督、core/增强对照、历史逐股建议与证据说明 | 原型未获支持仍可优化；上线功能按证据和既有影子契约另行接线 |
 
 其他策略和QE组合留在后续队列，不占首块实现量。当前文档合入只登记块一为下一计划项；实现、训练、回放均仍未开始。
+
+### 9.1 单次长任务执行包：实现与初步正式验证
+
+用户要求将本策略实现和初步验证规划为一次连续长任务。执行目标覆盖上表两个工作块；预计10～14小时有效工作/计算时间，属于预算而非完成时间保证，不为凑时长空等。设计PR尚在CI队列时可在基于最新main的独立实现分支接续已固定设计提交，关联设计PR；待其合入后同步main，设计等待不阻塞编写代码、直接测试与离线研究。
+
+规划时的只读预检：原PT-NEXT-017 request `c685a820dc4ed7ff0508350f6536832ab22777646e9adb5fbb1f972fe00d9c1e`存在，训练/历史评价人口各64股，源日期2018-08-01..2026-08-31；其candidate根`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260905-candidate`存在。`C:/Users/lc999/miniconda3/envs/AIstock/python.exe`读回numpy2.4.0、pandas2.3.3、lightgbm4.6.0；默认Python/根.venv缺少所需研究依赖，不作为本任务解释器。此预检仅证明路径与环境可用，完整消费文件hash和新人口coverage由执行时prepare验证。
+
+| 连续工作段 | 时间预算 | 实施与正式交付 |
+|---|---|---|
+| 契约落地与源检查 | 0.5～1小时 | 核对设计commit、独立worktree和精确写入范围；source-only确定人口/文件hash；展开初版与优化/模型规格；先补下面列出的实际接口适配 |
+| 策略与研究管线实现 | 3～4小时 | 形态/事件、两种机制反事实、连续P路径、8模板选择Q、同状态标签与四个模型head、逐股历史解释；针对性反例测试随实现推进 |
+| 首次历史回放与训练 | 3～5小时 | 先跑已冻结R0四比较，再执行8模板开发选择与两组模型的5比较；复用同一源快照、特征缓存和同规格基线，保持不同request身份 |
+| 审核修复、报告与合入 | 3～4小时 | 因果/交易正确性审核与研究统计审核；修复后只重跑受影响部分；bundle inspect/exact retry、隔离校验、验收矩阵、蓝图进度及研究报告、源码提交PR和CI后合入 |
+
+上述时段是一个任务内的操作顺序，不增加产品阶段或人工审批。计时可交错：计算期间审核实现和文档，不能同时改变正在计算所绑定的源码。CI排队单独报告，不伪装成开发耗时。
+
+可直接复用的已核验接口：`DailyCandidate.open(root)`、`daily_fill(plan,bar,*,sellable,parent_count=1,full_exit=False,slippage_bps=0)`、`estimator_parameters()`、`monthly_training_windows(calendar,initial_sessions=756)`与既有prepare/run/inspect不可变写入模式。`replay_continuous_cohorts`当前接受models和固定model_action_authority，没有任意`policy_callback`参数；必须在本模块真实增加显式扩展点并保持旧默认路径，不得调用想象中的参数。`circular_block_interval`当前是有限数值序列均值bootstrap，不支持稀疏事件比值；须在本模块增加专用小函数或明确mode实现§5.3，不把NaN填0交给旧函数。
+
+预计新增四个职责文件：`pattern_strategy.py`（特征/模板/事件/动作）、`pattern_research.py`（反事实/CLI/报告）、`pattern_optimizer.py`（训练期模板选择）、`pattern_model.py`（同状态训练与推断）；计划对应`test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py`、`test_pattern_model.py`。在执行开始登记确切allowed_write_scope，必要适配仅涉及同模块`action_value_research.py`及其直接测试。本执行包未授权修改其他模块源文件。复用模式不等于复制一套账本。
+
+研究预算固定：源人口按§5.3的64训练股/至多64评价股；8个规则模板仅在开发人口中选择；core/增强两组各2个head，每个可训练月最多4次fit，不追加种子/模型搜索。原型4项与第二块5项比较分别绑定独立family；所有实际尝试可追溯，不能把两family中任一赢家当作经过整个研发历史校正的最终最优。数据、形态特征和未变化的基线在hash一致时复用；初始只运行1个研究计算进程，线程上限4，实测首个小批次耗时与内存后更新完成时间估计，不在共享机器上同时拉起多套训练。
+
+正式run前先以固定合成反例验证因果与交易逻辑；若需真实数据小样性能测量，只取预定训练股前2只与首个开发时间段，记录它为开发数据，不能从评价人口挑“容易通过”的股票。不得为赶时限缩短正式样本、删除亏损事件或只交付最赚钱模板；耗时超预算就保存已完成的request/bundle身份并如实续报。允许只缓存确定性的源/特征和独立月度fit，缓存键含代码、输入、训练cutoff、目标和参数hash；无现有续跑支持的连续路径从该request重算，不声称具备未实现的任意中断恢复。Windows中断后据git、request和输出hash恢复，禁止覆盖未核验的历史结果。
+
+两轮审核分别覆盖：第一轮PIT、复权、可卖数量、最低佣、同状态对照、边沿/到期/跨月状态；第二轮训练与外层隔离、稀疏事件统计、覆盖分母、候选及多重比较计数、解释是否夸大收益。每次发现问题即修复和执行直接反例；最后再按F1各条及主蓝图约束逐项读回，不为“多轮”机械重复全套测试。
+
+任务结束交付：可运行CLI和测试；原型及优化/模型的不可变request、receipt、逐日连续净值、事件/成交/费用明细、月度模板与模型身份；固定SHA排序的前20条可评价入场/退出案例及全部类型失败计数（不按收益选案例）；逐股历史建议；一份中文结果报告与更新的蓝图/验收矩阵；源码PR、CI及合入状态。病例不足20条按实际交付。数值不足以训练某head时交付已实现代码、真实零/稀疏样本统计和`MODEL_NOT_ESTIMABLE`原因，明确“训练未成功/模型效力不可判定”，不报虚假的模型完成；规则和其他独立比较继续。
+
+本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前计划不激活正式card/alert/serving，不要求后端重启、不做生产DML；已有合入授权用于多轮审核和必要CI通过后的源码合入。其后才安排运行态建议接线、其他场景研究与QE组合。当前状态仍为计划已记录、实施未开始。
 
 ## 10. Verification Plan / 测试与验收
 
