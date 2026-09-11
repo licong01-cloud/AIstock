@@ -20,7 +20,8 @@ def validate_spec(value):
     spec = json_object(value)
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
                "read_start", "signal_start", "signal_end", "read_end", "cutoff", "instruments",
-               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison"}
+               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison",
+               "full_evaluation"}
     if set(spec) - allowed:
         raise ResearchError("invalid_request", f"Unknown run fields: {sorted(set(spec) - allowed)}")
     for key in ("task_id", "record_id", "attempt_id"):
@@ -86,6 +87,12 @@ def validate_spec(value):
             raise ResearchError("invalid_comparison", "Comparison windows must stay inside the declared signal window")
         if spec["comparison"]["knowledge_cutoff"]["date"] > spec["cutoff"]:
             raise ResearchError("invalid_comparison", "Comparison knowledge cutoff cannot exceed the run cutoff")
+    if spec.get("full_evaluation") is not None:
+        from .full_evaluation import validate_full_evaluation_spec
+
+        spec["full_evaluation"] = validate_full_evaluation_spec(
+            spec["full_evaluation"], candidate_names=set(names), repo_root=REPO_ROOT
+        )
     timeout = spec.get("timeout_seconds", 600)
     if type(timeout) not in (int, float) or timeout <= 0:
         raise ResearchError("invalid_request", "timeout_seconds must be positive")
@@ -159,6 +166,7 @@ def execute(spec, output, *, prepare=None, compute=None):
         compute = compute or compute_single_factor_metrics
     ctx = None
     results = []
+    full_evaluation_windows = None
     for candidate in spec["candidates"]:
         name = candidate["factor_name"]
         folder = output / name
@@ -190,12 +198,39 @@ def execute(spec, output, *, prepare=None, compute=None):
             ctx = evaluation_context(ctx, spec)
         selected = frame.loc[(dates >= pd.Timestamp(spec["signal_start"])) &
                              (dates <= pd.Timestamp(spec["signal_end"]))]
-        metrics = compute(name, selected, ctx)
+        if spec.get("full_evaluation") is not None:
+            from .full_evaluation import build_standard_windows, compute_candidate_metrics
+
+            if full_evaluation_windows is None:
+                full_evaluation_windows = build_standard_windows(
+                    pd.DatetimeIndex(ctx["dates"]),
+                    signal_start=spec["signal_start"],
+                    signal_end=spec["signal_end"],
+                )
+            metrics = compute_candidate_metrics(
+                name,
+                selected,
+                ctx,
+                full_evaluation_windows,
+                compute=compute,
+            )
+        else:
+            metrics = compute(name, selected, ctx)
         result = {"factor_name": name, "scope": "research_candidate", "metrics": metrics,
                   "rows": len(frame), "nan_rows": int(frame[name].isna().sum()),
                   "signal_rows": len(selected), "source_script": str(script),
                   "values": str(result_path), "actual_signal_start": ctx["data_start"],
                   "actual_signal_end": ctx["data_end"], "correlation_status": "not_computed"}
+        if spec.get("full_evaluation") is not None:
+            finite = selected.loc[selected[name].notna()]
+            result["actual_factor_value_range"] = (
+                {
+                    "start": str(finite.index.get_level_values("datetime").min().date()),
+                    "end": str(finite.index.get_level_values("datetime").max().date()),
+                }
+                if not finite.empty
+                else None
+            )
         write_json(folder / "metrics.json", result)
         results.append(result)
         del frame, selected
@@ -230,4 +265,14 @@ def execute(spec, output, *, prepare=None, compute=None):
                "finished_at": datetime.now(timezone.utc).isoformat()}
     if comparison is not None:
         payload["research_comparison"] = comparison
+    if spec.get("full_evaluation") is not None:
+        from .full_evaluation import build_full_evaluation_result
+
+        payload["full_evaluation"] = build_full_evaluation_result(
+            run_spec=spec,
+            evaluation_spec=spec["full_evaluation"],
+            ctx=ctx,
+            candidate_results=results,
+            candidate_paths={item["factor_name"]: Path(item["values"]) for item in results},
+        )
     return payload
