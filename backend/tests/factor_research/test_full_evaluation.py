@@ -75,6 +75,32 @@ def test_reference_loader_accepts_only_official_value_schema(tmp_path: Path) -> 
         load_values(valid, "m_candidate")
 
 
+def test_reference_loader_excludes_infinities_with_explicit_quality_report(
+    tmp_path: Path,
+) -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3)
+    instruments = ["000001.SZ", "000002.SZ"]
+    path = tmp_path / "nonfinite.parquet"
+    _write_reference_values(path, dates, instruments)
+    frame = pd.read_parquet(path)
+    frame.iloc[0, 0] = np.inf
+    frame.iloc[1, 0] = -np.inf
+    frame.iloc[2, 0] = np.nan
+    frame.to_parquet(path)
+
+    loaded = load_reference_values(path, "m_reference")
+
+    assert loaded["m_reference"].iloc[:3].isna().tolist() == [True, True, True]
+    assert loaded.attrs["reference_value_quality"] == {
+        "rows": 6,
+        "preexisting_missing_values": 1,
+        "infinite_values_excluded": 2,
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
+    with pytest.raises(ResearchError, match="Infinite candidate values"):
+        load_values(path, "value")
+
+
 def test_standard_windows_use_actual_calendar_boundaries() -> None:
     dates = pd.bdate_range("2023-12-27", "2026-08-31")
     windows = build_standard_windows(
@@ -151,6 +177,12 @@ def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_pat
 
     assert result["reference_reference_pairs_computed"] == 0
     assert result["reference_names"] == ["m_reference"]
+    assert result["reference_value_quality"]["m_reference"] == {
+        "rows": 12,
+        "preexisting_missing_values": 0,
+        "infinite_values_excluded": 0,
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
     assert all(not name.startswith("month_") for name in result["window_names"])
     assert all(
         window["requested_pairs"] == 1
