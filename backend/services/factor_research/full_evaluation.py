@@ -65,12 +65,19 @@ def load_reference_values(path: Path, name: str) -> pd.DataFrame:
             "full_evaluation_reference_schema_invalid",
             "Expected real numeric reference values",
         )
-    if np.isinf(values.to_numpy(dtype=float)).any():
-        raise ResearchError(
-            "full_evaluation_reference_nonfinite",
-            "Infinite reference values; NaN coverage is reported separately",
-        )
-    return frame.rename(columns={"value": name}).sort_index()
+    infinite_mask = np.isinf(values.to_numpy(dtype=float))
+    quality = {
+        "rows": len(frame),
+        "preexisting_missing_values": int(values.isna().sum()),
+        "infinite_values_excluded": int(infinite_mask.sum()),
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
+    if quality["infinite_values_excluded"]:
+        frame = frame.copy()
+        frame.loc[infinite_mask, "value"] = np.nan
+    normalized = frame.rename(columns={"value": name}).sort_index()
+    normalized.attrs["reference_value_quality"] = quality
+    return normalized
 
 
 def validate_full_evaluation_spec(
@@ -228,6 +235,7 @@ def compute_correlation_views(
         name: window for name, window in windows.items() if not name.startswith("month_")
     }
     states: dict[str, dict[str, Any]] = {}
+    reference_value_quality: dict[str, dict[str, Any]] = {}
     candidate_pair_results: list[dict[str, Any]] = []
     for window_name, window in correlation_windows.items():
         candidate_window = _slice(candidate_panel, window["start"], window["end"])
@@ -313,7 +321,11 @@ def compute_correlation_views(
     # multi-year artifact for every annual/recent view.
     for offset in range(0, len(reference_items), batch_size):
         batch = reference_items[offset : offset + batch_size]
-        reference_frames = [load_reference_values(path, name) for name, path in batch]
+        reference_frames = []
+        for name, path in batch:
+            frame = load_reference_values(path, name)
+            reference_value_quality[name] = frame.attrs["reference_value_quality"]
+            reference_frames.append(frame)
         reference_full = pd.concat(reference_frames, axis=1, join="outer").sort_index()
         for state in states.values():
             window = state["window"]
@@ -368,6 +380,7 @@ def compute_correlation_views(
         "method": "cross_sectional_spearman_ewma_selected_pairs",
         "reference_count": len(reference_items),
         "reference_names": [name for name, _ in reference_items],
+        "reference_value_quality": dict(sorted(reference_value_quality.items())),
         "parameters": {
             key: spec[key]
             for key in (
