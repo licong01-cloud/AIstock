@@ -1259,6 +1259,8 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
         "backend/tests/quantevolver/test_p0_d2_sector_oracle.py",
         "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
+        "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py",
+        "backend/tests/quantevolver/test_payload_summary.py",
         "backend/tests/quantevolver/test_stock_pool_sync.py",
         "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py",
         "backend/tests/quantevolver/test_official_factor_batch_compute.py",
