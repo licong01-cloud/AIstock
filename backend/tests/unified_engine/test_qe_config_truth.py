@@ -121,6 +121,141 @@ def test_custom_evo_zombie_recovery_is_single_flight(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_custom_evo_capacity_recovery_is_exact_loop_single_flight(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._custom_evo_capacity_resume_tasks = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def fake_resume(*, task_id: str, loop_index: int, loop_db_id: str) -> None:
+        calls.append((task_id, loop_index, loop_db_id))
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(scheduler, "_safe_resume_custom_evo_capacity_loop", fake_resume)
+
+    async def scenario() -> None:
+        kwargs = {
+            "loop_db_id": "qe_capacity_task_Loop3",
+            "task_id": "qe_capacity_task",
+            "loop_index": 3,
+        }
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is False
+        assert calls == [("qe_capacity_task", 3, "qe_capacity_task_Loop3")]
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        await asyncio.sleep(0)
+        assert scheduler._custom_evo_capacity_resume_tasks == {}
+
+        started.clear()
+        release.clear()
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        assert calls == [
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_custom_evo_capacity_recovery_submits_only_matching_persisted_loop(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    submissions = []
+
+    async def fake_submit(task_id: str, loop_index: int):
+        submissions.append((task_id, loop_index))
+        return f"{task_id}_Loop{loop_index}"
+
+    monkeypatch.setattr(scheduler, "submit_custom_evo_loop", fake_submit)
+
+    async def scenario() -> None:
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=5,
+            loop_db_id="qe_capacity_task_Loop5",
+        )
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=6,
+            loop_db_id="qe_other_task_Loop6",
+        )
+
+    asyncio.run(scenario())
+    assert submissions == [("qe_capacity_task", 5)]
+
+
+def test_scan_recovers_persisted_custom_evo_capacity_wait_without_zombie_replay(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._retry_resume_tasks = {}
+    sql_seen = []
+    capacity_rows = [
+        {
+            "loop_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+
+    class Cursor:
+        def __init__(self):
+            self.rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            normalized = " ".join(str(sql).split())
+            sql_seen.append(normalized)
+            self.rows = capacity_rows if "t.task_type = 'custom_evo'" in normalized else []
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    scheduled = []
+
+    def fake_schedule(**kwargs):
+        scheduled.append(dict(kwargs))
+        return True
+
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(scheduler, "_schedule_custom_evo_capacity_recovery", fake_schedule)
+
+    asyncio.run(scheduler.scan_running_loops())
+
+    assert scheduled == [
+        {
+            "loop_db_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+    zombie_sql = next(sql for sql in sql_seen if "SELECT t.task_id" in sql)
+    capacity_sql = next(sql for sql in sql_seen if "t.task_type = 'custom_evo'" in sql)
+    assert "agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'" in zombie_sql
+    assert "l.status = 'pending'" in capacity_sql
+    assert "NOT COALESCE(l.config_json ? %s, false)" in capacity_sql
+    assert "ORDER BY l.updated_at, l.loop_id" in capacity_sql
+
+
 def _load_qrun_minute_module(monkeypatch):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")

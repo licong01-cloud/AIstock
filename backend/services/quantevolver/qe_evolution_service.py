@@ -233,6 +233,7 @@ class AutoEvolutionScheduler:
         self._log_stream_stop_requested: set[str] = set()
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
         self._retry_resume_tasks: dict[str, asyncio.Task] = {}
+        self._custom_evo_capacity_resume_tasks: dict[str, asyncio.Task] = {}
         self._zombie_resume_tasks: dict[str, asyncio.Task] = {}
         self._resource_schema_not_ready_logged = False
 
@@ -243,6 +244,10 @@ class AutoEvolutionScheduler:
     def _ensure_zombie_resume_state(self) -> None:
         if not hasattr(self, "_zombie_resume_tasks"):
             self._zombie_resume_tasks = {}
+
+    def _ensure_custom_evo_capacity_resume_state(self) -> None:
+        if not hasattr(self, "_custom_evo_capacity_resume_tasks"):
+            self._custom_evo_capacity_resume_tasks = {}
 
     @staticmethod
     def _retry_submission_metadata(config: Any) -> Dict[str, Any] | None:
@@ -344,6 +349,58 @@ class AutoEvolutionScheduler:
             name=f"qe-zombie-recovery-{task_id}",
         )
         self._track_zombie_resume_task(task_id, task)
+        return True
+
+    def _track_custom_evo_capacity_resume_task(
+        self,
+        loop_db_id: str,
+        task: asyncio.Task,
+    ) -> None:
+        self._ensure_custom_evo_capacity_resume_state()
+        self._custom_evo_capacity_resume_tasks[loop_db_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            if self._custom_evo_capacity_resume_tasks.get(loop_db_id) is completed:
+                self._custom_evo_capacity_resume_tasks.pop(loop_db_id, None)
+            if completed.cancelled():
+                logger.error(
+                    "QE custom-evo capacity resume was cancelled: loop=%s",
+                    loop_db_id,
+                )
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE custom-evo capacity resume failed: loop=%s error=%s",
+                    loop_db_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    def _schedule_custom_evo_capacity_recovery(
+        self,
+        *,
+        loop_db_id: str,
+        task_id: str,
+        loop_index: int,
+    ) -> bool:
+        """Schedule one exact-loop recovery pass for a persisted capacity wait."""
+
+        self._ensure_custom_evo_capacity_resume_state()
+        active = self._custom_evo_capacity_resume_tasks.get(loop_db_id)
+        if active is not None and not active.done():
+            return False
+        task = asyncio.create_task(
+            self._safe_resume_custom_evo_capacity_loop(
+                task_id=task_id,
+                loop_index=loop_index,
+                loop_db_id=loop_db_id,
+            ),
+            name=f"qe-custom-evo-capacity-resume-{loop_db_id}",
+        )
+        self._track_custom_evo_capacity_resume_task(loop_db_id, task)
         return True
 
     @staticmethod
@@ -2935,6 +2992,12 @@ class AutoEvolutionScheduler:
                                 AND l3.status = 'pending'
                                 AND l3.config_json ? '_qe_retry_submission'
                           )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM qe_evolution_loops l4
+                              WHERE l4.task_id = t.task_id
+                                AND l4.status = 'pending'
+                                AND l4.agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'
+                          )
                     """)
                     zombie_tasks = cur.fetchall()
 
@@ -2948,6 +3011,19 @@ class AutoEvolutionScheduler:
                         ORDER BY l.updated_at, l.loop_id
                     """, (_QE_RETRY_SUBMISSION_KEY,))
                     pending_retry_loops = cur.fetchall()
+
+                    cur.execute("""
+                        SELECT l.loop_id, l.task_id, l.loop_index
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                        WHERE l.status = 'pending'
+                          AND t.status = 'running'
+                          AND t.task_type = 'custom_evo'
+                          AND l.agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'
+                          AND NOT COALESCE(l.config_json ? %s, false)
+                        ORDER BY l.updated_at, l.loop_id
+                    """, (_QE_RETRY_SUBMISSION_KEY,))
+                    pending_custom_evo_capacity_loops = cur.fetchall()
 
             # F4: 处理 processing 超时
             for row in stuck_processing:
@@ -2987,6 +3063,21 @@ class AutoEvolutionScheduler:
                     )
                 )
                 self._track_retry_resume_task(loop_db_id, task)
+
+            for row in pending_custom_evo_capacity_loops:
+                loop_db_id = str(row["loop_id"])
+                if self._schedule_custom_evo_capacity_recovery(
+                    loop_db_id=loop_db_id,
+                    task_id=str(row["task_id"]),
+                    loop_index=int(row["loop_index"]),
+                ):
+                    logger.info(
+                        "Persisted custom-evo capacity wait recovery scheduled: "
+                        "task=%s Loop%s loop=%s",
+                        row["task_id"],
+                        row["loop_index"],
+                        loop_db_id,
+                    )
 
             # 原有逻辑：检查 running 的 loop 在 RDAgent 侧的状态
             for loop_row in running_loops:
@@ -3060,6 +3151,52 @@ class AutoEvolutionScheduler:
                 "task=%s Loop%s error=%s",
                 task_id,
                 loop_index,
+                exc,
+                exc_info=True,
+            )
+
+    async def _safe_resume_custom_evo_capacity_loop(
+        self,
+        *,
+        task_id: str,
+        loop_index: int,
+        loop_db_id: str,
+    ) -> None:
+        """Retry one persisted custom-evo capacity wait without broad task replay.
+
+        The canonical reservation transaction remains the authority for capacity
+        and exactly-once submission.  A still-full node simply persists the same
+        waiting state and a later reconciliation pass retries it.
+        """
+
+        expected_loop_db_id = f"{task_id}_Loop{loop_index}"
+        if loop_db_id != expected_loop_db_id:
+            logger.error(
+                "Refusing custom-evo capacity resume with inconsistent loop identity: "
+                "task=%s Loop%s persisted_loop=%s expected_loop=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
+                expected_loop_db_id,
+            )
+            return
+        try:
+            result = await self.submit_custom_evo_loop(task_id, loop_index)
+            logger.info(
+                "Custom-evo capacity resume pass completed: task=%s Loop%s "
+                "loop=%s result=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Custom-evo capacity resume failed without broad task replay: "
+                "task=%s Loop%s loop=%s error=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
                 exc,
                 exc_info=True,
             )
