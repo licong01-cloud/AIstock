@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1433",
-  "closed_at": null,
+  "closed_at": "2026-09-11T05:23:43Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -252,8 +252,8 @@
   },
   "first_seen_at": "2026-09-11T04:46:21.332019Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9722483e96463815ec66d1cde6fdb0cc73447374",
+  "fixed_at": "2026-09-11T05:23:43Z",
   "github_issue_number": 4530,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4530",
   "last_seen_at": "2026-09-11T04:46:21.332019Z",
@@ -261,6 +261,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4533",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -280,6 +281,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -289,7 +291,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1433",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "60f88c1f86f98f0b",
+    "recorded_at": "2026-09-11T05:25:20.274567Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dcf7d52f02ec21d15580cb1586ae927f42fc799c",
+    "source_merge_commit": "9722483e96463815ec66d1cde6fdb0cc73447374",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4533",
+    "validation_evidence": [
+      "validation-receipt: id=51842805876f3538 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed (8 passed; 14/14 mapped)`",
+      "validation-receipt: id=816cc023c1aecb66 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed (blocking=0)`",
+      "validation-receipt: id=32a39bd0fcc817c9 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`passed (7 passed; findings=0)`",
+      "validation-receipt: id=48f0f895f4d759c9 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_issue_flow.py::test_validation_selects_only_changed_position_timing_lane backend/tests/scripts/test_issue_flow.py::test_validation_selects_only_changed_qe_long_trend_phase backend/tests/scripts/test_issue_flow.py::test_validation_uses_one_active_dataset_plan_instead_of_three backend/tests/scripts/test_issue_flow.py::test_validation_dev_db_plans_require_database_boundaries backend/tests/scripts/test_issue_flow.py::test_validation_research_assistant_phase_does_not_repeat_full_suite backend/tests/scripts/test_issue_flow.py::test_nox_phase_plans_do_not_repeat_global_or_cross_phase_suites backend/tests/scripts/test_ci_change_classifier.py::test_backend_change_selects_relevant_backend_matrix_slice backend/tests/scripts/test_ci_change_classifier.py::test_frontend_change_selects_owning_module_tests backend/tests/scripts/test_ci_change_classifier.py::test_selected_gateway_and_research_assistant_plans_have_windows_executors backend/tests/scripts/test_ci_change_classifier.py::test_frontend_uses_module_tests_while_go_uses_its_language_gate backend/tests/scripts/test_aistock_issue_workflow.py::test_start_validation_budget_defers_broad_required_plans backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_routes_changed_file_module_plan_to_ci_once backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_keeps_dev_db_plan_as_external_premerge_requirement backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_reports_recommended_regression_as_nightly backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_does_not_restore_stale_inapplicable_module_or_dev_plans -q` result=`passed (29 passed)`"
+    ],
+    "validation_evidence_digest": "02effa2ad5ad9e3c71c074e871ccc94c3b2a24f080db51346268df1841e0a0df"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -298,6 +324,12 @@
     "fingerprint": "aa12290c8a687fdb83bee2eb",
     "source_event_id": "FE-20260911-aa12290c8a68"
   },
+  "validation_evidence": [
+    "validation-receipt: id=51842805876f3538 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed (8 passed; 14/14 mapped)`",
+    "validation-receipt: id=816cc023c1aecb66 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed (blocking=0)`",
+    "validation-receipt: id=32a39bd0fcc817c9 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`passed (7 passed; findings=0)`",
+    "validation-receipt: id=48f0f895f4d759c9 commit=dcf7d52f02ec21d15580cb1586ae927f42fc799c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_issue_flow.py::test_validation_selects_only_changed_position_timing_lane backend/tests/scripts/test_issue_flow.py::test_validation_selects_only_changed_qe_long_trend_phase backend/tests/scripts/test_issue_flow.py::test_validation_uses_one_active_dataset_plan_instead_of_three backend/tests/scripts/test_issue_flow.py::test_validation_dev_db_plans_require_database_boundaries backend/tests/scripts/test_issue_flow.py::test_validation_research_assistant_phase_does_not_repeat_full_suite backend/tests/scripts/test_issue_flow.py::test_nox_phase_plans_do_not_repeat_global_or_cross_phase_suites backend/tests/scripts/test_ci_change_classifier.py::test_backend_change_selects_relevant_backend_matrix_slice backend/tests/scripts/test_ci_change_classifier.py::test_frontend_change_selects_owning_module_tests backend/tests/scripts/test_ci_change_classifier.py::test_selected_gateway_and_research_assistant_plans_have_windows_executors backend/tests/scripts/test_ci_change_classifier.py::test_frontend_uses_module_tests_while_go_uses_its_language_gate backend/tests/scripts/test_aistock_issue_workflow.py::test_start_validation_budget_defers_broad_required_plans backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_routes_changed_file_module_plan_to_ci_once backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_keeps_dev_db_plan_as_external_premerge_requirement backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_reports_recommended_regression_as_nightly backend/tests/scripts/test_aistock_issue_workflow.py::test_validation_budget_does_not_restore_stale_inapplicable_module_or_dev_plans -q` result=`passed (29 passed)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
