@@ -1,124 +1,92 @@
 {
-  "actual": "BUG-1446 首次 finalizer 在 source worktree 调用时抛出 ValueError，必须切换 canonical root 手工重跑恢复。",
+  "actual": "test_runtime_registration_is_exact_cli_only 在最新 main 上断言旧清单 entries.count(...) == 1 并失败。",
   "allowed_write_scope": [
-    "scripts/aistock_issue_workflow.py",
-    "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "tests/aistock_validation/bugs/20260911_BUG-1449-merge-finalizer-bug-json.json"
+    "backend/tests/factor_research/test_contracts.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1450-bug-1450-p1.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1449",
-  "closed_at": "2026-09-11T07:38:55Z",
+  "bug_id": "BUG-1450",
+  "closed_at": "2026-09-11T07:59:07Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-11T07:34:33.030697Z",
-  "description": "BUG-1446 首次 finalizer 在 source worktree 调用时抛出 ValueError，必须切换 canonical root 手工重跑恢复。",
+  "created_at": "2026-09-11T07:38:55.821547Z",
+  "description": "test_runtime_registration_is_exact_cli_only 在最新 main 上断言旧清单 entries.count(...) == 1 并失败。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260911-390194563b6d",
-      "timestamp": "2026-09-11T07:34:33.030681Z"
+      "note": "Promoted from IC-20260911-38988bce710e",
+      "timestamp": "2026-09-11T07:38:55.821535Z"
     }
   ],
   "evidence_uris": [
-    "scripts/aistock_issue_workflow.py:19268"
+    "GitHub Actions run 34574776878; BUG-1443 merge 8d4dc05aa58275ef4c0a315121365b27fdc33981"
   ],
-  "expected": "close-sync 使用现有跨工作树 BUG JSON 映射函数；从 source worktree 或 canonical root 调用均能把同一 repo-relative BUG JSON 映射到 registry worktree并幂等完成。",
+  "expected": "契约测试验证 scripts/factor_research.py 由 offline-operator-scripts 结构化规则唯一分类为 non_runtime，且 backend factor_research 服务仍为 backend runtime。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1449-merge-finalizer-bug-json.json",
-      "backend/tests/scripts/test_aistock_issue_workflow.py",
-      "scripts/aistock_issue_workflow.py"
+      "backend/tests/factor_research/test_contracts.py"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1449-merge-finalizer-bug-json.json",
-      "backend/tests/scripts/test_aistock_issue_workflow.py",
-      "scripts/aistock_issue_workflow.py"
+      "backend/tests/factor_research/test_contracts.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/factor_research/test_contracts.py"
       ],
       "impacted_modules": [
-        "validation.guardrails",
-        "validation.center",
-        "validation.runner",
-        "validation.module_quality",
-        "tests.backend",
-        "validation.coverage"
+        "factor_library.research"
       ],
       "matched_rules": [
         {
-          "file": "scripts/aistock_issue_workflow.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.module_quality"
-          ],
-          "primary_module": "validation.guardrails",
+          "file": "backend/tests/factor_research/test_contracts.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
           "risk_level": "high",
-          "rule_id": "validation_scripts"
-        },
-        {
-          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.coverage",
-            "validation.guardrails",
-            "validation.module_quality"
-          ],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "validation_backend_tests"
+          "rule_id": "factor_research_p1"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
-        "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/factor_research/test_contracts.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/factor_research/test_contracts.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/factor_research/test_contracts.py"
     ]
   },
-  "first_seen_at": "2026-09-11T07:34:33.030697Z",
+  "first_seen_at": "2026-09-11T07:38:55.821547Z",
   "fix_branch": null,
-  "fix_commit": "1669897351c69b7c4b778fb6925dfccdae6fe1d8",
-  "fixed_at": "2026-09-11T07:38:55Z",
-  "github_issue_number": 4566,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4566",
-  "last_seen_at": "2026-09-11T07:34:33.030697Z",
+  "fix_commit": "cce2904d66a86132f2c9502cd6e121d8256ee4b9",
+  "fixed_at": "2026-09-11T07:59:07Z",
+  "github_issue_number": 4568,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4568",
+  "last_seen_at": "2026-09-11T07:38:55.821547Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4567",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4572",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_contracts.py::test_runtime_registration_is_exact_cli_only -q",
   "required_verification": [
     "l0",
-    "guardrail_changed_files"
+    "factor_research_backend"
   ],
   "risk_area": "regression",
   "runtime_contract": {
@@ -139,47 +107,50 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1449",
+    "bug_id": "BUG-1450",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "ec269a9dcbe18f22",
-    "recorded_at": "2026-09-11T07:40:35.232645Z",
+    "receipt_id": "2cfd271fb7442cc4",
+    "recorded_at": "2026-09-11T08:01:54.944261Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "4bc4b00680f8bcc965f2ed02b8944bd275897b8c",
-    "source_merge_commit": "1669897351c69b7c4b778fb6925dfccdae6fe1d8",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4567",
+    "source_head_oid": "8a43c72e59d6ac6ef2c023aa1eca311cc6f26759",
+    "source_merge_commit": "cce2904d66a86132f2c9502cd6e121d8256ee4b9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4572",
     "validation_evidence": [
-      "python -m nox -s guardrail_changed_files -> passed (files=3 findings=0 blocking=0 ownership=3/3)",
-      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k merge_finalizer_or_close_sync_cross_root -> passed (16 passed)"
+      "python -m nox -s factor_research_backend -> 99 passed, 9 skipped; python -m nox -s l0 -> blocking 0"
     ],
-    "validation_evidence_digest": "b5cf11ab403eabaf6dce934b9a8cdb1ee25ea0d3862ddcbe33370aaea68f59fa"
+    "validation_evidence_digest": "9565c45ecc056c4ca4921afccd362645e4d1e21c7a8bdd02fb3765f4b4c6a269"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "merge-finalizer 从源工作树调用时混用 BUG JSON 路径基准并中断善后",
+  "title": "BUG-1450 P1: 结构化离线脚本分类后因子研究契约仍断言旧精确清单",
   "trigger_condition": {
-    "fingerprint": "390194563b6dc9d32652a3c6",
-    "source_event_id": "FE-20260911-390194563b6d"
+    "fingerprint": "38988bce710e4efaae43ce30",
+    "source_event_id": "FE-20260911-38988bce710e"
   },
   "validation_evidence": [
-    "python -m nox -s guardrail_changed_files -> passed (files=3 findings=0 blocking=0 ownership=3/3)",
-    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k merge_finalizer_or_close_sync_cross_root -> passed (16 passed)"
+    "python -m nox -s factor_research_backend -> 99 passed, 9 skipped; python -m nox -s l0 -> blocking 0"
   ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "validation",
+        "factor_research"
+      ],
+      "plans": [
+        "factor_research_backend"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -210,8 +181,7 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0",
-      "guardrail_changed_files"
+      "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -234,9 +204,14 @@
       "budget": "standard",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "validation",
+          "factor_research"
+        ],
+        "plans": [
+          "factor_research_backend"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -267,8 +242,7 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0",
-        "guardrail_changed_files"
+        "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

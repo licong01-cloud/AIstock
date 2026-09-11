@@ -6,6 +6,7 @@
 - Axioma Risk Model
 - 截面 Spearman Rank Correlation + EWMA (half-life=125d, window=252d)
 """
+
 from __future__ import annotations
 
 import importlib
@@ -78,17 +79,22 @@ def _resolve_gpu_backend() -> Any | None:
             )
         return _gpu_backend
 
+
 # HDF5 存储目录
 _DEFAULT_HDF5_DIR = os.path.join(
     os.path.dirname(__file__),
-    "..", "..", "..",
-    "data", "correlation_matrices",
+    "..",
+    "..",
+    "..",
+    "data",
+    "correlation_matrices",
 )
 
 
 @dataclass
 class PairwiseResult:
     """两个因子的相关性结果（含时序分解）。"""
+
     factor_a: str
     factor_b: str
     correlation: float  # EWMA 聚合后的最终值
@@ -101,10 +107,11 @@ class PairwiseResult:
 @dataclass
 class CorrelationResult:
     """K×K 因子相关性矩阵结果。"""
-    matrix: np.ndarray             # K×K 对称矩阵
+
+    matrix: np.ndarray  # K×K 对称矩阵
     factor_names: List[str]
     as_of_date: str
-    effective_window: int          # 实际使用天数
+    effective_window: int  # 实际使用天数
     computation_time_sec: float
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -125,11 +132,13 @@ class CorrelationResult:
             for j in range(i + 1, n):
                 corr = float(self.matrix[i, j])
                 if abs(corr) > threshold:
-                    pairs.append({
-                        "factor_a": self.factor_names[i],
-                        "factor_b": self.factor_names[j],
-                        "correlation": round(corr, 6),
-                    })
+                    pairs.append(
+                        {
+                            "factor_a": self.factor_names[i],
+                            "factor_b": self.factor_names[j],
+                            "correlation": round(corr, 6),
+                        }
+                    )
         pairs.sort(key=lambda x: abs(x["correlation"]), reverse=True)
         return pairs
 
@@ -156,17 +165,13 @@ class CorrelationResult:
             matrix = f["matrix"][:]
             # h5py attrs 返回 numpy 类型，需转为 Python 原生类型
             raw_names = f.attrs["factor_names"]
-            factor_names = [
-                s.decode("utf-8") if isinstance(s, bytes) else str(s)
-                for s in raw_names
-            ]
+            factor_names = [s.decode("utf-8") if isinstance(s, bytes) else str(s) for s in raw_names]
             as_of_date = str(f.attrs["as_of_date"])
             effective_window = int(f.attrs["effective_window"])
             computation_time_sec = float(f.attrs["computation_time_sec"])
             metadata = {}
             for k in f.attrs:
-                if k in {"factor_names", "as_of_date",
-                         "effective_window", "computation_time_sec"}:
+                if k in {"factor_names", "as_of_date", "effective_window", "computation_time_sec"}:
                     continue
                 v = f.attrs[k]
                 # 将 numpy 类型转为 Python 原生类型
@@ -197,13 +202,15 @@ class CorrelationResult:
             for j in range(i + 1, n):
                 corr = float(self.matrix[i, j])
                 if abs(corr) > threshold:
-                    records.append({
-                        "factor_a": self.factor_names[i],
-                        "factor_b": self.factor_names[j],
-                        "correlation": round(corr, 6),
-                        "method": "spearman_ewma",
-                        "data_period": f"252d_as_of_{self.as_of_date}",
-                    })
+                    records.append(
+                        {
+                            "factor_a": self.factor_names[i],
+                            "factor_b": self.factor_names[j],
+                            "correlation": round(corr, 6),
+                            "method": "spearman_ewma",
+                            "data_period": f"252d_as_of_{self.as_of_date}",
+                        }
+                    )
         return records
 
     def get_no_valid_pair_factors(self) -> list[str]:
@@ -254,6 +261,25 @@ class CorrelationSubmatrixResult:
                     }
                 )
         return rows
+
+
+@dataclass
+class DailyCorrelationSubmatrixResult:
+    """Reusable daily candidate-by-reference correlations.
+
+    The daily block keeps the exact pairwise finite-sample semantics used by
+    :meth:`compute_selected_submatrix`.  Callers may aggregate several
+    predeclared date windows without recomputing the cross-sectional ranks.
+    """
+
+    correlations: np.ndarray
+    support: np.ndarray
+    dates: pd.DatetimeIndex
+    candidate_names: List[str]
+    reference_names: List[str]
+    as_of_date: str
+    computation_time_sec: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class CorrelationEngine:
@@ -333,12 +359,10 @@ class CorrelationEngine:
 
         # 获取窗口内的交易日列表
         all_dates = self._loader.get_trading_dates("2000-01-01", as_of_date)
-        window_dates = all_dates[-self._window:] if len(all_dates) > self._window else all_dates
+        window_dates = all_dates[-self._window :] if len(all_dates) > self._window else all_dates
 
         if len(window_dates) < self._min_days:
-            raise ValueError(
-                f"有效交易日不足: {len(window_dates)} < {self._min_days}"
-            )
+            raise ValueError(f"有效交易日不足: {len(window_dates)} < {self._min_days}")
 
         # 一次性加载面板数据
         panel = self._loader.load_factor_panel(
@@ -371,10 +395,7 @@ class CorrelationEngine:
             low_coverage = non_nan_ratio[non_nan_ratio < 0.8]
             if len(low_coverage) > 0:
                 preview = low_coverage.sort_values().head(10).to_dict()
-                logger.info(
-                    f"低覆盖率因子 (<80%) 共 {len(low_coverage)} 个, 保留参与计算, "
-                    f"最低 10 个覆盖率: {preview}"
-                )
+                logger.info(f"低覆盖率因子 (<80%) 共 {len(low_coverage)} 个, 保留参与计算, 最低 10 个覆盖率: {preview}")
             min_cov = non_nan_ratio.min() if len(non_nan_ratio) else 0
             if min_cov == 0:
                 zero_cov = set(non_nan_ratio[non_nan_ratio == 0].index.tolist())
@@ -402,9 +423,7 @@ class CorrelationEngine:
         for day_idx, date_str in enumerate(window_dates):
             # 协作式取消检查
             if stop_event is not None and stop_event.is_set():
-                raise RuntimeError(
-                    f"相关性计算被取消/超时 (已完成 {len(daily_corrs)}/{total_days} 天)"
-                )
+                raise RuntimeError(f"相关性计算被取消/超时 (已完成 {len(daily_corrs)}/{total_days} 天)")
 
             ts = pd.Timestamp(date_str)
             try:
@@ -433,9 +452,7 @@ class CorrelationEngine:
                 on_progress(day_idx + 1, total_days)
 
         if len(daily_corrs) < self._min_days:
-            raise ValueError(
-                f"有效截面天数不足: {len(daily_corrs)} < {self._min_days}"
-            )
+            raise ValueError(f"有效截面天数不足: {len(daily_corrs)} < {self._min_days}")
 
         # EWMA 时序聚合
         final_matrix = self._ewma_aggregate(daily_corrs, valid_dates)
@@ -474,9 +491,7 @@ class CorrelationEngine:
 
         # 保存 HDF5
         if save_hdf5:
-            hdf5_path = os.path.join(
-                self._hdf5_dir, f"corr_{as_of_date.replace('-', '')}.h5"
-            )
+            hdf5_path = os.path.join(self._hdf5_dir, f"corr_{as_of_date.replace('-', '')}.h5")
             result.to_hdf5(hdf5_path)
             result.metadata["hdf5_path"] = hdf5_path
 
@@ -493,7 +508,7 @@ class CorrelationEngine:
             _, as_of_date = self._loader.get_date_range()
 
         all_dates = self._loader.get_trading_dates("2000-01-01", as_of_date)
-        window_dates = all_dates[-self._window:] if len(all_dates) > self._window else all_dates
+        window_dates = all_dates[-self._window :] if len(all_dates) > self._window else all_dates
 
         panel = self._loader.load_factor_panel(
             [factor_a, factor_b],
@@ -543,10 +558,7 @@ class CorrelationEngine:
             )
 
         # EWMA 聚合
-        weights = np.array([
-            self._lambda ** (len(daily_corrs_scalar) - 1 - i)
-            for i in range(len(daily_corrs_scalar))
-        ])
+        weights = np.array([self._lambda ** (len(daily_corrs_scalar) - 1 - i) for i in range(len(daily_corrs_scalar))])
         ewma_corr = float(np.average(daily_corrs_scalar, weights=weights))
 
         return PairwiseResult(
@@ -585,6 +597,33 @@ class CorrelationEngine:
         installed into the official cache. This method never writes HDF5 or DB
         rows and never computes reference x reference pairs.
         """
+        daily = self.compute_selected_daily_submatrix(
+            candidate_panel,
+            reference_panel,
+            as_of_date=as_of_date,
+        )
+        result = self.aggregate_selected_daily_submatrix(
+            daily,
+            start_date=None,
+            end_date=as_of_date,
+            as_of_date=as_of_date,
+        )
+        result.computation_time_sec = round(daily.computation_time_sec + result.computation_time_sec, 6)
+        return result
+
+    def compute_selected_daily_submatrix(
+        self,
+        candidate_panel: pd.DataFrame,
+        reference_panel: pd.DataFrame,
+        *,
+        as_of_date: str,
+    ) -> DailyCorrelationSubmatrixResult:
+        """Compute the reusable daily candidate x reference block once.
+
+        Pairs with the same finite-observation mask are ranked together.  This
+        preserves the prior pairwise winsorization and Spearman samples while
+        replacing repeated per-pair scipy calls with a small matrix kernel.
+        """
         started = time.time()
         for label, panel in (("candidate", candidate_panel), ("reference", reference_panel)):
             if not isinstance(panel, pd.DataFrame) or panel.empty:
@@ -596,19 +635,10 @@ class CorrelationEngine:
             if not all(isinstance(name, str) and name for name in panel.columns):
                 raise ValueError(f"{label}_panel requires named factor columns")
             dates = pd.DatetimeIndex(panel.index.get_level_values("datetime"))
-            if (
-                dates.hasnans
-                or dates.tz is not None
-                or not dates.equals(dates.normalize())
-            ):
-                raise ValueError(
-                    f"{label}_panel datetime level must contain timezone-naive daily dates"
-                )
+            if dates.hasnans or dates.tz is not None or not dates.equals(dates.normalize()):
+                raise ValueError(f"{label}_panel datetime level must contain timezone-naive daily dates")
             instruments = panel.index.get_level_values("instrument")
-            if not all(
-                isinstance(instrument, str) and bool(instrument.strip())
-                for instrument in instruments
-            ):
+            if not all(isinstance(instrument, str) and bool(instrument.strip()) for instrument in instruments):
                 raise ValueError(f"{label}_panel requires non-empty instrument identities")
 
         candidates = sorted(candidate_panel.columns)
@@ -621,48 +651,119 @@ class CorrelationEngine:
         combined = pd.concat(
             [candidate_panel[candidates], reference_panel[references]], axis=1, join="inner"
         ).sort_index()
-        combined = combined.loc[
-            combined.index.get_level_values("datetime") <= cutoff
-        ]
+        combined = combined.loc[combined.index.get_level_values("datetime") <= cutoff]
         dates = combined.index.get_level_values("datetime").unique().sort_values()
         if len(dates) > self._window:
             dates = dates[-self._window :]
-            combined = combined.loc[
-                combined.index.get_level_values("datetime").isin(dates)
-            ]
+            combined = combined.loc[combined.index.get_level_values("datetime").isin(dates)]
 
-        daily: list[list[list[float]]] = [
-            [[] for _ in references] for _ in candidates
-        ]
-        support: list[list[list[int]]] = [
-            [[] for _ in references] for _ in candidates
-        ]
-        for _, section in combined.groupby(level="datetime", sort=True):
-            for i, candidate in enumerate(candidates):
-                left = pd.to_numeric(section[candidate], errors="coerce").to_numpy(dtype=float)
-                for j, reference in enumerate(references):
-                    right = pd.to_numeric(section[reference], errors="coerce").to_numpy(dtype=float)
-                    valid = np.isfinite(left) & np.isfinite(right)
+        daily = np.full((len(dates), len(candidates), len(references)), np.nan, dtype=float)
+        support = np.zeros(daily.shape, dtype=np.int32)
+        mask_group_count = 0
+        for day_index, (_, section) in enumerate(combined.groupby(level="datetime", sort=True)):
+            candidate_values = section[candidates].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            reference_values = section[references].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            groups: dict[bytes, dict[str, Any]] = {}
+            for i in range(len(candidates)):
+                candidate_finite = np.isfinite(candidate_values[:, i])
+                for j in range(len(references)):
+                    valid = candidate_finite & np.isfinite(reference_values[:, j])
                     count = int(valid.sum())
                     if count < self._min_stocks:
                         continue
-                    corr, _ = stats.spearmanr(
-                        self._winsorize_array(left[valid]),
-                        self._winsorize_array(right[valid]),
+                    key = np.packbits(valid, bitorder="little").tobytes()
+                    group = groups.setdefault(
+                        key,
+                        {"valid": valid, "pairs": []},
                     )
-                    if np.isfinite(corr):
-                        daily[i][j].append(float(corr))
-                        support[i][j].append(count)
+                    group["pairs"].append((i, j, count))
 
-        matrix = np.full((len(candidates), len(references)), np.nan, dtype=float)
+            mask_group_count += len(groups)
+            for group in groups.values():
+                valid = group["valid"]
+                pairs = group["pairs"]
+                candidate_ids = sorted({i for i, _, _ in pairs})
+                reference_ids = sorted({j for _, j, _ in pairs})
+                values = np.column_stack(
+                    [candidate_values[valid, i] for i in candidate_ids]
+                    + [reference_values[valid, j] for j in reference_ids]
+                )
+                lower = np.percentile(values, self._winsorize_q * 100, axis=0)
+                upper = np.percentile(values, (1.0 - self._winsorize_q) * 100, axis=0)
+                winsorized = np.clip(values, lower, upper)
+                ranked = pd.DataFrame(winsorized).rank(method="average").to_numpy(dtype=float)
+                centered = ranked - ranked.mean(axis=0, keepdims=True)
+                scale = np.sqrt(np.sum(centered * centered, axis=0))
+                numerator = centered.T @ centered
+                denominator = np.outer(scale, scale)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    correlations = numerator / denominator
+                candidate_positions = {value: position for position, value in enumerate(candidate_ids)}
+                reference_positions = {
+                    value: len(candidate_ids) + position for position, value in enumerate(reference_ids)
+                }
+                for i, j, count in pairs:
+                    corr = correlations[candidate_positions[i], reference_positions[j]]
+                    if np.isfinite(corr):
+                        daily[day_index, i, j] = float(corr)
+                        support[day_index, i, j] = count
+
+        return DailyCorrelationSubmatrixResult(
+            correlations=daily,
+            support=support,
+            dates=pd.DatetimeIndex(dates),
+            candidate_names=candidates,
+            reference_names=references,
+            as_of_date=str(cutoff.date()),
+            computation_time_sec=round(time.time() - started, 6),
+            metadata={
+                "method": "cross_sectional_spearman_pairwise_mask_grouped",
+                "window": self._window,
+                "min_stocks": self._min_stocks,
+                "computed_pairs": len(candidates) * len(references),
+                "reference_reference_pairs_computed": 0,
+                "mask_groups": mask_group_count,
+            },
+        )
+
+    def aggregate_selected_daily_submatrix(
+        self,
+        daily: DailyCorrelationSubmatrixResult,
+        *,
+        start_date: str | None,
+        end_date: str,
+        as_of_date: str,
+    ) -> CorrelationSubmatrixResult:
+        """Aggregate one declared window from a reusable daily block."""
+        started = time.time()
+        start = pd.Timestamp(start_date) if start_date is not None else None
+        end = pd.Timestamp(end_date)
+        cutoff = pd.Timestamp(as_of_date)
+        for label, value in (("start_date", start), ("end_date", end), ("as_of_date", cutoff)):
+            if value is not None and (value.tz is not None or value.normalize() != value):
+                raise ValueError(f"{label} must be a timezone-naive daily date")
+        if start is not None and start > end:
+            raise ValueError("start_date must not be after end_date")
+        date_mask = daily.dates <= end
+        if start is not None:
+            date_mask &= daily.dates >= start
+        selected = daily.correlations[date_mask]
+        selected_support = daily.support[date_mask]
+        matrix = np.full(
+            (len(daily.candidate_names), len(daily.reference_names)),
+            np.nan,
+            dtype=float,
+        )
         effective = np.zeros(matrix.shape, dtype=int)
         average_support = np.zeros(matrix.shape, dtype=float)
-        for i in range(len(candidates)):
-            for j in range(len(references)):
-                values = daily[i][j]
+        for i in range(len(daily.candidate_names)):
+            for j in range(len(daily.reference_names)):
+                finite = np.isfinite(selected[:, i, j])
+                values = selected[finite, i, j]
                 effective[i, j] = len(values)
-                if support[i][j]:
-                    average_support[i, j] = float(np.mean(support[i][j]))
+                pair_support = selected_support[finite, i, j]
+                if len(pair_support):
+                    average_support[i, j] = float(np.mean(pair_support))
                 if len(values) < self._min_days:
                     continue
                 weights = np.asarray(
@@ -673,20 +774,23 @@ class CorrelationEngine:
 
         return CorrelationSubmatrixResult(
             matrix=matrix,
-            candidate_names=candidates,
-            reference_names=references,
+            candidate_names=daily.candidate_names,
+            reference_names=daily.reference_names,
             as_of_date=str(cutoff.date()),
             effective_days=effective,
             avg_stocks_per_day=average_support,
             computation_time_sec=round(time.time() - started, 6),
             metadata={
                 "method": "cross_sectional_spearman_ewma",
-                "window": self._window,
+                "window": int(date_mask.sum()),
                 "half_life": self._half_life,
                 "min_stocks": self._min_stocks,
                 "min_days": self._min_days,
-                "computed_pairs": len(candidates) * len(references),
+                "computed_pairs": len(daily.candidate_names) * len(daily.reference_names),
                 "reference_reference_pairs_computed": 0,
+                "daily_reuse": True,
+                "window_start": str(start.date()) if start is not None else None,
+                "window_end": str(end.date()),
             },
         )
 
@@ -789,12 +893,12 @@ class CorrelationEngine:
         """5-GEMM Pearson (CPU numpy BLAS)。"""
         N_pairs = M.T @ M
         SX = X.T @ M
-        SX2 = (X ** 2).T @ M
+        SX2 = (X**2).T @ M
         SXY = X.T @ X
 
         numerator = N_pairs * SXY - SX * SX.T
-        var_x = N_pairs * SX2 - SX ** 2
-        var_y = N_pairs * SX2.T - SX.T ** 2
+        var_x = N_pairs * SX2 - SX**2
+        var_y = N_pairs * SX2.T - SX.T**2
         denominator = np.sqrt(np.maximum(var_x * var_y, 0.0))
 
         # 相对阈值：要求每个因子的方差 > 理论最大方差的 1%
@@ -823,12 +927,12 @@ class CorrelationEngine:
 
         N_pairs = M_t.T @ M_t
         SX = X_t.T @ M_t
-        SX2 = (X_t ** 2).T @ M_t
+        SX2 = (X_t**2).T @ M_t
         SXY = X_t.T @ X_t
 
         numerator = N_pairs * SXY - SX * SX.T
-        var_x = N_pairs * SX2 - SX ** 2
-        var_y = N_pairs * SX2.T - SX.T ** 2
+        var_x = N_pairs * SX2 - SX**2
+        var_y = N_pairs * SX2.T - SX.T**2
         denominator = torch_module.sqrt(torch_module.clamp(var_x * var_y, min=0.0))
 
         # 相对阈值：与 CPU 版本一致

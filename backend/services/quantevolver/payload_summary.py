@@ -12,6 +12,7 @@ import json
 import math
 from typing import Any, Mapping
 
+from .qe_active_dataset_profile import is_pure_star50_universe
 from .qe_run_registry import qe_registration_summary
 
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
@@ -26,6 +27,12 @@ SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
         "annualized_return_absolute",
         "absolute_returns.cagr",
         "enhanced_metrics.absolute_returns.cagr",
+    ),
+    "sharpe": (
+        "sharpe",
+        "sharpe_absolute",
+        "absolute_returns.sharpe",
+        "enhanced_metrics.absolute_returns.sharpe",
     ),
     "annualized_return": (
         "annualized_return",
@@ -43,9 +50,14 @@ SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "information_ratio": (
         "information_ratio",
-        "sharpe",
         "excess_return_with_cost_IR",
         "1day.excess_return_with_cost.information_ratio",
+    ),
+    "benchmark_annualized_return": (
+        "benchmark_annualized_return",
+        "benchmark_annual_return",
+        "benchmark_return_annualized",
+        "enhanced_metrics.benchmark_returns.annualized_return",
     ),
     "calmar": (
         "calmar",
@@ -198,7 +210,7 @@ COMPACT_EXECUTION_PARAM_KEYS = (
 
 COMPACT_ABSOLUTE_RETURN_KEYS: dict[str, tuple[str, ...]] = {
     "cagr": ("cagr", "cagr_absolute", "annualized_return_absolute"),
-    "sharpe": ("sharpe", "sharpe_absolute", "information_ratio"),
+    "sharpe": ("sharpe", "sharpe_absolute"),
     "max_drawdown": ("max_drawdown", "max_drawdown_absolute"),
     "calmar": ("calmar", "calmar_ratio", "calmar_absolute"),
     "total_return": ("total_return", "absolute_total_return"),
@@ -522,11 +534,55 @@ def compact_metric_summary(metrics: Any, *, row: Mapping[str, Any] | None = None
     containers = _containers(parsed)
     row_map = row if isinstance(row, Mapping) else {}
     summary: dict[str, Any] = {}
+    enhanced_summary = compact_enhanced_metric_summary(parsed)
+    absolute = _mapping(enhanced_summary.get("absolute_returns"))
+    if not absolute and row_map.get("absolute_metrics_present") is True:
+        absolute = {
+            key: row_map.get(key)
+            for key in ("cagr", "sharpe", "max_drawdown", "calmar")
+            if row_map.get(key) is not None
+        }
+
+    # New QE runs persist one authoritative absolute NAV summary.  When it is
+    # present, never fill a missing absolute field from Qlib's benchmark-relative
+    # columns; doing so previously produced mixed-source Calmar and mislabeled IR
+    # as Sharpe.
+    if absolute:
+        for key in ("cagr", "sharpe", "max_drawdown", "calmar"):
+            value = first_number(absolute.get(key))
+            if value is not None:
+                summary[key] = value
+        _apply_calmar_if_available(summary)
+
     for canonical, aliases in SCALAR_METRIC_ALIASES.items():
+        if absolute and canonical in {"cagr", "sharpe", "max_drawdown", "calmar"}:
+            continue
         value = first_number(row_map.get(canonical), _first_by_alias(containers, aliases))
         if value is not None:
             summary[canonical] = value
-    _apply_calmar_if_available(summary)
+    if not absolute:
+        _apply_calmar_if_available(summary)
+
+    absolute_missing = [
+        key
+        for key in ("cagr", "sharpe", "max_drawdown", "calmar")
+        if summary.get(key) is None
+    ]
+    summary["metric_contract"] = {
+        "absolute_source": (
+            "enhanced_metrics.absolute_returns"
+            if absolute
+            else "legacy_summary_unverified"
+        ),
+        "active_source": (
+            "benchmark_relative_with_cost"
+            if summary.get("annualized_return") is not None
+            or summary.get("information_ratio") is not None
+            else "not_available"
+        ),
+        "information_ratio_is_sharpe": False,
+        "absolute_missing": absolute_missing,
+    }
 
     for container in containers:
         training = container.get("training_diagnostics")
@@ -538,7 +594,6 @@ def compact_metric_summary(metrics: Any, *, row: Mapping[str, Any] | None = None
             if val_final is not None and "val_loss_final" not in summary:
                 summary["val_loss_final"] = val_final
             break
-    enhanced_summary = compact_enhanced_metric_summary(parsed)
     if enhanced_summary:
         summary["enhanced_metrics"] = enhanced_summary
     return summary
@@ -600,9 +655,26 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
     )
     if execution_summary:
         summary["execution_algo_params"] = execution_summary
-    active_dataset = _mapping(cfg.get("_qe_active_dataset_summary"))
-    direct_binding = _mapping(cfg.get("_qe_direct_v2_dataset_binding"))
-    selection = _mapping(direct_binding.get("selection_pins"))
+    metadata_sources = [cfg, model_params, custom_params]
+    active_dataset = next(
+        (
+            candidate
+            for source in metadata_sources
+            if (candidate := _mapping(source.get("_qe_active_dataset_summary")))
+        ),
+        {},
+    )
+    direct_binding = next(
+        (
+            candidate
+            for source in metadata_sources
+            if (candidate := _mapping(source.get("_qe_direct_v2_dataset_binding")))
+        ),
+        {},
+    )
+    selection = _mapping(direct_binding.get("selection_pins")) or _mapping(
+        cfg.get("universe_selection")
+    )
     if active_dataset:
         summary["dataset"] = {
             key: active_dataset[key]
@@ -615,7 +687,118 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
             "pool_ids": list(selection.get("pool_ids") or []),
             "label": selection.get("instrument_name") or selection.get("stock_pool"),
         }
+    strategy_topk = first_number(strategy_summary.get("topk"))
+    if is_pure_star50_universe(
+        universe_selection=selection or None,
+        stock_pool=summary.get("stock_pool") or cfg.get("stock_pool"),
+    ):
+        protocol_eligible = strategy_topk == 20
+        summary.setdefault("universe", {})["star50_top20_eligible"] = protocol_eligible
+        if strategy_topk is not None and not protocol_eligible:
+            summary["universe"]["protocol_status"] = "historical_star50_non_top20"
     return summary
+
+
+def _explicit_bool(sources: list[Mapping[str, Any]], aliases: tuple[str, ...]) -> bool | None:
+    value = _first_by_alias(sources, aliases)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return None
+
+
+def _policy_effect(*, enabled: bool | None, count: float | int | None) -> tuple[bool | None, str]:
+    if enabled is False:
+        return False, "disabled"
+    if enabled is None:
+        return None, "enablement_not_recorded"
+    if count is None:
+        return None, "effect_evidence_not_recorded"
+    return count > 0, "action_observed" if count > 0 else "enabled_no_action"
+
+
+def compact_policy_summary(config: Any, metrics: Any) -> dict[str, Any]:
+    """Project requested/enabled/effective policy truth without inferring use."""
+
+    cfg = _mapping(config)
+    config_sources = [
+        cfg,
+        _mapping(cfg.get("custom_params")),
+        _mapping(cfg.get("strategy_params")),
+        _mapping(cfg.get("model_params")),
+        _mapping(cfg.get("runtime_profile")),
+    ]
+    metric_sources = _containers(_mapping(metrics))
+
+    hmm_enabled = _explicit_bool(
+        config_sources,
+        ("enable_sector_hmm", "hmm_enabled", "hmm.enabled"),
+    )
+    hmm_trigger_count = _first_number_from_sources(
+        metric_sources,
+        (
+            "hmm_trigger_count",
+            "hmm_action_count",
+            "sector_hmm_trigger_count",
+            "policy_diagnostics.hmm_trigger_count",
+            "enhanced_metrics.policy_diagnostics.hmm_trigger_count",
+        ),
+    )
+    hmm_effective, hmm_reason = _policy_effect(
+        enabled=hmm_enabled,
+        count=hmm_trigger_count,
+    )
+
+    blacklist_enabled = _explicit_bool(
+        config_sources,
+        (
+            "sector_blacklist_enabled",
+            "blacklist_enabled",
+            "sector_blacklist.enabled",
+        ),
+    )
+    if blacklist_enabled is None:
+        blacklist = _first_by_alias(config_sources, ("sector_blacklist",))
+        if isinstance(blacklist, (list, tuple, set)):
+            blacklist_enabled = bool(blacklist)
+    blacklist_action_count = _first_number_from_sources(
+        metric_sources,
+        (
+            "blacklist_excluded_count",
+            "sector_blacklist_excluded_count",
+            "blacklist_match_count",
+            "policy_diagnostics.blacklist_excluded_count",
+            "enhanced_metrics.policy_diagnostics.blacklist_excluded_count",
+        ),
+    )
+    blacklist_effective, blacklist_reason = _policy_effect(
+        enabled=blacklist_enabled,
+        count=blacklist_action_count,
+    )
+
+    return {
+        "hmm": {
+            "requested": hmm_enabled,
+            "enabled": hmm_enabled,
+            "effective": hmm_effective,
+            "trigger_count": hmm_trigger_count,
+            "effective_reason": hmm_reason,
+        },
+        "sector_blacklist": {
+            "requested": blacklist_enabled,
+            "enabled": blacklist_enabled,
+            "effective": blacklist_effective,
+            "action_count": blacklist_action_count,
+            "effective_reason": blacklist_reason,
+        },
+    }
 
 
 def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bool = False) -> dict[str, Any]:
@@ -706,6 +889,7 @@ def compact_loop_row(row: Mapping[str, Any]) -> dict[str, Any]:
         item["factor_count"] = len(factors)
     if config_summary:
         item["config_summary"] = config_summary
+    item["policy_summary"] = compact_policy_summary(config_source, raw_metrics)
     item["metrics_summary"] = metrics
     return item
 
@@ -736,33 +920,46 @@ def compact_task_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at",
     )
     item = {key: row.get(key) for key in keys if key in row}
-    item["hmm_enabled"] = _has_hmm_marker(row.get("strategy_params")) or _has_hmm_marker(row.get("strategy_evo_config"))
+    hmm_values = _collect_explicit_hmm_values(
+        [row.get("strategy_params"), row.get("strategy_evo_config")]
+    )
+    if not hmm_values:
+        item["hmm_enabled"] = None
+        item["hmm_status"] = "unknown"
+    elif all(hmm_values):
+        item["hmm_enabled"] = True
+        item["hmm_status"] = "enabled"
+    elif not any(hmm_values):
+        item["hmm_enabled"] = False
+        item["hmm_status"] = "disabled"
+    else:
+        item["hmm_enabled"] = None
+        item["hmm_status"] = "mixed"
     return item
 
 
-def _has_hmm_marker(value: Any) -> bool:
+def _collect_explicit_hmm_values(values: list[Any]) -> list[bool]:
+    collected: list[bool] = []
+    for value in values:
+        _collect_explicit_hmm_value(value, collected)
+    return collected
+
+
+def _collect_explicit_hmm_value(value: Any, collected: list[bool]) -> None:
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
-            return "hmm" in value.lower()
+            return
     if isinstance(value, Mapping):
         for key, nested in value.items():
             key_text = str(key).lower()
             if key_text in {"enable_sector_hmm", "hmm_enabled", "enable_hmm", "use_hmm"}:
-                if _truthy_hmm_value(nested):
-                    return True
+                parsed = _explicit_bool([{"value": nested}], ("value",))
+                if parsed is not None:
+                    collected.append(parsed)
                 continue
-            if _has_hmm_marker(nested):
-                return True
-            if "hmm" in key_text and nested not in (None, "", False):
-                return True
+            _collect_explicit_hmm_value(nested, collected)
     if isinstance(value, list):
-        return any(_has_hmm_marker(item) for item in value)
-    return False
-
-
-def _truthy_hmm_value(value: Any) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
-    return bool(value)
+        for item in value:
+            _collect_explicit_hmm_value(item, collected)

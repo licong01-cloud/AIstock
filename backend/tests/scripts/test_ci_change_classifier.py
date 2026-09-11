@@ -458,6 +458,19 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
+    qe_comparison_truth_tests_payload = classifier.classify_changed_files(
+        [
+            "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py",
+            "backend/tests/quantevolver/test_payload_summary.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_comparison_truth_tests_payload["classification"] == "targeted_ci_required"
+    assert qe_comparison_truth_tests_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_comparison_truth_tests_payload["unmapped_code_files"] == []
+    assert qe_comparison_truth_tests_payload["unexecuted_test_files"] == []
+
     qe_candidate_payload = classifier.classify_changed_files(
         [
             "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
