@@ -915,6 +915,30 @@ def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
     assert rows[["trade_date", "symbol"]].tolist() == [(20220103, b"000002.SZ")]
 
 
+def test_qlib_month_spool_uses_full_calendar_for_bin_indices_and_bounds_output_window(tmp_path: Path) -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
+    window = calendar[-44:]
+    qlib_root = tmp_path / "qlib"
+    feature_root = qlib_root / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    start_index = 10
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.asarray([float(start_index), *range(90)], dtype="<f4")
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    paths = subject._spool_qlib_months(
+        qlib_root,
+        calendar=calendar,
+        spans={"000001.SZ": ((calendar[0], calendar[-1]),)},
+        spool_root=tmp_path / "spool",
+        window_start=window[0],
+        window_end=window[-1],
+    )
+
+    rows = np.concatenate([np.fromfile(path, dtype=subject._QLIB_SOURCE_DTYPE) for path in paths])
+    assert rows["trade_date"].tolist() == [int(day.strftime("%Y%m%d")) for day in window]
+
+
 def test_security_intervals_preserve_dataset_specific_source_aliases() -> None:
     canonical = "302132.SZ"
     start = subject.SOURCE_START
@@ -1873,6 +1897,7 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
     qlib_root = candidate_root / "qlib"
     qlib_root.mkdir()
     loader_calls: list[dict[str, object]] = []
+    spool_calls: list[dict[str, object]] = []
 
     def load_assets(root, **kwargs):
         loader_calls.append({"root": root, **kwargs})
@@ -1940,7 +1965,11 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
     monkeypatch.setattr(subject, "_SecurityResolutionIndex", lambda value: value)
     monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[]))
     monkeypatch.setattr(subject, "_load_suspend_keys", lambda *_args, **_kwargs: frozenset())
-    monkeypatch.setattr(subject, "_spool_qlib_months", lambda *_args, **_kwargs: (tmp_path / "202603.bin",))
+    def spool_qlib_months(*_args, **kwargs):
+        spool_calls.append(kwargs)
+        return (tmp_path / "202603.bin",)
+
+    monkeypatch.setattr(subject, "_spool_qlib_months", spool_qlib_months)
     monkeypatch.setattr(subject, "_build_stock_fact_aggregates", build_stock_inputs)
 
     result = subject.build_rotation_l1_single_date_source_from_assets(
@@ -1967,6 +1996,10 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         }
     ]
     assert result["feature_calendar"][-2:] == (as_of, trade_day)
+    assert len(spool_calls) == 1
+    assert spool_calls[0]["calendar"] == calendar
+    assert spool_calls[0]["window_start"] == calendar[-45 if deterministic_v16 else -40]
+    assert spool_calls[0]["window_end"] == as_of
     if deterministic_v16:
         assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v2"
         assert result["model_contract_version"] == "hmm_risk_rotation_l1_g2a_v1_6"

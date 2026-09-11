@@ -732,7 +732,11 @@ def _read_qlib_stock_rows(
     symbol: str,
     calendar: Sequence[date],
     active_spans: Sequence[tuple[date, date]],
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
 ) -> np.ndarray:
+    if window_start > window_end:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "Qlib stock read window is reversed")
     feature_root = qlib_root / "features" / _qlib_code_directory(symbol)
     inventories: dict[str, tuple[Path, int, int]] = {}
     for field in QLIB_STOCK_FIELDS:
@@ -762,7 +766,7 @@ def _read_qlib_stock_rows(
     expected_positions = [
         index
         for index, day in enumerate(calendar)
-        if SOURCE_START <= day <= SOURCE_END
+        if window_start <= day <= window_end
         and any(span_start <= day <= span_end for span_start, span_end in active_spans)
     ]
     positions = [index for index in expected_positions if start_index <= index < start_index + length]
@@ -2003,6 +2007,8 @@ def _spool_qlib_months(
     calendar: Sequence[date],
     spans: Mapping[str, Sequence[tuple[date, date]]],
     spool_root: Path,
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
     resource_started: float | None = None,
 ) -> tuple[Path, ...]:
     spool_root.mkdir(parents=True, exist_ok=False)
@@ -2022,6 +2028,8 @@ def _spool_qlib_months(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=active_spans,
+                window_start=window_start,
+                window_end=window_end,
             )
             if not len(rows):
                 continue
@@ -3239,9 +3247,11 @@ def build_rotation_l1_single_date_source_from_assets(
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-inference-", dir=work_root) as raw_temporary:
         month_paths = _spool_qlib_months(
             assets["qlib_root"],
-            calendar=stock_history_calendar,
+            calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            window_start=stock_history_calendar[0],
+            window_end=as_of_date,
         )
         _build_stock_fact_aggregates(
             month_paths=month_paths,
