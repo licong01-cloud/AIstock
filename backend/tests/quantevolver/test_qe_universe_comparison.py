@@ -170,6 +170,53 @@ def test_strategy_fork_rejects_star50_non_top20_before_scheduler(
     assert called is False
 
 
+def test_strategy_fork_success_returns_once_without_retired_execution_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_strategy_fork_task(**kwargs):
+        calls.append(kwargs)
+        return "qe_strategy_fork_new"
+
+    monkeypatch.setattr(
+        evolution_router,
+        "ensure_qe_label_horizon_schema",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        evolution_router.scheduler,
+        "strategy_fork_task",
+        fake_strategy_fork_task,
+    )
+    request = evolution_router.StrategyEvolutionForkRequest(
+        from_loop_index=3,
+        task_name="reuse prediction",
+        loops=[
+            evolution_router.StrategyLoopConfig(
+                strategy_params={"topk": 20, "n_drop": 2},
+            )
+        ],
+        node_id="wsl2-5080",
+    )
+
+    result = asyncio.run(
+        evolution_router.strategy_fork_task("qe_source_task", request)
+    )
+
+    assert result == {
+        "status": "success",
+        "task_id": "qe_strategy_fork_new",
+        "source_task_id": "qe_source_task",
+        "from_loop_index": 3,
+        "total_loops": 1,
+        "message": "策略演进任务已创建，1 个策略回测 Loop 后台启动中",
+    }
+    assert len(calls) == 1
+    assert calls[0]["source_task_id"] == "qe_source_task"
+    assert calls[0]["loops_config"][0]["loop_index"] == 1
+
+
 def test_custom_evo_rerun_reuses_persisted_binding_without_reading_active_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

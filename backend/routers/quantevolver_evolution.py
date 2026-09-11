@@ -1397,7 +1397,6 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             "source_task_id": task_id,
             "from_loop_index": req.from_loop_index,
             "total_loops": len(loops_config),
-            "execution_mode": req.execution_mode or "serial",
             "message": f"策略演进任务已创建，{len(loops_config)} 个策略回测 Loop 后台启动中",
         }
     except HTTPException:

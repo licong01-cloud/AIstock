@@ -65,6 +65,123 @@ def test_legacy_attempt_cannot_attach_undeclared_comparison(tmp_path):
         ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
 
 
+def test_legacy_attempt_cannot_attach_undeclared_full_evaluation(tmp_path):
+    spec, result, value = attachment(tmp_path)
+    folder = tmp_path / "m_trial"
+    folder.mkdir()
+    (folder / "values.h5").write_bytes(b"fixture")
+    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
+    result["candidates"] = [
+        {
+            "factor_name": "m_trial",
+            "scope": "research_candidate",
+            "metrics": {},
+            "values": str(folder / "values.h5"),
+            "source_script": str(folder / "factor.py"),
+        }
+    ]
+    result["full_evaluation"] = {
+        "schema_version": "factor_research_full_evaluation_v1"
+    }
+    write_json(tmp_path / "result.json", result)
+    with pytest.raises(ResearchError, match="undeclared full evaluation"):
+        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
+
+
+def test_declared_full_evaluation_attach_requires_pair_denominator_closure(tmp_path):
+    spec, result, value = attachment(tmp_path)
+    folder = tmp_path / "m_trial"
+    folder.mkdir()
+    (folder / "values.h5").write_bytes(b"fixture")
+    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
+    result["candidates"] = [
+        {
+            "factor_name": "m_trial",
+            "scope": "research_candidate",
+            "metrics": {},
+            "values": str(folder / "values.h5"),
+            "source_script": str(folder / "factor.py"),
+        }
+    ]
+    parameters = {
+        "correlation_batch_size": 2,
+        "correlation_half_life": 4,
+        "correlation_min_stocks": 3,
+        "correlation_min_effective_days": 2,
+    }
+    spec["full_evaluation"] = {
+        "reference_value_artifacts": {"m_reference": str(tmp_path / "reference.h5")},
+        **parameters,
+    }
+    result["request"] = spec
+    external_record = {
+        "candidate": "m_trial",
+        "reference": "m_reference",
+        "correlation": 0.25,
+        "status": "available",
+        "reason": None,
+        "effective_days": 20,
+        "avg_stocks_per_day": 3000.0,
+    }
+    result["full_evaluation"] = {
+        "schema_version": "factor_research_full_evaluation_v1",
+        "scope": "research_only_not_official_metrics_correlations_or_qe_result",
+        "candidate_names": ["m_trial"],
+        "official_database_writes": 0,
+        "windows": {"full": {"start": "2024-01-01", "end": "2026-08-31"}},
+        "correlations": {
+            "reference_count": 1,
+            "reference_names": ["m_reference"],
+            "parameters": parameters,
+            "reference_reference_pairs_computed": 0,
+            "window_names": ["full"],
+            "windows": [
+                {
+                    "window": "full",
+                    "requested_pairs": 1,
+                    "available_pairs": 1,
+                    "unavailable_pairs": 0,
+                    "records": [external_record],
+                }
+            ],
+            "candidate_candidate_windows": [
+                {
+                    "window": "full",
+                    "requested_pairs": 0,
+                    "available_pairs": 0,
+                    "unavailable_pairs": 0,
+                    "records": [],
+                }
+            ],
+        },
+    }
+    write_json(tmp_path / "result.json", result)
+    repository = RecordedAttempt(tmp_path, spec)
+    assert ResearchService(repository).attach(value)["applied"] is True
+
+    result["full_evaluation"]["correlations"]["windows"][0]["records"][0][
+        "reference"
+    ] = "m_wrong_reference"
+    second = tmp_path / "second"
+    second.mkdir()
+    for name in ("m_trial",):
+        (second / name).mkdir()
+        (second / name / "values.h5").write_bytes(b"fixture")
+        (second / name / "factor.py").write_text("# fixture", encoding="utf-8")
+    # A fresh recorded attempt is needed because result paths are identity-bound.
+    # Keeping the row count unchanged proves that attach binds exact pair
+    # identities rather than accepting denominator closure alone.
+    bad_value = {**value, "result_path": str(second / "result.json")}
+    bad_result = {**result, "candidates": [{
+        **result["candidates"][0],
+        "values": str(second / "m_trial" / "values.h5"),
+        "source_script": str(second / "m_trial" / "factor.py"),
+    }]}
+    write_json(second / "result.json", bad_result)
+    with pytest.raises(ResearchError, match="wrong contract"):
+        ResearchService(RecordedAttempt(second, spec)).attach(bad_value)
+
+
 def test_declared_comparison_attach_checks_identity_and_records_without_recompute(tmp_path):
     spec, result, value = attachment(tmp_path)
     spec["method_version"] = "2.0"
