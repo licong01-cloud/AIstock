@@ -124,7 +124,8 @@
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "fresh_process_evidence": [
       "Windows fresh Python imported backend.services.quantevolver.qe_eval_v2_qlib_reader from the BUG-1440 task worktree",
-      "Direct-v2 readback preserved 5450 spans for 5145 symbols including 284 multi-span symbols"
+      "Direct-v2 readback preserved 5450 spans for 5145 symbols including 284 multi-span symbols",
+      "Windows fresh Python imported task-worktree qe_eval_v2_qlib_reader; direct-v2 readback preserved 5450 spans for 5145 symbols including 284 multi-span symbols"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
