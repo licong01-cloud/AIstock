@@ -15,6 +15,64 @@ from .runner import load_values
 _FACTOR_NAME = re.compile(r"[a-z][a-z0-9_]{2,80}")
 
 
+def load_reference_values(path: Path, name: str) -> pd.DataFrame:
+    """Load one official single-factor artifact without relaxing candidate schema."""
+    import numpy as np
+
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ResearchError(
+            "full_evaluation_reference_missing",
+            "Expected a regular official reference result file",
+        )
+    frame = (
+        pd.read_parquet(path)
+        if path.suffix == ".parquet"
+        else pd.read_hdf(path, key="data")
+    )
+    if not isinstance(frame, pd.DataFrame) or list(frame.columns) != ["value"]:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected exactly the official value column",
+        )
+    if (
+        not isinstance(frame.index, pd.MultiIndex)
+        or frame.index.names != ["datetime", "instrument"]
+    ):
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected MultiIndex(datetime,instrument)",
+        )
+    if frame.empty or not frame.index.is_unique:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Reference is empty or has duplicate index rows",
+        )
+    dates = frame.index.get_level_values("datetime")
+    if not isinstance(dates, pd.DatetimeIndex) or dates.hasnans or dates.tz is not None:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected non-null timezone-naive market dates",
+        )
+    if not dates.equals(dates.normalize()):
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Daily values must use normalized market dates",
+        )
+    values = frame["value"]
+    if not pd.api.types.is_numeric_dtype(values) or pd.api.types.is_complex_dtype(values):
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected real numeric reference values",
+        )
+    if np.isinf(values.to_numpy(dtype=float)).any():
+        raise ResearchError(
+            "full_evaluation_reference_nonfinite",
+            "Infinite reference values; NaN coverage is reported separately",
+        )
+    return frame.rename(columns={"value": name}).sort_index()
+
+
 def validate_full_evaluation_spec(
     value: Any,
     *,
@@ -255,7 +313,7 @@ def compute_correlation_views(
     # multi-year artifact for every annual/recent view.
     for offset in range(0, len(reference_items), batch_size):
         batch = reference_items[offset : offset + batch_size]
-        reference_frames = [load_values(path, name) for name, path in batch]
+        reference_frames = [load_reference_values(path, name) for name, path in batch]
         reference_full = pd.concat(reference_frames, axis=1, join="outer").sort_index()
         for state in states.values():
             window = state["window"]
