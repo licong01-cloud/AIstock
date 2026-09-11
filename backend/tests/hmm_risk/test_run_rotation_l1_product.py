@@ -405,3 +405,15 @@ def test_output_must_be_external_and_create_exclusive(tmp_path: Path) -> None:
     args.output_receipt = subject.ROOT / "tmp" / "forbidden.json"
     with pytest.raises(subject.RotationL1ProductExecutorError, match="outside the repository"):
         subject.execute(args)
+
+
+def test_product_executor_is_registered_as_offline_source() -> None:
+    from scripts.aistock_issue_workflow import _classify_runtime_impact
+
+    result = _classify_runtime_impact(
+        ["scripts/hmm_risk/run_rotation_l1_product.py"],
+        root=subject.ROOT,
+    )
+    assert result["runtime_impact"] == "none"
+    assert result["runtime_files"] == []
+    assert result["target_ids"] == []

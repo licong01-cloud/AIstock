@@ -60,6 +60,7 @@ non_runtime_source_paths:
   - scripts/hmm_risk/run_market_relative_ridge_candidate.py
   - scripts/hmm_risk/run_market_relative_ridge_holdout.py
   - scripts/hmm_risk/run_rotation_l1_g2a.py
+  - scripts/hmm_risk/run_rotation_l1_product.py
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
   - scripts/ingest_tushare_daily_basic.py
