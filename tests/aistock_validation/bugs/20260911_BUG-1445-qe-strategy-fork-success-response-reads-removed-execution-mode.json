@@ -1,6 +1,8 @@
 {
   "actual": "The strategy-fork route successfully creates/schedules a new task and then dereferences StrategyEvolutionForkRequest.execution_mode, a field removed from the request contract. The response raises HTTP 500 after the side effect, creating duplicate-submission risk on retry. Preserve current no-execution-mode business contract, remove the stale response read, add a success-path invariant proving one scheduler call and a stable response, and do not alter QE model/factor/universe/TWAP behavior.",
   "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/quantevolver/test_qe_universe_comparison.py",
     "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
   ],
   "assigned_agent": null,
@@ -25,8 +27,12 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ],
+    "changed_files_source": "actual_changed_files",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +41,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ]
   },
   "first_seen_at": "2026-09-11T06:38:28.117079Z",
   "fix_branch": null,
@@ -61,15 +75,29 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.routers.quantevolver_evolution and confirmed request_field_absent=true stale_response_read_absent=true",
+      "fresh pytest process: backend/tests/quantevolver/test_qe_universe_comparison.py and backend/tests/unified_engine/test_custom_evo_mutation_routes.py -> 23 passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
