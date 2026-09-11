@@ -12,7 +12,7 @@ from .models import ResearchError, json_object
 from .runner import load_values
 
 
-_FACTOR_NAME = re.compile(r"[a-z][a-z0-9_]{2,80}")
+_FACTOR_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,80}")
 
 
 def load_reference_values(path: Path, name: str) -> pd.DataFrame:
@@ -415,6 +415,10 @@ def build_full_evaluation_result(
         },
         "price_context_covers_requested_range": (
             actual_start <= run_spec["signal_start"] and actual_end >= run_spec["signal_end"]
+        ),
+        "instrument_coverage": ctx["instrument_coverage"],
+        "all_requested_instruments_have_physical_prices": (
+            ctx["instrument_coverage"]["missing_price_instrument_count"] == 0
         ),
         "windows": windows,
         "candidate_names": [row["factor_name"] for row in candidate_results],
