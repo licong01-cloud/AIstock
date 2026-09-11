@@ -529,6 +529,83 @@ def test_validation_non_behavioral_classifier_does_not_hide_controlled_executabl
     assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/agents/openai.yaml") is False
 
 
+def test_validation_selects_only_changed_position_timing_lane() -> None:
+    backend = flow.select_validation(["backend/services/position_timing/service.py"])
+    frontend = flow.select_validation(["frontend/src/app/position-timing/page.tsx"])
+    mixed = flow.select_validation(
+        ["backend/services/position_timing/service.py", "frontend/src/app/position-timing/page.tsx"]
+    )
+
+    assert backend["required_plans"] == ["l0", "position_timing_backend"]
+    assert frontend["required_plans"] == ["l0", "position_timing_first_release"]
+    assert mixed["required_plans"] == ["l0", "position_timing_backend", "position_timing_first_release"]
+
+
+def test_validation_selects_only_changed_qe_long_trend_phase() -> None:
+    phase2 = flow.select_validation(["backend/services/quantevolver/long_trend_evaluator.py"])
+    phase3 = flow.select_validation(["backend/services/qe_archive/long_trend_repository.py"])
+    phase4 = flow.select_validation(
+        ["frontend/src/app/qe-archive/LongTrendComparisonPanel.tsx"]
+    )
+
+    assert phase2["required_plans"] == ["l0", "qe_long_trend_phase2_backend"]
+    assert phase3["required_plans"] == ["l0", "qe_long_trend_phase3_platform"]
+    assert phase4["required_plans"] == ["l0", "qe_long_trend_phase4_ui"]
+
+
+def test_validation_uses_one_active_dataset_plan_instead_of_three() -> None:
+    payload = flow.select_validation(["backend/services/quantevolver/qe_active_dataset_profile.py"])
+
+    assert payload["required_plans"] == ["l0", "qe_read_backend"]
+    assert "qe_sector_risk_overlay_backend" not in payload["required_plans"]
+    assert "qe_mcp_backend" not in payload["required_plans"]
+
+
+def test_validation_dev_db_plans_require_database_boundaries() -> None:
+    localsim_control = flow.select_validation(["backend/services/simulation_runtime/localsim_control.py"])
+    localsim_repository = flow.select_validation(
+        ["backend/services/simulation_runtime/successor_repository.py"]
+    )
+    advisory_readiness = flow.select_validation(["backend/services/advisory_phase1/readiness_plan.py"])
+
+    assert localsim_control["required_plans"] == ["l0", "simulation_core_l2"]
+    assert "localsim_successor_core_dev_db" in localsim_control["inapplicable_plans"]
+    assert localsim_repository["required_plans"] == [
+        "l0",
+        "simulation_core_l2",
+        "localsim_successor_core_dev_db",
+    ]
+    assert advisory_readiness["required_plans"] == ["l0"]
+    assert "advisory_dev_input_onboarding_backend" in advisory_readiness["inapplicable_plans"]
+
+
+def test_validation_research_assistant_phase_does_not_repeat_full_suite() -> None:
+    payload = flow.select_validation(["backend/services/research_assistant/memory_tree.py"])
+
+    assert payload["required_plans"] == ["l0", "ra_phase1_memory_tree"]
+    assert "research_assistant_backend" in payload["recommended_plans"]
+    assert "ra_phase0_baseline" not in payload["required_plans"]
+
+
+def test_nox_phase_plans_do_not_repeat_global_or_cross_phase_suites() -> None:
+    source = Path("noxfile.py").read_text(encoding="utf-8")
+    phase0 = source.split("def ra_phase0_baseline", 1)[1].split("def ra_phase1_memory_tree", 1)[0]
+    phase3 = source.split("def qe_long_trend_phase3_platform", 1)[1].split(
+        "def qe_long_trend_phase4_ui", 1
+    )[0]
+    position_ui = source.split("def position_timing_first_release", 1)[1].split(
+        "def rl_execution_smoke", 1
+    )[0]
+
+    assert '"backend/tests/research_assistant/test_phase0_blueprint_baseline.py"' in phase0
+    assert '"backend/tests/research_assistant",' not in phase0
+    assert "aistock_validation_catalog_integrity.py" not in phase0
+    assert "test_qe_long_trend_phase2_orchestration.py" not in phase3
+    assert '"backend/tests/position_timing"' not in position_ui
+    assert "compileall" not in position_ui
+    assert "--fail-on-warning" not in source
+
+
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue = _write_json(tmp_path / "bug.json", {
         "bug_id": "BUG-124",
