@@ -47,6 +47,7 @@ from .action_value_data import DailyCandidate, file_reference
 from .action_value_pipeline import _clean_repository_commit
 from .action_value_research import (
     REFERENCE_CAPITAL_CNY,
+    UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS,
     _apply_actions_until,
     _available_raw_close,
     _has_unbound_material_factor_change,
@@ -71,7 +72,8 @@ from .policy import COST_POLICY_SHA256, round_to_board_lot
 
 PIPELINE_ID = "POSITION_TIMING_PATTERN_STRATEGY_V1"
 ARTIFACT_FOLDER = "pattern_strategy_v1"
-REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v1"
+LEGACY_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v1"
+REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v2"
 RECEIPT_SCHEMA = "position_timing_pattern_strategy_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_pattern_strategy_bundle_v1"
 POPULATION_SEED_TEXT = "20260911"
@@ -104,6 +106,18 @@ CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
 }
 CORPORATE_ACTION_APPLICATION_POLICY_SHA256 = canonical_sha256(
     CORPORATE_ACTION_APPLICATION_POLICY
+)
+
+FACTOR_ACTION_COVERAGE_POLICY: Mapping[str, Any] = {
+    "schema_version": "position_timing_pattern_factor_action_coverage_policy_v1",
+    "factor_change_tolerance_bps": str(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS),
+    "factor_interval": "CONSECUTIVE_VALID_FACTOR_OBSERVATIONS_WITHIN_REQUEST_SCOPE",
+    "bound_definition": "AT_LEAST_ONE_NORMALIZED_CORPORATE_ACTION_IN_INTERVAL",
+    "unbound_result": "FAIL_REQUEST_PREPARATION_CLOSED",
+    "outcomes_read": False,
+}
+FACTOR_ACTION_COVERAGE_POLICY_SHA256 = canonical_sha256(
+    FACTOR_ACTION_COVERAGE_POLICY
 )
 
 PROTOTYPE_CONTRACT: Mapping[str, Any] = {
@@ -348,6 +362,102 @@ def apply_pattern_corporate_action_policy(
         "application_sha256": canonical_sha256(audit_identity),
     }
     return CorporateActionBook(retained, audit["application_sha256"]), audit
+
+
+def audit_pattern_factor_action_coverage(
+    candidate: Any,
+    *,
+    symbols: Sequence[str],
+    corporate_actions: CorporateActionBook,
+    start: date,
+    end: date,
+    candidate_source_sha256: str,
+) -> Mapping[str, Any]:
+    """Find every material factor transition before outcomes can be read.
+
+    This audit deliberately does not infer an economic action from a factor
+    name, price gap, suspension, or share-count change.  A factor transition
+    is usable only when the normalized corporate-action book binds at least
+    one action to the interval.  Otherwise request preparation fails closed
+    with the exact source coordinates so the owning data module can repair or
+    provide a separately designed authority.
+    """
+
+    normalized_symbols = tuple(sorted({str(symbol).upper() for symbol in symbols}))
+    if (
+        not normalized_symbols
+        or start > end
+        or len(candidate_source_sha256) != 64
+        or len(corporate_actions.snapshot_sha256) != 64
+    ):
+        raise ActionValueError("PATTERN_FACTOR_ACTION_COVERAGE_SCOPE_INVALID")
+
+    material_change_count = 0
+    bound_change_count = 0
+    unbound_changes: list[dict[str, Any]] = []
+    insufficient_symbols: list[str] = []
+    for symbol in normalized_symbols:
+        bars = candidate.bars(symbol)
+        in_scope = (bars.index.date >= start) & (bars.index.date <= end)
+        factors = pd.to_numeric(bars.loc[in_scope, "factor"], errors="coerce")
+        valid = factors.where(np.isfinite(factors) & factors.gt(0)).dropna()
+        if len(valid) < 2:
+            insufficient_symbols.append(symbol)
+            continue
+        previous_timestamp: pd.Timestamp | None = None
+        previous_factor: Decimal | None = None
+        for raw_timestamp, raw_factor in valid.items():
+            timestamp = pd.Timestamp(raw_timestamp)
+            factor = Decimal(str(raw_factor))
+            if previous_timestamp is not None and previous_factor is not None:
+                change_bps = abs(factor / previous_factor - Decimal(1)) * Decimal(10000)
+                if change_bps > UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS:
+                    material_change_count += 1
+                    actions = corporate_actions.between(
+                        symbol,
+                        previous_timestamp.date(),
+                        timestamp.date(),
+                    )
+                    if actions:
+                        bound_change_count += 1
+                    else:
+                        unbound_changes.append(
+                            {
+                                "symbol": symbol,
+                                "previous_factor_date": previous_timestamp.date().isoformat(),
+                                "current_factor_date": timestamp.date().isoformat(),
+                                "previous_factor": str(previous_factor),
+                                "current_factor": str(factor),
+                                "absolute_change_bps": str(change_bps),
+                            }
+                        )
+            previous_timestamp = timestamp
+            previous_factor = factor
+
+    audit_identity = {
+        "schema_version": "position_timing_pattern_factor_action_coverage_audit_v1",
+        "candidate_source_sha256": candidate_source_sha256,
+        "corporate_action_application_sha256": corporate_actions.snapshot_sha256,
+        "policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(normalized_symbols),
+            "symbol_count": len(normalized_symbols),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        },
+        "material_factor_change_count": material_change_count,
+        "bound_material_factor_change_count": bound_change_count,
+        "unbound_material_factor_change_count": len(unbound_changes),
+        "unbound_material_factor_changes": unbound_changes,
+        "insufficient_factor_symbol_count": len(insufficient_symbols),
+        "insufficient_factor_symbols": insufficient_symbols,
+        "coverage_complete": not unbound_changes and not insufficient_symbols,
+        "outcomes_read": False,
+    }
+    return {
+        **audit_identity,
+        "audit_sha256": canonical_sha256(audit_identity),
+    }
 
 
 def _snapshot_scope(path: Path, *, expected_symbols: Sequence[str], start: date, end: date) -> Mapping[str, Any]:
@@ -2146,7 +2256,7 @@ def prepare_pattern_request(
     # binding only evaluation files would leave model training source mutable.
     coverage = candidate.coverage(symbols)
     corporate_book = CorporateActionBook.open(corporate_action_snapshot.resolve())
-    _, corporate_application_audit = apply_pattern_corporate_action_policy(
+    applied_corporate_book, corporate_application_audit = apply_pattern_corporate_action_policy(
         candidate,
         symbols=symbols,
         corporate_actions=corporate_book,
@@ -2154,6 +2264,30 @@ def prepare_pattern_request(
         end=end,
         candidate_source_sha256=coverage["source_sha256"],
     )
+    factor_action_coverage_audit = audit_pattern_factor_action_coverage(
+        candidate,
+        symbols=symbols,
+        corporate_actions=applied_corporate_book,
+        start=start,
+        end=end,
+        candidate_source_sha256=coverage["source_sha256"],
+    )
+    if not factor_action_coverage_audit["coverage_complete"]:
+        raise ActionValueError(
+            "PATTERN_FACTOR_ACTION_COVERAGE_INCOMPLETE",
+            unbound_material_factor_change_count=factor_action_coverage_audit[
+                "unbound_material_factor_change_count"
+            ],
+            unbound_material_factor_changes=factor_action_coverage_audit[
+                "unbound_material_factor_changes"
+            ][:10],
+            insufficient_factor_symbol_count=factor_action_coverage_audit[
+                "insufficient_factor_symbol_count"
+            ],
+            insufficient_factor_symbols=factor_action_coverage_audit[
+                "insufficient_factor_symbols"
+            ][:10],
+        )
     suspension_book = SuspensionSnapshotBook.open(suspension_snapshot.resolve())
     source_code_paths = {
         "pattern_strategy_source": Path(__file__).with_name("pattern_strategy.py"),
@@ -2191,6 +2325,14 @@ def prepare_pattern_request(
         "corporate_action_application_audit": corporate_application_audit,
         "corporate_action_application_sha256": corporate_application_audit[
             "application_sha256"
+        ],
+        "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
+        "factor_action_coverage_policy_sha256": (
+            FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        ),
+        "factor_action_coverage_audit": factor_action_coverage_audit,
+        "factor_action_coverage_audit_sha256": factor_action_coverage_audit[
+            "audit_sha256"
         ],
         "suspension_snapshot": file_reference(suspension_snapshot.resolve()),
         "suspension_snapshot_sha256": suspension_book.snapshot_sha256,
@@ -2298,8 +2440,79 @@ def _load_request(path: Path) -> dict[str, Any]:
             or audit_scope.get("start") != population.get("start")
             or audit_scope.get("end") != population.get("end")
         )
+    has_factor_coverage_contract = any(
+        key in request
+        for key in (
+            "factor_action_coverage_policy",
+            "factor_action_coverage_policy_sha256",
+            "factor_action_coverage_audit",
+            "factor_action_coverage_audit_sha256",
+        )
+    )
+    factor_coverage_contract_invalid = False
+    if has_factor_coverage_contract:
+        factor_audit = request.get("factor_action_coverage_audit")
+        factor_audit_identity = (
+            {key: value for key, value in factor_audit.items() if key != "audit_sha256"}
+            if isinstance(factor_audit, Mapping)
+            else {}
+        )
+        factor_scope = (
+            factor_audit.get("scope") if isinstance(factor_audit, Mapping) else None
+        )
+        candidate_identity = request.get("candidate_source_identity")
+        population = request.get("population_spec")
+        raw_symbols = request.get("snapshot_symbols")
+        factor_symbols = tuple(
+            sorted(
+                {
+                    str(symbol).upper()
+                    for symbol in (
+                        raw_symbols
+                        if isinstance(raw_symbols, Sequence)
+                        and not isinstance(raw_symbols, (str, bytes))
+                        else ()
+                    )
+                }
+            )
+        )
+        factor_coverage_contract_invalid = (
+            request.get("factor_action_coverage_policy_sha256")
+            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            or canonical_sha256(request.get("factor_action_coverage_policy"))
+            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            or not isinstance(factor_audit, Mapping)
+            or factor_audit.get("audit_sha256")
+            != canonical_sha256(factor_audit_identity)
+            or request.get("factor_action_coverage_audit_sha256")
+            != factor_audit.get("audit_sha256")
+            or factor_audit.get("candidate_source_sha256")
+            != (
+                candidate_identity.get("source_sha256")
+                if isinstance(candidate_identity, Mapping)
+                else None
+            )
+            or factor_audit.get("corporate_action_application_sha256")
+            != request.get("corporate_action_application_sha256")
+            or factor_audit.get("policy_sha256")
+            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            or factor_audit.get("coverage_complete") is not True
+            or factor_audit.get("unbound_material_factor_change_count") != 0
+            or factor_audit.get("insufficient_factor_symbol_count") != 0
+            or not isinstance(population, Mapping)
+            or not isinstance(factor_scope, Mapping)
+            or factor_scope.get("symbols_sha256")
+            != canonical_sha256(factor_symbols)
+            or factor_scope.get("symbol_count") != len(factor_symbols)
+            or factor_scope.get("start") != population.get("start")
+            or factor_scope.get("end") != population.get("end")
+        )
     if (
-        request.get("schema_version") != REQUEST_SCHEMA
+        request.get("schema_version") not in {LEGACY_REQUEST_SCHEMA, REQUEST_SCHEMA}
+        or (
+            request.get("schema_version") == REQUEST_SCHEMA
+            and not has_factor_coverage_contract
+        )
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("request_sha256") != canonical_sha256(identity)
         or request.get("prototype_contract_sha256") != PROTOTYPE_CONTRACT_SHA256
@@ -2315,6 +2528,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         or len(str(request.get("corporate_action_snapshot_sha256", ""))) != 64
         or len(str(request.get("suspension_snapshot_sha256", ""))) != 64
         or application_contract_invalid
+        or factor_coverage_contract_invalid
         or any(request.get(flag) is not False for flag in false_flags)
     ):
         raise ActionValueError("PATTERN_REQUEST_IDENTITY_MISMATCH")
@@ -2425,6 +2639,16 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
             or receipt.get("corporate_action_application_audit")
             != request.get("corporate_action_application_audit")
         )
+    factor_coverage_identity_mismatch = False
+    if "factor_action_coverage_audit_sha256" in request:
+        factor_coverage_identity_mismatch = (
+            receipt.get("factor_action_coverage_policy_sha256")
+            != request.get("factor_action_coverage_policy_sha256")
+            or receipt.get("factor_action_coverage_audit_sha256")
+            != request.get("factor_action_coverage_audit_sha256")
+            or receipt.get("factor_action_coverage_audit")
+            != request.get("factor_action_coverage_audit")
+        )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
         or manifest.get("manifest_sha256") != canonical_sha256(manifest_identity)
@@ -2454,6 +2678,7 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
         or evolution.get("receipt_sha256")
         != canonical_sha256({key: value for key, value in evolution.items() if key != "receipt_sha256"})
         or application_identity_mismatch
+        or factor_coverage_identity_mismatch
         or any(receipt.get(flag) is not False for flag in false_flags)
         or manifest.get("request_sha256") != request["request_sha256"]
         or manifest.get("receipt_sha256") != receipt["receipt_sha256"]
@@ -2559,6 +2784,22 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         # requests.  Every newly prepared request binds the application audit.
         corporate_actions = source_corporate_actions
         corporate_application_audit = None
+    factor_action_coverage_audit = None
+    if "factor_action_coverage_audit_sha256" in request:
+        factor_action_coverage_audit = audit_pattern_factor_action_coverage(
+            candidate,
+            symbols=tuple(request["snapshot_symbols"]),
+            corporate_actions=corporate_actions,
+            start=start,
+            end=end,
+            candidate_source_sha256=observed_source["source_sha256"],
+        )
+        if (
+            factor_action_coverage_audit
+            != request["factor_action_coverage_audit"]
+            or not factor_action_coverage_audit["coverage_complete"]
+        ):
+            raise ActionValueError("PATTERN_FACTOR_ACTION_COVERAGE_DRIFT")
     candidate = suspension_book.apply(candidate, snapshot_path=Path(request["suspension_snapshot"]["path"]))
     cached = PatternCandidateCache(candidate)
     result = replay_prototype(
@@ -2954,6 +3195,13 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             "corporate_action_application_sha256"
         ),
         "corporate_action_application_audit": corporate_application_audit,
+        "factor_action_coverage_policy_sha256": request.get(
+            "factor_action_coverage_policy_sha256"
+        ),
+        "factor_action_coverage_audit_sha256": request.get(
+            "factor_action_coverage_audit_sha256"
+        ),
+        "factor_action_coverage_audit": factor_action_coverage_audit,
         "suspension_snapshot_sha256": suspension_book.snapshot_sha256,
         "research_model_outputs_written": True,
         "cost_sensitivity": sensitivity,

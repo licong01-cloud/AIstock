@@ -1,11 +1,11 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.6；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
-> 状态：`ENGINEERING_DATA_IDENTITY_FIX_VERIFIED_THIRD_FORMAL_RUN_PENDING_NOT_SERVING`
+> 版本：v1.7；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
+> 状态：`ENGINEERING_SOURCE_PREFLIGHT_VERIFIED_FORMAL_EVIDENCE_SOURCE_BLOCKED_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测。首次正式运行因根 manifest 漏列模型子目录 manifest 而无效；第二次已通过 bundle inspect 和 exact retry，但 `002086.SZ` 的特殊非同比例资本变动令外层人口仅完成63/64，按冻结覆盖契约整份结果仍不可用于收益结论。两个旧 request/bundle 与人口均永久保留，不据其结果调参。公司行动 v4 与择时专属因子一致性策略已经完成代码、真实源核对和单股回放，下一步以新提交、新评价人口、新 request 执行第三次正式运行。当前没有 serving 模型。
+> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动、`300506.SZ` 未绑定复权因子基准拼接缝；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。新实现把全量因子—公司行动覆盖审计前移到 request 生成前；第四批128股在未读取收益时发现4个未绑定区间并拒绝生成正式 request。当前需要数据所属模块补齐非同比例资本事件 authority 并修复增量复权因子历史重述，当前没有 serving 模型。
 
 ## 1. Background / 目标与现状
 
@@ -28,6 +28,8 @@
 ```text
 冻结日线/复权/指数 + 公司行动/停牌快照 + 全局交易日
                     ↓
+       全量因子—公司行动覆盖预检（不读收益）
+                    ↓
   pattern_strategy.py：纯特征、事件状态、固定候选动作
                     ↓
   既有 daily_fill / 持仓现金记账 / 逐腿成本 / 终值与统计
@@ -45,13 +47,13 @@
 |---|---|
 | 历史日频源 | `action_value_data.py::DailyCandidate`；冻结 manifest、消费字段和文件 hash，读取现有候选 |
 | 行情与核心特征 | `action_value.py::market_features`；历史窗口、复权和完整性与现有实现一致 |
-| 公司行动/停牌 | `action_value_corporate_actions.py`、`action_value_suspensions.py`；只读已有快照/已授权只读源，禁止修改上游 |
+| 公司行动/停牌/因子覆盖 | `action_value_corporate_actions.py`、`action_value_suspensions.py` 与 `pattern_research.py::audit_pattern_factor_action_coverage`；只读已有快照/已授权只读源，正式 request 前穷举未绑定因子变更，禁止修改或猜测上游 |
 | 交易日与合法交易 | candidate 全局 calendar、`action_value.py::daily_fill`、现有 board-lot；不使用自然日或统一100股规则 |
 | 成本和仓位 | `policy.py::PERSONAL_MANUAL_COMPONENT_COST_V1`、已有现金/库存/持仓成本更新；净佣最低5元与规费分别计 |
 | 持久化和统计 | `artifact_store.py` 的 hash、锁及原子提交；`action_value_research.py::circular_block_interval` |
 | 后续模型 | `action_value_model.py::estimator_parameters/monthly_training_windows/numeric_matrix`；固定 LightGBM 4.6.0 |
 
-未来代码写入范围只含 `backend/services/position_timing/`、`backend/tests/position_timing/` 及本模块设计文档。本次实际文档写入范围只有本文件与主蓝图。研究输出只到 timing-owned `research/pattern_strategy_v1/requests|bundles`；不写全局 N0、QE/Advisory/Selection registry、任何 current/serving 指针、生产 card/event/alert。首轮试验清单保存在自有 request/receipt，不另建试验管理平台。
+未来代码写入范围只含 `backend/services/position_timing/`、`backend/tests/position_timing/` 及本模块设计文档。本次实际文档写入范围只有本文件与主蓝图。研究输出只到 timing-owned `research/pattern_strategy_v1/requests|bundles|source_diagnostics`；不写全局 N0、QE/Advisory/Selection registry、任何 current/serving 指针、生产 card/event/alert。`source_diagnostics` 只是按内容寻址的单份只读事实回执，不是监控平台、调度器或试验门禁。首轮试验清单保存在自有 request/receipt，不另建试验管理平台。
 
 ## 4. Contracts / 价格、时钟与状态
 
@@ -64,6 +66,8 @@ request展开并绑定candidate manifest、全局calendar hash、实际列/文�
 公司行动 source snapshot v5 在同一 `record_date` 内按“共享 `end_date` 或共享 `base_date`”的连通关系识别同一分配方案；两者都不同才是同日独立分配。`end_date` 与 `base_date` 都可能被同一事项的不同源版本改写，任取一个作唯一键都会重复计数。相同方案的已实施条款覆盖更早预案；多条已实施记录的经济条款互相冲突时 typed fail-closed。不同方案才按行动前每股口径相加现金与送转比例。每个方案优先使用最早非空 `imp_ann_date`；若全部修订均缺该字段，仅在唯一 `record_date` 严格早于除权日时，以其日频cutoff作为保守可见代理。禁止任选一条、使用更早普通公告日或静默覆盖。v1～v4 不可变快照继续可读；新快照一律生成 v5，不改写旧文件。
 
 形态研究另冻结 `position_timing_pattern_corporate_action_application_policy_v2`，逐个送股事项比较“事项前最后一个有效 qfq factor”到“事项日或其后首个有效 factor”的比值与数量倍数乘积，容差2%。普通送股必须满足 `observed_factor_ratio >= quantity_multiplier_product × 0.98`。若同一因子区间只有一个合并行动、账户与参考价现金均为零，且源倍数大于观测倍数，则显式分类为非同比例事项：观测因子在1的±2%内时记 `NON_PRO_RATA_STOCK_ACTION_IGNORED`；观测因子为正增长且该行动仅含一个经济事项时，以观测因子比作为合成研究持仓的有效数量倍数，记 `NON_PRO_RATA_STOCK_ACTION_FACTOR_MAPPED`。后者只保持跨股票合成sleeve与candidate复权身份一致，不声称还原特定真实股东的权益。含现金、多日期行动、多个经济事项的非零映射或其他不一致全部 `PATTERN_CORPORATE_ACTION_FACTOR_MISMATCH` fail-closed。request 同时绑定源 snapshot hash、候选源 hash、应用策略 hash、逐事项审计与规范化 action-set hash；receipt/inspect 再次校验。该策略只属于离线形态研究，不改变共享公司行动数据、不修改其他研究的旧 request，也不构造 survivor filter。
+
+新 request 另冻结 `position_timing_pattern_factor_action_coverage_policy_v1`：在2018-08-01至2026-08-31的完整训练股与评价股范围内，按连续有效 factor 观测穷举绝对变化超过10 bps的区间；只有规范化公司行动 book 在前一有效因子日至当前有效因子日之间至少包含一个行动时才算已绑定。审计记录候选源、规范化行动集、人口、日期、material/bound/unbound计数与每个未绑定区间的股票、日期、因子和变化幅度，明确 `outcomes_read=false`。覆盖不完整时 `prepare` 立即返回 `PATTERN_FACTOR_ACTION_COVERAGE_INCOMPLETE` 且不发布正式 request；覆盖完整时 request v2 绑定策略与审计 hash，run 重算逐字段一致性，receipt/inspect继续校验。旧 request v1 仅保持不可变 inspect/run兼容，不可伪装拥有新审计。该检查不使用点估计、MDE或最新交易日，不是收益准入/人工审批；它只阻止来源语义未知的错误计算，也不得通过换股、缩短历史或放宽10 bps阈值制造完整覆盖。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
 
@@ -222,8 +226,8 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 | 工作块 | 实际产出 | 收益与交付的关系 |
 |---|---|---|
-| 规则历史研究 | 已实现纯形态与事件状态、四项固定比较、连续账户回放和不可变request/bundle/receipt | 工程与直接测试已完成；正式收益尚未运行，不等最新交易日、不要求后端重启 |
-| 有界优化、模型条件化与历史解释 | 已实现8模板训练期选择、同状态两头监督、core/增强对照、历史逐股解释 | 与规则在同一request中事前冻结；正式收益尚未运行，上线仍按既有影子契约另行接线 |
+| 规则历史研究 | 已实现纯形态与事件状态、四项固定比较、连续账户回放、不可变request/bundle/receipt及请求前因子—公司行动覆盖审计 | 工程与直接测试已完成；前三次正式run均因不同完整性问题不可作为收益证据，第四批在prepare前发现源缺口；不等最新交易日、不要求后端重启 |
+| 有界优化、模型条件化与历史解释 | 已实现8模板训练期选择、同状态两头监督、core/增强对照、历史逐股解释 | 与规则在同一request中事前冻结；覆盖完整的正式收益仍待数据authority修复，上线仍按既有影子契约另行接线 |
 
 其他策略和QE组合留在后续队列，不占当前实现量。当前工程不接卡片、提醒或serving；正式结果无论正、负或不确定都如实回填，不把研究分类作为源码合入门槛。
 
@@ -254,30 +258,33 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 任务结束交付：可运行CLI和测试；原型及优化/模型的不可变request、receipt、逐日连续净值、事件/成交/费用明细、月度模板与模型身份；固定SHA排序的前20条可评价入场/退出案例及全部类型失败计数（不按收益选案例）；逐股历史建议；一份中文结果报告与更新的蓝图/验收矩阵；源码PR、CI及合入状态。病例不足20条按实际交付。数值不足以训练某head时交付已实现代码、真实零/稀疏样本统计和`MODEL_NOT_ESTIMABLE`原因，明确“训练未成功/模型效力不可判定”，不报虚假的模型完成；规则和其他独立比较继续。
 
-本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。工程已完成并进入合入前复核；用户已授权只读生产源快照。前两次正式 request 分别因 artifact 完整性和 63/64 人口覆盖而不可用于收益结论，下一步在数据身份修复形成干净提交后直接生成第三个不可变 request，不等待最新交易日，也不把覆盖修复变成研究放行门禁。
+本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。工程已完成并进入合入前复核；用户已授权只读生产源快照。前三次正式 request 分别因 artifact 完整性、特殊资本事项和复权因子历史拼接而不可用于收益结论。第四批不再重复长跑：source-only预检在正式request发布前发现4个未绑定因子区间并fail-closed。下一步是由数据所属模块修复历史因子重述并提供非同比例资本事件authority；修复后对同一第四批人口重新prepare，不换股、不等待最新交易日，也不把收益结果作为工程合入条件。
 
 ### 9.2 当前实施读回
 
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
 - 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。第二次正式运行后又据真实 source/factor 对照修正公司行动身份：同一 `(end_date, record_date)`、不同 `base_date` 是修订；唯一已实施条款覆盖较早预案，只有不同财报期的同日分配才相加。形态研究在源 snapshot 之上增加 hash-bound 因子一致性应用审计，特殊非同比例事项可以保留股票并显式 no-op，其他不一致仍拒绝。修复均有直接反例，不改变形态阈值、模型规格或已冻结评价人口。
-- 验证状态：数据身份修复后的公司行动与 pattern 直接测试共35项、完整 `backend/tests/position_timing` 回归298项通过，position-timing源码/测试 ruff、compile、F1/F2 validator 与 `git diff --check` 通过；上述本地结果不替代最终CI或收益证据。
+- 验证状态：公司行动与 pattern 相关直接测试共53项、完整 `backend/tests/position_timing` 回归301项通过，其中请求前因子覆盖审计及request v2防降级有3项新增反例。position-timing源码/测试 ruff、compile、F1/F2 validator 与 `git diff --check` 必须再次通过；上述本地结果不替代最终CI或收益证据。
 - 首次正式运行：request `df591f237f6263873e720a678218b59042cc9490c63a0f482ffd0891c60d4a12` 绑定提交 `888a6576e2fa54cccfcfbac91cbcc2c92c3e9be5`、64训练股、64只此前未评价股票、2个family和9项比较。计算生成了receipt与模型文件，但根 manifest 构造使用 `path.name != "manifest.json"`，错误排除了114个模型子目录 manifest；inspect得到 `PATTERN_BUNDLE_FILE_SET_MISMATCH`，故整份bundle按fail-closed处理，不读取或报告其中收益。这是artifact完整性缺陷，不是统计结论；旧request、bundle与评价人口永久保留，禁止原地补manifest。
 - 修复与重跑：根 manifest 只排除bundle根自身的 `manifest.json`，嵌套模型manifest必须进入文件集并绑定hash；Pattern专属LightGBM参数只增加 `verbosity=-1` 以压制重复日志，不改树、目标、样本、阈值或预测语义。新request须绑定修复后的干净提交，并把首次64只评价股票纳入prior-request禁用集合后确定性选择新评价人口；所需公司行动/停牌快照重新按新128股范围只读冻结。首次公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 与停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 仅属于失败request的输入谱系，不覆盖未来新人口。没有研究模型current、selected或任何运行态写入。
 - 新人口数据适配：新评价股 `600803.SH` 的 `2025-07-22` 已实施分红行缺少 `imp_ann_date`，但唯一 `record_date=2025-07-21`。快照按§4的record-date保守代理契约升级为v3并显式留证；不删除该股票、不使用更早 `ann_date=2025-03-27` 推定最终条款，也不修改生产数据。v1/v2不可变快照继续只读兼容。
 - 第二次正式运行：request `b653d306802c0ba6e41204535260853f6d969af0e69868df4f8f4a38c2d9336b` 绑定提交 `3a75b22e4e06ac14c5d2b4f40f0387a8329d44de`、第二批64只评价股票、公司行动快照 `d9fef84118122e07fb6824b9d6a27035cfdf0448ed20d5d082b82b32c983fa64` 和停牌快照 `c71c9fdcece0d0bb7929ef400c10f7d928ff18b8fa7bc913970b92bb78942aae`。bundle包含365个绑定文件和114个模型子manifest，inspect通过；exact retry为`ALREADY_MATERIALIZED`且hash不变。但外层仅63/64：`002086.SZ/2023-12-29` 的数据库源行声明每股转增1.59，而candidate相邻有效qfq factor比为1；旧路径先在缺失日读到非有限factor，并且若机械应用会伪造159%持仓增长。因此全部9项比较按`coverage_complete=false`保持`INCONCLUSIVE`，selected=0；点估计、区间和诊断不得用于选下一版阈值或宣称策略收益。该bundle永久保留为结构完整、证据人口不完整的失败记录。
 - 第二次后数据审计：对该128股全部91个含送股事项作独立因子核对，除 `002086.SZ` 外均满足冻结容差。另发现 `688188.SH` 两个年度事项各有同经济条款、同 `end_date/record_date` 但不同 `base_date` 的重复修订；v3曾把每股0.4送转误叠加为0.8。`600803.SH` 的0.81早期预案与1.03已实施条款也不应相加。v4只读快照 `0af455eed9976b5fac1c903a160b273021eac6c8669bd2c941d5fbf666c6a419` 从702条原始行形成685个行动/经济事项、折叠17条修订、record-date代理归零；应用审计 `45b1f10b89a940fca62b154ffff2186543cdeefba045c80c7bf49e031b45f69f` 检查91/91区间，只将 `002086.SZ` 记为 `NON_PRO_RATA_STOCK_ACTION_IGNORED`。同股单独回放已达到1/1完整、0 unknown，证明原63/64故障路径被修复；这仍只是正确性验证，不是正式收益结果。
 - 第三批source-only预检：prior request 32份、禁用股票489只；确定性得到64只训练股与64只新评价股。v5公司行动快照 `3f0b8027b2e94d4fb6077666df5439108c1fb1eba67364a7bc508d0b41ddd8ac` 从741条源行形成722个行动/经济事项并折叠19条修订；停牌快照为 `923e062505dd68f9897062b531f97fa0be6a62a230195efb057e2b7561080f06`。96/96个送股因子区间完成核对；`002326.SZ/2019-09-30` 定向转增从源倍数1.1206188映射为factor倍数1.0756665，`300506.SZ/2025-12-22` 重整股份过入投资人/债权人且factor为1，故合成旧持仓不增加数量。应用审计为 `9a3eaedbc7ad4dd140c4be3aef2d1aedda32995e5805748c2f2c4ae79177cca6`。该预检不读取收益/标签，不是策略证据；两项非同比例语义另由公司公告与本地 source/factor identity 交叉核验。
-- 第三次运行边界：新代码提交后，prior-request集合必须同时纳入前两批评价人口并保持上述第三批股票；使用第三批128股的v5公司行动与停牌快照，prepare时绑定源snapshot与应用审计，run时重算并逐字段相等校验。不得复用第二次点估计、替换失败股票或修改两family九项比较。第三次完整bundle通过inspect、exact retry和64/64开发/训练/评价/外层覆盖后，才可报告其真实分类；无论结果正负均不写registry/current/card/alert/order/runtime。
+- 第三次正式运行：request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 绑定提交 `6389c5b494d7d521d59747408744e56426e74cf2` 与上述第三批快照，bundle含365个绑定文件，manifest `9de1da44981b7fb021d994197e60056b2e5b04a5cb7ddad87d0bfd857f597f85`、receipt `3c370a205d0de93f04531daf4b975d7d7dc26041a9366a9089bfdb0503bf7b22`，inspect与exact retry `ALREADY_MATERIALIZED`通过。训练模型输入64股完整、优化器开发512/512模板—股票对完整；但评价原型和模型输入均只有63/64，`300506.SZ` 为 `UNBOUND_MATERIAL_FACTOR_CHANGE`，所以9项比较继续不可引用，`selected_trial_count=0`且无serving/registry/current/card/alert/order/DB/runtime写入。
+- 第三次源诊断：`300506.SZ` candidate在2026-07-03至07-06由0.754176跳到1；本地 `market.adj_factor` 同期由4.844跳到6.4229，而Tushare当前对2026-06-25至07-15整个历史区间均返回6.4229。原始价格07-03收6.25、07-06收6.04，总股本持续142,559.6569万股且无实施分红。故这是上游历史因子整体重述后本地仅刷新新区间形成的基准拼接，不是07-06真实除权；不得在形态研究里把它映射成持仓数量或静默保留伪复权收益。
+- 第四批source-only预检：33份prior request、553只禁用股票确定性得到原64训练股与第四批64评价股；只读v5公司行动快照 `126bcd984e1c8dc89b5a7694fc4c6b83066074d679c5c0fea6d05639a6582b00`、停牌快照 `171cb4dade3a6e13d30bfaa9146416041bbece023296560b6f2861170a94c24f` 已冻结。对128股全部697个大于10 bps的因子区间检查后，693个能绑定规范化公司行动，4个未绑定：`000970.SZ/2022-02-15→02-24`、`600008.SH/2020-09-18→09-29`、`601236.SH/2021-07-26→08-04`、`688109.SH/2026-07-08→07-09`。前三项都跨停牌、总股本增加而流通股本未同步增加，`dividend`无事项，不能凭臆测决定普通旧股东的数量/现金语义；`688109.SH` 的candidate与本地库由1.5415跳至1.5459，而Tushare当前已把两侧都重述为1.5459。无收益源诊断回执为 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/source_diagnostics/c01a8d3dd05ffda3c23eaa6be5c886f4989447e173cf2df34c33a5bbe537a822.json`，明确`outcomes_read=false/database_write=false`。
+- 第四次运行边界：新 `position_timing_pattern_strategy_request_v2` 必须绑定完整的因子—公司行动审计；上述4个区间关闭前不生成request，也不运行训练/回放。该数据纠错不能通过改形态阈值、删除股票、缩短历史、把总股本变化强行当同比例送股或读取前三次比较值完成。数据authority修复后仍使用同一第四批人口和两family九项冻结比较；旧v1 request/bundle继续可inspect但没有新审计身份。
 
 ## 10. Verification Plan / 测试与验收
 
-直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`，并复用/扩展 `test_action_value_corporate_actions.py`；当前相关35项、完整position-timing 298项通过，覆盖如下：
+直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`，并复用/扩展 `test_action_value_corporate_actions.py`；当前相关53项、完整position-timing 301项通过，覆盖如下：
 
 1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量；同日独立分红相加而同一方案冲突继续拒绝。
 2. 状态与动作：不确认、假突破、一次入场、过期、退出边沿、持仓不可ADD、风险退出优先；EXIT目标与可卖/部分成交区别；真实成本未知不伪称盈利。
 3. 对照与账本：从b锚定，保留无回踩和未成交；s复制完全相同持仓；预算不足保留现金；逐腿父订单最低佣、分红送转、停牌、终值共同顺延与未知覆盖；等待错失上涨和提前卖飞的反例必须得到负增量。
-4. 研究身份：四项比较与family一致；source漂移拒绝复用；retry只返回既有bundle；旧研究/模型/current/N0/card/alert hash不变。稀疏事件统计不把非事件日当零收益、不按非等间隔事件序号抽块。
+4. 研究身份：四项比较与family一致；source漂移拒绝复用；retry只返回既有bundle；旧研究/模型/current/N0/card/alert hash不变。稀疏事件统计不把非事件日当零收益、不按非等间隔事件序号抽块。request v2不可删除因子—公司行动审计降级成v1语义，旧v1 artifact仍可inspect。
 5. 证据诚实：零事件返回完整人口计数和不可估计原因；UNKNOWN不偷换NO_FILL；相同代码/数据/request重放一致；不把机制SUPPORTED当组合SUPPORTED。
 
 第二块另补选模的直接反例：改变外层月份收益不得改写该月模板；月界不能重置现金/库存或重复退出；已活动事件保持创建时模板；模型训练不含未成熟标签和未来确认状态；缺头/缺优化窗口明确回退身份。源文件/参数展开hash与实际计算值不一致须被检出。规则选择算法和模型的改动分别覆盖，不用复制实现的恒真测试充数。
@@ -301,7 +308,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 ## 12. Design Acceptance Matrix / 设计验收矩阵
 
-`ENGINEERING_VERIFIED`表示设计条款已有真实代码与直接测试，不表示模型取得增量或生产功能已加载。前两次正式运行分别为 artifact 无效和人口覆盖不完整；其收益输出不可作为结论，第三次有效正式证据仍未运行。不得引用该矩阵或旧bundle声称策略有效。
+`ENGINEERING_VERIFIED`表示设计条款已有真实代码与直接测试，不表示模型取得增量或生产功能已加载。前三次正式运行都因artifact或人口覆盖不完整而不能作为收益证据；第四批只完成不读收益的source preflight且未生成request。不得引用该矩阵、预检或旧bundle声称策略有效。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|

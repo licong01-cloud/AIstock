@@ -12,7 +12,11 @@ from backend.services.position_timing.action_value import ActionPlan, ActionValu
 from backend.services.position_timing.action_value_corporate_actions import CorporateAction, CorporateActionBook
 from backend.services.position_timing.pattern_research import (
     BUNDLE_SCHEMA,
+    CORPORATE_ACTION_APPLICATION_POLICY,
     CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
+    FACTOR_ACTION_COVERAGE_POLICY,
+    FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+    LEGACY_REQUEST_SCHEMA,
     PIPELINE_ID,
     PREREGISTERED_FAMILY_COUNT,
     PROTOTYPE_CONTRACT,
@@ -24,10 +28,12 @@ from backend.services.position_timing.pattern_research import (
     TOTAL_FORMAL_COMPARISON_COUNT,
     PrototypeReplayResult,
     apply_pattern_corporate_action_policy,
+    audit_pattern_factor_action_coverage,
     evaluate_entry_and_exit_mechanisms,
     _execute_next_session,
     _effect_evidence,
     _manifest,
+    _load_request,
     _model_contract,
     _model_contract_sha256,
     _optimizer_contract,
@@ -233,6 +239,177 @@ def test_pattern_corporate_action_policy_fails_closed_for_ambiguous_factor_misma
             end=bars.index[-1].date(),
             candidate_source_sha256="b" * 64,
         )
+
+
+def test_factor_action_coverage_audit_binds_material_transition():
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    bars = _bars(8)
+    effective = bars.index[4].date()
+    bars.iloc[4:, bars.columns.get_loc("factor")] = 1.2
+    action = _stock_action(effective, multiplier="1.2")
+    actions = CorporateActionBook((action,), canonical_sha256({"source": "bound"}))
+
+    class Candidate:
+        def bars(self, symbol: str) -> pd.DataFrame:
+            assert symbol == "000001.SZ"
+            return bars
+
+    audit = audit_pattern_factor_action_coverage(
+        Candidate(),
+        symbols=("000001.SZ",),
+        corporate_actions=actions,
+        start=bars.index[0].date(),
+        end=bars.index[-1].date(),
+        candidate_source_sha256="b" * 64,
+    )
+
+    assert audit["policy_sha256"] == FACTOR_ACTION_COVERAGE_POLICY_SHA256
+    assert audit["material_factor_change_count"] == 1
+    assert audit["bound_material_factor_change_count"] == 1
+    assert audit["unbound_material_factor_change_count"] == 0
+    assert audit["coverage_complete"] is True
+    assert audit["outcomes_read"] is False
+
+
+def test_factor_action_coverage_audit_exposes_unbound_source_coordinates():
+    bars = _bars(8)
+    bars.iloc[4:, bars.columns.get_loc("factor")] = 1.2
+
+    class Candidate:
+        def bars(self, symbol: str) -> pd.DataFrame:
+            assert symbol == "000001.SZ"
+            return bars
+
+    audit = audit_pattern_factor_action_coverage(
+        Candidate(),
+        symbols=("000001.SZ",),
+        corporate_actions=CorporateActionBook.empty(),
+        start=bars.index[0].date(),
+        end=bars.index[-1].date(),
+        candidate_source_sha256="b" * 64,
+    )
+
+    assert audit["coverage_complete"] is False
+    assert audit["unbound_material_factor_change_count"] == 1
+    assert audit["unbound_material_factor_changes"] == [
+        {
+            "symbol": "000001.SZ",
+            "previous_factor_date": bars.index[3].date().isoformat(),
+            "current_factor_date": bars.index[4].date().isoformat(),
+            "previous_factor": "1.0",
+            "current_factor": "1.2",
+            "absolute_change_bps": "2000.0",
+        }
+    ]
+
+
+def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    request = {
+        "schema_version": LEGACY_REQUEST_SCHEMA,
+        "pipeline_id": PIPELINE_ID,
+        "prototype_contract": PROTOTYPE_CONTRACT,
+        "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
+        "optimizer_contract": _optimizer_contract(),
+        "optimizer_contract_sha256": _optimizer_contract_sha256(),
+        "model_contract": _model_contract(),
+        "model_contract_sha256": _model_contract_sha256(),
+        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
+        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
+        "result_class": RESULT_CLASS,
+        "research_model_outputs_write": True,
+        "registry_write": False,
+        "current_write": False,
+        "serving_model_artifact_write": False,
+        "card_write": False,
+        "alert_write": False,
+        "order_write": False,
+        "database_write": False,
+        "runtime_write": False,
+        "corporate_action_snapshot_sha256": "a" * 64,
+        "suspension_snapshot_sha256": "b" * 64,
+    }
+    request["request_sha256"] = canonical_sha256(request)
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request), encoding="utf-8")
+    assert _load_request(path)["schema_version"] == LEGACY_REQUEST_SCHEMA
+
+    request["schema_version"] = REQUEST_SCHEMA
+    request["request_sha256"] = canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(request), encoding="utf-8")
+    with pytest.raises(ActionValueError, match="PATTERN_REQUEST_IDENTITY_MISMATCH"):
+        _load_request(path)
+
+    application_audit = {
+        "schema_version": "position_timing_pattern_corporate_action_application_audit_v1",
+        "source_snapshot_sha256": "a" * 64,
+        "candidate_source_sha256": "c" * 64,
+        "policy_sha256": CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(("000001.SZ",)),
+            "symbol_count": 1,
+            "start": "2024-01-02",
+            "end": "2024-01-31",
+        },
+        "checked_stock_action_count": 0,
+        "checked_factor_interval_count": 0,
+        "normalized_non_pro_rata_action_count": 0,
+        "normalized_non_pro_rata_actions": [],
+        "ignored_non_pro_rata_action_count": 0,
+        "factor_mapped_non_pro_rata_action_count": 0,
+        "retained_action_count": 0,
+        "retained_actions_sha256": canonical_sha256([]),
+    }
+    application_audit["application_sha256"] = canonical_sha256(application_audit)
+    audit = {
+        "schema_version": "position_timing_pattern_factor_action_coverage_audit_v1",
+        "candidate_source_sha256": "c" * 64,
+        "corporate_action_application_sha256": application_audit[
+            "application_sha256"
+        ],
+        "policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(("000001.SZ",)),
+            "symbol_count": 1,
+            "start": "2024-01-02",
+            "end": "2024-01-31",
+        },
+        "material_factor_change_count": 0,
+        "bound_material_factor_change_count": 0,
+        "unbound_material_factor_change_count": 0,
+        "unbound_material_factor_changes": [],
+        "insufficient_factor_symbol_count": 0,
+        "insufficient_factor_symbols": [],
+        "coverage_complete": True,
+        "outcomes_read": False,
+    }
+    audit["audit_sha256"] = canonical_sha256(audit)
+    request.update(
+        {
+            "candidate_source_identity": {"source_sha256": "c" * 64},
+            "snapshot_symbols": ["000001.SZ"],
+            "population_spec": {"start": "2024-01-02", "end": "2024-01-31"},
+            "corporate_action_application_policy": CORPORATE_ACTION_APPLICATION_POLICY,
+            "corporate_action_application_policy_sha256": CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
+            "corporate_action_application_audit": application_audit,
+            "corporate_action_application_sha256": application_audit[
+                "application_sha256"
+            ],
+            "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
+            "factor_action_coverage_policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+            "factor_action_coverage_audit": audit,
+            "factor_action_coverage_audit_sha256": audit["audit_sha256"],
+        }
+    )
+    request["request_sha256"] = canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(request), encoding="utf-8")
+    assert _load_request(path)["schema_version"] == REQUEST_SCHEMA
 
 
 def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(tmp_path: Path):
@@ -581,7 +758,7 @@ def test_available_ex_date_price_does_not_require_missing_prior_day_factor():
 
 def test_pattern_bundle_is_recursive_immutable_and_exact_retry_is_noop(tmp_path: Path):
     request = {
-        "schema_version": REQUEST_SCHEMA,
+        "schema_version": LEGACY_REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
         "prototype_contract": PROTOTYPE_CONTRACT,
         "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
@@ -679,7 +856,7 @@ def test_pattern_bundle_is_recursive_immutable_and_exact_retry_is_noop(tmp_path:
 
 def test_pattern_bundle_rejects_unmanifested_file(tmp_path: Path):
     request = {
-        "schema_version": REQUEST_SCHEMA,
+        "schema_version": LEGACY_REQUEST_SCHEMA,
         "pipeline_id": PIPELINE_ID,
         "prototype_contract": PROTOTYPE_CONTRACT,
         "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
