@@ -31,17 +31,28 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+    "actual_changed_files": [
+      ".claude/commands/develop-factor.md",
+      ".claude/commands/factor-research.md",
+      ".codex/skills/develop-factor/SKILL.md",
+      ".codex/skills/factor-research/SKILL.md",
       "docs/analysis/factor_research_methodology.md",
       "docs/architecture/factor_research_comparison_supplement_20260909.md",
-      ".codex/skills/factor-research/SKILL.md",
-      ".codex/skills/develop-factor/SKILL.md",
-      ".claude/commands/factor-research.md",
-      ".claude/commands/develop-factor.md"
+      "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+      "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".claude/commands/develop-factor.md",
+      ".claude/commands/factor-research.md",
+      ".codex/skills/develop-factor/SKILL.md",
+      ".codex/skills/factor-research/SKILL.md",
+      "docs/analysis/factor_research_methodology.md",
+      "docs/architecture/factor_research_comparison_supplement_20260909.md",
+      "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+      "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "docs/architecture/factor_research_evolution_blueprint_20260908.md",
@@ -173,10 +184,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
