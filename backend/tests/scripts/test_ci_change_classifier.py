@@ -85,6 +85,31 @@ def test_open_bug_registry_change_skips_unrelated_backend_matrix(tmp_path: Path)
     assert any("status=open" in reason for reason in payload["reasons"])
 
 
+def test_factor_research_docs_and_instruction_only_change_does_not_request_dev_db(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json"
+    _write_bug(tmp_path / bug_rel, status="open", module="factor_library.research")
+
+    payload = classifier.classify_changed_files(
+        [
+            ".claude/commands/develop-factor.md",
+            ".claude/commands/factor-research.md",
+            ".codex/skills/develop-factor/SKILL.md",
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "docs/architecture/factor_research_comparison_supplement_20260909.md",
+            "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+            bug_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["dev_db_required"] is False
+    assert payload["dev_db_plan_keys"] == []
+    assert payload["backend_required"] is False
+    assert "factor_research_backend" not in payload["selected_plan_keys"]
+    assert "factor_research_dev_db" not in payload["selected_plan_keys"]
+
+
 def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="fixed")

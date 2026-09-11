@@ -349,7 +349,8 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert "watchlist" in payload["impacted_modules"]
     assert payload["ownership"]["unmatched_files"] == []
     assert "validation_center_backend" not in payload["required_plans"]
-    assert payload["required_plans"] == ["l0", "validation_module_registry_l0", "watchlist_backend"]
+    assert payload["required_plans"] == ["l0", "watchlist_backend"]
+    assert "validation_module_registry_l0" in payload["inapplicable_plans"]
 
 
 def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
@@ -472,6 +473,60 @@ def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: py
     assert payload["docs_fast_tier"] is None
     assert payload["docs_controlled_required"] is True
     assert payload["required_plans"] == ["l0"]
+
+
+def test_validation_select_keeps_factor_skill_and_bug_metadata_off_business_and_dev_plans() -> None:
+    payload = flow.select_validation(
+        [
+            ".claude/commands/develop-factor.md",
+            ".claude/commands/factor-research.md",
+            ".codex/skills/develop-factor/SKILL.md",
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "docs/architecture/factor_research_comparison_supplement_20260909.md",
+            "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+            "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json",
+        ]
+    )
+
+    assert payload["required_plans"] == ["l0"]
+    assert "factor_research_backend" in payload["inapplicable_plans"]
+    assert "factor_research_dev_db" in payload["inapplicable_plans"]
+    assert "validation_module_registry_l0" in payload["inapplicable_plans"]
+    assert payload["skip_reasons"]["factor_research_dev_db"] == (
+        "module_owned_files_are_documentation_instruction_or_bug_metadata_only"
+    )
+    assert payload["plan_trigger_reasons"]["l0"]
+
+
+def test_validation_select_applies_factor_dev_plan_only_to_database_boundaries() -> None:
+    computation = flow.select_validation(["backend/services/factor_research/comparison.py"])
+    repository = flow.select_validation(["backend/services/factor_research/repository.py"])
+    mixed = flow.select_validation(
+        [
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "backend/services/factor_research/quality_repository.py",
+        ]
+    )
+
+    assert computation["required_plans"] == ["l0", "factor_research_backend"]
+    assert "factor_research_dev_db" in computation["inapplicable_plans"]
+    assert computation["skip_reasons"]["factor_research_dev_db"] == (
+        "factor_research_change_does_not_touch_repository_transaction_sql_migration_or_dev_contract"
+    )
+    assert repository["required_plans"] == ["l0", "factor_research_backend", "factor_research_dev_db"]
+    dev_reason = repository["plan_trigger_reasons"]["factor_research_dev_db"][0]
+    assert dev_reason["reason"] == "matched_plan_change_applicability"
+    assert dev_reason["matched_files"] == ["backend/services/factor_research/repository.py"]
+    assert mixed["required_plans"] == ["l0", "factor_research_backend", "factor_research_dev_db"]
+
+
+def test_validation_non_behavioral_classifier_does_not_hide_controlled_executables() -> None:
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/SKILL.md") is True
+    assert flow._is_non_behavioral_validation_path(".claude/commands/factor-research.md") is True
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/scripts/check.py") is False
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/agents/openai.yaml") is False
 
 
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
