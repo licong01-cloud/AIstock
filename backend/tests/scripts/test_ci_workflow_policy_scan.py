@@ -87,6 +87,8 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["changed_tests_reachable_from_selected_ci_plan"] is True
     assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
+    assert evidence["security_workflows_fail_fast_before_runner_allocation"] is True
+    assert evidence["nightly_code_intelligence_has_single_scheduled_owner"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
     assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
@@ -154,6 +156,19 @@ def test_dual_runner_policy_does_not_lock_nightly_job_count(tmp_path: Path) -> N
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
 
     assert evidence["bounded_dual_runner_roles"] is True
+
+
+def test_security_runner_preflight_contract_rejects_direct_queueing(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "codeql.yml":
+            text = text.replace("    needs: security-runner-preflight\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["security_workflows_fail_fast_before_runner_allocation"] is False
+    assert evidence["no_linux_or_production_environment_fallback"] is False
 
 
 def test_nightly_receipt_policy_rejects_non_scalar_candidate_stream(tmp_path: Path) -> None:
@@ -283,8 +298,23 @@ def test_codeql_is_nightly_only_before_runner_allocation() -> None:
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     assert set(codeql[True]) == {"schedule", "workflow_dispatch"}
     assert codeql[True]["schedule"] == [{"cron": "27 20 * * *"}]
-    assert list(codeql["jobs"]) == ["codeql-nightly"]
+    assert list(codeql["jobs"]) == ["security-runner-preflight", "codeql-nightly"]
+    assert codeql["jobs"]["security-runner-preflight"]["runs-on"] == "ubuntu-latest"
+    assert codeql["jobs"]["codeql-nightly"]["needs"] == "security-runner-preflight"
     assert codeql["jobs"]["codeql-nightly"]["name"] == "CodeQL nightly full scan"
+
+
+def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> None:
+    import yaml
+
+    nightly = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    refresh = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
+
+    assert refresh[True]["schedule"] == [{"cron": "30 18 * * *"}]
+    assert refresh["jobs"]["refresh-after-main"]["needs"] == "security-runner-preflight"
+    legacy = nightly["jobs"]["code-intelligence-weekly"]
+    assert legacy["if"] == "github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+    assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
 
 
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
