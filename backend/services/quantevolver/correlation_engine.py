@@ -223,6 +223,39 @@ class CorrelationResult:
         return no_valid_pairs
 
 
+@dataclass
+class CorrelationSubmatrixResult:
+    """Read-only candidate-by-reference correlation block."""
+
+    matrix: np.ndarray
+    candidate_names: List[str]
+    reference_names: List[str]
+    as_of_date: str
+    effective_days: np.ndarray
+    avg_stocks_per_day: np.ndarray
+    computation_time_sec: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def records(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for i, candidate in enumerate(self.candidate_names):
+            for j, reference in enumerate(self.reference_names):
+                value = float(self.matrix[i, j])
+                available = not np.isnan(value)
+                rows.append(
+                    {
+                        "candidate": candidate,
+                        "reference": reference,
+                        "correlation": round(value, 6) if available else None,
+                        "status": "available" if available else "unavailable",
+                        "reason": None if available else "insufficient_effective_days",
+                        "effective_days": int(self.effective_days[i, j]),
+                        "avg_stocks_per_day": float(self.avg_stocks_per_day[i, j]),
+                    }
+                )
+        return rows
+
+
 class CorrelationEngine:
     """业界标准因子相关性计算引擎。
 
@@ -538,6 +571,124 @@ class CorrelationEngine:
         """
         all_factors = list(dict.fromkeys(existing_factors + new_factors))
         return self.compute_full_matrix(all_factors, as_of_date, save_hdf5=False)
+
+    def compute_selected_submatrix(
+        self,
+        candidate_panel: pd.DataFrame,
+        reference_panel: pd.DataFrame,
+        *,
+        as_of_date: str,
+    ) -> CorrelationSubmatrixResult:
+        """Compute only the declared candidate x reference block.
+
+        Panels are caller-provided so research candidates do not need to be
+        installed into the official cache. This method never writes HDF5 or DB
+        rows and never computes reference x reference pairs.
+        """
+        started = time.time()
+        for label, panel in (("candidate", candidate_panel), ("reference", reference_panel)):
+            if not isinstance(panel, pd.DataFrame) or panel.empty:
+                raise ValueError(f"{label}_panel must be a non-empty DataFrame")
+            if not isinstance(panel.index, pd.MultiIndex) or list(panel.index.names) != ["datetime", "instrument"]:
+                raise ValueError(f"{label}_panel requires datetime,instrument MultiIndex")
+            if panel.index.has_duplicates or panel.columns.has_duplicates:
+                raise ValueError(f"{label}_panel contains duplicate identity")
+            if not all(isinstance(name, str) and name for name in panel.columns):
+                raise ValueError(f"{label}_panel requires named factor columns")
+            dates = pd.DatetimeIndex(panel.index.get_level_values("datetime"))
+            if (
+                dates.hasnans
+                or dates.tz is not None
+                or not dates.equals(dates.normalize())
+            ):
+                raise ValueError(
+                    f"{label}_panel datetime level must contain timezone-naive daily dates"
+                )
+            instruments = panel.index.get_level_values("instrument")
+            if not all(
+                isinstance(instrument, str) and bool(instrument.strip())
+                for instrument in instruments
+            ):
+                raise ValueError(f"{label}_panel requires non-empty instrument identities")
+
+        candidates = sorted(candidate_panel.columns)
+        references = sorted(reference_panel.columns)
+        if set(candidates) & set(references):
+            raise ValueError("candidate and reference factor names must be distinct")
+        cutoff = pd.Timestamp(as_of_date)
+        if cutoff.tz is not None or cutoff.normalize() != cutoff:
+            raise ValueError("as_of_date must be a timezone-naive daily date")
+        combined = pd.concat(
+            [candidate_panel[candidates], reference_panel[references]], axis=1, join="inner"
+        ).sort_index()
+        combined = combined.loc[
+            combined.index.get_level_values("datetime") <= cutoff
+        ]
+        dates = combined.index.get_level_values("datetime").unique().sort_values()
+        if len(dates) > self._window:
+            dates = dates[-self._window :]
+            combined = combined.loc[
+                combined.index.get_level_values("datetime").isin(dates)
+            ]
+
+        daily: list[list[list[float]]] = [
+            [[] for _ in references] for _ in candidates
+        ]
+        support: list[list[list[int]]] = [
+            [[] for _ in references] for _ in candidates
+        ]
+        for _, section in combined.groupby(level="datetime", sort=True):
+            for i, candidate in enumerate(candidates):
+                left = pd.to_numeric(section[candidate], errors="coerce").to_numpy(dtype=float)
+                for j, reference in enumerate(references):
+                    right = pd.to_numeric(section[reference], errors="coerce").to_numpy(dtype=float)
+                    valid = np.isfinite(left) & np.isfinite(right)
+                    count = int(valid.sum())
+                    if count < self._min_stocks:
+                        continue
+                    corr, _ = stats.spearmanr(
+                        self._winsorize_array(left[valid]),
+                        self._winsorize_array(right[valid]),
+                    )
+                    if np.isfinite(corr):
+                        daily[i][j].append(float(corr))
+                        support[i][j].append(count)
+
+        matrix = np.full((len(candidates), len(references)), np.nan, dtype=float)
+        effective = np.zeros(matrix.shape, dtype=int)
+        average_support = np.zeros(matrix.shape, dtype=float)
+        for i in range(len(candidates)):
+            for j in range(len(references)):
+                values = daily[i][j]
+                effective[i, j] = len(values)
+                if support[i][j]:
+                    average_support[i, j] = float(np.mean(support[i][j]))
+                if len(values) < self._min_days:
+                    continue
+                weights = np.asarray(
+                    [self._lambda ** (len(values) - 1 - k) for k in range(len(values))],
+                    dtype=float,
+                )
+                matrix[i, j] = float(np.average(values, weights=weights))
+
+        return CorrelationSubmatrixResult(
+            matrix=matrix,
+            candidate_names=candidates,
+            reference_names=references,
+            as_of_date=str(cutoff.date()),
+            effective_days=effective,
+            avg_stocks_per_day=average_support,
+            computation_time_sec=round(time.time() - started, 6),
+            metadata={
+                "method": "cross_sectional_spearman_ewma",
+                "window": self._window,
+                "half_life": self._half_life,
+                "min_stocks": self._min_stocks,
+                "min_days": self._min_days,
+                "computed_pairs": len(candidates) * len(references),
+                "reference_reference_pairs_computed": 0,
+            },
+        )
 
     def get_latest_hdf5(self) -> Optional[str]:
         """获取最新的 HDF5 文件路径。"""

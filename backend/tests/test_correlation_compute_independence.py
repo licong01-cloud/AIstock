@@ -122,6 +122,100 @@ def test_correlation_result_classifies_no_valid_pair_factors() -> None:
     assert result.get_no_valid_pair_factors() == ["quality_structure_composite"]
 
 
+def test_selected_correlation_submatrix_is_rectangular_and_order_invariant() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = pd.bdate_range("2026-01-05", periods=4)
+    instruments = ["000001.SZ", "000002.SZ", "000003.SZ"]
+    index = pd.MultiIndex.from_product(
+        [dates, instruments], names=["datetime", "instrument"]
+    )
+    base = np.tile(np.asarray([1.0, 2.0, 3.0]), len(dates))
+    candidates = pd.DataFrame(
+        {"candidate_b": -base, "candidate_a": base}, index=index
+    )
+    references = pd.DataFrame(
+        {"reference_b": -base, "reference_a": base}, index=index
+    )
+    engine = CorrelationEngine(
+        object(), window=4, half_life=2, min_stocks=3, min_days=2
+    )
+
+    first = engine.compute_selected_submatrix(
+        candidates, references, as_of_date="2026-01-08"
+    )
+    second = engine.compute_selected_submatrix(
+        candidates.sample(frac=1.0, random_state=7)[["candidate_a", "candidate_b"]],
+        references.sample(frac=1.0, random_state=8)[["reference_a", "reference_b"]],
+        as_of_date="2026-01-08",
+    )
+
+    assert first.candidate_names == ["candidate_a", "candidate_b"]
+    assert first.reference_names == ["reference_a", "reference_b"]
+    assert first.matrix.shape == (2, 2)
+    assert np.allclose(first.matrix, second.matrix)
+    assert np.all(first.effective_days == 4)
+    assert first.metadata["computed_pairs"] == 4
+    assert first.metadata["reference_reference_pairs_computed"] == 0
+
+
+def test_selected_correlation_submatrix_reports_insufficient_support_as_null() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2026-01-05")], ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    candidate = pd.DataFrame({"candidate": [1.0, 2.0]}, index=index)
+    reference = pd.DataFrame({"reference": [2.0, 1.0]}, index=index)
+    engine = CorrelationEngine(
+        object(), window=4, half_life=2, min_stocks=2, min_days=2
+    )
+
+    result = engine.compute_selected_submatrix(
+        candidate, reference, as_of_date="2026-01-05"
+    )
+
+    assert np.isnan(result.matrix[0, 0])
+    assert result.effective_days[0, 0] == 1
+    assert result.records()[0]["correlation"] is None
+    assert result.records()[0]["reason"] == "insufficient_effective_days"
+
+
+def test_selected_correlation_submatrix_rejects_non_daily_or_invalid_identity() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    engine = CorrelationEngine(
+        object(), window=4, half_life=2, min_stocks=2, min_days=2
+    )
+    intraday_index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2026-01-05 09:30:00")], ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    valid_index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2026-01-05")], ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+
+    with pytest.raises(ValueError, match="timezone-naive daily dates"):
+        engine.compute_selected_submatrix(
+            pd.DataFrame({"candidate": [1.0, 2.0]}, index=intraday_index),
+            pd.DataFrame({"reference": [2.0, 1.0]}, index=valid_index),
+            as_of_date="2026-01-05",
+        )
+
+    invalid_identity = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-01-05"), ""), (pd.Timestamp("2026-01-05"), "000002.SZ")],
+        names=["datetime", "instrument"],
+    )
+    with pytest.raises(ValueError, match="non-empty instrument identities"):
+        engine.compute_selected_submatrix(
+            pd.DataFrame({"candidate": [1.0, 2.0]}, index=invalid_identity),
+            pd.DataFrame({"reference": [2.0, 1.0]}, index=valid_index),
+            as_of_date="2026-01-05",
+        )
+
+
 def test_correlation_cache_status_reports_offline_orphan_parquets(monkeypatch, tmp_path) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
 
