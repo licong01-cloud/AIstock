@@ -12,6 +12,7 @@ from backend.services.position_timing.action_value_corporate_actions import (
     AVAILABILITY_SNAPSHOT_SCHEMA,
     CorporateAction,
     CorporateActionBook,
+    IDENTITY_SNAPSHOT_SCHEMA,
     LEGACY_SNAPSHOT_SCHEMA,
     SAME_DAY_SNAPSHOT_SCHEMA,
     _snapshot_payload,
@@ -123,6 +124,7 @@ def test_snapshot_sums_distinct_same_day_distributions_after_revision_collapse(
 ) -> None:
     second = {
         "end_date": date(2026, 3, 31),
+        "base_date": date(2026, 3, 31),
         "imp_ann_date": date(2026, 5, 22),
         "stk_div": Decimal("0.1"),
         "stk_bo_rate": Decimal("0.04"),
@@ -213,6 +215,27 @@ def test_snapshot_implemented_terms_supersede_preliminary_terms_for_same_distrib
     assert payload["actions"][0]["source_available_at"] == cutoff_on(
         date(2026, 5, 20)
     ).isoformat()
+
+
+def test_snapshot_collapses_same_distribution_when_only_end_date_differs() -> None:
+    payload = _snapshot_payload(
+        [
+            _row(end_date=date(2025, 12, 31), base_date=date(2026, 5, 20)),
+            _row(
+                end_date=date(2026, 5, 1),
+                ann_date=date(2026, 5, 2),
+                base_date=date(2026, 5, 20),
+            ),
+        ],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+
+    assert payload["canonical_economic_action_count"] == 1
+    assert payload["canonicalized_equivalent_revision_count"] == 1
+    assert payload["combined_same_day_economic_action_count"] == 0
+    assert payload["actions"][0]["quantity_multiplier"] == "1.3"
 
 
 def test_v1_snapshot_remains_readable_after_same_day_contract_upgrade(tmp_path: Path) -> None:
@@ -329,6 +352,26 @@ def test_v3_snapshot_with_old_distribution_identity_remains_readable(tmp_path: P
     )
     legacy["snapshot_sha256"] = canonical_sha256(legacy)
     path = tmp_path / "legacy-v3.json"
+    path.write_bytes(canonical_json_bytes(legacy))
+
+    assert CorporateActionBook.open(path).actions[0].quantity_multiplier == Decimal("1.3")
+
+
+def test_v4_snapshot_with_end_record_identity_remains_readable(tmp_path: Path) -> None:
+    payload = _snapshot_payload(
+        [_row()],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+    legacy = {key: value for key, value in payload.items() if key != "snapshot_sha256"}
+    legacy["schema_version"] = IDENTITY_SNAPSHOT_SCHEMA
+    legacy["source_query"]["same_day_canonicalization"] = (
+        "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_RECORD_IDENTITY_"
+        "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
+    )
+    legacy["snapshot_sha256"] = canonical_sha256(legacy)
+    path = tmp_path / "legacy-v4.json"
     path.write_bytes(canonical_json_bytes(legacy))
 
     assert CorporateActionBook.open(path).actions[0].quantity_multiplier == Decimal("1.3")

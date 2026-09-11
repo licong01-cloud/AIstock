@@ -23,11 +23,13 @@ from .contracts import canonical_json_bytes, canonical_sha256
 LEGACY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
 SAME_DAY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
 AVAILABILITY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v3"
-SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v4"
+IDENTITY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v4"
+SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v5"
 SUPPORTED_SNAPSHOT_SCHEMAS = (
     LEGACY_SNAPSHOT_SCHEMA,
     SAME_DAY_SNAPSHOT_SCHEMA,
     AVAILABILITY_SNAPSHOT_SCHEMA,
+    IDENTITY_SNAPSHOT_SCHEMA,
     SNAPSHOT_SCHEMA,
 )
 IMPLEMENTED_DIVIDEND = "\u5b9e\u65bd"
@@ -39,7 +41,7 @@ SOURCE_QUERY_IDENTITY = {
     "reference_price_cash_component": "cash_div_tax (pre-tax per local DDL contract)",
     "stock_component": "stk_div=stk_bo_rate+stk_co_rate",
     "same_day_canonicalization": (
-        "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_RECORD_IDENTITY_"
+        "COLLAPSE_CONNECTED_REVISIONS_WITHIN_RECORD_AND_SHARED_END_OR_BASE_"
         "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
     ),
     "availability_policy": "EARLIEST_IMP_ANN_ELSE_RECORD_DATE_STRICTLY_BEFORE_EX_DATE",
@@ -319,16 +321,10 @@ def _snapshot_payload(
     canonical_economic_actions = 0
     combined_same_day_actions = 0
     for (symbol, effective), versions in sorted(grouped.items()):
-        distributions: dict[tuple[str | None, str | None], list[dict[str, Any]]] = {}
-        for row in versions:
-            distributions.setdefault(_distribution_identity(row), []).append(row)
-
         canonical_distributions: list[
             tuple[tuple[str, str, str, str | None, str | None], date, bool]
         ] = []
-        for distribution_identity, revisions in sorted(
-            distributions.items(), key=lambda item: tuple(value or "" for value in item[0])
-        ):
+        for revisions in _distribution_revision_groups(versions):
             implemented_economics = {
                 _economic_identity(row)
                 for row in revisions
@@ -345,7 +341,16 @@ def _snapshot_payload(
                     "CORPORATE_ACTION_ECONOMIC_CONFLICT",
                     symbol=symbol,
                     effective_trade_date=effective.isoformat(),
-                    distribution_identity=distribution_identity,
+                    distribution_identity_sha256=canonical_sha256(
+                        [
+                            {
+                                "end_date": row["end_date"],
+                                "base_date": row["base_date"],
+                                "record_date": row["record_date"],
+                            }
+                            for row in revisions
+                        ]
+                    ),
                     economic_action_count=len(economics),
                 )
             selected_economics = next(iter(economics))
@@ -471,12 +476,39 @@ def _economic_identity(
     )
 
 
-def _distribution_identity(
-    row: Mapping[str, Any],
-) -> tuple[str | None, str | None]:
-    """Identify one distribution plan before announcement-revision collapse."""
+def _distribution_revision_groups(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[Mapping[str, Any], ...], ...]:
+    """Connect revisions by record date plus a shared fiscal or base date."""
 
-    return row["end_date"], row["record_date"]
+    pending = sorted(
+        (dict(row) for row in rows),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
+    groups: list[tuple[Mapping[str, Any], ...]] = []
+    while pending:
+        connected = [pending.pop(0)]
+        changed = True
+        while changed:
+            changed = False
+            for candidate in tuple(pending):
+                if any(_same_distribution_revision(candidate, item) for item in connected):
+                    pending.remove(candidate)
+                    connected.append(candidate)
+                    changed = True
+        groups.append(tuple(connected))
+    return tuple(groups)
+
+
+def _same_distribution_revision(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    if left["record_date"] != right["record_date"]:
+        return False
+    same_end = left["end_date"] is not None and left["end_date"] == right["end_date"]
+    same_base = left["base_date"] is not None and left["base_date"] == right["base_date"]
+    return same_end or same_base
 
 
 def _date_text(value: Any) -> str | None:

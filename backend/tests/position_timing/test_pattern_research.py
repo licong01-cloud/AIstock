@@ -142,7 +142,11 @@ def test_pattern_corporate_action_policy_ignores_audited_non_pro_rata_action():
     bars = _bars(8)
     effective = bars.index[4].date()
     bars.iloc[3, bars.columns.get_loc("factor")] = np.nan
-    action = _stock_action(effective, multiplier="2.59")
+    action = _stock_action(
+        effective,
+        multiplier="3.10",
+        source_economic_action_count=2,
+    )
     source = CorporateActionBook((action,), canonical_sha256({"source": "special"}))
 
     class Candidate:
@@ -163,12 +167,49 @@ def test_pattern_corporate_action_policy_ignores_audited_non_pro_rata_action():
     assert normalized.snapshot_sha256 == audit["application_sha256"]
     assert audit["policy_sha256"] == CORPORATE_ACTION_APPLICATION_POLICY_SHA256
     assert audit["ignored_non_pro_rata_action_count"] == 1
-    assert audit["ignored_non_pro_rata_actions"][0]["classification"] == (
+    assert audit["normalized_non_pro_rata_actions"][0][
+        "source_economic_action_count"
+    ] == 2
+    assert audit["normalized_non_pro_rata_actions"][0]["classification"] == (
         "NON_PRO_RATA_STOCK_ACTION_IGNORED"
     )
-    assert audit["ignored_non_pro_rata_actions"][0]["previous_factor_date"] == (
+    assert audit["normalized_non_pro_rata_actions"][0]["previous_factor_date"] == (
         bars.index[2].date().isoformat()
     )
+
+
+def test_pattern_corporate_action_policy_factor_maps_partial_holder_distribution():
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    bars = _bars(8)
+    effective = bars.index[4].date()
+    bars.iloc[4:, bars.columns.get_loc("factor")] = 1.075
+    action = _stock_action(effective, multiplier="1.12")
+    source = CorporateActionBook((action,), canonical_sha256({"source": "partial-holder"}))
+
+    class Candidate:
+        def bars(self, symbol: str) -> pd.DataFrame:
+            assert symbol == "000001.SZ"
+            return bars
+
+    normalized, audit = apply_pattern_corporate_action_policy(
+        Candidate(),
+        symbols=("000001.SZ",),
+        corporate_actions=source,
+        start=bars.index[0].date(),
+        end=bars.index[-1].date(),
+        candidate_source_sha256="b" * 64,
+    )
+
+    assert normalized.actions[0].quantity_multiplier == Decimal("1.075")
+    assert audit["factor_mapped_non_pro_rata_action_count"] == 1
+    assert audit["ignored_non_pro_rata_action_count"] == 0
+    assert audit["normalized_non_pro_rata_actions"][0]["classification"] == (
+        "NON_PRO_RATA_STOCK_ACTION_FACTOR_MAPPED"
+    )
+    assert audit["normalized_non_pro_rata_actions"][0][
+        "applied_quantity_multiplier"
+    ] == "1.075"
 
 
 def test_pattern_corporate_action_policy_fails_closed_for_ambiguous_factor_mismatch():

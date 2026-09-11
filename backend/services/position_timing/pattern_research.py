@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_FLOOR
 import hashlib
@@ -90,13 +90,16 @@ TOTAL_FORMAL_COMPARISON_COUNT = PROTOTYPE_FAMILY_SIZE + EVOLUTION_FAMILY_SIZE
 RESULT_CLASS = "EXPLORATORY_USER_PROPOSED_HYPOTHESIS_CROSS_SYMBOL_NOT_TEMPORAL_HOLDOUT"
 
 CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
-    "schema_version": "position_timing_pattern_corporate_action_application_policy_v1",
+    "schema_version": "position_timing_pattern_corporate_action_application_policy_v2",
     "stock_factor_relative_tolerance": "0.02",
     "factor_interval": "LAST_VALID_FACTOR_BEFORE_ACTION_TO_FIRST_VALID_FACTOR_ON_OR_AFTER_ACTION",
     "ordinary_stock_action_test": "OBSERVED_FACTOR_RATIO_GTE_QUANTITY_MULTIPLIER_PRODUCT_X_0_98",
-    "non_pro_rata_ignore_rule": (
-        "ONE_ZERO_CASH_SINGLE_ECONOMIC_ACTION_AND_OBSERVED_FACTOR_RATIO_WITHIN_2_PERCENT_OF_ONE"
+    "non_pro_rata_mapping_rule": (
+        "ONE_COMBINED_ZERO_CASH_ACTION_IGNORE_WHEN_FACTOR_NEUTRAL_OR_"
+        "MAP_SINGLE_ECONOMIC_ACTION_TO_POSITIVE_OBSERVED_FACTOR_RATIO"
     ),
+    "factor_neutral_result": "NON_PRO_RATA_STOCK_ACTION_IGNORED",
+    "factor_positive_result": "NON_PRO_RATA_STOCK_ACTION_FACTOR_MAPPED",
     "other_mismatch": "FAIL_CLOSED",
 }
 CORPORATE_ACTION_APPLICATION_POLICY_SHA256 = canonical_sha256(
@@ -204,8 +207,9 @@ def apply_pattern_corporate_action_policy(
     A database row with a stock component is not sufficient proof that every
     ordinary holder received a proportional share distribution.  The exported
     qfq factor is the independent price-series identity used by this replay.
-    One narrowly specified zero-cash, factor-neutral action may therefore be
-    classified as non-pro-rata and ignored; every other mismatch fails closed.
+    One narrowly specified zero-cash action may therefore be classified as
+    non-pro-rata and mapped to the observed dilution factor (or ignored when
+    factor-neutral); every other mismatch fails closed.
     """
 
     normalized_symbols = tuple(sorted({str(symbol).upper() for symbol in symbols}))
@@ -219,7 +223,8 @@ def apply_pattern_corporate_action_policy(
         str(CORPORATE_ACTION_APPLICATION_POLICY["stock_factor_relative_tolerance"])
     )
     ignored_keys: set[tuple[str, date]] = set()
-    ignored: list[dict[str, Any]] = []
+    replacements: dict[tuple[str, date], CorporateAction] = {}
+    normalized: list[dict[str, Any]] = []
     checked_action_count = 0
     checked_interval_count = 0
 
@@ -270,20 +275,34 @@ def apply_pattern_corporate_action_policy(
             factor_neutral = abs(observed - Decimal(1)) <= tolerance
             if (
                 only is not None
-                and only.source_economic_action_count == 1
                 and only.cashflow_yuan_per_share == 0
                 and only.reference_price_cash_yuan_per_share == 0
-                and factor_neutral
+                and observed >= Decimal(1) - tolerance
+                and (factor_neutral or only.source_economic_action_count == 1)
             ):
-                ignored_keys.add((only.symbol, only.effective_trade_date))
-                ignored.append(
+                key = (only.symbol, only.effective_trade_date)
+                applied_multiplier = Decimal(1) if factor_neutral else observed
+                classification = (
+                    "NON_PRO_RATA_STOCK_ACTION_IGNORED"
+                    if factor_neutral
+                    else "NON_PRO_RATA_STOCK_ACTION_FACTOR_MAPPED"
+                )
+                if factor_neutral:
+                    ignored_keys.add(key)
+                else:
+                    replacements[key] = replace(
+                        only,
+                        quantity_multiplier=applied_multiplier,
+                    )
+                normalized.append(
                     {
                         **_corporate_action_identity(only),
-                        "classification": "NON_PRO_RATA_STOCK_ACTION_IGNORED",
+                        "classification": classification,
                         "previous_factor_date": valid_dates[previous_index].isoformat(),
                         "current_factor_date": valid_dates[following_index].isoformat(),
                         "observed_factor_ratio": str(observed),
                         "expected_quantity_multiplier_product": str(expected),
+                        "applied_quantity_multiplier": str(applied_multiplier),
                     }
                 )
                 continue
@@ -298,7 +317,7 @@ def apply_pattern_corporate_action_policy(
             )
 
     retained = tuple(
-        action
+        replacements.get((action.symbol, action.effective_trade_date), action)
         for action in corporate_actions.actions
         if (action.symbol, action.effective_trade_date) not in ignored_keys
     )
@@ -315,8 +334,10 @@ def apply_pattern_corporate_action_policy(
         },
         "checked_stock_action_count": checked_action_count,
         "checked_factor_interval_count": checked_interval_count,
-        "ignored_non_pro_rata_action_count": len(ignored),
-        "ignored_non_pro_rata_actions": ignored,
+        "normalized_non_pro_rata_action_count": len(normalized),
+        "normalized_non_pro_rata_actions": normalized,
+        "ignored_non_pro_rata_action_count": len(ignored_keys),
+        "factor_mapped_non_pro_rata_action_count": len(replacements),
         "retained_action_count": len(retained),
         "retained_actions_sha256": canonical_sha256(
             [_corporate_action_identity(action) for action in retained]
