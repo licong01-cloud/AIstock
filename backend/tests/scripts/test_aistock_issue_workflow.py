@@ -16177,6 +16177,56 @@ def test_cleanup_evidence_finalization_requires_structured_receipt(
     assert mismatch["durable_receipt_present"] is False
 
 
+def test_cleanup_evidence_finalization_uses_exact_origin_main_record_when_source_is_stale(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = isolated_workflow_root / "source-worktree"
+    canonical_root = isolated_workflow_root / "canonical"
+    source_path = _write_json(
+        source_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(status="in_progress", validation_evidence=[]),
+    )
+    canonical_path = canonical_root / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    canonical_path.parent.mkdir(parents=True)
+    fixed_record = _bug(
+        status="fixed",
+        fix_commit="a" * 40,
+        pr_url="https://github.example/pull/199",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical_root)
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (json.loads(source_path.read_text(encoding="utf-8")), source_path),
+    )
+
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_run(command: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        calls.append((command, cwd))
+        assert command == ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"]
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(fixed_record), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    finalization = workflow._cleanup_evidence_finalization("BUG-199")
+
+    assert finalization["durable_receipt_present"] is True
+    assert finalization["status"] == "finalized_legacy_closed_bug"
+    assert finalization["evidence_source"] == "origin_main_exact_bug_record"
+    assert finalization["local_status"] == "missing_durable_receipt"
+    assert calls == [
+        (
+            ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"],
+            canonical_root,
+        )
+    ]
+
+
 def test_merged_pr_validation_receipt_profile_is_compact(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
