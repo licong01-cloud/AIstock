@@ -2045,7 +2045,7 @@ def _manifest(root: Path, receipt: Mapping[str, Any]) -> Mapping[str, Any]:
     names = tuple(
         path.relative_to(root).as_posix()
         for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "manifest.json"
+        if path.is_file() and path.relative_to(root).as_posix() != "manifest.json"
     )
     payload = {
         "schema_version": BUNDLE_SCHEMA,

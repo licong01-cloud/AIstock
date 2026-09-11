@@ -65,6 +65,7 @@ def test_fixed_pattern_model_uses_only_mature_labels_and_predicts(feature_set):
         source_commit="c" * 40,
     )
     assert model.metadata["parameters"]
+    assert model.metadata["parameters"]["verbosity"] == -1
     assert model.metadata["heads"][ENTRY_HEAD]["training_rows"] == 12
     assert model.metadata["heads"][EXIT_HEAD]["training_rows"] == 12
     order = FEATURE_ORDERS[feature_set]

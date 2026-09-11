@@ -1,11 +1,11 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.3；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
-> 状态：`ENGINEERING_IMPLEMENTED_READONLY_SNAPSHOT_FROZEN_FORMAL_RUN_PENDING_NOT_SERVING`
+> 版本：v1.4；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
+> 状态：`ENGINEERING_FIX_VERIFIED_FORMAL_RERUN_PENDING_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测，尚未生成正式评价 request/bundle，也没有可据此宣称的策略收益或 serving 模型。
+> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测。首次正式运行已完整计算但因根 manifest 漏列模型子目录 manifest 而未通过 inspect；失败 request/bundle 均保留且不得用作策略收益证据，修复后使用新代码提交、新评价人口和新 request 重跑。当前没有 serving 模型。
 
 ## 1. Background / 目标与现状
 
@@ -257,12 +257,13 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
 - 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。授权快照还暴露同日多个独立实施方案，现按方案身份先归并修订、再合并同日经济行动；相同方案内的真实冲突仍拒绝。修复均有直接反例，不改变预注册阈值或评价人口。
-- 验证状态：四个形态直接测试文件当前29项通过，公司行动适配器直接测试9项通过；整个`backend/tests/position_timing`最终本地回归为286项通过。ruff与`git diff --check`的本地结果不替代最终CI。
-- 正式运行：用户授权的只读快照已冻结；公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 含753条原始行、744项独立经济行动、739个同日规范行动、9条等价修订和5项同日合并，停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 含446个键。尚未创建本研究request/bundle、没有读取新评价人口outcome、没有研究模型current或selected；快照修复提交后立即准备唯一request并一次性运行两个family。
+- 验证状态：首次正式运行后的最小修复直接测试为 `test_pattern_research.py` 15项、`test_pattern_model.py` 5项通过；完整 `backend/tests/position_timing` 回归为287项通过，ruff、F1/F2 validator 与 `git diff --check` 均通过。上述本地结果不替代最终CI。
+- 首次正式运行：request `df591f237f6263873e720a678218b59042cc9490c63a0f482ffd0891c60d4a12` 绑定提交 `888a6576e2fa54cccfcfbac91cbcc2c92c3e9be5`、64训练股、64只此前未评价股票、2个family和9项比较。计算生成了receipt与模型文件，但根 manifest 构造使用 `path.name != "manifest.json"`，错误排除了114个模型子目录 manifest；inspect得到 `PATTERN_BUNDLE_FILE_SET_MISMATCH`，故整份bundle按fail-closed处理，不读取或报告其中收益。这是artifact完整性缺陷，不是统计结论；旧request、bundle与评价人口永久保留，禁止原地补manifest。
+- 修复与重跑：根 manifest 只排除bundle根自身的 `manifest.json`，嵌套模型manifest必须进入文件集并绑定hash；Pattern专属LightGBM参数只增加 `verbosity=-1` 以压制重复日志，不改树、目标、样本、阈值或预测语义。新request须绑定修复后的干净提交，并把首次64只评价股票纳入prior-request禁用集合后确定性选择新评价人口；所需公司行动/停牌快照重新按新128股范围只读冻结。首次公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 与停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 仅属于失败request的输入谱系，不覆盖未来新人口。没有研究模型current、selected或任何运行态写入。
 
 ## 10. Verification Plan / 测试与验收
 
-直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`；当前29项通过，覆盖如下：
+直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`；当前30项通过，覆盖如下：
 
 1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量；同日独立分红相加而同一方案冲突继续拒绝。
 2. 状态与动作：不确认、假突破、一次入场、过期、退出边沿、持仓不可ADD、风险退出优先；EXIT目标与可卖/部分成交区别；真实成本未知不伪称盈利。

@@ -83,7 +83,7 @@ MODEL_CONTRACT: Mapping[str, Any] = {
     "threshold_bps": 0.0,
     "training": "MONTHLY_EXPANDING_LABEL_AVAILABLE_AT_CUTOFF",
     "initial_sessions": INITIAL_TRAINING_SESSIONS,
-    "estimator": estimator_parameters(),
+    "estimator": {**estimator_parameters(), "verbosity": -1},
     "search": False,
     "early_stopping": False,
 }
@@ -295,7 +295,7 @@ def fit_pattern_model(
     for head in HEADS:
         selected = eligible.loc[eligible["objective"].eq(head)]
         matrix, medians = numeric_matrix(selected.loc[:, order], feature_order=order)
-        estimator = library.LGBMRegressor(**estimator_parameters())
+        estimator = library.LGBMRegressor(**MODEL_CONTRACT["estimator"])
         estimator.fit(matrix, selected["net_action_value_bps"].to_numpy(float))
         booster = estimator.booster_
         text = booster.model_to_string()
@@ -318,7 +318,7 @@ def fit_pattern_model(
         "training_cutoff": cutoff.isoformat(),
         "available_at": available_at.isoformat(),
         "package_version": library.__version__,
-        "parameters": estimator_parameters(),
+        "parameters": MODEL_CONTRACT["estimator"],
         "heads": head_metadata,
         "temporal_mode": "HISTORICAL_REPLAY_NOT_SERVING",
     }

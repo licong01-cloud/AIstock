@@ -25,6 +25,7 @@ from backend.services.position_timing.pattern_research import (
     evaluate_entry_and_exit_mechanisms,
     _execute_next_session,
     _effect_evidence,
+    _manifest,
     _model_contract,
     _model_contract_sha256,
     _optimizer_contract,
@@ -40,6 +41,21 @@ from backend.services.position_timing.pattern_research import (
     sparse_event_interval,
 )
 from backend.services.position_timing.pattern_strategy import pattern_feature_frame
+
+
+def test_root_manifest_binds_nested_model_manifests(tmp_path: Path):
+    (tmp_path / "manifest.json").write_text("root", encoding="utf-8")
+    nested = tmp_path / "models" / "CORE_ONLY" / ("a" * 64) / "manifest.json"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("model", encoding="utf-8")
+
+    manifest = _manifest(
+        tmp_path,
+        {"request_sha256": "b" * 64, "receipt_sha256": "c" * 64},
+    )
+
+    assert "manifest.json" not in manifest["files"]
+    assert nested.relative_to(tmp_path).as_posix() in manifest["files"]
 
 
 def _bars(periods: int = 90) -> pd.DataFrame:
