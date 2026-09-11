@@ -396,6 +396,35 @@ REQUIRED_DAYS = {
 }
 
 
+def _normalize_evaluation_windows(
+    evaluation_windows: Optional[dict[str, dict[str, Any]]],
+) -> tuple[dict[str, Any], dict[str, int], bool]:
+    if evaluation_windows is None:
+        return EVAL_WINDOWS, REQUIRED_DAYS, False
+    if not isinstance(evaluation_windows, dict) or not evaluation_windows:
+        raise ValueError("evaluation_windows must be a non-empty mapping")
+    normalized: dict[str, Any] = {}
+    required: dict[str, int] = {}
+    for name, value in evaluation_windows.items():
+        if not isinstance(name, str) or not name or not isinstance(value, dict):
+            raise ValueError("evaluation window names and definitions must be explicit")
+        if set(value) - {"start", "end", "required_days"}:
+            raise ValueError(f"unsupported evaluation window fields for {name}")
+        try:
+            start = pd.Timestamp(value["start"])
+            end = pd.Timestamp(value["end"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"evaluation window {name} requires valid start/end") from exc
+        if start.tz is not None or end.tz is not None or start.normalize() != start or end.normalize() != end or start > end:
+            raise ValueError(f"evaluation window {name} has invalid daily boundaries")
+        required_days = value.get("required_days", 0)
+        if type(required_days) is not int or required_days < 0:
+            raise ValueError(f"evaluation window {name} required_days must be a non-negative integer")
+        normalized[name] = (str(start.date()), str(end.date()))
+        required[name] = required_days
+    return normalized, required, True
+
+
 def _resolve_date_mask(dates: pd.DatetimeIndex, window_spec, data_start: str, data_end: str):
     """Return boolean mask over dates array + (w_start, w_end) strings."""
     if window_spec is None:
@@ -566,6 +595,8 @@ def _compute_factor_metrics_impl(
     suspended_mask: Optional[np.ndarray] = None,
     eligible_mask: Optional[np.ndarray] = None,
     universe_metadata: Optional[dict[str, Any]] = None,
+    evaluation_windows: Optional[dict[str, dict[str, Any]]] = None,
+    include_horizon_metrics: bool = False,
 ) -> tuple[list, list]:
     """Compute all eval-window metrics for a single factor (thread-safe, read-only).
 
@@ -586,29 +617,38 @@ def _compute_factor_metrics_impl(
     non_warmup_full = _post_first_finite_mask(f_arr_full)
     eval_valid_full = eligible_full & market_valid_full & ~suspended_full
     grp_full = _group_returns_from_matrices(f_arr_full, fwd_arr, sample_mask=eval_valid_full)
+    window_specs, required_days_by_window, explicit_windows = _normalize_evaluation_windows(
+        evaluation_windows
+    )
 
-    for window_name, window_spec in EVAL_WINDOWS.items():
+    for window_name, window_spec in window_specs.items():
         try:
             mask, w_start, w_end = _resolve_date_mask(dates, window_spec, data_start, data_end)
+            actual_dates = dates[mask]
+            if explicit_windows and len(actual_dates):
+                actual_start = str(actual_dates[0].date())
+                actual_end = str(actual_dates[-1].date())
+            else:
+                actual_start, actual_end = w_start, w_end
             if mask.sum() == 0:
                 factor_reports.append({
                     "factor_name": fname, "eval_window": window_name, "status": "skipped",
-                    "error_message": f": 0, {REQUIRED_DAYS.get(window_name, 0)}",
-                    "n_trading_days": 0, "required_days": REQUIRED_DAYS.get(window_name, 0),
+                    "error_message": f": 0, {required_days_by_window.get(window_name, 0)}",
+                    "n_trading_days": 0, "required_days": required_days_by_window.get(window_name, 0),
                     "data_start": None, "data_end": None,
                     "data_source": "parquet", "calc_engine": "qe_eval_v2",
                     "calculated_at": datetime.now(timezone.utc).isoformat(),
                 })
                 continue
 
-            req_days = REQUIRED_DAYS.get(window_name, 0)
+            req_days = required_days_by_window.get(window_name, 0)
             actual_days = int(mask.sum())
             if req_days > 0 and actual_days < req_days:
                 factor_reports.append({
                     "factor_name": fname, "eval_window": window_name, "status": "skipped",
                     "error_message": f": {actual_days}, {req_days}",
                     "n_trading_days": actual_days, "required_days": req_days,
-                    "data_start": w_start, "data_end": w_end,
+                    "data_start": actual_start, "data_end": actual_end,
                     "data_source": "parquet", "calc_engine": "qe_eval_v2",
                     "calculated_at": datetime.now(timezone.utc).isoformat(),
                 })
@@ -640,7 +680,7 @@ def _compute_factor_metrics_impl(
             result = {
                 "factor_name": fname, "eval_window": window_name,
                 "calc_batch_id": calc_batch_id,
-                "data_start": w_start, "data_end": w_end,
+                "data_start": actual_start, "data_end": actual_end,
                 "return_horizon": "1d",
                 "universe": universe_metadata.get("universe_key", OFFICIAL_FACTOR_UNIVERSE_KEY),
                 "coverage_semantics": universe_metadata.get("coverage_semantics", OFFICIAL_FACTOR_COVERAGE_SEMANTICS),
@@ -684,14 +724,61 @@ def _compute_factor_metrics_impl(
                 result["turnover"] = None
                 result["ic_decay_half_life"] = None
 
-            if window_name == "full":
-                f_ranked_full = _rank_matrix(f_w)
+            if window_name == "full" or include_horizon_metrics:
+                horizon_metrics = {}
                 for pname, p_arr in fwd_arrs.items():
-                    r_p = np.where(eligible_full[mask] & np.isfinite(p_arr[mask]), p_arr[mask], np.nan)
+                    if include_horizon_metrics:
+                        horizon_valid = (
+                            eligible_full[mask]
+                            & ~suspended_full[mask]
+                            & np.isfinite(f_arr_full[mask])
+                            & np.isfinite(p_arr[mask])
+                        )
+                        f_h = np.where(horizon_valid, f_arr_full[mask], np.nan)
+                        r_p = np.where(horizon_valid, p_arr[mask], np.nan)
+                    else:
+                        # Preserve the official writer's existing full-window
+                        # behavior unless the read-only all-horizon view is
+                        # explicitly requested.
+                        f_h = f_w
+                        r_p = np.where(
+                            eligible_full[mask] & np.isfinite(p_arr[mask]),
+                            p_arr[mask],
+                            np.nan,
+                        )
+                    f_ranked_h = _rank_matrix(f_h)
                     r_ranked_p = _rank_matrix(r_p)
-                    ic_mp = _pearson_ic_from_matrices(f_ranked_full, r_ranked_p)
+                    ic_mp = _pearson_ic_from_matrices(f_ranked_h, r_ranked_p)
                     ic_mp_clean = ic_mp[~np.isnan(ic_mp)]
                     result[f"rank_ic_{pname}"] = float(ic_mp_clean.mean()) if len(ic_mp_clean) > 0 else None
+                    if include_horizon_metrics:
+                        pearson = _pearson_ic_from_matrices(
+                            _robust_zscore_matrix(f_h), _robust_zscore_matrix(r_p)
+                        )
+                        pearson = pearson[~np.isnan(pearson)]
+                        rank_std = float(ic_mp_clean.std()) if len(ic_mp_clean) else None
+                        pearson_mean = float(pearson.mean()) if len(pearson) else None
+                        pearson_std = float(pearson.std()) if len(pearson) else None
+                        rank_mean = float(ic_mp_clean.mean()) if len(ic_mp_clean) else None
+                        horizon_metrics[pname] = {
+                            "ic_mean": pearson_mean,
+                            "ic_std": pearson_std,
+                            "icir": (
+                                float(pearson_mean / pearson_std)
+                                if pearson_mean is not None and pearson_std and pearson_std > 0
+                                else None
+                            ),
+                            "rank_ic_mean": rank_mean,
+                            "rank_ic_std": rank_std,
+                            "rank_icir": (
+                                float(rank_mean / rank_std)
+                                if rank_mean is not None and rank_std and rank_std > 0
+                                else None
+                            ),
+                            "n_effective_days": int(len(ic_mp_clean)),
+                        }
+                if include_horizon_metrics:
+                    result["horizon_metrics"] = horizon_metrics
             else:
                 for pname in HOLDING_PERIODS:
                     result[f"rank_ic_{pname}"] = None
@@ -710,8 +797,8 @@ def _compute_factor_metrics_impl(
             factor_reports.append({
                 "factor_name": fname, "eval_window": window_name, "status": "ok",
                 "error_message": None, "n_trading_days": int(mask.sum()),
-                "required_days": REQUIRED_DAYS.get(window_name, 0),
-                "data_start": w_start, "data_end": w_end,
+                "required_days": required_days_by_window.get(window_name, 0),
+                "data_start": actual_start, "data_end": actual_end,
                 "data_source": "parquet", "calc_engine": "qe_eval_v2",
                 "calculated_at": datetime.now(timezone.utc).isoformat(),
             })
@@ -723,7 +810,7 @@ def _compute_factor_metrics_impl(
             factor_reports.append({
                 "factor_name": fname, "eval_window": window_name, "status": "error",
                 "error_message": str(e), "n_trading_days": _n_days,
-                "required_days": REQUIRED_DAYS.get(window_name, 0),
+                "required_days": required_days_by_window.get(window_name, 0),
                 "data_start": _w_start, "data_end": _w_end,
                 "data_source": "parquet", "calc_engine": "qe_eval_v2",
                 "calculated_at": datetime.now(timezone.utc).isoformat(),
@@ -819,6 +906,9 @@ def compute_single_factor_metrics(
     fname: str,
     factor_df: pd.DataFrame,
     ctx: dict[str, Any],
+    *,
+    evaluation_windows: Optional[dict[str, dict[str, Any]]] = None,
+    include_horizon_metrics: bool = False,
 ) -> dict[str, Any]:
     """Compute metrics for a single factor using shared context.
 
@@ -827,6 +917,10 @@ def compute_single_factor_metrics(
     fname : factor name
     factor_df : DataFrame with single column, MultiIndex(datetime, instrument)
     ctx : dict from prepare_shared_context()
+    evaluation_windows : optional explicit named daily windows. Defaults keep
+        the official writer's existing five-window contract unchanged.
+    include_horizon_metrics : include h1/h5/h10/h20 IC summaries for every
+        requested window. The result is read-only and is not an official DB row.
 
     Returns dict with keys: factor_name, metrics (dict of windowmetrics), reports.
     """
@@ -910,6 +1004,8 @@ def compute_single_factor_metrics(
         suspended_mask=suspended_mask,
         eligible_mask=eligible_mask,
         universe_metadata=ctx.get("universe_metadata") or {},
+        evaluation_windows=evaluation_windows,
+        include_horizon_metrics=include_horizon_metrics,
     )
 
     # Sanitize NaN/Inf  None

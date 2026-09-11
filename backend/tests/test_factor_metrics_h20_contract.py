@@ -396,6 +396,89 @@ def test_qe_eval_v2_computes_h20_hac_companion_without_changing_1d_contract() ->
     assert all(row["status"] == "ok" for row in reports)
 
 
+def test_qe_eval_v2_supports_explicit_windows_with_all_horizons() -> None:
+    rng = np.random.default_rng(1442)
+    dates = pd.bdate_range("2025-01-02", periods=42)
+    instruments = [f"{index:06d}.SZ" for index in range(12)]
+    factor_values = rng.normal(size=(len(dates), len(instruments)))
+    returns = {
+        name: factor_values * scale + rng.normal(scale=0.5, size=factor_values.shape)
+        for name, scale in {"1d": 0.1, "5d": 0.2, "10d": 0.3, "20d": 0.4}.items()
+    }
+    close = pd.DataFrame(
+        100.0 + np.cumsum(rng.normal(size=factor_values.shape), axis=0),
+        index=dates,
+        columns=instruments,
+    )
+    windows = {
+        "early": {"start": str(dates[2].date()), "end": str(dates[20].date())},
+        "late": {"start": str(dates[21].date()), "end": str(dates[-2].date())},
+    }
+
+    metrics, reports = metric_engine._compute_factor_metrics_impl(
+        fname="alpha_explicit",
+        f_arr_full=factor_values,
+        dates=dates,
+        fwd_arr=returns["1d"],
+        fwd_arrs=returns,
+        close_unstacked=close,
+        data_start=str(dates[0].date()),
+        data_end=str(dates[-1].date()),
+        calc_batch_id="batch-1442",
+        suspended_mask=np.zeros_like(factor_values, dtype=bool),
+        eligible_mask=np.ones_like(factor_values, dtype=bool),
+        evaluation_windows=windows,
+        include_horizon_metrics=True,
+    )
+
+    assert [row["eval_window"] for row in metrics] == ["early", "late"]
+    assert all(set(row["horizon_metrics"]) == set(metric_engine.HOLDING_PERIODS) for row in metrics)
+    assert all(row["data_start"] == windows[row["eval_window"]]["start"] for row in metrics)
+    assert all(row["data_end"] == windows[row["eval_window"]]["end"] for row in metrics)
+    assert all(row["horizon_metrics"]["20d"]["rank_ic_mean"] is not None for row in metrics)
+    assert all("n_effective_days" in row["horizon_metrics"]["20d"] for row in metrics)
+    assert all(row["status"] == "ok" for row in reports)
+
+
+def test_qe_eval_v2_all_horizons_use_each_horizons_own_valid_mask() -> None:
+    dates = pd.bdate_range("2025-01-02", periods=4)
+    instruments = [f"{index:06d}.SZ" for index in range(12)]
+    factor_values = np.tile(np.arange(1.0, 13.0), (4, 1))
+    returns = {
+        name: factor_values.copy()
+        for name in metric_engine.HOLDING_PERIODS
+    }
+    returns["1d"][1, :] = np.nan
+    close = pd.DataFrame(100.0, index=dates, columns=instruments)
+
+    metrics, _ = metric_engine._compute_factor_metrics_impl(
+        fname="alpha_horizon_masks",
+        f_arr_full=factor_values,
+        dates=dates,
+        fwd_arr=returns["1d"],
+        fwd_arrs=returns,
+        close_unstacked=close,
+        data_start=str(dates[0].date()),
+        data_end=str(dates[-1].date()),
+        calc_batch_id="batch-1442-mask",
+        evaluation_windows={
+            "all": {"start": str(dates[0].date()), "end": str(dates[-1].date())}
+        },
+        include_horizon_metrics=True,
+    )
+
+    horizon_metrics = metrics[0]["horizon_metrics"]
+    assert horizon_metrics["1d"]["n_effective_days"] == 3
+    assert horizon_metrics["20d"]["n_effective_days"] == 4
+
+
+def test_qe_eval_v2_rejects_invalid_explicit_window_before_computation() -> None:
+    with pytest.raises(ValueError, match="invalid daily boundaries"):
+        metric_engine._normalize_evaluation_windows(
+            {"bad": {"start": "2026-02-01", "end": "2026-01-01"}}
+        )
+
+
 def test_h20_hac_is_nullable_for_insufficient_or_degenerate_ic_series() -> None:
     assert metric_engine._hac_icir(np.asarray([0.1] * 19), lag=19) is None
     assert metric_engine._hac_icir(np.asarray([0.1] * 25), lag=19) is None
