@@ -5,7 +5,7 @@
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动、`300506.SZ` 未绑定复权因子基准拼接缝；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。新实现把全量因子—公司行动覆盖审计前移到 request 生成前；第四批128股在未读取收益时发现4个未绑定区间并拒绝生成正式 request。当前需要数据所属模块补齐非同比例资本事件 authority 并修复增量复权因子历史重述，当前没有 serving 模型。
+> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`。当前已完成离线实现、直接测试与训练股开发烟测。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动、`300506.SZ` 未绑定复权因子基准拼接缝；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。新实现把全量因子—公司行动覆盖审计前移到 request 生成前；第四批128股在未读取收益时发现4个未绑定区间并拒绝生成正式 request。当前需要数据所属模块补齐非同比例资本事件 authority 并修复增量复权因子历史重述，当前没有 serving 模型。
 
 ## 1. Background / 目标与现状
 
@@ -275,7 +275,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 - 第三次正式运行：request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 绑定提交 `6389c5b494d7d521d59747408744e56426e74cf2` 与上述第三批快照，bundle含365个绑定文件，manifest `9de1da44981b7fb021d994197e60056b2e5b04a5cb7ddad87d0bfd857f597f85`、receipt `3c370a205d0de93f04531daf4b975d7d7dc26041a9366a9089bfdb0503bf7b22`，inspect与exact retry `ALREADY_MATERIALIZED`通过。训练模型输入64股完整、优化器开发512/512模板—股票对完整；但评价原型和模型输入均只有63/64，`300506.SZ` 为 `UNBOUND_MATERIAL_FACTOR_CHANGE`，所以9项比较继续不可引用，`selected_trial_count=0`且无serving/registry/current/card/alert/order/DB/runtime写入。
 - 第三次源诊断：`300506.SZ` candidate在2026-07-03至07-06由0.754176跳到1；本地 `market.adj_factor` 同期由4.844跳到6.4229，而Tushare当前对2026-06-25至07-15整个历史区间均返回6.4229。原始价格07-03收6.25、07-06收6.04，总股本持续142,559.6569万股且无实施分红。故这是上游历史因子整体重述后本地仅刷新新区间形成的基准拼接，不是07-06真实除权；不得在形态研究里把它映射成持仓数量或静默保留伪复权收益。
 - 第四批source-only预检：33份prior request、553只禁用股票确定性得到原64训练股与第四批64评价股；只读v5公司行动快照 `126bcd984e1c8dc89b5a7694fc4c6b83066074d679c5c0fea6d05639a6582b00`、停牌快照 `171cb4dade3a6e13d30bfaa9146416041bbece023296560b6f2861170a94c24f` 已冻结。对128股全部697个大于10 bps的因子区间检查后，693个能绑定规范化公司行动，4个未绑定：`000970.SZ/2022-02-15→02-24`、`600008.SH/2020-09-18→09-29`、`601236.SH/2021-07-26→08-04`、`688109.SH/2026-07-08→07-09`。前三项都跨停牌、总股本增加而流通股本未同步增加，`dividend`无事项，不能凭臆测决定普通旧股东的数量/现金语义；`688109.SH` 的candidate与本地库由1.5415跳至1.5459，而Tushare当前已把两侧都重述为1.5459。无收益源诊断回执为 `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/source_diagnostics/c01a8d3dd05ffda3c23eaa6be5c886f4989447e173cf2df34c33a5bbe537a822.json`，明确`outcomes_read=false/database_write=false`。
-- 第四次运行边界：新 `position_timing_pattern_strategy_request_v2` 必须绑定完整的因子—公司行动审计；上述4个区间关闭前不生成request，也不运行训练/回放。该数据纠错不能通过改形态阈值、删除股票、缩短历史、把总股本变化强行当同比例送股或读取前三次比较值完成。数据authority修复后仍使用同一第四批人口和两family九项冻结比较；旧v1 request/bundle继续可inspect但没有新审计身份。
+- 第四次运行边界：提交`ab1a20ba2`上的真实prepare在12.5秒返回`PATTERN_FACTOR_ACTION_COVERAGE_INCOMPLETE`，request文件数前后均为3、`new_request_files=[]`，证明新 `position_timing_pattern_strategy_request_v2` 不会在缺少完整因子—公司行动审计时发布。上述4个区间关闭前不运行训练/回放。该数据纠错不能通过改形态阈值、删除股票、缩短历史、把总股本变化强行当同比例送股或读取前三次比较值完成。数据authority修复后仍使用同一第四批人口和两family九项冻结比较；旧v1 request/bundle继续可inspect但没有新审计身份。
 
 ## 10. Verification Plan / 测试与验收
 
