@@ -31,15 +31,24 @@
   ],
   "expected": "使用结构化源码角色规则；显式 runtime target 优先，scripts 下 Python/PowerShell 默认非运行时，backend 未登记源码继续 fail-closed 为运行时，并以合同测试防止降级。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/aistock_issue_workflow.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260911_BUG-1443-issue.json",
       "backend/tests/scripts/test_aistock_issue_workflow.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/aistock_issue_workflow.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260911_BUG-1443-issue.json",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -164,10 +173,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
