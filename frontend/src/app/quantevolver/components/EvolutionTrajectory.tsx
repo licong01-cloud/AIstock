@@ -139,7 +139,33 @@ export default React.memo(function EvolutionTrajectory({
         const rowCfg = parseConfigJson(row.config_json);
         const rowFlags = rowCfg.runtime_flags || {};
         const cfgFlags = cfg.runtime_flags || {};
-        const strategyParams = rowCfg.strategy_params || cfg.strategy_params || {};
+        const modelParams = rowCfg.model_params || {};
+        const strategyParams = {
+          ...modelParams,
+          ...(cfg.strategy_params || {}),
+          ...(rowCfg.strategy_params || {}),
+        };
+        const universeSelection = rowCfg.universe_selection
+          || modelParams?._qe_direct_v2_dataset_binding?.selection_pins
+          || cfg.universe_selection
+          || {};
+        const poolIds = Array.isArray(universeSelection.pool_ids) ? universeSelection.pool_ids : [];
+        const poolLabel = poolIds.length > 0
+          ? poolIds.join("+")
+          : firstText(rowCfg.stock_pool, cfg.stock_pool) || "stock_universe";
+        const hmmEnabled = rowCfg.enable_sector_hmm
+          ?? modelParams.enable_sector_hmm
+          ?? cfg.enable_sector_hmm;
+        const blacklistValues = rowCfg.sector_blacklist
+          ?? modelParams.sector_blacklist
+          ?? cfg.sector_blacklist;
+        const blacklistEnabled = Array.isArray(blacklistValues)
+          ? blacklistValues.length > 0
+          : (
+            rowCfg.sector_blacklist_enabled
+            ?? modelParams.sector_blacklist_enabled
+            ?? cfg.sector_blacklist_enabled
+          );
         const label = firstText(
           row.loop_label,
           row.label,
@@ -167,6 +193,9 @@ export default React.memo(function EvolutionTrajectory({
               ? cfgFlags.objectives
               : [],
           modelId: firstText(rowCfg.model_id, cfg.model_id),
+          poolLabel,
+          hmmEnabled,
+          blacklistEnabled,
           topk: strategyParams.topk,
           seed: rowFlags.random_seed ?? cfgFlags.random_seed ?? strategyParams.random_seed,
         };
@@ -180,6 +209,7 @@ export default React.memo(function EvolutionTrajectory({
     const isCombine = (dataSourceAdapter?.taskType || taskType || sourceType) === "multi_alpha_combine";
     const trajectory = trajectoryRows.map((loop: any) => {
       const m = loop.metrics_json || {};
+      const absolute = m?.enhanced_metrics?.absolute_returns || {};
       const desc = loopDescriptionByIndex.get(Number(loop.loop_index ?? 0));
       return {
         loop_id: loop.loop_index ?? 0,
@@ -188,9 +218,9 @@ export default React.memo(function EvolutionTrajectory({
         ic: extractMetric(m, "IC", "ic"),
         rank_ic: extractMetric(m, "Rank_IC", "rank_ic", "Rank IC"),
         icir: extractMetric(m, "ICIR", "icir"),
-        ann_ret: extractMetric(m, "annualized_return", "ann_return", "annual_return"),
-        sharpe: extractMetric(m, "sharpe", "Sharpe"),
-        max_drawdown: extractMetric(m, "max_drawdown", "max_drawdown_no_cost"),
+        ann_ret: extractMetric(absolute, "cagr", "annualized_return_absolute"),
+        sharpe: extractMetric(absolute, "sharpe", "sharpe_absolute"),
+        max_drawdown: extractMetric(absolute, "max_drawdown", "max_drawdown_absolute"),
         is_sota: loop.is_sota === true,
         action_type: loop.action_type || "unknown",
       };
@@ -334,8 +364,11 @@ export default React.memo(function EvolutionTrajectory({
               const status = formatStatus(item.status);
               const tags = [
                 ...(item.objectives || []),
+                `pool:${item.poolLabel}`,
                 item.topk != null ? `topk${item.topk}` : "",
                 item.seed != null ? `seed${item.seed}` : "",
+                `HMM:${item.hmmEnabled === true ? "on" : item.hmmEnabled === false ? "off" : "unknown"}`,
+                `blacklist:${item.blacklistEnabled === true ? "on" : item.blacklistEnabled === false ? "off" : "unknown"}`,
               ].filter(Boolean);
               return (
                 <div key={item.loopIndex} style={{

@@ -10,12 +10,15 @@ from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver.qe_active_dataset_profile import (
     ACTIVE_PROFILE_ENV,
     QEActiveDatasetProfileError,
+    enforce_qe_universe_topk,
     get_qe_dataset_profile_summary,
+    is_pure_star50_universe,
     load_active_qe_profile,
     reject_client_dataset_internals,
     resolve_active_qe_dataset,
 )
 from backend.services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_INDEX_CODES
+from backend.services.quantevolver.experiment_config import ExperimentConfig
 from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
     build_config_from_strategy_evo_loop,
@@ -35,6 +38,85 @@ def _write(path: Path, payload: bytes) -> str:
 
 def _canonical(value: dict) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+@pytest.mark.parametrize(
+    "stock_pool",
+    ["star50", "科创50", "000688.SH", "index_pool__star50", "index_pool__star50.txt"],
+)
+def test_star50_top20_contract_accepts_aliases_and_defaults(stock_pool: str) -> None:
+    assert is_pure_star50_universe(stock_pool=stock_pool) is True
+    assert enforce_qe_universe_topk(None, stock_pool=stock_pool)["topk"] == 20
+    assert enforce_qe_universe_topk({"topk": 20}, stock_pool=stock_pool)["topk"] == 20
+
+
+@pytest.mark.parametrize(
+    "stock_pool",
+    [
+        "/tmp/qe/pools/index_pool__star50.txt",
+        r"X:\qe\pools\index_pool__star50.txt",
+    ],
+)
+def test_star50_top20_contract_accepts_pool_sidecar_paths(stock_pool: str) -> None:
+    assert is_pure_star50_universe(stock_pool=stock_pool) is True
+    assert enforce_qe_universe_topk(None, stock_pool=stock_pool)["topk"] == 20
+
+
+@pytest.mark.parametrize("topk", [10, 50, 20.0, True, "20"])
+def test_star50_top20_contract_rejects_explicit_non_integer_20(topk: object) -> None:
+    with pytest.raises(QEActiveDatasetProfileError, match="qe_star50_topk_required"):
+        enforce_qe_universe_topk(
+            {"topk": topk},
+            universe_selection={"mode": "single_index", "pool_ids": ["star50"]},
+        )
+
+
+def test_star50_top20_contract_does_not_rewrite_union_or_other_pool() -> None:
+    assert enforce_qe_universe_topk(
+        {"topk": 50},
+        universe_selection={"mode": "index_union", "pool_ids": ["csi300", "star50"]},
+    )["topk"] == 50
+    assert enforce_qe_universe_topk(
+        {"topk": 50},
+        universe_selection={"mode": "single_index", "pool_ids": ["star100"]},
+    )["topk"] == 50
+
+
+def test_star50_top20_contract_applies_to_normalized_single_pool_union() -> None:
+    selection = {"mode": "index_union", "pool_ids": ["star50"]}
+
+    assert is_pure_star50_universe(universe_selection=selection) is True
+    assert enforce_qe_universe_topk(None, universe_selection=selection)["topk"] == 20
+    with pytest.raises(QEActiveDatasetProfileError, match="qe_star50_topk_required"):
+        enforce_qe_universe_topk({"topk": 50}, universe_selection=selection)
+
+
+def test_star50_identity_accepts_frozen_selection_pins_with_extra_fields() -> None:
+    assert is_pure_star50_universe(
+        universe_selection={
+            "mode": "single_index",
+            "pool_ids": ["star50"],
+            "instrument_name": "index_pool__star50",
+            "membership_revision": "pit-rev",
+        }
+    ) is True
+
+
+def test_experiment_config_is_final_star50_top20_consumer_guard() -> None:
+    config = ExperimentConfig(
+        factor_names=["alpha"],
+        model_id="model",
+        stock_pool="index_pool__star50",
+    )
+    assert config.strategy_params == {"topk": 20}
+
+    with pytest.raises(ValueError, match="qe_star50_topk_required"):
+        ExperimentConfig(
+            factor_names=["alpha"],
+            model_id="model",
+            stock_pool="index_pool__star50",
+            strategy_params={"topk": 50},
+        )
 
 
 def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
