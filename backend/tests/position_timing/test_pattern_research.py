@@ -411,6 +411,54 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
     path.write_text(json.dumps(request), encoding="utf-8")
     assert _load_request(path)["schema_version"] == REQUEST_SCHEMA
 
+    without_application = dict(request)
+    for key in (
+        "corporate_action_application_policy",
+        "corporate_action_application_policy_sha256",
+        "corporate_action_application_audit",
+        "corporate_action_application_sha256",
+    ):
+        without_application.pop(key)
+    detached_audit = dict(without_application["factor_action_coverage_audit"])
+    detached_audit["corporate_action_application_sha256"] = None
+    detached_audit["audit_sha256"] = canonical_sha256(
+        {key: value for key, value in detached_audit.items() if key != "audit_sha256"}
+    )
+    without_application["factor_action_coverage_audit"] = detached_audit
+    without_application["factor_action_coverage_audit_sha256"] = detached_audit[
+        "audit_sha256"
+    ]
+    without_application["request_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in without_application.items()
+            if key != "request_sha256"
+        }
+    )
+    path.write_text(json.dumps(without_application), encoding="utf-8")
+    with pytest.raises(ActionValueError, match="PATTERN_REQUEST_IDENTITY_MISMATCH"):
+        _load_request(path)
+
+    outcomes_read = json.loads(json.dumps(request))
+    outcomes_read_audit = outcomes_read["factor_action_coverage_audit"]
+    outcomes_read_audit["outcomes_read"] = True
+    outcomes_read_audit["audit_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in outcomes_read_audit.items()
+            if key != "audit_sha256"
+        }
+    )
+    outcomes_read["factor_action_coverage_audit_sha256"] = outcomes_read_audit[
+        "audit_sha256"
+    ]
+    outcomes_read["request_sha256"] = canonical_sha256(
+        {key: value for key, value in outcomes_read.items() if key != "request_sha256"}
+    )
+    path.write_text(json.dumps(outcomes_read), encoding="utf-8")
+    with pytest.raises(ActionValueError, match="PATTERN_REQUEST_IDENTITY_MISMATCH"):
+        _load_request(path)
+
 
 def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(tmp_path: Path):
     from backend.services.position_timing.contracts import canonical_sha256

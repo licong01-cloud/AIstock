@@ -2497,8 +2497,13 @@ def _load_request(path: Path) -> dict[str, Any]:
             or factor_audit.get("policy_sha256")
             != FACTOR_ACTION_COVERAGE_POLICY_SHA256
             or factor_audit.get("coverage_complete") is not True
+            or factor_audit.get("outcomes_read") is not False
             or factor_audit.get("unbound_material_factor_change_count") != 0
+            or factor_audit.get("unbound_material_factor_changes") != []
             or factor_audit.get("insufficient_factor_symbol_count") != 0
+            or factor_audit.get("insufficient_factor_symbols") != []
+            or factor_audit.get("material_factor_change_count")
+            != factor_audit.get("bound_material_factor_change_count")
             or not isinstance(population, Mapping)
             or not isinstance(factor_scope, Mapping)
             or factor_scope.get("symbols_sha256")
@@ -2511,7 +2516,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         request.get("schema_version") not in {LEGACY_REQUEST_SCHEMA, REQUEST_SCHEMA}
         or (
             request.get("schema_version") == REQUEST_SCHEMA
-            and not has_factor_coverage_contract
+            and (not has_application_contract or not has_factor_coverage_contract)
         )
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("request_sha256") != canonical_sha256(identity)
