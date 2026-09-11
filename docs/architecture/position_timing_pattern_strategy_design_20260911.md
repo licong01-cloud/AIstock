@@ -1,11 +1,11 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.1；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
-> 状态：`DESIGN_ONLY_NOT_IMPLEMENTED_NOT_RUN_NOT_SERVING`
+> 版本：v1.2；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
+> 状态：`ENGINEERING_IMPLEMENTED_DEV_SMOKE_VERIFIED_FORMAL_RUN_PENDING_AUTHORIZED_READONLY_SNAPSHOT_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`9722483e9`；本次只交付设计，不启动历史实验或模型训练。
+> 设计源提交：`535180c15`；当前已完成离线实现、直接测试与训练股开发烟测，尚未生成正式评价 request/bundle，也没有可据此宣称的策略收益或 serving 模型。
 
 ## 1. Background / 目标与现状
 
@@ -17,7 +17,7 @@
 
 ## 2. Scope / 范围与 Non-goals
 
-设计覆盖日频形态、两项独立机制对照、完整规则组合回放、有界参数优化、后续模型学习方式、相似策略研究队列与未来 QE 只读融合边界。首个实现块交付离线原型研究；第二块在同一研究工具内优化规则并研究模型条件化，形成逐股历史影子建议。这是两个连续工作块，不拆平台、审批或日历等待阶段。
+设计覆盖日频形态、两项独立机制对照、完整规则组合回放、有界参数优化、模型条件化、相似策略研究队列与未来 QE 只读融合边界。原型、优化器与模型现已在同一个离线研究工具中实现，以一个顶层 request 在读取新评价收益前同时冻结两个统计 family；它们仍是两个解释边界而不是两个产品或审批阶段。
 
 产品人口仍为“唯一权威持仓 ∪ 用户显式勾选的已确认自选”；同股持仓身份优先。当前名单只能用于当前或所声明的追溯展示，不能倒填为历史自选名单。首轮正式研究使用冻结 PIT 样本，报告向真实自选/持仓人口迁移的局限。
 
@@ -33,11 +33,13 @@
   既有 daily_fill / 持仓现金记账 / 逐腿成本 / 终值与统计
                     ↓
   pattern_research.py：prepare / run / inspect / 不可变结果
-                    ↓
-  研究报告 → 第二块：同状态标签与模型 → 逐股历史影子解释
+          ↙                                  ↘
+ pattern_optimizer.py：8模板月度选择    pattern_model.py：同状态双头模型
+          ↘                                  ↙
+        同一冻结评价人口上的研究比较与逐股历史影子解释
 ```
 
-首块预计只新增上述两个服务文件及两个直接测试文件；按需在现有 `action_value_research.py` 增加明确 policy callback 或复用函数，不复制其成交、公司行动、现金/库存引擎。若现有入口的模型必需参数、review stride 或硬编码动作与本策略冲突，须用显式新模式扩展并回归旧路径，不把模型伪造为空实现来绕过。
+实际新增 `pattern_strategy.py`、`pattern_research.py`、`pattern_optimizer.py`、`pattern_model.py` 及四个同名直接测试文件；没有修改既有 `action_value_research.py` 或其他模块。新代码只调用其纯函数及既有成交、公司行动、现金/库存、模型训练实现，并在本模块内维护形态政策状态，未复制第二套共享 guard、数据库或运行框架。
 
 | 基础 | 复用位置与约束 |
 |---|---|
@@ -55,7 +57,7 @@
 
 决策时点固定为全局交易日 T 的 20:00（Asia/Shanghai），动作有效期为 T+1 一个交易日。T日最终收盘价和全天成交量只能在收盘数据已可用后用于决策；禁止看完日线后假设当日收盘前成交。盘中未来若展示本策略，也只是提示已冻结建议；日频研究不能宣称捕捉到了当日冲顶最高价。
 
-request展开并绑定candidate manifest、全局calendar hash、实际列/文件hash、公司行动与停牌snapshot、费用和guard snapshot及代码commit。每行携带`decision_as_of/feature_available_at/source_identity`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
+request展开并绑定candidate manifest、全局calendar hash、实际列/文件hash、公司行动与停牌snapshot、费用和guard snapshot及代码commit；bundle级request/manifest提供统一`source_identity`。事件、成交、连续净值和模型标签行显式携带`decision_as_of/feature_available_at`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
 
 记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。
 
@@ -143,13 +145,13 @@ P每次新b按当时现金和§5.1的同一预算公式生成计划；risk exit�
 
 首块一次性固定4项主比较：E1-E0、X1-X0、P-buy-and-hold、P-L1。前两项每个anchor日先对股票事件等权取均值，再对有事件日期等权；后两项按交易日对固定人口等权聚合财富日收益差。单位分别为事件bps和bps/日，不互相代换。共同使用25日circular moving block、5,000次、seed=20260911、nominal95%、Bonferroni98.75%区间；稀疏事件在全局calendar上保存`daily_event_mean/active_day_indicator`，重抽日期块后以日均值之和除以有事件日期数，非事件日分子与计数均为0。若重抽分母为0，记录无效重抽，全部5,000次中有效比例低于95%时区间为null并报告原因，不追加重抽凑足结果。该按日等权口径不能换成按事件数量加权，也不能把非等间隔事件序号当交易日。
 
-每项成本后threshold=0，adjusted lower>0为SUPPORTED，upper≤0为NEGATIVE，其余INCONCLUSIVE；4项分别报告。仅两项完整政策比较均SUPPORTED才可称本规则组合取得局部统计支持；不能因为一个机制为正就称组合有效。没有足够有效日期块计算区间时字段为null与typed reason，不通过调块长、增股票或等明天补救。MDE/区间宽度/样本量为报告义务，不作为开跑或工程合入门槛。
+每项成本后threshold=0，adjusted lower>0为SUPPORTED，adjusted upper<0为NEGATIVE，其余（包括区间恰好为[0,0]）为INCONCLUSIVE；4项分别报告。仅两项完整政策比较均SUPPORTED才可称本规则组合取得局部统计支持；不能因为一个机制为正就称组合有效。没有足够有效日期块计算区间时字段为null与typed reason，不通过调块长、增股票或等明天补救。MDE/区间宽度/样本量为报告义务，不作为开跑或工程合入门槛。
 
 receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、每腿另加5/10bps摩擦敏感性（假设压力值，不是市场实测）、换手、暴露、最大回撤、等待错失上涨、止盈后的继续上涨及回撤变化。市场上涨/下跌和波动切片仅诊断，不按最赚钱切片重写生效条件。主paired路径必须对称；UNKNOWN和不可估值路径报告数量与影响，禁止静默剔除后宣称完整人口SUPPORTED。负结果同样完成研究任务。
 
 ## 6. 有界优化与模型：第二个工作块
 
-首块规则回放用于建立可解释基线；规则未获SUPPORTED不阻止继续研发。第二块分别检验“少量规则细节调整能否改善效果”和“模型能否识别原型何时有用”，允许研究者依据已有结果形成新假设，但用其后未用于该次选择的时间段评价。已经反复看过的历史始终说明探索性，不能因增加一层验证就宣称数据从未被研究者见过。
+原型规则回放用于建立可解释基线；规则未获SUPPORTED不阻止继续研发。同一离线实现还分别检验“少量规则细节调整能否改善效果”和“模型能否识别原型何时有用”。三者在读取本轮评价人口收益前一次性冻结，避免先看原型评价结果再条件化决定是否运行优化或模型；已经反复看过的历史始终说明探索性，不能因增加一层验证就宣称数据从未被研究者见过。
 
 ### 6.1 小范围调优与演进契约
 
@@ -184,7 +186,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 形态块字段固定候选为：低点年龄、距低点ATR倍数、距MA5/MA10的ATR倍数、两条MA的一日斜率/ATR、当日low距上一日MA10的ATR倍数、加速度a、同股数volume_ratio。全为当前可算的连续值；不增加未来事件标签、不做百指标特征筛选。MA/ATR/量比已有正式因子可经语义与PIT核对后读取同值列，否则本模块纯计算；全局因子桥接不是前置平台任务。
 
-模型条件化先固定在R0目标上，不把8个模板再乘进模型网格。第二块在读取评价收益前落成独立request和验收补充，总共5项主比较：Q-P、Q-buy-and-hold，以及增强模型联合政策减core模型联合政策、减P、减buy-and-hold。family=5，Bonferroni99%区间；内部8模板选择和两组各两头的训练次数另行完整记录，不能写成“只试5个模型”。模型和规则优化分别报告，不在同一外层结果上再挑赢家后声称无偏有效。具体事件支持/持仓转移、训练文件hash和样本数属于该块prepare产物，本设计不伪装它们已经冻结或执行。
+模型条件化先固定在R0目标上，不把8个模板再乘进模型网格。一个顶层 request 同时冻结原型 family=4 与演进 family=5；两组分别采用 Bonferroni 98.75% 与 99% 区间，不把9项误称为一个family，也不跨family挑赢家。演进5项为Q-P、Q-buy-and-hold，以及增强模型联合政策减core模型联合政策、减P、减buy-and-hold；内部8模板选择和两组各两头的训练次数另行完整记录，不能写成“只试5个模型”。模型和规则优化分别报告，不在同一外层结果上再挑赢家后声称无偏有效。单request比原先“看完原型后再准备第二request”更严格地避免结果驱动规格变化；具体样本数与正式收益仍须由不可变bundle给出，开发烟测不能替代。
 
 逐股研究解释输出 `symbol/as_of/pattern_state/reason_values/proposed_action/target_session/valid_until/position_context/cost_estimate/evidence_ref`，预测值是成本后增量估计，不称个股胜率。当前持仓成本未知时不能生成盈利清仓结论；源或模型不可用时提供原因。runtime接线另按本蓝图已有版本化影子建议和提醒契约实施；首块不用新增API/UI去展示一个未验证策略。
 
@@ -216,16 +218,16 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 | 工作块 | 实际产出 | 收益与交付的关系 |
 |---|---|---|
-| 块一：规则历史研究 | 纯形态与事件状态、四项固定比较、连续账户回放、不可变request/bundle/receipt、测试与蓝图回填 | 无论正/负/不确定都交付；不等最新交易日、不要求后端重启 |
-| 块二：有界优化、模型条件化与历史解释 | 8模板训练期选择、同状态两头监督、core/增强对照、历史逐股建议与证据说明 | 原型未获支持仍可优化；上线功能按证据和既有影子契约另行接线 |
+| 规则历史研究 | 已实现纯形态与事件状态、四项固定比较、连续账户回放和不可变request/bundle/receipt | 工程与直接测试已完成；正式收益尚未运行，不等最新交易日、不要求后端重启 |
+| 有界优化、模型条件化与历史解释 | 已实现8模板训练期选择、同状态两头监督、core/增强对照、历史逐股解释 | 与规则在同一request中事前冻结；正式收益尚未运行，上线仍按既有影子契约另行接线 |
 
-其他策略和QE组合留在后续队列，不占首块实现量。当前文档合入只登记块一为下一计划项；实现、训练、回放均仍未开始。
+其他策略和QE组合留在后续队列，不占当前实现量。当前工程不接卡片、提醒或serving；正式结果无论正、负或不确定都如实回填，不把研究分类作为源码合入门槛。
 
 ### 9.1 单次长任务执行包：实现与初步正式验证
 
-用户要求将本策略实现和初步验证规划为一次连续长任务。执行目标覆盖上表两个工作块；预计10～14小时有效工作/计算时间，属于预算而非完成时间保证，不为凑时长空等。设计PR尚在CI队列时可在基于最新main的独立实现分支接续已固定设计提交，关联设计PR；待其合入后同步main，设计等待不阻塞编写代码、直接测试与离线研究。
+用户要求将本策略实现和初步验证作为一次连续长任务执行。当前已在独立实现分支完成上表两个工作块的源码、直接测试和训练股开发烟测；设计PR #4538 的旧CI记录为 `pr_quality` 失败，而其已执行的后端选择性测试通过，该旧CI既不作为研究结论，也不冒充当前实现已经通过。最终以同步最新main后的当前实现PR重新执行全部适用CI。
 
-规划时的只读预检：原PT-NEXT-017 request `c685a820dc4ed7ff0508350f6536832ab22777646e9adb5fbb1f972fe00d9c1e`存在，训练/历史评价人口各64股，源日期2018-08-01..2026-08-31；其candidate根`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260905-candidate`存在。`C:/Users/lc999/miniconda3/envs/AIstock/python.exe`读回numpy2.4.0、pandas2.3.3、lightgbm4.6.0；默认Python/根.venv缺少所需研究依赖，不作为本任务解释器。此预检仅证明路径与环境可用，完整消费文件hash和新人口coverage由执行时prepare验证。
+只读预检已经确认：原PT-NEXT-017 request `c685a820dc4ed7ff0508350f6536832ab22777646e9adb5fbb1f972fe00d9c1e`存在，训练/历史评价人口各64股，源日期2018-08-01..2026-08-31；其candidate根`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260905-candidate`存在。`C:/Users/lc999/miniconda3/envs/AIstock/python.exe`读回numpy2.4.0、pandas2.3.3、lightgbm4.6.0；默认Python/根.venv缺少所需研究依赖，不作为本任务解释器。source-only人口选择已在不读取outcome时得到64只新评价股；现有公司行动和停牌snapshot不覆盖该批次，因此正式prepare前只需对训练64股与评价64股生成同一范围的新版只读快照。
 
 | 连续工作段 | 时间预算 | 实施与正式交付 |
 |---|---|---|
@@ -238,7 +240,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 可直接复用的已核验接口：`DailyCandidate.open(root)`、`daily_fill(plan,bar,*,sellable,parent_count=1,full_exit=False,slippage_bps=0)`、`estimator_parameters()`、`monthly_training_windows(calendar,initial_sessions=756)`与既有prepare/run/inspect不可变写入模式。`replay_continuous_cohorts`当前接受models和固定model_action_authority，没有任意`policy_callback`参数；必须在本模块真实增加显式扩展点并保持旧默认路径，不得调用想象中的参数。`circular_block_interval`当前是有限数值序列均值bootstrap，不支持稀疏事件比值；须在本模块增加专用小函数或明确mode实现§5.3，不把NaN填0交给旧函数。
 
-预计新增四个职责文件：`pattern_strategy.py`（特征/模板/事件/动作）、`pattern_research.py`（反事实/CLI/报告）、`pattern_optimizer.py`（训练期模板选择）、`pattern_model.py`（同状态训练与推断）；计划对应`test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py`、`test_pattern_model.py`。在执行开始登记确切allowed_write_scope，必要适配仅涉及同模块`action_value_research.py`及其直接测试。本执行包未授权修改其他模块源文件。复用模式不等于复制一套账本。
+实际新增四个职责文件：`pattern_strategy.py`（特征/模板/事件/动作）、`pattern_research.py`（反事实/CLI/报告）、`pattern_optimizer.py`（训练期模板选择）、`pattern_model.py`（同状态训练与推断），以及对应四个直接测试文件。没有修改`action_value_research.py`或任何其他模块源文件；复用既有纯实现并保持旧入口不变。allowed_write_scope仍仅为本模块源码、直接测试与两份设计文档。
 
 研究预算固定：源人口按§5.3的64训练股/至多64评价股；8个规则模板仅在开发人口中选择；core/增强两组各2个head，每个可训练月最多4次fit，不追加种子/模型搜索。原型4项与第二块5项比较分别绑定独立family；所有实际尝试可追溯，不能把两family中任一赢家当作经过整个研发历史校正的最终最优。数据、形态特征和未变化的基线在hash一致时复用；初始只运行1个研究计算进程，线程上限4，实测首个小批次耗时与内存后更新完成时间估计，不在共享机器上同时拉起多套训练。
 
@@ -248,11 +250,19 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 任务结束交付：可运行CLI和测试；原型及优化/模型的不可变request、receipt、逐日连续净值、事件/成交/费用明细、月度模板与模型身份；固定SHA排序的前20条可评价入场/退出案例及全部类型失败计数（不按收益选案例）；逐股历史建议；一份中文结果报告与更新的蓝图/验收矩阵；源码PR、CI及合入状态。病例不足20条按实际交付。数值不足以训练某head时交付已实现代码、真实零/稀疏样本统计和`MODEL_NOT_ESTIMABLE`原因，明确“训练未成功/模型效力不可判定”，不报虚假的模型完成；规则和其他独立比较继续。
 
-本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前计划不激活正式card/alert/serving，不要求后端重启、不做生产DML；已有合入授权用于多轮审核和必要CI通过后的源码合入。其后才安排运行态建议接线、其他场景研究与QE组合。当前状态仍为计划已记录、实施未开始。
+本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把NEGATIVE/INCONCLUSIVE研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。工程已完成并进入合入前复核；原型、优化和模型的正式证据仍统一标为`NOT_RUN`，原因仅是新版公司行动/停牌快照的生产库只读操作需用户单独授权，而不是等待最新交易日或结果门禁。
+
+### 9.2 当前实施读回
+
+- source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
+- 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
+- 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。修复均有直接反例，不改变预注册阈值或评价人口。
+- 验证状态：四个直接测试文件当前29项通过；整个`backend/tests/position_timing`最终本地回归为284项通过。ruff与`git diff --check`的本地结果不替代最终CI。
+- 正式运行：尚未创建本研究request/bundle、没有读取新评价人口outcome、没有研究模型current或selected；获得只读快照授权后，以干净源码提交准备唯一request并一次性运行两个family。
 
 ## 10. Verification Plan / 测试与验收
 
-直接测试落在计划文件 `backend/tests/position_timing/test_pattern_strategy.py` 与 `test_pattern_research.py`，本次尚不存在，不宣称已通过：
+直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py` 与 `test_pattern_model.py`；当前29项通过，覆盖如下：
 
 1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量。
 2. 状态与动作：不确认、假突破、一次入场、过期、退出边沿、持仓不可ADD、风险退出优先；EXIT目标与可卖/部分成交区别；真实成本未知不伪称盈利。
@@ -281,20 +291,20 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 ## 12. Design Acceptance Matrix / 设计验收矩阵
 
-`DESIGN_VERIFIED`仅表示文档级设计已逐项审核；所有新增功能仍为未实现、未运行，不得引用该矩阵声称有回测或收益证据。`implementation_refs`此处指设计规定的落点，未新增的代码位置由实施任务另填实证。
+`ENGINEERING_VERIFIED`表示设计条款已有真实代码与直接测试，不表示正式评价回放已经运行、模型取得增量或生产功能已加载。当前所有收益证据仍为`NOT_RUN`，不得引用该矩阵声称策略有效。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文§1、§2、§9；主蓝图§9.21 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-002 | 本文§4；action_value.py::market_features | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-003 | 本文§4.2、§5.1、§5.2 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-004 | 本文§4.3、§5.1 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-005 | 本文§5.1、§5.3、§10 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-006 | 本文§5.2、§5.3 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-007 | 本文§3、§9、§13 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-008 | 本文§6、§9 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-009 | 本文§7、§8 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
-| F-010 | 本文§10、§13、§14 | artifact:docs/architecture/position_timing_pattern_strategy_design_20260911.md | DESIGN_VERIFIED | none |
+| F-001 | 本文§1、§2、§9；主蓝图§9.21 | `backend/tests/position_timing/test_pattern_research.py` | ENGINEERING_VERIFIED | none |
+| F-002 | `pattern_strategy.py::pattern_feature_frame`；`action_value.py::market_features` | `backend/tests/position_timing/test_pattern_strategy.py` | ENGINEERING_VERIFIED | none |
+| F-003 | `pattern_strategy.py::breakout_observed/advance_entry_event`；`pattern_research.py` | `backend/tests/position_timing/test_pattern_strategy.py`；`test_pattern_research.py` | ENGINEERING_VERIFIED | none |
+| F-004 | `pattern_strategy.py::acceleration_volume_exit`；`pattern_research.py::_simulate_exit_pair` | `backend/tests/position_timing/test_pattern_strategy.py`；`test_pattern_research.py` | ENGINEERING_VERIFIED | none |
+| F-005 | `pattern_research.py::evaluate_entry_and_exit_mechanisms/replay_prototype` | `backend/tests/position_timing/test_pattern_research.py` | ENGINEERING_VERIFIED | none |
+| F-006 | `pattern_research.py::replay_full_policy_symbol/_comparison_receipts` | `backend/tests/position_timing/test_pattern_research.py` | ENGINEERING_VERIFIED | none |
+| F-007 | `backend/services/position_timing/pattern_*.py`；timing-owned artifact root | `backend/tests/position_timing/test_pattern_research.py`；`python -m pytest backend/tests/position_timing -q` | ENGINEERING_VERIFIED | none |
+| F-008 | `pattern_optimizer.py`；`pattern_model.py`；`pattern_research.py::run_pattern_request` | `backend/tests/position_timing/test_pattern_optimizer.py`；`test_pattern_model.py` | ENGINEERING_VERIFIED | none |
+| F-009 | 本文§7、§8；当前代码无HMM/QE/Agent import | `backend/tests/position_timing/test_pattern_research.py`；合入前显式import扫描 | ENGINEERING_VERIFIED | none |
+| F-010 | 本文§10、§13、§14；四个直接测试文件 | `python -m pytest backend/tests/position_timing/test_pattern_strategy.py backend/tests/position_timing/test_pattern_research.py backend/tests/position_timing/test_pattern_optimizer.py backend/tests/position_timing/test_pattern_model.py -q` | ENGINEERING_VERIFIED | none |
 
 ## 13. Risks / 失败模式与 Production Gates
 
@@ -302,7 +312,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 本次 `production_ddl_gate=noop`、DML/dependency/restart/runtime均noop。后续研究读本地候选和timing-owned快照；源问题跨模块时只提交需求。Rollback：撤回本设计的下一任务链接或停止后续独立研究即可，既有生产卡和历史研究不变；未来运行版用既有版本化policy回退，不能覆盖旧artifact。
 
-DESIGN-COMPLIANCE-001：①本交付是完整设计，不冒充功能实现；②未知/无事件/失败显式留证，不填零冒充成功；③用户概要作为原型，按最新授权允许依据论文与实验优化清仓/减仓/确认和其他参数；④不增加审批、双人确认、sealed holdout前置或最新数据等待。研究结论不控制工程合入，正式服务仍沿主蓝图已有证据语义。
+DESIGN-COMPLIANCE-001：①当前交付为完整离线工程实现，不冒充正式收益或运行功能；②未知/无事件/失败显式留证，不填零冒充成功，任何开发、训练或评价覆盖不完整均不能进入SUPPORTED；③用户概要作为原型，按最新授权允许后续依据论文与独立实验优化清仓/减仓/确认和其他参数；④不增加审批、双人确认、sealed holdout、MDE或最新数据等待。生产库只读快照仅遵守用户明确的数据操作授权边界，不由研究结果决定；研究结论不控制工程合入，正式服务仍沿主蓝图已有证据语义。
 
 ## 14. 方法论依据与设计审核记录
 
@@ -315,3 +325,5 @@ DESIGN-COMPLIANCE-001：①本交付是完整设计，不冒充功能实现；�
 以上来源于2026-09-11公开摘要核验；NBER页面直读受限时使用检索返回的原始摘要，未声称阅读不可访问全文。所有具体窗口/阈值来自用户意图和本设计的可操作定义，尚无本地receipt支持。
 
 第一轮语义审核已修订：清仓保留为原型；回踩等待从突破日锚定；没有回踩的事件保留；收盘确认只在次日尝试；模型只能在决策时看到已经出现的形态。第二轮契约审核已修订：机制收益与完整策略收益分开、两者统计单位分开；完整策略加入同股buy-and-hold与L1；成本未知不虚构浮盈；量比处理送转可比数量；旧研究不因新策略覆盖。用户补充授权后第三轮修订加入有界优化、减仓与衰竭确认，区分一次试验冻结和长期可调整，并修正`initial_holding_endowment`需要非空成本的复用误判。最终文档校验结果由本次PR的命令输出记录。
+
+实现审核新增四组修正：其一，所有N线政策名与数值必须落到代码或receipt，不从名称推断语义；其二，净佣最低5元仅作用于佣金组件，gross必须同时移除已实现费用和估值清算费用，敏感性只在相同人口上标注；其三，PIT关闭只禁止新买入和新形态信号，已持库存仍按停牌/涨跌停/公司行动规则估值及退出，除权停牌日用factor映射最后价格；其四，原型UNKNOWN、优化器开发覆盖、模型训练/评价覆盖与外层覆盖均fail-closed，避免部分样本被标为SUPPORTED。上述均为正确性边界，不是新增研发门禁。
