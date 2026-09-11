@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: f0e89ff0fc638700973a297ba63e91060bd889669c389a13dd19711efe0d24fd
+source_sha256: 6f3b5c1a3c6ff7ea334f3e66fa30cc4f493e8fd7a86e67a5891495df6f605bd4
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-09-11"
@@ -709,6 +709,10 @@ rules:
         - persistent_fix_basis
         - durable_fresh_process_load_evidence_in_bug_and_pr
         - runtime_target_catalog_ref
+        - structured_source_role_rules_prefer_specific_matches
+        - scripts_default_non_runtime_with_explicit_runtime_target_override
+        - backend_unknown_source_remains_runtime_fail_closed
+        - equal_specificity_role_conflict_is_unknown
         - existing_repo_operator_runbook_ref
         - runtime_source_pr_uses_refs_not_closes
         - runtime_batch_path_blocked
@@ -721,7 +725,7 @@ rules:
         - github_issue_open_while_runtime_pending
         - close_sync_worktree_current_with_origin_main
     baseline_policy: block_issue_verified_until_post_restart_passed
-    remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
+    remediation: Classify changed files through the runtime target catalog and bounded source_role_rules without accumulating per-file script exceptions; preserve explicit runtime targets and unknown backend fail-closed behavior. Then keep runtime BUGs fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
 
   - rule_id: CI-ENVIRONMENT-PARITY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-environment-parity-001

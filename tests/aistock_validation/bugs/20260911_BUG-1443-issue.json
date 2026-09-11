@@ -1,55 +1,93 @@
 {
-  "actual": "canonical main 单测失败，并阻断 BUG-1443 PR #4556；业务代码及其余 594 项测试均通过。",
+  "actual": "当前必须为每个离线源码新增精确白名单；遗漏时业务窗口被 runtime gate 阻断。",
   "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "tests/aistock_validation/bugs/20260911_BUG-1446-ui-intake-paper-v2-pr-ci.json"
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "tests/aistock_validation/bugs/20260911_BUG-1443-issue.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1446",
-  "closed_at": "2026-09-11T07:15:36Z",
+  "bug_id": "BUG-1443",
+  "closed_at": "2026-09-11T07:28:19Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-11T06:58:25.935204Z",
-  "description": "canonical main 单测失败，并阻断 BUG-1443 PR #4556；业务代码及其余 594 项测试均通过。",
+  "created_at": "2026-09-11T06:27:29.934065Z",
+  "description": "当前必须为每个离线源码新增精确白名单；遗漏时业务窗口被 runtime gate 阻断。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260911-32718c7bd3e8",
-      "timestamp": "2026-09-11T06:58:25.935184Z"
+      "note": "Promoted from IC-20260911-d8cbe3918436",
+      "timestamp": "2026-09-11T06:27:29.934047Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/actions/runs/34571726936"
+    "docs/standards/aistock_runtime_targets_v1.yaml:8"
   ],
-  "expected": "合同测试与当前最小相关验证策略一致：advisory UI 只要求 frontend_type_lint、watchlist_backend 和 l0，不恢复 paper_v2_backend。",
+  "expected": "使用结构化源码角色规则；显式 runtime target 优先，scripts 下 Python/PowerShell 默认非运行时，backend 未登记源码继续 fail-closed 为运行时，并以合同测试防止降级。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1446-ui-intake-paper-v2-pr-ci.json",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "tests/aistock_validation/bugs/20260911_BUG-1443-issue.json",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/aistock_issue_workflow.py"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20260911_BUG-1446-ui-intake-paper-v2-pr-ci.json",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "tests/aistock_validation/bugs/20260911_BUG-1443-issue.json",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/aistock_issue_workflow.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "scripts/aistock_issue_workflow.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "impacted_modules": [
-        "tests.backend",
+        "validation.guardrails",
         "validation.center",
         "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
         "validation.coverage",
-        "validation.guardrails",
-        "validation.module_quality"
+        "docs.standards"
       ],
       "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "docs/standards/aistock_runtime_targets_v1.yaml",
+          "impact_modules": [
+            "validation.module_quality",
+            "validation.runner"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "runtime_target_catalog"
+        },
         {
           "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
           "impact_modules": [
@@ -62,43 +100,75 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
         }
       ],
       "risk_levels": [
+        "high",
         "medium"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "scripts/aistock_issue_workflow.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
-  "first_seen_at": "2026-09-11T06:58:25.935204Z",
+  "first_seen_at": "2026-09-11T06:27:29.934065Z",
   "fix_branch": null,
-  "fix_commit": "d9bd329759e6c952945661a52317fa3fce559cd9",
-  "fixed_at": "2026-09-11T07:15:36Z",
-  "github_issue_number": 4557,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4557",
-  "last_seen_at": "2026-09-11T06:58:25.935204Z",
+  "fix_commit": "a484ac63a1ff5baea6f24d61f5249f192f8016d1",
+  "fixed_at": "2026-09-11T07:28:19Z",
+  "github_issue_number": 4548,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4548",
+  "last_seen_at": "2026-09-11T06:27:29.934065Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4558",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4556",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "regression",
   "runtime_contract": {
@@ -119,39 +189,43 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1446",
+    "bug_id": "BUG-1443",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "536eb6d2698d86c0",
-    "recorded_at": "2026-09-11T07:19:35.039160Z",
+    "receipt_id": "38facd4baf39be6a",
+    "recorded_at": "2026-09-11T07:30:05.565624Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "b0893fc8f113fa1c69a8107e48178110b596b1f3",
-    "source_merge_commit": "d9bd329759e6c952945661a52317fa3fce559cd9",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4558",
+    "source_head_oid": "856553a6aa3a079ca67ef096a0271aea16d119b6",
+    "source_merge_commit": "a484ac63a1ff5baea6f24d61f5249f192f8016d1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4556",
     "validation_evidence": [
-      "python -m nox -s l0 -> passed (2 files, blocking=0)",
-      "CI verdict -> passed (541 passed, 2 skipped)"
+      "python -m nox -s guardrail_changed_files -> passed (files=6 findings=0 blocking=0 ownership=6/6)",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -> passed (CI 595 passed, 2 skipped)",
+      "python -m pytest backend/tests/test_aistock_guardrail_scan.py -> passed (35 passed)",
+      "python -m nox -s validation_module_registry_l0 -> passed (8 passed, ownership 14/14)"
     ],
-    "validation_evidence_digest": "7e2fb1606707789cb8b1912ca4349de592e8ca29571a2411cd45c1db4df6f1c8"
+    "validation_evidence_digest": "8533e5368f083915094f8d7a9b5266fba6962268d3be792cf742aa1a5b41b49e"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "UI intake 合同保留已移除的 paper_v2 后端门禁导致工作流 PR CI 失败",
+  "title": "运行时分类依赖逐文件例外导致离线工具持续误判并阻断合入",
   "trigger_condition": {
-    "fingerprint": "32718c7bd3e839954308fc70",
-    "source_event_id": "FE-20260911-32718c7bd3e8"
+    "fingerprint": "d8cbe391843656ff2e52d9b5",
+    "source_event_id": "FE-20260911-d8cbe3918436"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed (2 files, blocking=0)",
-    "CI verdict -> passed (541 passed, 2 skipped)"
+    "python -m nox -s guardrail_changed_files -> passed (files=6 findings=0 blocking=0 ownership=6/6)",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -> passed (CI 595 passed, 2 skipped)",
+    "python -m pytest backend/tests/test_aistock_guardrail_scan.py -> passed (35 passed)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed, ownership 14/14)"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -190,7 +264,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -246,7 +321,8 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"

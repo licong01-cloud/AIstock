@@ -2041,6 +2041,98 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
         non_runtime_path_keys.add(normalized_key)
         non_runtime_paths.append(path_value)
     payload["non_runtime_source_paths"] = non_runtime_paths
+    raw_source_role_rules = payload.get("source_role_rules", [])
+    if not isinstance(raw_source_role_rules, list):
+        raise WorkflowError("runtime target catalog source_role_rules must be a list")
+    source_role_rules: list[dict[str, Any]] = []
+    seen_rule_ids: set[str] = set()
+    seen_role_patterns: set[str] = set()
+    runtime_patterns = {
+        str(pattern)
+        for target in targets.values()
+        for pattern in flow._as_list(target.get("source_globs"))
+    }
+    for raw_rule in raw_source_role_rules:
+        if not isinstance(raw_rule, dict):
+            raise WorkflowError("runtime target catalog source_role_rules entries must be mappings")
+        rule_id = str(raw_rule.get("rule_id") or "").strip()
+        role = str(raw_rule.get("role") or "").strip()
+        source_globs = raw_rule.get("source_globs")
+        if not rule_id or not re.fullmatch(r"[a-z][a-z0-9_-]*", rule_id):
+            raise WorkflowError("runtime target catalog source_role_rules rule_id is invalid")
+        if rule_id in seen_rule_ids:
+            raise WorkflowError(f"runtime target catalog source_role_rules contains duplicate rule_id: {rule_id}")
+        if role != "non_runtime":
+            raise WorkflowError(
+                f"runtime target catalog source_role_rules only supports non_runtime: {rule_id}"
+            )
+        if not isinstance(source_globs, list) or not source_globs:
+            raise WorkflowError(
+                f"runtime target catalog source_role_rules source_globs must be a non-empty list: {rule_id}"
+            )
+        normalized_patterns: list[str] = []
+        for raw_pattern in source_globs:
+            if not isinstance(raw_pattern, str):
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules patterns must be strings: {rule_id}"
+                )
+            pattern = raw_pattern.strip()
+            if (
+                not pattern
+                or "\\" in pattern
+                or pattern.startswith(("/", "./"))
+                or re.match(r"^[A-Za-z]:(?:/|$)", pattern)
+                or any(part in {"", ".", ".."} for part in pattern.split("/"))
+            ):
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules contains an invalid relative pattern: {raw_pattern}"
+                )
+            suffix = Path(pattern).suffix.casefold()
+            supported_namespace = (
+                (pattern.startswith("scripts/") and suffix in {".py", ".ps1"})
+                or (pattern.startswith("backend/services/") and suffix == ".py")
+                or pattern == "noxfile.py"
+            )
+            if not supported_namespace:
+                raise WorkflowError(
+                    "runtime target catalog source_role_rules only accepts Python or PowerShell patterns "
+                    f"under scripts/, Python patterns under backend/services/, or noxfile.py: {pattern}"
+                )
+            if pattern.startswith("backend/services/") and any(character in pattern for character in "*?["):
+                parts = pattern.split("/")
+                directory_parts = parts[:-1]
+                filename = parts[-1]
+                literal_prefix = re.split(r"[\*\?\[]", filename, maxsplit=1)[0]
+                if (
+                    len(parts) != 4
+                    or any(any(character in part for character in "*?[") for part in directory_parts)
+                    or "**" in filename
+                    or len(literal_prefix) < 4
+                ):
+                    raise WorkflowError(
+                        "runtime target catalog backend source-role globs must be bounded to one exact service "
+                        f"directory and a filename family with a literal prefix: {pattern}"
+                    )
+            if pattern in runtime_patterns:
+                raise WorkflowError(
+                    f"runtime target catalog source-role pattern duplicates a runtime target pattern: {pattern}"
+                )
+            normalized_key = os.path.normcase(pattern).casefold()
+            if normalized_key in seen_role_patterns:
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules contains duplicate pattern: {pattern}"
+                )
+            seen_role_patterns.add(normalized_key)
+            normalized_patterns.append(pattern)
+        seen_rule_ids.add(rule_id)
+        source_role_rules.append(
+            {
+                "rule_id": rule_id,
+                "role": role,
+                "source_globs": normalized_patterns,
+            }
+        )
+    payload["source_role_rules"] = source_role_rules
     return payload
 
 
@@ -2051,6 +2143,17 @@ def _runtime_glob_matches(path: str, pattern: str) -> bool:
         current = current.replace("**/", "", 1)
         candidates.add(current)
     return any(fnmatch.fnmatchcase(path, candidate) for candidate in candidates)
+
+
+def _runtime_pattern_specificity(pattern: str) -> tuple[int, int, int]:
+    """Rank exact and bounded runtime/source-role patterns deterministically."""
+
+    wildcard_count = sum(pattern.count(character) for character in "*?[")
+    return (
+        int(wildcard_count == 0),
+        sum(character not in "*?[]" for character in pattern),
+        -wildcard_count,
+    )
 
 
 def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None = None) -> dict[str, Any]:
@@ -2070,6 +2173,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         catalog = _load_runtime_target_catalog(root)
     catalog_targets = catalog.get("targets") or {}
     catalog_non_runtime_files = set(flow._as_list(catalog.get("non_runtime_source_paths")))
+    catalog_source_role_rules = flow._as_list(catalog.get("source_role_rules"))
     known_non_runtime_prefixes = (
         ".github/",
         "backend/tests/",
@@ -2092,27 +2196,60 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path == "scripts/aistock_issue_workflow.py":
             impacts.add("none")
             continue
-        if (
-            path in catalog_non_runtime_files
-            or lower.startswith(known_non_runtime_prefixes)
-        ):
+        if path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
             impacts.add("none")
             continue
-        matched_targets: list[tuple[str, str]] = []
+        matched_targets: list[tuple[str, str, str]] = []
         for catalog_target_id, catalog_target in catalog_targets.items():
             if not isinstance(catalog_target, dict):
                 continue
-            if any(
-                _runtime_glob_matches(path, str(pattern))
-                for pattern in flow._as_list(catalog_target.get("source_globs"))
-            ):
-                matched_targets.append((str(catalog_target_id), str(catalog_target.get("runtime_kind") or "unknown")))
+            for pattern in flow._as_list(catalog_target.get("source_globs")):
+                pattern = str(pattern)
+                if _runtime_glob_matches(path, pattern):
+                    matched_targets.append(
+                        (
+                            str(catalog_target_id),
+                            str(catalog_target.get("runtime_kind") or "unknown"),
+                            pattern,
+                        )
+                    )
+        matched_non_runtime_patterns = [
+            str(pattern)
+            for rule in catalog_source_role_rules
+            if isinstance(rule, dict) and rule.get("role") == "non_runtime"
+            for pattern in flow._as_list(rule.get("source_globs"))
+            if _runtime_glob_matches(path, str(pattern))
+        ]
+        best_runtime_specificity = max(
+            (_runtime_pattern_specificity(item[2]) for item in matched_targets),
+            default=None,
+        )
+        best_non_runtime_specificity = max(
+            (_runtime_pattern_specificity(pattern) for pattern in matched_non_runtime_patterns),
+            default=None,
+        )
+        if (
+            best_non_runtime_specificity is not None
+            and (
+                best_runtime_specificity is None
+                or best_non_runtime_specificity > best_runtime_specificity
+            )
+        ):
+            impacts.add("none")
+            continue
+        if (
+            best_runtime_specificity is not None
+            and best_non_runtime_specificity == best_runtime_specificity
+        ):
+            impacts.add("unknown")
+            runtime_files.append(path)
+            continue
         worker_matches = [item for item in matched_targets if item[1] == "worker_scheduler"]
         if worker_matches:
             matched_targets = worker_matches
         if matched_targets:
             runtime_files.append(path)
-            for catalog_target_id, runtime_kind in matched_targets:
+            for catalog_target_id, runtime_kind, _pattern in matched_targets:
                 target_ids.add(catalog_target_id)
                 impacts.add(runtime_kind if runtime_kind in RUNTIME_IMPACTS else "unknown")
         elif lower.startswith("tdx-api-main/") and lower.endswith(".go"):

@@ -3,7 +3,6 @@
   "allowed_write_scope": [
     "scripts/hmm_risk/run_rotation_l1_product.py",
     "backend/tests/hmm_risk/test_run_rotation_l1_product.py",
-    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260911_BUG-1444-hmm-g2-a-v1-6-approved-single-date-prediction-has-no-formal-executor.json"
   ],
   "assigned_agent": null,
@@ -68,14 +67,12 @@
     },
     "planned_files": [
       "scripts/hmm_risk/run_rotation_l1_product.py",
-      "backend/tests/hmm_risk/test_run_rotation_l1_product.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "backend/tests/hmm_risk/test_run_rotation_l1_product.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/hmm_risk/run_rotation_l1_product.py",
-      "backend/tests/hmm_risk/test_run_rotation_l1_product.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "backend/tests/hmm_risk/test_run_rotation_l1_product.py"
     ]
   },
   "first_seen_at": "2026-09-11T06:30:48.748913Z",
