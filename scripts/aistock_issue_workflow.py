@@ -14091,11 +14091,67 @@ def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
             "durable_receipt_present": False,
             "error": str(exc),
         }
-    return _cleanup_evidence_finalization_from_record(
+    local_finalization = _cleanup_evidence_finalization_from_record(
         record,
         source=_repo_rel(source_path),
         expected_bug_id=bug_id,
     )
+    if local_finalization.get("durable_receipt_present"):
+        return local_finalization
+
+    canonical_root = _canonical_root()
+    canonical_path = _issue_json_path_for_worktree(source_path, canonical_root)
+    try:
+        relative_path = canonical_path.resolve().relative_to(canonical_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "canonical_bug_path_unavailable",
+        }
+    origin_record = _run_command(
+        ["git", "show", f"origin/main:{relative_path}"],
+        cwd=canonical_root,
+        timeout=30,
+    )
+    if not origin_record.get("ok"):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "exact_bug_record_unavailable",
+        }
+    try:
+        candidate = json.loads(str(origin_record.get("stdout") or ""))
+    except (json.JSONDecodeError, TypeError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_invalid_json",
+        }
+    if not isinstance(candidate, dict):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_not_mapping",
+        }
+    origin_finalization = _cleanup_evidence_finalization_from_record(
+        candidate,
+        source=f"origin/main:{relative_path}",
+        expected_bug_id=bug_id,
+    )
+    if origin_finalization.get("durable_receipt_present"):
+        return {
+            **origin_finalization,
+            "evidence_source": "origin_main_exact_bug_record",
+            "local_status": local_finalization.get("status"),
+            "local_bug_json": local_finalization.get("bug_json"),
+            "origin_main_exact_record_checked": True,
+        }
+    return {
+        **local_finalization,
+        "origin_main_exact_record_checked": True,
+        "origin_main_status": origin_finalization.get("status"),
+    }
 
 
 def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
