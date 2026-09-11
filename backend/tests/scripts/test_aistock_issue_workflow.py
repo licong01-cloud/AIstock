@@ -19285,7 +19285,7 @@ def test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output(
     assert "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts" in record["allowed_write_scope"]
     assert "frontend_type_lint" in record["required_verification"]
     assert "watchlist_backend" in record["required_verification"]
-    assert "paper_v2_backend" in record["required_verification"]
+    assert "paper_v2_backend" not in record["required_verification"]
     assert "frontend_tsc" not in record["required_verification"]
     assert not any("/" in plan or "\\" in plan for plan in record["required_verification"])
     assert payload["github_issue_labels"] == ["aistock:bug", "bug", "P1", "severity:p1", "module:paper_v2", "status:open", "paper-v2"]
