@@ -466,7 +466,6 @@ def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
     elif module == "validation":
         files.extend(
             [
-                ".github/workflows/issue-on-test-fail.yml",
                 "scripts/ci_failure_issue_summary.py",
                 "scripts/aistock_issue_workflow.py",
                 "backend/tests/scripts",
