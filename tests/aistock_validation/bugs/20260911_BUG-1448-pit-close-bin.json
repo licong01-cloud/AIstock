@@ -146,7 +146,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Windows fresh Python read current direct-v2 through 2026-08-31 and preserved all 5341 requested PIT instruments, including 197 physical-price-missing instruments as NaN columns"
+      "Windows fresh Python read current direct-v2 through 2026-08-31 and preserved all 5341 requested PIT instruments, including 197 physical-price-missing instruments as NaN columns",
+      "Windows fresh process direct-v2 PIT denominator preservation -> passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
