@@ -168,6 +168,12 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
         "st_pit_eligible_mask": close.notna(),
         "data_start": str(dates[0].date()),
         "data_end": str(dates[-1].date()),
+        "instrument_coverage": {
+            "requested_instrument_count": len(instruments),
+            "physical_price_instrument_count": len(instruments),
+            "missing_price_instrument_count": 0,
+            "missing_price_instruments": [],
+        },
     }
     calls: list[dict] = []
 
@@ -182,6 +188,7 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
     full = result["full_evaluation"]
     assert full["scope"] == "research_only_not_official_metrics_correlations_or_qe_result"
     assert full["official_database_writes"] == 0
+    assert full["all_requested_instruments_have_physical_prices"] is True
     assert full["correlations"]["reference_reference_pairs_computed"] == 0
     assert all(
         window["requested_pairs"] == 1
