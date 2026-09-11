@@ -12,6 +12,7 @@ from backend.services.position_timing.action_value import ActionPlan, ActionValu
 from backend.services.position_timing.action_value_corporate_actions import CorporateAction, CorporateActionBook
 from backend.services.position_timing.pattern_research import (
     BUNDLE_SCHEMA,
+    CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
     PIPELINE_ID,
     PREREGISTERED_FAMILY_COUNT,
     PROTOTYPE_CONTRACT,
@@ -22,6 +23,7 @@ from backend.services.position_timing.pattern_research import (
     RESULT_CLASS,
     TOTAL_FORMAL_COMPARISON_COUNT,
     PrototypeReplayResult,
+    apply_pattern_corporate_action_policy,
     evaluate_entry_and_exit_mechanisms,
     _execute_next_session,
     _effect_evidence,
@@ -110,6 +112,86 @@ def test_population_selection_uses_fixed_pipe_hash_and_exclusion():
     second = select_pattern_evaluation_symbols(tuple(reversed(symbols)), forbidden_symbols=symbols[:10], limit=8)
     assert first == second
     assert not set(first).intersection(symbols[:10])
+
+
+def _stock_action(
+    effective: date,
+    *,
+    multiplier: str,
+    cash: str = "0",
+    source_economic_action_count: int = 1,
+) -> CorporateAction:
+    return CorporateAction(
+        symbol="000001.SZ",
+        effective_trade_date=effective,
+        quantity_multiplier=Decimal(multiplier),
+        cashflow_yuan_per_share=Decimal(cash),
+        reference_price_cash_yuan_per_share=Decimal(cash),
+        cash_pay_date=None,
+        share_listing_date=effective,
+        source_available_at=cutoff_on(effective - timedelta(days=1)),
+        source_row_count=1,
+        source_rows_sha256="a" * 64,
+        source_economic_action_count=source_economic_action_count,
+    )
+
+
+def test_pattern_corporate_action_policy_ignores_audited_non_pro_rata_action():
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    bars = _bars(8)
+    effective = bars.index[4].date()
+    bars.iloc[3, bars.columns.get_loc("factor")] = np.nan
+    action = _stock_action(effective, multiplier="2.59")
+    source = CorporateActionBook((action,), canonical_sha256({"source": "special"}))
+
+    class Candidate:
+        def bars(self, symbol: str) -> pd.DataFrame:
+            assert symbol == "000001.SZ"
+            return bars
+
+    normalized, audit = apply_pattern_corporate_action_policy(
+        Candidate(),
+        symbols=("000001.SZ",),
+        corporate_actions=source,
+        start=bars.index[0].date(),
+        end=bars.index[-1].date(),
+        candidate_source_sha256="b" * 64,
+    )
+
+    assert normalized.actions == ()
+    assert normalized.snapshot_sha256 == audit["application_sha256"]
+    assert audit["policy_sha256"] == CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+    assert audit["ignored_non_pro_rata_action_count"] == 1
+    assert audit["ignored_non_pro_rata_actions"][0]["classification"] == (
+        "NON_PRO_RATA_STOCK_ACTION_IGNORED"
+    )
+    assert audit["ignored_non_pro_rata_actions"][0]["previous_factor_date"] == (
+        bars.index[2].date().isoformat()
+    )
+
+
+def test_pattern_corporate_action_policy_fails_closed_for_ambiguous_factor_mismatch():
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    bars = _bars(8)
+    action = _stock_action(bars.index[4].date(), multiplier="1.4", cash="0.5")
+    source = CorporateActionBook((action,), canonical_sha256({"source": "ambiguous"}))
+
+    class Candidate:
+        def bars(self, symbol: str) -> pd.DataFrame:
+            assert symbol == "000001.SZ"
+            return bars
+
+    with pytest.raises(ActionValueError, match="PATTERN_CORPORATE_ACTION_FACTOR_MISMATCH"):
+        apply_pattern_corporate_action_policy(
+            Candidate(),
+            symbols=("000001.SZ",),
+            corporate_actions=source,
+            start=bars.index[0].date(),
+            end=bars.index[-1].date(),
+            candidate_source_sha256="b" * 64,
+        )
 
 
 def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(tmp_path: Path):
@@ -411,6 +493,47 @@ def test_suspended_ex_date_maps_last_price_without_inventing_wealth_jump():
     )
     comparison = pd.DataFrame(rows).query("comparison == 'P_MINUS_FROZEN_L1'").set_index("valuation_date")
     before = comparison.loc[bars.index[ex_ordinal - 1].date(), "policy_wealth_cny"]
+    ex_date = comparison.loc[bars.index[ex_ordinal].date(), "policy_wealth_cny"]
+    assert ex_date == pytest.approx(before, abs=0.01)
+
+
+def test_available_ex_date_price_does_not_require_missing_prior_day_factor():
+    from backend.services.position_timing.contracts import canonical_sha256
+
+    bars = _bars(70)
+    decision_ordinal = 30
+    ex_ordinal = decision_ordinal + 1
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("open")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("high")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("low")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("close")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("up_limit")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("down_limit")] /= 2
+    bars.iloc[ex_ordinal:, bars.columns.get_loc("factor")] = 2.0
+    bars.iloc[
+        decision_ordinal,
+        [bars.columns.get_loc(name) for name in ("open", "high", "low", "close", "factor")],
+    ] = np.nan
+    action = _stock_action(bars.index[ex_ordinal].date(), multiplier="2")
+    actions = CorporateActionBook((action,), canonical_sha256({"test": "missing-prior-factor"}))
+    features = pattern_feature_frame(bars, symbol="000001.SZ", corporate_actions=actions)
+
+    rows, _, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=actions,
+        start_ordinal=20,
+        terminal_ordinal=40,
+    )
+
+    assert len(rows) == 40
+    assert counts["DECISION_PRICE_UNAVAILABLE"] == 1
+    comparison = pd.DataFrame(rows).query(
+        "comparison == 'P_MINUS_FROZEN_L1'"
+    ).set_index("valuation_date")
+    before = comparison.loc[bars.index[decision_ordinal].date(), "policy_wealth_cny"]
     ex_date = comparison.loc[bars.index[ex_ordinal].date(), "policy_wealth_cny"]
     assert ex_date == pytest.approx(before, abs=0.01)
 

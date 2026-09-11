@@ -22,10 +22,12 @@ from .contracts import canonical_json_bytes, canonical_sha256
 
 LEGACY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
 SAME_DAY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
-SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v3"
+AVAILABILITY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v3"
+SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v4"
 SUPPORTED_SNAPSHOT_SCHEMAS = (
     LEGACY_SNAPSHOT_SCHEMA,
     SAME_DAY_SNAPSHOT_SCHEMA,
+    AVAILABILITY_SNAPSHOT_SCHEMA,
     SNAPSHOT_SCHEMA,
 )
 IMPLEMENTED_DIVIDEND = "\u5b9e\u65bd"
@@ -37,7 +39,7 @@ SOURCE_QUERY_IDENTITY = {
     "reference_price_cash_component": "cash_div_tax (pre-tax per local DDL contract)",
     "stock_component": "stk_div=stk_bo_rate+stk_co_rate",
     "same_day_canonicalization": (
-        "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_BASE_RECORD_IDENTITY_"
+        "COLLAPSE_EQUIVALENT_REVISIONS_WITHIN_END_RECORD_IDENTITY_"
         "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
     ),
     "availability_policy": "EARLIEST_IMP_ANN_ELSE_RECORD_DATE_STRICTLY_BEFORE_EX_DATE",
@@ -317,7 +319,7 @@ def _snapshot_payload(
     canonical_economic_actions = 0
     combined_same_day_actions = 0
     for (symbol, effective), versions in sorted(grouped.items()):
-        distributions: dict[tuple[str | None, str | None, str | None], list[dict[str, Any]]] = {}
+        distributions: dict[tuple[str | None, str | None], list[dict[str, Any]]] = {}
         for row in versions:
             distributions.setdefault(_distribution_identity(row), []).append(row)
 
@@ -327,7 +329,17 @@ def _snapshot_payload(
         for distribution_identity, revisions in sorted(
             distributions.items(), key=lambda item: tuple(value or "" for value in item[0])
         ):
-            economics = {_economic_identity(row) for row in revisions}
+            implemented_economics = {
+                _economic_identity(row)
+                for row in revisions
+                if row["imp_ann_date"] is not None
+            }
+            all_economics = {_economic_identity(row) for row in revisions}
+            # Rows sharing one fiscal period and record date are revisions of
+            # one distribution even if an earlier proposal used a different
+            # base date or amount.  Implemented terms supersede preliminary
+            # rows; conflicting implemented terms remain unsafe and fail.
+            economics = implemented_economics or all_economics
             if len(economics) != 1:
                 raise ActionValueError(
                     "CORPORATE_ACTION_ECONOMIC_CONFLICT",
@@ -336,9 +348,15 @@ def _snapshot_payload(
                     distribution_identity=distribution_identity,
                     economic_action_count=len(economics),
                 )
+            selected_economics = next(iter(economics))
+            canonical_revisions = [
+                row
+                for row in revisions
+                if _economic_identity(row) == selected_economics
+            ]
             implementation_dates = {
                 date.fromisoformat(row["imp_ann_date"])
-                for row in revisions
+                for row in canonical_revisions
                 if row["imp_ann_date"] is not None
             }
             # Equivalent source revisions can carry a later implementation
@@ -348,7 +366,7 @@ def _snapshot_payload(
             # available, hence the outer max below.
             uses_record_date_proxy = not implementation_dates
             if uses_record_date_proxy:
-                record_dates = {row["record_date"] for row in revisions}
+                record_dates = {row["record_date"] for row in canonical_revisions}
                 if None in record_dates or len(record_dates) != 1:
                     raise ActionValueError(
                         "CORPORATE_ACTION_AVAILABILITY_UNVERIFIABLE", symbol=symbol
@@ -361,7 +379,7 @@ def _snapshot_payload(
             else:
                 distribution_available_at = min(implementation_dates)
             canonical_distributions.append(
-                (next(iter(economics)), distribution_available_at, uses_record_date_proxy)
+                (selected_economics, distribution_available_at, uses_record_date_proxy)
             )
             equivalent_revisions += len(revisions) - 1
 
@@ -455,10 +473,10 @@ def _economic_identity(
 
 def _distribution_identity(
     row: Mapping[str, Any],
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None]:
     """Identify one distribution plan before announcement-revision collapse."""
 
-    return row["end_date"], row["base_date"], row["record_date"]
+    return row["end_date"], row["record_date"]
 
 
 def _date_text(value: Any) -> str | None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_FLOOR
 import hashlib
 import json
@@ -40,6 +40,7 @@ from .action_value import (
 from .action_value_corporate_actions import (
     CorporateAction,
     CorporateActionBook,
+    SNAPSHOT_SCHEMA as CORPORATE_ACTION_SNAPSHOT_SCHEMA,
     apply_corporate_action_with_audit,
 )
 from .action_value_data import DailyCandidate, file_reference
@@ -87,6 +88,20 @@ EVOLUTION_FAMILY_SIZE = 5
 PREREGISTERED_FAMILY_COUNT = 2
 TOTAL_FORMAL_COMPARISON_COUNT = PROTOTYPE_FAMILY_SIZE + EVOLUTION_FAMILY_SIZE
 RESULT_CLASS = "EXPLORATORY_USER_PROPOSED_HYPOTHESIS_CROSS_SYMBOL_NOT_TEMPORAL_HOLDOUT"
+
+CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
+    "schema_version": "position_timing_pattern_corporate_action_application_policy_v1",
+    "stock_factor_relative_tolerance": "0.02",
+    "factor_interval": "LAST_VALID_FACTOR_BEFORE_ACTION_TO_FIRST_VALID_FACTOR_ON_OR_AFTER_ACTION",
+    "ordinary_stock_action_test": "OBSERVED_FACTOR_RATIO_GTE_QUANTITY_MULTIPLIER_PRODUCT_X_0_98",
+    "non_pro_rata_ignore_rule": (
+        "ONE_ZERO_CASH_SINGLE_ECONOMIC_ACTION_AND_OBSERVED_FACTOR_RATIO_WITHIN_2_PERCENT_OF_ONE"
+    ),
+    "other_mismatch": "FAIL_CLOSED",
+}
+CORPORATE_ACTION_APPLICATION_POLICY_SHA256 = canonical_sha256(
+    CORPORATE_ACTION_APPLICATION_POLICY
+)
 
 PROTOTYPE_CONTRACT: Mapping[str, Any] = {
     "schema_version": "position_timing_pattern_prototype_contract_v1",
@@ -161,6 +176,159 @@ class PatternCandidateCache:
         return self._bars[symbol]
 
 
+def _corporate_action_identity(action: CorporateAction) -> Mapping[str, Any]:
+    return {
+        "symbol": action.symbol,
+        "effective_trade_date": action.effective_trade_date.isoformat(),
+        "quantity_multiplier": str(action.quantity_multiplier),
+        "cashflow_yuan_per_share": str(action.cashflow_yuan_per_share),
+        "reference_price_cash_yuan_per_share": str(
+            action.reference_price_cash_yuan_per_share
+        ),
+        "source_economic_action_count": action.source_economic_action_count,
+        "source_rows_sha256": action.source_rows_sha256,
+    }
+
+
+def apply_pattern_corporate_action_policy(
+    candidate: Any,
+    *,
+    symbols: Sequence[str],
+    corporate_actions: CorporateActionBook,
+    start: date,
+    end: date,
+    candidate_source_sha256: str,
+) -> tuple[CorporateActionBook, Mapping[str, Any]]:
+    """Validate stock distributions against qfq factors and normalize exceptions.
+
+    A database row with a stock component is not sufficient proof that every
+    ordinary holder received a proportional share distribution.  The exported
+    qfq factor is the independent price-series identity used by this replay.
+    One narrowly specified zero-cash, factor-neutral action may therefore be
+    classified as non-pro-rata and ignored; every other mismatch fails closed.
+    """
+
+    normalized_symbols = tuple(sorted({str(symbol).upper() for symbol in symbols}))
+    if (
+        not normalized_symbols
+        or start > end
+        or len(candidate_source_sha256) != 64
+    ):
+        raise ActionValueError("PATTERN_CORPORATE_ACTION_POLICY_SCOPE_INVALID")
+    tolerance = Decimal(
+        str(CORPORATE_ACTION_APPLICATION_POLICY["stock_factor_relative_tolerance"])
+    )
+    ignored_keys: set[tuple[str, date]] = set()
+    ignored: list[dict[str, Any]] = []
+    checked_action_count = 0
+    checked_interval_count = 0
+
+    for symbol in normalized_symbols:
+        scoped_actions = tuple(
+            action
+            for action in corporate_actions.between(
+                symbol,
+                start_exclusive=start - timedelta(days=1),
+                end_inclusive=end,
+            )
+            if action.quantity_multiplier > 1
+        )
+        if not scoped_actions:
+            continue
+        bars = candidate.bars(symbol)
+        factors = pd.to_numeric(bars.get("factor"), errors="coerce")
+        valid = factors.notna() & np.isfinite(factors) & factors.gt(0)
+        valid_dates = tuple(pd.Timestamp(item).date() for item in bars.index[valid])
+        valid_values = tuple(Decimal(str(item)) for item in factors.loc[valid].tolist())
+        if not valid_dates:
+            raise ActionValueError(
+                "PATTERN_CORPORATE_ACTION_FACTOR_UNVERIFIABLE", symbol=symbol
+            )
+
+        interval_actions: dict[tuple[int, int], list[CorporateAction]] = {}
+        for action in scoped_actions:
+            previous = [index for index, day in enumerate(valid_dates) if day < action.effective_trade_date]
+            following = [index for index, day in enumerate(valid_dates) if day >= action.effective_trade_date]
+            if not previous or not following:
+                raise ActionValueError(
+                    "PATTERN_CORPORATE_ACTION_FACTOR_UNVERIFIABLE",
+                    symbol=symbol,
+                    effective_trade_date=action.effective_trade_date.isoformat(),
+                )
+            interval_actions.setdefault((previous[-1], following[0]), []).append(action)
+
+        for (previous_index, following_index), actions in sorted(interval_actions.items()):
+            checked_interval_count += 1
+            checked_action_count += len(actions)
+            expected = Decimal(1)
+            for action in actions:
+                expected *= action.quantity_multiplier
+            observed = valid_values[following_index] / valid_values[previous_index]
+            if observed >= expected * (Decimal(1) - tolerance):
+                continue
+            only = actions[0] if len(actions) == 1 else None
+            factor_neutral = abs(observed - Decimal(1)) <= tolerance
+            if (
+                only is not None
+                and only.source_economic_action_count == 1
+                and only.cashflow_yuan_per_share == 0
+                and only.reference_price_cash_yuan_per_share == 0
+                and factor_neutral
+            ):
+                ignored_keys.add((only.symbol, only.effective_trade_date))
+                ignored.append(
+                    {
+                        **_corporate_action_identity(only),
+                        "classification": "NON_PRO_RATA_STOCK_ACTION_IGNORED",
+                        "previous_factor_date": valid_dates[previous_index].isoformat(),
+                        "current_factor_date": valid_dates[following_index].isoformat(),
+                        "observed_factor_ratio": str(observed),
+                        "expected_quantity_multiplier_product": str(expected),
+                    }
+                )
+                continue
+            raise ActionValueError(
+                "PATTERN_CORPORATE_ACTION_FACTOR_MISMATCH",
+                symbol=symbol,
+                previous_factor_date=valid_dates[previous_index].isoformat(),
+                current_factor_date=valid_dates[following_index].isoformat(),
+                observed_factor_ratio=str(observed),
+                expected_quantity_multiplier_product=str(expected),
+                action_count=len(actions),
+            )
+
+    retained = tuple(
+        action
+        for action in corporate_actions.actions
+        if (action.symbol, action.effective_trade_date) not in ignored_keys
+    )
+    audit_identity = {
+        "schema_version": "position_timing_pattern_corporate_action_application_audit_v1",
+        "source_snapshot_sha256": corporate_actions.snapshot_sha256,
+        "candidate_source_sha256": candidate_source_sha256,
+        "policy_sha256": CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(normalized_symbols),
+            "symbol_count": len(normalized_symbols),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        },
+        "checked_stock_action_count": checked_action_count,
+        "checked_factor_interval_count": checked_interval_count,
+        "ignored_non_pro_rata_action_count": len(ignored),
+        "ignored_non_pro_rata_actions": ignored,
+        "retained_action_count": len(retained),
+        "retained_actions_sha256": canonical_sha256(
+            [_corporate_action_identity(action) for action in retained]
+        ),
+    }
+    audit = {
+        **audit_identity,
+        "application_sha256": canonical_sha256(audit_identity),
+    }
+    return CorporateActionBook(retained, audit["application_sha256"]), audit
+
+
 def _snapshot_scope(path: Path, *, expected_symbols: Sequence[str], start: date, end: date) -> Mapping[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -168,6 +336,7 @@ def _snapshot_scope(path: Path, *, expected_symbols: Sequence[str], start: date,
         symbols = tuple(str(item).upper() for item in scope["symbols"])
         scope_start = date.fromisoformat(scope["start"])
         scope_end = date.fromisoformat(scope["end"])
+        schema_version = payload.get("schema_version")
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise ActionValueError("PATTERN_SNAPSHOT_SCOPE_INVALID", path=path.as_posix()) from exc
     missing = sorted(set(expected_symbols).difference(symbols))
@@ -178,7 +347,12 @@ def _snapshot_scope(path: Path, *, expected_symbols: Sequence[str], start: date,
             missing_symbol_count=len(missing),
             missing_symbol_examples=missing[:10],
         )
-    return {"start": scope_start.isoformat(), "end": scope_end.isoformat(), "symbol_count": len(symbols)}
+    return {
+        "schema_version": schema_version,
+        "start": scope_start.isoformat(),
+        "end": scope_end.isoformat(),
+        "symbol_count": len(symbols),
+    }
 
 
 def _request_symbols(request: Mapping[str, Any]) -> tuple[str, ...]:
@@ -788,13 +962,15 @@ def _simulate_exit_pair(
                 else _pattern_raw_close(bars.iloc[decision_ordinal])
             )
             if current is None:
+                target_price = _inventory_raw_close(bars.iloc[decision_ordinal + 1])
                 target_action = corporate_actions.on(symbol, calendar_dates[decision_ordinal + 1])
-                last_price = _mapped_reference_to_target(
-                    last_price,
-                    bars=bars,
-                    decision_ordinal=decision_ordinal,
-                    action=target_action,
-                ) or last_price
+                if target_price is None:
+                    last_price = _mapped_reference_to_target(
+                        last_price,
+                        bars=bars,
+                        decision_ordinal=decision_ordinal,
+                        action=target_action,
+                    ) or last_price
                 state = _carry_to_target(
                     state,
                     symbol=symbol,
@@ -802,7 +978,6 @@ def _simulate_exit_pair(
                     calendar_dates=calendar_dates,
                     corporate_actions=corporate_actions,
                 )
-                target_price = _inventory_raw_close(bars.iloc[decision_ordinal + 1])
                 if target_price is not None:
                     last_price = target_price
                 wealths.append(_mark_to_market(state, symbol, last_price) if state.quantity else state.cash)
@@ -1197,14 +1372,17 @@ def replay_full_policy_symbol(
                 )
                 active_event = None
                 event_reference = None
+            target_ordinal = ordinal + 1
+            target_price = _inventory_raw_close(bars.iloc[target_ordinal])
             for role in tuple(states):
-                target_action = corporate_actions.on(symbol, calendar_dates[ordinal + 1])
-                last_prices[role] = _mapped_reference_to_target(
-                    last_prices[role],
-                    bars=bars,
-                    decision_ordinal=ordinal,
-                    action=target_action,
-                )
+                target_action = corporate_actions.on(symbol, calendar_dates[target_ordinal])
+                if target_price is None:
+                    last_prices[role] = _mapped_reference_to_target(
+                        last_prices[role],
+                        bars=bars,
+                        decision_ordinal=ordinal,
+                        action=target_action,
+                    )
                 states[role] = _carry_to_target(
                     states[role],
                     symbol=symbol,
@@ -1212,11 +1390,9 @@ def replay_full_policy_symbol(
                     calendar_dates=calendar_dates,
                     corporate_actions=corporate_actions,
                 )
-            target_ordinal = ordinal + 1
-            price = _inventory_raw_close(bars.iloc[target_ordinal])
             for role in states:
-                if price is not None:
-                    last_prices[role] = price
+                if target_price is not None:
+                    last_prices[role] = target_price
                 if last_prices[role] is None and states[role].quantity:
                     raise ActionValueError("PATTERN_VALUATION_PRICE_UNAVAILABLE", symbol=symbol)
             wealth = {
@@ -1937,12 +2113,26 @@ def prepare_pattern_request(
     corporate_scope = _snapshot_scope(
         corporate_action_snapshot.resolve(), expected_symbols=symbols, start=start, end=end
     )
+    if corporate_scope["schema_version"] != CORPORATE_ACTION_SNAPSHOT_SCHEMA:
+        raise ActionValueError(
+            "PATTERN_CORPORATE_ACTION_SNAPSHOT_SCHEMA_UNSUPPORTED",
+            expected=CORPORATE_ACTION_SNAPSHOT_SCHEMA,
+            actual=corporate_scope["schema_version"],
+        )
     suspension_scope = _snapshot_scope(suspension_snapshot.resolve(), expected_symbols=symbols, start=start, end=end)
     candidate = DailyCandidate.open(Path(plan["candidate_root"]))
     # Both development and outer populations are consumed by this request;
     # binding only evaluation files would leave model training source mutable.
     coverage = candidate.coverage(symbols)
     corporate_book = CorporateActionBook.open(corporate_action_snapshot.resolve())
+    _, corporate_application_audit = apply_pattern_corporate_action_policy(
+        candidate,
+        symbols=symbols,
+        corporate_actions=corporate_book,
+        start=start,
+        end=end,
+        candidate_source_sha256=coverage["source_sha256"],
+    )
     suspension_book = SuspensionSnapshotBook.open(suspension_snapshot.resolve())
     source_code_paths = {
         "pattern_strategy_source": Path(__file__).with_name("pattern_strategy.py"),
@@ -1950,6 +2140,9 @@ def prepare_pattern_request(
         "pattern_optimizer_source": Path(__file__).with_name("pattern_optimizer.py"),
         "pattern_model_source": Path(__file__).with_name("pattern_model.py"),
         "action_value_source": Path(__file__).with_name("action_value.py"),
+        "corporate_action_source": Path(__file__).with_name(
+            "action_value_corporate_actions.py"
+        ),
         "policy_source": Path(__file__).with_name("policy.py"),
     }
     request = {
@@ -1970,6 +2163,14 @@ def prepare_pattern_request(
         "corporate_action_snapshot": file_reference(corporate_action_snapshot.resolve()),
         "corporate_action_snapshot_sha256": corporate_book.snapshot_sha256,
         "corporate_action_scope": corporate_scope,
+        "corporate_action_application_policy": CORPORATE_ACTION_APPLICATION_POLICY,
+        "corporate_action_application_policy_sha256": (
+            CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+        ),
+        "corporate_action_application_audit": corporate_application_audit,
+        "corporate_action_application_sha256": corporate_application_audit[
+            "application_sha256"
+        ],
         "suspension_snapshot": file_reference(suspension_snapshot.resolve()),
         "suspension_snapshot_sha256": suspension_book.snapshot_sha256,
         "suspension_scope": suspension_scope,
@@ -2015,6 +2216,67 @@ def _load_request(path: Path) -> dict[str, Any]:
         "database_write",
         "runtime_write",
     )
+    has_application_contract = any(
+        key in request
+        for key in (
+            "corporate_action_application_policy",
+            "corporate_action_application_policy_sha256",
+            "corporate_action_application_audit",
+            "corporate_action_application_sha256",
+        )
+    )
+    application_contract_invalid = False
+    if has_application_contract:
+        audit = request.get("corporate_action_application_audit")
+        candidate_identity = request.get("candidate_source_identity")
+        population = request.get("population_spec")
+        audit_scope = audit.get("scope") if isinstance(audit, Mapping) else None
+        raw_request_symbols = request.get("snapshot_symbols")
+        request_symbols = tuple(
+            sorted(
+                {
+                    str(symbol).upper()
+                    for symbol in (
+                        raw_request_symbols
+                        if isinstance(raw_request_symbols, Sequence)
+                        and not isinstance(raw_request_symbols, (str, bytes))
+                        else ()
+                    )
+                }
+            )
+        )
+        audit_identity = (
+            {key: value for key, value in audit.items() if key != "application_sha256"}
+            if isinstance(audit, Mapping)
+            else {}
+        )
+        application_contract_invalid = (
+            request.get("corporate_action_application_policy_sha256")
+            != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+            or canonical_sha256(request.get("corporate_action_application_policy"))
+            != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+            or not isinstance(audit, Mapping)
+            or audit.get("application_sha256") != canonical_sha256(audit_identity)
+            or request.get("corporate_action_application_sha256")
+            != audit.get("application_sha256")
+            or audit.get("source_snapshot_sha256")
+            != request.get("corporate_action_snapshot_sha256")
+            or audit.get("candidate_source_sha256")
+            != (
+                candidate_identity.get("source_sha256")
+                if isinstance(candidate_identity, Mapping)
+                else None
+            )
+            or audit.get("policy_sha256")
+            != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+            or not isinstance(population, Mapping)
+            or not isinstance(audit_scope, Mapping)
+            or audit_scope.get("symbols_sha256")
+            != canonical_sha256(request_symbols)
+            or audit_scope.get("symbol_count") != len(request_symbols)
+            or audit_scope.get("start") != population.get("start")
+            or audit_scope.get("end") != population.get("end")
+        )
     if (
         request.get("schema_version") != REQUEST_SCHEMA
         or request.get("pipeline_id") != PIPELINE_ID
@@ -2031,6 +2293,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         or request.get("research_model_outputs_write") is not True
         or len(str(request.get("corporate_action_snapshot_sha256", ""))) != 64
         or len(str(request.get("suspension_snapshot_sha256", ""))) != 64
+        or application_contract_invalid
         or any(request.get(flag) is not False for flag in false_flags)
     ):
         raise ActionValueError("PATTERN_REQUEST_IDENTITY_MISMATCH")
@@ -2129,6 +2392,18 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
         "database_written",
         "runtime_written",
     )
+    application_identity_mismatch = False
+    if "corporate_action_application_sha256" in request:
+        application_identity_mismatch = (
+            receipt.get("corporate_action_snapshot_sha256")
+            != request.get("corporate_action_snapshot_sha256")
+            or receipt.get("corporate_action_application_policy_sha256")
+            != request.get("corporate_action_application_policy_sha256")
+            or receipt.get("corporate_action_application_sha256")
+            != request.get("corporate_action_application_sha256")
+            or receipt.get("corporate_action_application_audit")
+            != request.get("corporate_action_application_audit")
+        )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
         or manifest.get("manifest_sha256") != canonical_sha256(manifest_identity)
@@ -2157,6 +2432,7 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
         }
         or evolution.get("receipt_sha256")
         != canonical_sha256({key: value for key, value in evolution.items() if key != "receipt_sha256"})
+        or application_identity_mismatch
         or any(receipt.get(flag) is not False for flag in false_flags)
         or manifest.get("request_sha256") != request["request_sha256"]
         or manifest.get("receipt_sha256") != receipt["receipt_sha256"]
@@ -2230,17 +2506,40 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
     )
     if evaluation_symbols != expected:
         raise ActionValueError("PATTERN_EVALUATION_POPULATION_DRIFT")
-    corporate_actions = CorporateActionBook.open(Path(request["corporate_action_snapshot"]["path"]))
+    source_corporate_actions = CorporateActionBook.open(
+        Path(request["corporate_action_snapshot"]["path"])
+    )
     suspension_book = SuspensionSnapshotBook.open(Path(request["suspension_snapshot"]["path"]))
     if (
-        corporate_actions.snapshot_sha256 != request["corporate_action_snapshot_sha256"]
+        source_corporate_actions.snapshot_sha256 != request["corporate_action_snapshot_sha256"]
         or suspension_book.snapshot_sha256 != request["suspension_snapshot_sha256"]
     ):
         raise ActionValueError("PATTERN_SNAPSHOT_IDENTITY_DRIFT")
-    candidate = suspension_book.apply(candidate, snapshot_path=Path(request["suspension_snapshot"]["path"]))
-    cached = PatternCandidateCache(candidate)
     start = date.fromisoformat(request["population_spec"]["start"])
     end = date.fromisoformat(request["population_spec"]["end"])
+    if "corporate_action_application_sha256" in request:
+        corporate_actions, corporate_application_audit = apply_pattern_corporate_action_policy(
+            candidate,
+            symbols=tuple(request["snapshot_symbols"]),
+            corporate_actions=source_corporate_actions,
+            start=start,
+            end=end,
+            candidate_source_sha256=observed_source["source_sha256"],
+        )
+        if (
+            corporate_application_audit
+            != request["corporate_action_application_audit"]
+            or corporate_actions.snapshot_sha256
+            != request["corporate_action_application_sha256"]
+        ):
+            raise ActionValueError("PATTERN_CORPORATE_ACTION_APPLICATION_DRIFT")
+    else:
+        # Backward compatibility is inspect/run-only for already immutable v1
+        # requests.  Every newly prepared request binds the application audit.
+        corporate_actions = source_corporate_actions
+        corporate_application_audit = None
+    candidate = suspension_book.apply(candidate, snapshot_path=Path(request["suspension_snapshot"]["path"]))
+    cached = PatternCandidateCache(candidate)
     result = replay_prototype(
         cached,
         symbols=evaluation_symbols,
@@ -2626,7 +2925,14 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         "repository_commit": request["repository_commit"],
         "created_at": datetime.now(TZ).isoformat(),
         "source_sha256": request["candidate_source_identity"]["source_sha256"],
-        "corporate_action_snapshot_sha256": corporate_actions.snapshot_sha256,
+        "corporate_action_snapshot_sha256": source_corporate_actions.snapshot_sha256,
+        "corporate_action_application_policy_sha256": request.get(
+            "corporate_action_application_policy_sha256"
+        ),
+        "corporate_action_application_sha256": request.get(
+            "corporate_action_application_sha256"
+        ),
+        "corporate_action_application_audit": corporate_application_audit,
         "suspension_snapshot_sha256": suspension_book.snapshot_sha256,
         "research_model_outputs_written": True,
         "cost_sensitivity": sensitivity,
