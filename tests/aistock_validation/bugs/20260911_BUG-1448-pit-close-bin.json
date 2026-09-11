@@ -1,0 +1,281 @@
+{
+  "actual": "read_close_prices 跳过无 close Bin 股票，unstack 后缺列，后续 PIT mask 与 coverage denominator 不再包含这些请求股票。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/tests/test_factor_metrics_h20_contract.py",
+    "backend/services/factor_research/full_evaluation.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1448-pit-close-bin.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1448",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-11T07:18:51.265811Z",
+  "description": "read_close_prices 跳过无 close Bin 股票，unstack 后缺列，后续 PIT mask 与 coverage denominator 不再包含这些请求股票。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260911-6ef44fa605f1",
+      "timestamp": "2026-09-11T07:18:51.265790Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "显式 instrument_hint 的每只股票均保留在价格/标签/PIT 矩阵；无物理价格者保持 NaN 并计入不可用覆盖，不伪造或填充价格。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/test_factor_metrics_h20_contract.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/factor_research/full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ]
+  },
+  "first_seen_at": "2026-09-11T07:18:51.265811Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4561,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4561",
+  "last_seen_at": "2026-09-11T07:18:51.265811Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "prepare_shared_context(... instrument_hint={physical_symbol,missing_symbol}) and inspect close_unstacked columns",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "factor_research_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "显式PIT股票请求在缺少物理close Bin时被静默移出完整评价分母",
+  "trigger_condition": {
+    "fingerprint": "6ef44fa605f1c38f61c561e1",
+    "source_event_id": "FE-20260911-6ef44fa605f1"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_read",
+        "factor_research"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_read",
+          "factor_research"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
