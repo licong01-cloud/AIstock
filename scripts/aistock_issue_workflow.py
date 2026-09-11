@@ -463,6 +463,44 @@ def _split_validation_budget_items(items: Iterable[Any]) -> dict[str, list[str]]
     }
 
 
+def _route_validation_budget_items(items: Iterable[Any]) -> dict[str, list[str]]:
+    """Route validation once to the cheapest authoritative execution phase."""
+
+    plans = flow._plans_by_key()
+    routed: dict[str, list[str]] = {
+        "local": [],
+        "ci": [],
+        "external": [],
+        "nightly": [],
+    }
+    for raw in items:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        plan = plans.get(item)
+        if item in LOCAL_PREMERGE_PLAN_KEYS:
+            routed["local"].append(item)
+        elif plan:
+            execution_mode = str(plan.get("execution_mode") or "").strip()
+            if bool(plan.get("requires_dev_db")) or execution_mode == "operator":
+                routed["external"].append(item)
+            elif execution_mode == "ci":
+                routed["ci"].append(item)
+            elif plan.get("runner_enabled") is False:
+                routed["nightly"].append(item)
+            elif plan.get("runner_enabled", True):
+                routed["ci"].append(item)
+            else:
+                routed["nightly"].append(item)
+        elif _is_local_validation_item(item):
+            routed["local"].append(item)
+        elif _is_broad_validation_plan(item):
+            routed["nightly"].append(item)
+        else:
+            routed["local"].append(item)
+    return {key: flow._unique_strings(values) for key, values in routed.items()}
+
+
 def _apply_validation_budget(
     *,
     record: dict[str, Any],
@@ -472,31 +510,56 @@ def _apply_validation_budget(
     """Keep pre-merge BUG validation narrow and move broad plans to nightly/VC."""
 
     selected_required_items = flow._unique_strings(validation.get("required_plans") or [])
-    selected_direct = [item for item in selected_required_items if item != "l0"]
-    selected_local = selected_direct or selected_required_items
+    selected_route = _route_validation_budget_items(selected_required_items)
     selected_recommended = flow._unique_strings(validation.get("recommended_plans") or [])
-    record_split = _split_validation_budget_items(
+    record_items = flow._unique_strings(
         record_required if record_required is not None else record.get("required_verification") or []
     )
+    record_route = _route_validation_budget_items(record_items)
+    inapplicable: set[str] = set()
     if record_required is None:
         inapplicable = set(flow._unique_strings(validation.get("inapplicable_plans") or []))
-        record_split = {
+        record_route = {
             key: [item for item in values if item not in inapplicable]
-            for key, values in record_split.items()
+            for key, values in record_route.items()
         }
-    local_required = flow._unique_strings([*record_split["local"], *selected_local]) or ["l0"]
+    stale_record_plans = [
+        item
+        for item in record_items
+        if item in _known_plan_keys() and item not in selected_required_items and item not in inapplicable
+    ]
+    stale_record_plan_set = set(stale_record_plans)
+    for phase in ("local", "ci", "external", "nightly"):
+        record_route[phase] = [item for item in record_route[phase] if item not in stale_record_plan_set]
+    record_route["nightly"] = flow._unique_strings([*record_route["nightly"], *stale_record_plans])
+    local_required = flow._unique_strings(
+        [
+            *record_route["local"],
+            *record_route["external"],
+            *selected_route["local"],
+            *selected_route["external"],
+        ]
+    ) or ["l0"]
     if any(item != "l0" for item in local_required):
         local_required = [item for item in local_required if item != "l0"]
-    deferred = flow._unique_strings(item for item in record_split["deferred"] if item not in selected_local)
+    ci_premerge = flow._unique_strings([*record_route["ci"], *selected_route["ci"]])
+    external_premerge = flow._unique_strings([*record_route["external"], *selected_route["external"]])
+    deferred = flow._unique_strings(
+        [*record_route["nightly"], *selected_route["nightly"], *selected_recommended]
+    )
     budgeted = dict(validation)
     budgeted["required_plans"] = local_required
-    budgeted["recommended_plans"] = flow._unique_strings([*selected_recommended, *deferred])
+    budgeted["recommended_plans"] = deferred
+    budgeted["ci_premerge_plans"] = ci_premerge
+    budgeted["external_premerge_plans"] = external_premerge
     budgeted["deferred_nightly_plans"] = deferred
     budgeted["validation_budget_gate"] = {
         "schema_version": "aistock_validation_budget_gate_v1",
         "premerge_required": local_required,
+        "ci_premerge_plans": ci_premerge,
+        "external_premerge_plans": external_premerge,
         "deferred_nightly_plans": deferred,
-        "policy": "broad module/UI/API/business-flow plans are nightly/VC by default; run pre-merge only on explicit request or production-gate need",
+        "policy": "run each plan once in its cheapest authoritative phase: local fix-point, required CI, external DEV, or deduplicated nightly",
     }
     return budgeted
 
@@ -7533,9 +7596,13 @@ def _verification_budget_for_record(
     split = _split_validation_budget_items(required)
     if validation_budget is not None:
         local_plans = flow._unique_strings(validation_budget.get("required_plans") or [])
+        ci_premerge_plans = flow._unique_strings(validation_budget.get("ci_premerge_plans") or [])
+        external_premerge_plans = flow._unique_strings(validation_budget.get("external_premerge_plans") or [])
         deferred_plans = flow._unique_strings(validation_budget.get("deferred_nightly_plans") or [])
     else:
         local_plans = flow._unique_strings(split["local"] or ["l0"])
+        ci_premerge_plans = []
+        external_premerge_plans = []
         deferred_plans = flow._unique_strings(split["deferred"])
     deferred_modules = _deferred_modules_from_plans(module, deferred_plans)
     return {
@@ -7549,6 +7616,8 @@ def _verification_budget_for_record(
             "production gates",
         ],
         "premerge_required_plans": local_plans,
+        "ci_premerge_plans": ci_premerge_plans,
+        "external_premerge_plans": external_premerge_plans,
         "delegated_validation": {
             "skill": "aistock-validation-delegation",
             "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
@@ -8559,6 +8628,8 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "## Verification Budget",
         f"- budget: `{budget.get('budget') or 'not_recorded'}`",
         f"- target_cost_percent_of_legacy: `{budget.get('target_cost_percent_of_legacy') or 'not_recorded'}`",
+        f"- ci_premerge_plans: `{', '.join(budget.get('ci_premerge_plans') or []) or 'none'}`",
+        f"- external_premerge_plans: `{', '.join(budget.get('external_premerge_plans') or []) or 'none'}`",
         f"- deferred_nightly_required: `{str(bool(deferred.get('required'))).lower()}`",
         f"- deferred_nightly_modules: `{', '.join(deferred.get('modules') or []) or 'none'}`",
         f"- deferred_nightly_plans: `{', '.join(deferred.get('plans') or []) or 'none'}`",

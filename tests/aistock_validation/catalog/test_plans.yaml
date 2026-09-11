@@ -176,6 +176,16 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [pytest]
     resource_policy: existing_dev_db
+    change_applicability:
+      include:
+        - backend/services/advisory_dev_input_onboarding/**
+        - backend/services/advisory_phase0a/**
+        - backend/services/advisory_phase1/readiness_plan_store.py
+        - backend/services/advisory_phase1/source_observer_postgres.py
+        - backend/tests/advisory_dev_input_onboarding/**
+        - backend/tests/advisory_phase0a/**
+        - scripts/advisory_real_dev_onboarding.py
+      no_match_reason: advisory_change_does_not_touch_dev_database_onboarding_or_persistence
   - plan_key: l0
     title: L0 static guardrail gate
     module: validation_center
@@ -212,6 +222,9 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+    change_applicability:
+      ownership_rules: [qe_long_trend_evaluation_phase2]
+      no_match_reason: qe_long_trend_change_does_not_touch_phase2_contract
   - plan_key: qe_long_trend_phase3_platform
     title: QE F-014 long-trend Phase 3 persistence and operator contracts
     module: qe.long_trend_evaluation
@@ -230,6 +243,9 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, schema, api, mcp]
+    change_applicability:
+      ownership_rules: [qe_long_trend_evaluation_phase3]
+      no_match_reason: qe_long_trend_change_does_not_touch_phase3_contract
   - plan_key: qe_long_trend_phase4_ui
     title: QE F-014 long-trend Phase 4 Loop and Archive UI contracts
     module: qe.long_trend_evaluation
@@ -249,6 +265,9 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [tsc, playwright]
+    change_applicability:
+      ownership_rules: [qe_long_trend_evaluation_phase4]
+      no_match_reason: qe_long_trend_change_does_not_touch_phase4_ui_contract
   - plan_key: qe_sector_risk_overlay_backend
     title: QE sector-risk overlay backend contracts
     module: qe.sector_risk_overlay
@@ -1152,6 +1171,13 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+    change_applicability:
+      include:
+        - backend/mcp/**
+        - backend/tests/mcp/test_research_assistant_module.py
+        - backend/tests/mcp/test_profiles_registry_gateway.py
+        - scripts/aistock_mcp_gateway.py
+      no_match_reason: research_assistant_change_does_not_touch_mcp_contract
   - plan_key: research_assistant_ui
     title: Research Assistant mocked UI regression
     module: research_assistant
@@ -1257,6 +1283,17 @@ plans:
       artifact_retention_days: 180
       max_log_excerpt_chars: 6000
     resource_policy: existing_dev_db
+    change_applicability:
+      include:
+        - backend/migrations/localsim_successor_core_*.sql
+        - backend/migrations/localsim_product_cutover_bridge_*.sql
+        - backend/services/simulation_runtime/successor_models.py
+        - backend/services/simulation_runtime/successor_repository.py
+        - backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py
+        - backend/tests/simulation_runtime/test_localsim_successor_schema.py
+        - scripts/localsim_product_validation.py
+        - scripts/prepare_localsim_successor_cutover.py
+      no_match_reason: localsim_change_does_not_touch_schema_repository_or_dev_database_contract
   - plan_key: miniqmt_execution_runtime_l2
     title: Canonical MiniQMT event-loop runtime and durable tick-driver validation
     module: miniqmt_execution_runtime
