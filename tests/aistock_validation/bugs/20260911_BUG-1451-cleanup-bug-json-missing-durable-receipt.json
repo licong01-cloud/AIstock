@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1451",
-  "closed_at": null,
+  "closed_at": "2026-09-11T07:59:49Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -101,8 +101,8 @@
   },
   "first_seen_at": "2026-09-11T07:46:37.699608Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0c5f927b550a1bdda454a0286631c4b4cb89d7e4",
+  "fixed_at": "2026-09-11T07:59:49Z",
   "github_issue_number": 4573,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4573",
   "last_seen_at": "2026-09-11T07:46:37.699608Z",
@@ -110,6 +110,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4574",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +128,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -136,7 +138,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -145,6 +147,12 @@
     "fingerprint": "19abfc6832050a63a57fa9ad",
     "source_event_id": "FE-20260911-19abfc683205"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed (blocking=0)",
+    "python -m nox -s guardrail_changed_files -> passed (files=3 findings=0 blocking=0 ownership=3/3)",
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py -k cleanup_evidence_finalization_or_cleanup_after_merge -> passed (24 passed)",
+    "rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
