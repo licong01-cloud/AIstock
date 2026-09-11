@@ -28,12 +28,18 @@
   ],
   "expected": "候选工件继续严格要求声明因子列；官方 reference_value_artifacts 通过专用加载路径严格读取唯一 value 列并重命名为声明因子名。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1453-value.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/factor_research/full_evaluation.py",
-      "backend/tests/factor_research/test_full_evaluation.py"
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1453-value.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/factor_research/full_evaluation.py",
@@ -100,11 +106,22 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows and WSL rdagent-gpu fresh processes loaded official CORD10 value artifact: 8,143,190 rows, unique datetime/instrument index -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
