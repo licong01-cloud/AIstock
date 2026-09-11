@@ -24,9 +24,9 @@ on:
         type: boolean
         default: false
       run_code_intelligence:
-        description: 'Refresh CodeGraph and assess Understand Anything state without paid semantic work.'
+        description: 'Legacy manual compatibility only; scheduled refreshes use code-intelligence-refresh.yml.'
         type: boolean
-        default: true
+        default: false
       run_paid_ua_refresh:
         description: 'Explicitly authorize the paid Understand Anything semantic refresh for this dispatch.'
         type: boolean
@@ -98,6 +98,7 @@ jobs:
             --workflow "nightly.yml" \
             --required-label self-hosted \
             --required-label windows \
+            --required-label aistock-ci \
             --stale-queued-minutes 30 \
             --output-json tmp/validation/runner_health/runner-health.json \
             --output-md tmp/validation/runner_health/runner-health.md
@@ -488,7 +489,9 @@ jobs:
   code-intelligence-weekly:
     name: Code intelligence daily graph refresh and summary
     needs: runner-preflight
-    if: github.event_name == 'schedule' || inputs.run_code_intelligence
+    # Scheduled refreshes are owned exclusively by code-intelligence-refresh.yml.
+    # Keep this lane only for an explicit legacy/manual recovery dispatch.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: false
