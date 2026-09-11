@@ -2,7 +2,7 @@
   "actual": "result[symbol]=(start,end)覆盖前段，loader随后只尊重最后一个start且忽略end。",
   "allowed_write_scope": [
     "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-    "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py",
+    "backend/tests/test_factor_st_pit_metrics_cache.py",
     "tests/aistock_validation/bugs/20260911_BUG-1440-qlib-instruments.json"
   ],
   "assigned_agent": null,
@@ -29,21 +29,19 @@
     "actual_changed_files": [
       "tests/aistock_validation/bugs/20260911_BUG-1440-qlib-instruments.json",
       "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-      "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+      "backend/tests/test_factor_st_pit_metrics_cache.py"
     ],
-    "added_files": [
-      "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
-    ],
+    "added_files": [],
     "changed_files": [
       "tests/aistock_validation/bugs/20260911_BUG-1440-qlib-instruments.json",
       "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-      "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+      "backend/tests/test_factor_st_pit_metrics_cache.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-        "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+        "backend/tests/test_factor_st_pit_metrics_cache.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -69,31 +67,30 @@
           "rule_id": "qe_services"
         },
         {
-          "file": "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py",
+          "file": "backend/tests/test_factor_st_pit_metrics_cache.py",
           "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
         "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-        "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+        "backend/tests/test_factor_st_pit_metrics_cache.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-      "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+      "backend/tests/test_factor_st_pit_metrics_cache.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
-      "backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py"
+      "backend/tests/test_factor_st_pit_metrics_cache.py"
     ]
   },
   "first_seen_at": "2026-09-11T05:48:09.320240Z",
@@ -111,7 +108,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_eval_v2_qlib_reader.py -q",
+  "reproduce_command": "python -m pytest backend/tests/test_factor_st_pit_metrics_cache.py -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
