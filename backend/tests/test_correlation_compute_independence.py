@@ -62,7 +62,6 @@ def test_correlation_wsl_runner_no_args_returns_structured_usage() -> None:
     assert "usage:" in payload["data"]["error"]
 
 
-
 def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.factor_value_loader import _DEFAULT_PIPELINE_DIR
@@ -127,23 +126,13 @@ def test_selected_correlation_submatrix_is_rectangular_and_order_invariant() -> 
 
     dates = pd.bdate_range("2026-01-05", periods=4)
     instruments = ["000001.SZ", "000002.SZ", "000003.SZ"]
-    index = pd.MultiIndex.from_product(
-        [dates, instruments], names=["datetime", "instrument"]
-    )
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
     base = np.tile(np.asarray([1.0, 2.0, 3.0]), len(dates))
-    candidates = pd.DataFrame(
-        {"candidate_b": -base, "candidate_a": base}, index=index
-    )
-    references = pd.DataFrame(
-        {"reference_b": -base, "reference_a": base}, index=index
-    )
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=3, min_days=2
-    )
+    candidates = pd.DataFrame({"candidate_b": -base, "candidate_a": base}, index=index)
+    references = pd.DataFrame({"reference_b": -base, "reference_a": base}, index=index)
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=3, min_days=2)
 
-    first = engine.compute_selected_submatrix(
-        candidates, references, as_of_date="2026-01-08"
-    )
+    first = engine.compute_selected_submatrix(candidates, references, as_of_date="2026-01-08")
     second = engine.compute_selected_submatrix(
         candidates.sample(frac=1.0, random_state=7)[["candidate_a", "candidate_b"]],
         references.sample(frac=1.0, random_state=8)[["reference_a", "reference_b"]],
@@ -168,13 +157,9 @@ def test_selected_correlation_submatrix_reports_insufficient_support_as_null() -
     )
     candidate = pd.DataFrame({"candidate": [1.0, 2.0]}, index=index)
     reference = pd.DataFrame({"reference": [2.0, 1.0]}, index=index)
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=2, min_days=2
-    )
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=2, min_days=2)
 
-    result = engine.compute_selected_submatrix(
-        candidate, reference, as_of_date="2026-01-05"
-    )
+    result = engine.compute_selected_submatrix(candidate, reference, as_of_date="2026-01-05")
 
     assert np.isnan(result.matrix[0, 0])
     assert result.effective_days[0, 0] == 1
@@ -182,12 +167,169 @@ def test_selected_correlation_submatrix_reports_insufficient_support_as_null() -
     assert result.records()[0]["reason"] == "insufficient_effective_days"
 
 
+def test_selected_daily_submatrix_preserves_pairwise_mask_semantics() -> None:
+    from scipy import stats
+
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = pd.bdate_range("2026-01-05", periods=3)
+    instruments = [f"{code:06d}.SZ" for code in range(1, 7)]
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+    candidates = pd.DataFrame(
+        {
+            "candidate_a": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                2,
+                3,
+                np.nan,
+                5,
+                6,
+                7,
+                3,
+                4,
+                5,
+                6,
+                np.nan,
+                8,
+            ],
+            "candidate_b": [
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                7,
+                np.nan,
+                5,
+                4,
+                3,
+                2,
+                8,
+                7,
+                6,
+                np.nan,
+                4,
+                3,
+            ],
+        },
+        index=index,
+    )
+    references = pd.DataFrame(
+        {
+            "reference_a": [
+                1,
+                4,
+                2,
+                6,
+                3,
+                5,
+                2,
+                5,
+                3,
+                np.nan,
+                4,
+                6,
+                3,
+                np.nan,
+                4,
+                8,
+                5,
+                7,
+            ],
+            "reference_b": [
+                5,
+                2,
+                6,
+                1,
+                4,
+                3,
+                6,
+                3,
+                np.nan,
+                2,
+                5,
+                4,
+                7,
+                4,
+                8,
+                3,
+                6,
+                np.nan,
+            ],
+        },
+        index=index,
+    )
+    engine = CorrelationEngine(
+        object(),
+        window=3,
+        half_life=2,
+        min_stocks=3,
+        min_days=1,
+        winsorize_quantile=0.2,
+    )
+
+    daily = engine.compute_selected_daily_submatrix(candidates, references, as_of_date="2026-01-07")
+
+    expected = np.full((3, 2, 2), np.nan)
+    for day_index, date in enumerate(dates):
+        left_day = candidates.loc[date]
+        right_day = references.loc[date]
+        for i, candidate in enumerate(sorted(candidates.columns)):
+            for j, reference in enumerate(sorted(references.columns)):
+                left = left_day[candidate].to_numpy(dtype=float)
+                right = right_day[reference].to_numpy(dtype=float)
+                valid = np.isfinite(left) & np.isfinite(right)
+                if int(valid.sum()) < 3:
+                    continue
+                corr, _ = stats.spearmanr(
+                    engine._winsorize_array(left[valid]),
+                    engine._winsorize_array(right[valid]),
+                )
+                if np.isfinite(corr):
+                    expected[day_index, i, j] = corr
+
+    assert np.allclose(daily.correlations, expected, equal_nan=True, atol=1e-12)
+    assert daily.metadata["mask_groups"] < 3 * 2 * 2
+
+
+def test_selected_daily_submatrix_reuses_dates_without_changing_window_result() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = pd.bdate_range("2026-01-05", periods=5)
+    instruments = [f"{code:06d}.SZ" for code in range(1, 7)]
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+    base = np.tile(np.asarray([1.0, 3.0, 2.0, 6.0, 4.0, 5.0]), len(dates))
+    candidates = pd.DataFrame({"candidate": base}, index=index)
+    references = pd.DataFrame({"reference": np.roll(base, 1)}, index=index)
+    engine = CorrelationEngine(object(), window=5, half_life=2, min_stocks=3, min_days=2)
+    daily = engine.compute_selected_daily_submatrix(candidates, references, as_of_date="2026-01-09")
+    reused = engine.aggregate_selected_daily_submatrix(
+        daily,
+        start_date="2026-01-07",
+        end_date="2026-01-09",
+        as_of_date="2026-01-09",
+    )
+    sliced = engine.compute_selected_submatrix(
+        candidates.loc[(slice(pd.Timestamp("2026-01-07"), None), slice(None)), :],
+        references.loc[(slice(pd.Timestamp("2026-01-07"), None), slice(None)), :],
+        as_of_date="2026-01-09",
+    )
+
+    assert np.allclose(reused.matrix, sliced.matrix, equal_nan=True, atol=1e-12)
+    assert np.array_equal(reused.effective_days, sliced.effective_days)
+    assert np.allclose(reused.avg_stocks_per_day, sliced.avg_stocks_per_day)
+
+
 def test_selected_correlation_submatrix_rejects_non_daily_or_invalid_identity() -> None:
     from backend.services.quantevolver.correlation_engine import CorrelationEngine
 
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=2, min_days=2
-    )
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=2, min_days=2)
     intraday_index = pd.MultiIndex.from_product(
         [[pd.Timestamp("2026-01-05 09:30:00")], ["000001.SZ", "000002.SZ"]],
         names=["datetime", "instrument"],
@@ -285,9 +427,7 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
         json.dumps(
             {
                 "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
-                "factors": {
-                    "factor_a": {"as_of_date": "2026-04-10"}
-                }
+                "factors": {"factor_a": {"as_of_date": "2026-04-10"}},
             },
             ensure_ascii=False,
         ),
@@ -361,13 +501,17 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 2,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 2,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
     monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
@@ -394,7 +538,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
                 "factors": {
                     "factor_a": {"as_of_date": "2026-04-10"},
                     "factor_b": {"as_of_date": "2026-04-10"},
-                }
+                },
             },
             ensure_ascii=False,
         ),
@@ -464,13 +608,17 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 2,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 2,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
     monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
@@ -490,7 +638,6 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["cache_root"] == str(tmp_path)
 
 
-
 def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(monkeypatch, tmp_path) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.correlation_engine import CorrelationResult
@@ -500,10 +647,7 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
         json.dumps(
             {
                 "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
-                "factors": {
-                    name: {"as_of_date": "2026-04-30"}
-                    for name in factors
-                }
+                "factors": {name: {"as_of_date": "2026-04-30"} for name in factors},
             },
             ensure_ascii=False,
         ),
@@ -590,13 +734,17 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 3,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 3,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", fake_persist_records)
     monkeypatch.setattr(svc, "_persist_correlation_metadata", fake_persist_metadata)
