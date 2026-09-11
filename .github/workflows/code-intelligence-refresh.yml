@@ -33,8 +33,30 @@ env:
   AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ github.event_name == 'workflow_dispatch' && inputs.ua_max_budget_usd || vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
 
 jobs:
+  security-runner-preflight:
+    name: Security runner preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: none
+    steps:
+      - name: Fail fast when the security runner is offline
+        env:
+          GH_TOKEN: ${{ secrets.AISTOCK_RUNNER_HEALTH_TOKEN || github.token }}
+        shell: bash
+        run: |
+          online_count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100" \
+            --jq '[.runners[] | select(.status == "online") | select(.labels | map(.name) | index("aistock-ci-security"))] | length')
+          if [ "${online_count}" -lt 1 ]; then
+            echo "::error title=Security runner unavailable::No online runner has label aistock-ci-security; the refresh was not queued."
+            exit 1
+          fi
+          echo "security_runner_gate=ready online_count=${online_count}"
+
   refresh-after-main:
     name: Refresh and publish code intelligence graphs
+    needs: security-runner-preflight
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     defaults:
