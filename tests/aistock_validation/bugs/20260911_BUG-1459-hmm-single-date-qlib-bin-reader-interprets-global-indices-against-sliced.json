@@ -1,6 +1,8 @@
 {
   "actual": "The formal HMM G2-A v1.6 single-date consumer passes a short stock-history calendar into the Qlib Bin reader, while each .day.bin start index is relative to the full release calendar. A valid 2026-08-28 as-of / 2026-08-31 decision request therefore fails closed before consumer preflight. Fix the calendar/bin-index boundary without changing model, mapping, data, tail, or runtime semantics; add Windows and WSL fresh-process regression evidence.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "tests/aistock_validation/bugs/20260911_BUG-1459-hmm-single-date-qlib-bin-reader-interprets-global-indices-against-sliced.json"
   ],
   "assigned_agent": null,
