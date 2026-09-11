@@ -1,6 +1,6 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.32
+> 版本：v2.33
 > 日期：2026-09-11
 > Feature tier：F2
 > 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_017_FORMAL_INCONCLUSIVE_NOT_SERVING`
@@ -51,6 +51,8 @@ v2.29 冻结并实现 `PT-NEXT-016`：不改旧双头模型，在父训练股真
 v2.31 冻结 `PT-NEXT-017/OPEN_NOW_VS_DEFER_ONE_SESSION_THEN_OPEN_V1` 一个机制不同的 ENTRY timing 假设。父 v4 的 ENTRY 标签比较 T+1 OPEN 后持有至 T+20 与全程现金，26,915 条标签标准差约 838.83 bps；19,516 条 OOF 的预测与目标 Pearson/Spearman 仅约 `-0.0063/+0.0081`，而 NO_FILL 只占 3.36%，说明主要问题不是未成交零标签，而是目标同时混入“股票未来方向”与“现在是否优于稍后买入”。新目标固定同一股票、同一计划数量：候选 T+1 入场，反事实基线 T+1 等待并以 T+1 收盘参考在 T+2 尝试相同数量，随后两侧使用同一冻结 risk exit、公司行动、停牌、逐腿成本和共同 T+20 终值。只训练一个独立 `ENTRY_TIMING_VALUE_V1` 单头，不改旧双头/ADD 单头；正式评价在纳入 PT-NEXT-016 后全部 prior request 的 297 股禁用并集外 source-only 固定第五批 64 股，不同时测试其他 defer horizon、因子、阈值、仓位或模型 family。
 
 v2.32 完成同一 `PT-NEXT-017`。首次 request `f1c10f871c82f93696e639232e6a674f41279155dd58ff2e822ad8909afa7f1a` 在 bundle 形成前因延后入场按冻结股数遇到现金不足而以 `CASH_OR_POSITION_INVARIANT` fail closed；实现随后只把该预期路径翻译为 `DEFERRED_ENTRY_CASH_INSUFFICIENT` typed exclusion，旧 request 保持不可变。最终 request `c685a820dc4ed7ff0508350f6536832ab22777646e9adb5fbb1f972fe00d9c1e` 绑定干净提交 `233f41ce83f95cdc9c1f897a2d4525422a62c9e5`、27 份 prior request/297 股禁用并集和第五批 64 股零重叠人口；24,781 条训练标签形成 17,865 条 OOF 和 59 个月度模型，目标均值/中位数/标准差为 `-13.2184/-1.2001/397.9764 bps`，正值占比 `47.68%`，OOF Pearson/Spearman 为 `0.0194/0.0452`。正式候选相对 buy-and-hold、frozen L1、同窗口 always-open 的日均增量分别为 `-0.1216/+4.9133/+0.1397 bps`，98.3333% family-wise 区间分别为 `[-3.2934,+3.2951]`、`[-7.3236,+15.7711]`、`[-2.7037,+3.0614]`，alpha、ENTRY timing component 与联合证据均为 `INCONCLUSIVE/selected=0`。新目标把旧标签噪声标准差降低至约 398 bps，且相关性方向转正，但正式成本后收益仍不可分辨；这两项诊断不得替代收益证据。因此不发布模型、不改变 L1/L1a 或运行态，也不据点估计继续追加 defer horizon、因子、阈值、仓位、模型 family 或股票批次。
+
+v2.33 仅新增下一方向的设计：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`，详见[形态择时研究设计](position_timing_pattern_strategy_design_20260911.md)。用户提出突破均线、回踩确认及加速放量止盈原型，并进一步明确允许参考研究和实践逐步优化。下一步先做日频规则历史回放，再在限定候选中做训练期调优与模型条件化；其他场景策略、HMM和QE成果组合依次后置。本版没有实现、训练或新收益receipt，不改变已有`INCONCLUSIVE/NOT_SERVING`结论。历史family的停止搜索约束仍保护旧结果，不应外推成禁止新版本有记录的优化；新设计详述开发/外层评价隔离，不等待最新交易日。
 
 ## 1. Background / 背景与结论
 
@@ -1197,6 +1199,14 @@ factor 只承担复权比例和源一致性校验，不能凭名称或单次变�
 本项在一个实施块完成 F-047 设计、`ENTRY_TIMING_VALUE_V1` 单头、同量 T+1-vs-T+2 反事实标签、第五批历史人口、正式回放、失败修复、三轮复核和蓝图结果回填。最小源码面为一个 dedicated 单头模型、`action_value_research.py` 的纯标签/路径扩展、一个 prepare/run/inspect immutable pipeline 和直接测试；未新增 router、页面、scheduler、worker、数据库表、外部模块接线或运行模型。首次 request 在延后入场现金不足路径上 fail closed、未形成 bundle；修复只增加 typed exclusion，新 request 重新运行且不改写旧记录。
 
 最终第五批与父训练及全部 prior request 人口零重叠，标签波动下降、OOF 相关性弱正，但三项正式成本后 family-wise 区间全部跨零，alpha、timing component 与联合均为 `INCONCLUSIVE/selected=0`。因此本项只保留不可变研究证据，不发布模型或改变个股建议，不根据诊断改善或 frozen L1 正点估计继续搜索；正式身份、数值、失败记录、inspect/exact retry 与隔离 readback 见 `EVID-ACTION-DEFERRED-ENTRY-FORMAL-20260911`。
+
+### 9.21 已完成设计、尚未实现：PT-NEXT-018 形态择时与后续优化
+
+权威单模块详细设计为[自选股与持仓股形态择时研究设计](position_timing_pattern_strategy_design_20260911.md)，使用独立F1验收索引，本蓝图既有实现验收状态不据此提升。新设计落实同股突破日锚定的等待回踩对照、真实因果持仓上的加速放量退出对照，以及完整规则组合相对buy-and-hold/L1的成本后连续路径。先交付规则研究，再开展有界调优与模型条件化两个工作块；预计首块仅两个服务文件和直接测试，复用已有数据、成交、费用、公司行动、交易日和不可变研究artifact。
+
+MA5/MA10、清仓等为原型假设，允许在后续spec中比较等待窗口、容差、减仓比例和衰竭确认，优化只使用决策时已经可得的开发数据，并以其后时间段评价。候选数、训练尝试和历史数据重复使用如实记录；本任务不引入审批、MDE准入或实时数据等待。候选场景研究队列及QE只读融合约定见详细设计§7～8；QE成果组合在择时策略自身研究之后。当前仅完成文档，未开跑PT-NEXT-018、未发布模型或修改L1/L1a，DB/runtime/restart均noop。
+
+后续用户要求一次连续长任务完成实现与初步验证，执行包已落在详细设计v1.1 §9.1：计划10～14小时覆盖规则原型四比较、8模板训练期优化、两组各两头模型的五比较、历史逐股解释、两轮实质审核修复及源码合入。基础candidate路径与AIstock Conda/LightGBM4.6.0环境已经只读核验；完整source identity与新人口尚待执行时prepare。本段只记录可执行计划，不把训练、研究或合入写成已完成；设计PR的CI等待不作为本地研发准入条件。
 
 ## 10. Verification Plan / 验证方案
 
