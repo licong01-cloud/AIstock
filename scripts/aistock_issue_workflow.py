@@ -475,7 +475,15 @@ def _apply_validation_budget(
     selected_direct = [item for item in selected_required_items if item != "l0"]
     selected_local = selected_direct or selected_required_items
     selected_recommended = flow._unique_strings(validation.get("recommended_plans") or [])
-    record_split = _split_validation_budget_items(record_required or record.get("required_verification") or [])
+    record_split = _split_validation_budget_items(
+        record_required if record_required is not None else record.get("required_verification") or []
+    )
+    if record_required is None:
+        inapplicable = set(flow._unique_strings(validation.get("inapplicable_plans") or []))
+        record_split = {
+            key: [item for item in values if item not in inapplicable]
+            for key, values in record_split.items()
+        }
     local_required = flow._unique_strings([*record_split["local"], *selected_local]) or ["l0"]
     if any(item != "l0" for item in local_required):
         local_required = [item for item in local_required if item != "l0"]
