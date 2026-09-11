@@ -262,12 +262,19 @@ raise SystemExit(pytest.main(['backend/tests/factor_research/test_repository_dev
     assert b"9 skipped" in result.stdout
 
 
-def test_runtime_registration_is_exact_cli_only():
+def test_runtime_registration_uses_offline_operator_rule_without_hiding_backend_services():
     from scripts.aistock_issue_workflow import _classify_runtime_impact, _load_runtime_target_catalog
 
     catalog = _load_runtime_target_catalog(ROOT)
     entries = catalog["non_runtime_source_paths"]
-    assert entries.count("scripts/factor_research.py") == 1
+    operator_rules = [
+        rule
+        for rule in catalog["source_role_rules"]
+        if rule["rule_id"] == "offline-operator-scripts"
+    ]
+    assert len(operator_rules) == 1
+    assert "scripts/**/*.py" in operator_rules[0]["source_globs"]
+    assert "scripts/factor_research.py" not in entries
     assert _classify_runtime_impact(["scripts/factor_research.py"], root=ROOT)["runtime_impact"] == "none"
     backend_files = [f"backend/services/factor_research/{name}.py"
                      for name in ("__init__", "models", "repository", "runner", "service")]
@@ -276,4 +283,4 @@ def test_runtime_registration_is_exact_cli_only():
     assert result["runtime_impact"] == "backend"
     assert result["target_ids"] == ["backend-main"]
     assert set(result["runtime_files"]) == set(backend_files)
-    assert _classify_runtime_impact(["scripts/factor_research_unregistered.py"], root=ROOT)["runtime_impact"] == "unknown"
+    assert _classify_runtime_impact(["scripts/factor_research_unregistered.py"], root=ROOT)["runtime_impact"] == "none"
