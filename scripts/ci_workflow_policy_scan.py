@@ -254,6 +254,34 @@ def build_contract_evidence(
         )
         return literal_runner or dynamic_windows_runner
 
+    def has_security_runner_preflight(text: str, downstream_job: str) -> bool:
+        preflight_match = re.search(
+            r"(?ms)^  security-runner-preflight:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        downstream_match = re.search(
+            rf"(?ms)^  {re.escape(downstream_job)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        preflight = preflight_match.group("body") if preflight_match else ""
+        downstream = downstream_match.group("body") if downstream_match else ""
+        return (
+            "runs-on: ubuntu-latest" in preflight
+            and "Fail fast when the security runner is offline" in preflight
+            and 'secrets.AISTOCK_RUNNER_HEALTH_TOKEN || github.token' in preflight
+            and 'repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100' in preflight
+            and 'index("aistock-ci-security")' in preflight
+            and "needs: security-runner-preflight" in downstream
+        )
+
+    nightly_code_intelligence_input_match = re.search(
+        r"(?ms)^      run_code_intelligence:\n(?P<body>.*?)(?=^      [a-z0-9_]+:\n|^defaults:)",
+        nightly_text,
+    )
+    nightly_code_intelligence_input = (
+        nightly_code_intelligence_input_match.group("body") if nightly_code_intelligence_input_match else ""
+    )
+
     evidence = {
         "windows_self_hosted_runner": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
         and all(uses_expected_runner(name) for name in WINDOWS_CI_WORKFLOWS),
@@ -269,9 +297,11 @@ def build_contract_evidence(
             and all("conda run -n aistock" not in text.casefold() for text in ci_texts)
             and all(
                 "ubuntu-" not in workflow_text.get(name, "").casefold()
-                for name in WINDOWS_CI_WORKFLOWS - {"test.yml"}
+                for name in WINDOWS_CI_WORKFLOWS - {"test.yml", "codeql.yml"}
             )
             and test_text.casefold().count("ubuntu-latest") == 1
+            and codeql_text.casefold().count("runs-on: ubuntu-latest") == 1
+            and has_security_runner_preflight(codeql_text, "codeql-nightly")
             and "github_hosted_metadata" in test_text
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "--close-sync-only" in test_text
@@ -381,6 +411,24 @@ def build_contract_evidence(
         "code_intelligence_refresh_has_no_external_artifact_action_dependency": (
             "actions/upload-artifact@" not in code_intelligence_refresh_text
             and "actions/download-artifact@" not in code_intelligence_refresh_text
+        ),
+        "security_workflows_fail_fast_before_runner_allocation": (
+            has_security_runner_preflight(codeql_text, "codeql-nightly")
+            and has_security_runner_preflight(code_intelligence_refresh_text, "refresh-after-main")
+        ),
+        "nightly_code_intelligence_has_single_scheduled_owner": (
+            "schedule:" in code_intelligence_refresh_text
+            and "default: false" in nightly_code_intelligence_input
+            and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
+            and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
+            and "--required-label aistock-ci" in nightly_text
+        ),
+        "redundant_issue_event_workflows_retired": (
+            "issue-auto-link.yml" not in workflow_text
+            and "issue-on-test-fail.yml" not in workflow_text
+            and "github.rest.issues.create" not in test_text
+            and "Build Nightly failure issue context" in nightly_text
+            and "Auto-register failure as actionable GitHub Issue" in nightly_text
         ),
         "javascript_actions_use_approved_native_node24_majors": all(
             set(re.findall(rf"{re.escape(prefix)}v\d+", combined_workflow_text)) == {expected}

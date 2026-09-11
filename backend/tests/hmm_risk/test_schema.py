@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -87,6 +88,8 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "development_oof_rank_ic is not null" in ddl
     assert "development_oof_rank_ic_hac_lower is not null" in ddl
     assert "development_oof_rank_ic_hac_upper is not null" in ddl
+    assert "jsonb_array_length(feature_contributions) in (10,11)" in ddl
+    assert "jsonb_array_length(feature_contributions)=10" not in ddl
     assert "select *" not in ddl
 
 
@@ -170,9 +173,10 @@ def test_bootstrap_executes_every_statement_then_verifies(monkeypatch: pytest.Mo
 
 
 class _RotationSchemaCursor:
-    def __init__(self, *, drift: bool = False) -> None:
+    def __init__(self, *, drift: bool = False, contribution_drift: bool = False) -> None:
         self.step = 0
         self.drift = drift
+        self.contribution_drift = contribution_drift
 
     def __enter__(self):
         return self
@@ -194,13 +198,24 @@ class _RotationSchemaCursor:
                 rows[-1] = (*rows[-1][:-1], "old")
             return rows
         if self.step == 2:
-            return [
+            rows = [
                 (
                     name,
                     " ".join(schema.ROTATION_L1_PREDICTION_CONSTRAINT_TOKENS[name]),
                     f"{name} enforces hmm_risk_rotation_l1_prediction_v1",
                 )
                 for name in sorted(schema.ROTATION_L1_PREDICTION_CONSTRAINTS)
+            ]
+            dimension_fragment = (
+                "jsonb_array_length(feature_contributions) = 10"
+                if self.contribution_drift
+                else "jsonb_array_length(feature_contributions) = ANY (ARRAY[10, 11])"
+            )
+            return [
+                (name, f"{definition} {dimension_fragment}", comment)
+                if name == "ck_hmm_risk_rotation_l1_prediction_availability"
+                else (name, definition, comment)
+                for name, definition, comment in rows
             ]
         raise AssertionError(self.step)
 
@@ -217,11 +232,12 @@ class _RotationSchemaCursor:
 
 
 class _RotationSchemaConnection:
-    def __init__(self, *, drift: bool = False) -> None:
+    def __init__(self, *, drift: bool = False, contribution_drift: bool = False) -> None:
         self.drift = drift
+        self.contribution_drift = contribution_drift
 
     def cursor(self):
-        return _RotationSchemaCursor(drift=self.drift)
+        return _RotationSchemaCursor(drift=self.drift, contribution_drift=self.contribution_drift)
 
 
 def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
@@ -229,3 +245,29 @@ def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejec
 
     with pytest.raises(RuntimeError, match="column comments"):
         schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(drift=True))
+
+    with pytest.raises(RuntimeError, match="contribution dimensions"):
+        schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(contribution_drift=True))
+
+
+def test_rotation_l1_prediction_contribution_migration_is_guarded_and_reversible() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (
+        (migration_root / "alter_hmm_risk_rotation_l1_prediction_contributions_20260911.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    rollback_sql = (
+        (migration_root / "alter_hmm_risk_rotation_l1_prediction_contributions_20260911.rollback.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+
+    assert "lock table hmm_risk.rotation_l1_prediction in share row exclusive mode" in apply_sql
+    assert "unexpected contribution dimensions" in apply_sql
+    assert "stored contribution dimensions invalid" in apply_sql
+    assert "jsonb_array_length(feature_contributions) in (10,11)" in apply_sql
+    assert "comment on constraint ck_hmm_risk_rotation_l1_prediction_availability" in apply_sql
+    assert "unexpected contribution dimensions" in rollback_sql
+    assert "non-v1.3 contribution dimensions exist" in rollback_sql
+    assert "jsonb_array_length(feature_contributions)=10" in rollback_sql

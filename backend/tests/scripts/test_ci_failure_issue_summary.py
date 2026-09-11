@@ -1617,27 +1617,9 @@ def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
     assert "needs_bug_json: `False`" in markdown
 
 
-def test_issue_on_test_fail_workflow_uses_payload_file_and_policy_gate() -> None:
-    import yaml
-
-    workflow = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
-    script = workflow["jobs"]["file-p0-p1-issue"]["steps"][3]["with"]["script"]
-    build_step = workflow["jobs"]["file-p0-p1-issue"]["steps"][1]["run"]
-
-    assert "--github-issue-payload-output tmp/validation/ci_failure_issue/github-issue-payload.json" in build_step
-    assert "INPUT_LLM_TRIAGE_MODE" in build_step
-    assert "INPUT_LLM_AUTO_FILE_OPT_IN" in build_step
-    assert 'LLM_ARGS=(--llm-triage-mode "${INPUT_LLM_TRIAGE_MODE}")' in build_step
-    assert '"${LLM_ARGS[@]}"' in build_step
-    assert "--wait-for-completion" in build_step
-    assert "--wait-attempts 2" in build_step
-    assert "--log-attempts 3" in build_step
-    assert "--stdout-format compact" in build_step
-    assert "const issuePayloadPath = 'tmp/validation/ci_failure_issue/github-issue-payload.json';" in script
-    assert "if (!fs.existsSync(issuePayloadPath))" in script
-    assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
-    assert "const renderBody = (issueNumber) => payload.body.replaceAll" in script
-    assert "body: renderBody(created.data.number)" in script
+def test_redundant_workflow_run_failure_listener_is_retired() -> None:
+    assert not Path(".github/workflows/issue-on-test-fail.yml").exists()
+    assert Path("scripts/ci_failure_issue_summary.py").exists()
 
 
 def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
@@ -1722,7 +1704,7 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert dispatch_inputs["run_dr"]["default"] is False
     assert dispatch_inputs["run_nightly_l3"]["default"] is True
     assert dispatch_inputs["run_paper_v2_live"]["default"] is False
-    assert dispatch_inputs["run_code_intelligence"]["default"] is True
+    assert dispatch_inputs["run_code_intelligence"]["default"] is False
     assert dispatch_inputs["llm_triage_mode"]["default"] == "warning_only"
     assert dispatch_inputs["llm_auto_file_opt_in"]["default"] is False
     assert "inputs.run_dr" in workflow["jobs"]["dr-snapshot"]["if"]
