@@ -448,7 +448,9 @@ def test_qe_eval_v2_all_horizons_use_each_horizons_own_valid_mask() -> None:
         name: factor_values.copy()
         for name in metric_engine.HOLDING_PERIODS
     }
-    returns["1d"][1, :] = np.nan
+    # Keep a non-empty cross-section but below the engine's daily IC minimum,
+    # while the other horizons retain their complete independent support.
+    returns["1d"][1, 4:] = np.nan
     close = pd.DataFrame(100.0, index=dates, columns=instruments)
 
     metrics, _ = metric_engine._compute_factor_metrics_impl(
