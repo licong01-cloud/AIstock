@@ -989,6 +989,32 @@ def test_validation_budget_keeps_changed_file_primary_module_plan_and_drops_fixe
     assert record_budget["deferred_nightly_verification"]["plans"] == []
 
 
+def test_validation_budget_does_not_restore_stale_inapplicable_module_or_dev_plans() -> None:
+    budgeted = workflow._apply_validation_budget(
+        record={
+            "required_verification": [
+                "l0",
+                "validation_module_registry_l0",
+                "factor_research_backend",
+                "factor_research_dev_db",
+            ]
+        },
+        validation={
+            "required_plans": ["l0"],
+            "recommended_plans": [],
+            "inapplicable_plans": [
+                "validation_module_registry_l0",
+                "factor_research_backend",
+                "factor_research_dev_db",
+            ],
+        },
+    )
+
+    assert budgeted["required_plans"] == ["l0"]
+    assert budgeted["recommended_plans"] == []
+    assert budgeted["deferred_nightly_plans"] == []
+
+
 def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

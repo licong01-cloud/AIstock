@@ -97,6 +97,8 @@ DOCS_LITE_PREFIXES = (
 DOCS_LITE_ROOT_FILES = {"README.md"}
 DOCS_STRICT_PREFIXES = ("docs/standards/", ".codex/", ".claude/")
 DOCS_STRICT_FILES = {"docs/codex_project_memory.md", "AGENTS.md", "AGENTS.override.md"}
+INSTRUCTION_DOCUMENT_PREFIXES = (".codex/skills/", ".claude/commands/")
+BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 ISSUE_FORM_LABEL_ALIASES = {
     "existing bug id": "bug_id",
     "severity": "severity",
@@ -200,6 +202,48 @@ def _docs_controlled_required(changed_files: list[str]) -> bool:
         _norm_path(path) in DOCS_STRICT_FILES or _norm_path(path).startswith(DOCS_STRICT_PREFIXES)
         for path in changed_files
     )
+
+
+def _is_non_behavioral_validation_path(path: str) -> bool:
+    """Return true for evidence/instructions that do not change module behavior.
+
+    Controlled trees may contain executable helpers, so only Markdown instruction
+    files are classified as non-behavioral. Catalog YAML, Python helpers, and every
+    other executable/configuration file continue through normal fail-closed plan
+    selection.
+    """
+
+    normalized = str(path).replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    lower = normalized.lower()
+    if lower.startswith("docs/") and lower.endswith((".md", ".markdown", ".txt")):
+        return True
+    if lower.endswith((".md", ".markdown")) and lower.startswith(INSTRUCTION_DOCUMENT_PREFIXES):
+        return True
+    return lower.startswith(BUG_REGISTRY_PREFIX) and lower.endswith(".json")
+
+
+def _plan_change_applicability(
+    plan: dict[str, Any],
+    changed_files: list[str],
+) -> tuple[bool, list[str], str]:
+    """Evaluate optional declarative changed-file triggers for one test plan."""
+
+    applicability = plan.get("change_applicability")
+    if not isinstance(applicability, dict):
+        return True, list(changed_files), "module_required_on_change"
+    includes = [str(item) for item in _as_list(applicability.get("include")) if str(item).strip()]
+    excludes = [str(item) for item in _as_list(applicability.get("exclude")) if str(item).strip()]
+    matched = [
+        path
+        for path in changed_files
+        if (not includes or any(_pattern_matches(pattern, path) for pattern in includes))
+        and not any(_pattern_matches(pattern, path) for pattern in excludes)
+    ]
+    if matched:
+        return True, matched, "matched_plan_change_applicability"
+    return False, [], str(applicability.get("no_match_reason") or "no_plan_change_applicability_match")
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -418,20 +462,76 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     required: list[str] = []
     recommended: list[str] = []
     primary_required: set[str] = set()
+    module_files: dict[str, list[str]] = {}
+    for matched in ownership.get("matched_rules") or []:
+        primary_module = str(matched.get("primary_module") or "")
+        file_path = str(matched.get("file") or "")
+        if primary_module and file_path:
+            module_files.setdefault(primary_module, []).append(file_path)
+    plan_trigger_reasons: dict[str, list[dict[str, Any]]] = {}
+    inapplicable_plans: list[str] = []
+    inapplicable_reasons: dict[str, str] = {}
+
+    def select_module_plan(module_id: str, plan_key: str, *, selection: str) -> bool:
+        plan = plans.get(plan_key)
+        if not plan:
+            return False
+        owned_files = _unique_strings(module_files.get(module_id) or ([] if module_files else changed_files))
+        behavioral_files = [path for path in owned_files if not _is_non_behavioral_validation_path(path)]
+        if plan_key == "l0":
+            applicable = True
+            matched_files = owned_files
+            reason = "baseline_static_gate_for_non_docs_lite_change"
+        elif owned_files and not behavioral_files:
+            applicable = False
+            matched_files = []
+            reason = "module_owned_files_are_documentation_instruction_or_bug_metadata_only"
+        else:
+            applicable, matched_files, reason = _plan_change_applicability(
+                plan,
+                behavioral_files or owned_files,
+            )
+        if not applicable:
+            inapplicable_plans.append(plan_key)
+            inapplicable_reasons.setdefault(plan_key, reason)
+            return False
+        plan_trigger_reasons.setdefault(plan_key, []).append(
+            {
+                "module": module_id,
+                "selection": selection,
+                "reason": reason,
+                "matched_files": matched_files,
+            }
+        )
+        return True
+
     for module_id in primary_modules:
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
-        primary_required.update(str(item) for item in _as_list(module_plans.get("required_on_change")))
-    for module_id in primary_modules:
-        entry = modules.get(module_id) or {}
-        module_plans = entry.get("test_plans") or {}
-        required.extend(_as_list(module_plans.get("required_on_change")))
-        recommended.extend(_as_list(module_plans.get("recommended")))
+        for plan_key in (str(item) for item in _as_list(module_plans.get("required_on_change"))):
+            if select_module_plan(module_id, plan_key, selection="required_on_change"):
+                required.append(plan_key)
+                primary_required.add(plan_key)
+        for plan_key in (str(item) for item in _as_list(module_plans.get("recommended"))):
+            if select_module_plan(module_id, plan_key, selection="recommended"):
+                recommended.append(plan_key)
     if docs_lite_change:
         required = []
         recommended = []
+        plan_trigger_reasons = {}
+        inapplicable_plans = []
+        inapplicable_reasons = {}
     elif not required:
         required.append("l0")
+        plan_trigger_reasons["l0"] = [
+            {
+                "module": module or "unmapped",
+                "selection": "fallback",
+                "reason": "baseline_static_gate_for_non_docs_lite_change",
+                "matched_files": _unique_strings(changed_files),
+            }
+        ]
+        primary_required.add("l0")
     required = [plan for plan in _unique_strings(required) if plan in plans]
     recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
     required, recommended, plan_promotions = _promote_indirect_required_to_recommended(
@@ -442,11 +542,22 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
     recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
     required = sorted(required, key=_plan_priority)
 
+    selected_plans = set(required + recommended)
+    final_inapplicable_plans = [
+        plan_key for plan_key in _unique_strings(inapplicable_plans) if plan_key not in selected_plans
+    ]
     skip_reasons = {
         plan_key: "not selected by changed-file ownership or requested module"
         for plan_key in plans
-        if plan_key not in set(required + recommended)
+        if plan_key not in selected_plans
     }
+    skip_reasons.update(
+        {
+            plan_key: reason
+            for plan_key, reason in inapplicable_reasons.items()
+            if plan_key in final_inapplicable_plans
+        }
+    )
     gates = {
         "ddl": "required" if any(_requires_production_ddl(path) for path in changed_files) else "noop",
         "frontend_dependency": "required"
@@ -464,6 +575,8 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         "required_plans": required,
         "recommended_plans": recommended,
         "plan_promotions": plan_promotions,
+        "plan_trigger_reasons": plan_trigger_reasons,
+        "inapplicable_plans": final_inapplicable_plans,
         "nightly_plans": ["AIstock Nightly L3 + DR"],
         "skip_reasons": skip_reasons,
         "production_gates": gates,
