@@ -245,6 +245,16 @@ def test_get_task_detail_summary_compacts_loop_jsonb(monkeypatch):
     assert "agent_analysis" not in loop_sql
     assert "config_json->'factor_list'" in loop_sql
     assert "metrics_json->>'IC'" in loop_sql
+    assert "config_json#>'{custom_params,_qe_direct_v2_dataset_binding,selection_pins}'" in loop_sql
+    assert "config_json#>'{model_params,_qe_direct_v2_dataset_binding,selection_pins}'" in loop_sql
+    assert "config_json#>>'{model_params,enable_sector_hmm}'" in loop_sql
+    assert "config_json#>'{model_params,sector_blacklist}'" in loop_sql
+    assert "AS absolute_metrics_present" in loop_sql
+    assert "metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe" in loop_sql
+    assert "metrics_json->>'information_ratio'" in loop_sql
+    assert "metrics_json->>'benchmark_annualized_return'" in loop_sql
+    assert "WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL" in loop_sql
+    assert "THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'" in loop_sql
 
 
 def test_get_task_detail_full_keeps_loop_jsonb(monkeypatch):
@@ -299,4 +309,24 @@ def test_compact_task_row_hmm_enabled_rejects_false_string():
     from backend.services.quantevolver.payload_summary import compact_task_row
 
     assert compact_task_row({"strategy_params": {"enable_sector_hmm": "false"}})["hmm_enabled"] is False
-    assert compact_task_row({"strategy_params": {"hmm_model_version_id": "snap_001"}})["hmm_enabled"] is True
+    unknown = compact_task_row({"strategy_params": {"hmm_model_version_id": "snap_001"}})
+    assert unknown["hmm_enabled"] is None
+    assert unknown["hmm_status"] == "unknown"
+
+
+def test_compact_task_row_hmm_status_uses_explicit_loop_enablement_only():
+    from backend.services.quantevolver.payload_summary import compact_task_row
+
+    mixed = compact_task_row(
+        {
+            "strategy_evo_config": {
+                "template_hmm_model_version_id": "not_enablement",
+                "loops": [
+                    {"enable_sector_hmm": False},
+                    {"enable_sector_hmm": True},
+                ],
+            }
+        }
+    )
+    assert mixed["hmm_enabled"] is None
+    assert mixed["hmm_status"] == "mixed"

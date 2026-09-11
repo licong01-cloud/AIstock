@@ -3121,6 +3121,7 @@ def generate_config(req: GenerateConfigRequest):
         custom_params["qe_mcp_provenance"] = provenance
 
         from ..services.quantevolver.qe_active_dataset_profile import (
+            enforce_qe_universe_topk,
             load_active_qe_profile,
             resolve_and_apply_active_qe_dataset,
         )
@@ -3147,6 +3148,12 @@ def generate_config(req: GenerateConfigRequest):
                 label_horizon=int(custom_params.get("label_horizon") or 1),
                 profile=active_profile,
             )
+
+        custom_params = enforce_qe_universe_topk(
+            custom_params,
+            universe_selection=req.universe_selection,
+            stock_pool=custom_params.get("stock_pool"),
+        )
 
 
         cc = ConfigComposer()
@@ -3349,6 +3356,7 @@ def generate_config(req: GenerateConfigRequest):
             "qe_universe_mode_invalid",
             "qe_universe_pool_unknown",
             "qe_universe_window_coverage_incomplete",
+            "qe_star50_topk_required",
         }
         raise HTTPException(
             status_code=400 if e.reason_code in request_codes else 503,

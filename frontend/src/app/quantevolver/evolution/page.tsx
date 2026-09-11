@@ -252,7 +252,7 @@ function normalizeSummaryLoop(loop: Loop): Loop {
     annualized_return: metricsSummary.annualized_return ?? (loop as any).annualized_return,
     max_drawdown: metricsSummary.max_drawdown ?? (loop as any).max_drawdown,
     information_ratio: metricsSummary.information_ratio ?? (loop as any).information_ratio,
-    sharpe: metricsSummary.sharpe ?? metricsSummary.information_ratio ?? (loop as any).information_ratio,
+    sharpe: metricsSummary.sharpe ?? (loop as any).sharpe,
   };
   return {
     ...loop,

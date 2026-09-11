@@ -3466,29 +3466,87 @@ class AutoEvolutionScheduler:
                                config_json->>'strategy_id' AS strategy_id,
                                config_json->>'label_horizon' AS label_horizon,
                                config_json->>'execution_algo' AS execution_algo,
+                               config_json->>'stock_pool' AS stock_pool,
+                               config_json->'strategy_params' AS strategy_params,
+                               COALESCE(
+                                   config_json->>'enable_sector_hmm',
+                                   config_json#>>'{model_params,enable_sector_hmm}',
+                                   config_json#>>'{strategy_params,enable_sector_hmm}'
+                               ) AS enable_sector_hmm,
+                               COALESCE(
+                                   config_json->>'hmm_model_version_id',
+                                   config_json#>>'{model_params,hmm_model_version_id}',
+                                   config_json#>>'{strategy_params,hmm_model_version_id}'
+                               ) AS hmm_model_version_id,
+                               COALESCE(
+                                   config_json->>'hmm_signal_preset',
+                                   config_json#>>'{model_params,hmm_signal_preset}',
+                                   config_json#>>'{strategy_params,hmm_signal_preset}'
+                               ) AS hmm_signal_preset,
+                               COALESCE(
+                                   config_json->>'sector_blacklist_enabled',
+                                   config_json#>>'{model_params,sector_blacklist_enabled}',
+                                   config_json#>>'{strategy_params,sector_blacklist_enabled}'
+                               ) AS sector_blacklist_enabled,
+                               COALESCE(
+                                   config_json->'sector_blacklist',
+                                   config_json#>'{model_params,sector_blacklist}',
+                                   config_json#>'{strategy_params,sector_blacklist}'
+                               ) AS sector_blacklist,
+                               COALESCE(
+                                   config_json#>'{custom_params,_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json#>'{model_params,_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json#>'{_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json->'universe_selection'
+                               ) AS universe_selection,
                                COALESCE(metrics_json->>'ic', metrics_json->>'IC') AS ic,
                                COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
                                COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
                                COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                               COALESCE(
-                                   metrics_json->>'cagr',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
-                               ) AS cagr,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                                   ELSE metrics_json->>'cagr'
+                               END AS cagr,
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe,
+                               (metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL) AS absolute_metrics_present,
                                COALESCE(
                                    metrics_json->>'annualized_return',
                                    metrics_json->>'1day.excess_return_with_cost.annualized_return'
                                ) AS annualized_return,
                                COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
-                               ) AS max_drawdown,
+                                   metrics_json->>'information_ratio',
+                                   metrics_json->>'1day.excess_return_with_cost.information_ratio'
+                               ) AS information_ratio,
                                COALESCE(
-                                   metrics_json->>'calmar',
-                                   metrics_json->>'calmar_ratio',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
-                               ) AS calmar,
+                                   metrics_json->>'benchmark_annualized_return',
+                                   metrics_json->>'benchmark_annual_return',
+                                   metrics_json#>>'{enhanced_metrics,benchmark_returns,annualized_return}'
+                               ) AS benchmark_annualized_return,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                                   ELSE COALESCE(
+                                       metrics_json->>'max_drawdown',
+                                       metrics_json->>'1day.excess_return_with_cost.max_drawdown'
+                                   )
+                               END AS max_drawdown,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN COALESCE(
+                                       metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                                       metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                                   )
+                                   ELSE COALESCE(metrics_json->>'calmar', metrics_json->>'calmar_ratio')
+                               END AS calmar,
+                               COALESCE(
+                                   metrics_json->>'hmm_trigger_count',
+                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,hmm_trigger_count}'
+                               ) AS hmm_trigger_count,
+                               COALESCE(
+                                   metrics_json->>'blacklist_excluded_count',
+                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,blacklist_excluded_count}'
+                               ) AS blacklist_excluded_count,
                                COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
                                COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
                                COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
@@ -3556,25 +3614,33 @@ class AutoEvolutionScheduler:
                            COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
                            COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
                            COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           COALESCE(
-                               metrics_json->>'cagr',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
-                           ) AS cagr,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                               ELSE metrics_json->>'cagr'
+                           END AS cagr,
+                           metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe,
+                           (metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL) AS absolute_metrics_present,
                            COALESCE(
                                metrics_json->>'annualized_return',
                                metrics_json->>'1day.excess_return_with_cost.annualized_return'
                            ) AS annualized_return,
-                           COALESCE(
-                               metrics_json->>'max_drawdown',
-                               metrics_json->>'1day.excess_return_with_cost.max_drawdown',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
-                           ) AS max_drawdown,
-                           COALESCE(
-                               metrics_json->>'calmar',
-                               metrics_json->>'calmar_ratio',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
-                           ) AS calmar,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                               ELSE COALESCE(
+                                   metrics_json->>'max_drawdown',
+                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown'
+                               )
+                           END AS max_drawdown,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN COALESCE(
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                               )
+                               ELSE COALESCE(metrics_json->>'calmar', metrics_json->>'calmar_ratio')
+                           END AS calmar,
                            COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
                            COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
                            COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
@@ -5150,6 +5216,8 @@ class AutoEvolutionScheduler:
         base_exp_id = f"{new_task_id}_base"
         metrics = source_loop.get("metrics_json") or {}
         from .qe_active_dataset_profile import (
+            QEActiveDatasetProfileError,
+            enforce_qe_universe_topk,
             load_active_qe_profile,
             resolve_and_apply_active_qe_dataset,
         )
@@ -5189,6 +5257,17 @@ class AutoEvolutionScheduler:
                 loop_cfg["custom_params"] = resolved_params
                 loop_cfg["stock_pool"] = resolved_params.get("stock_pool")
                 loop_cfg["resolved_dataset"] = resolved_summary
+        for idx, loop_cfg in enumerate(loops_config, start=1):
+            try:
+                loop_cfg["strategy_params"] = enforce_qe_universe_topk(
+                    loop_cfg.get("strategy_params"),
+                    universe_selection=loop_cfg.get("universe_selection"),
+                    stock_pool=loop_cfg.get("stock_pool"),
+                )
+            except QEActiveDatasetProfileError as exc:
+                raise ValueError(
+                    f"strategy_fork loop {idx}: reason_code={exc.reason_code}: {exc}"
+                ) from exc
         loops_config = [
             attach_qe_planned_loop_registration(
                 loop_cfg,

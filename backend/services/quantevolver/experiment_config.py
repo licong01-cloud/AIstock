@@ -23,7 +23,11 @@ from .qe_dataset_contract import (
     QEFormalDatasetRequest,
     require_qe_formal_dataset_request,
 )
-from .qe_active_dataset_profile import UniverseSelection
+from .qe_active_dataset_profile import (
+    QEActiveDatasetProfileError,
+    UniverseSelection,
+    enforce_qe_universe_topk,
+)
 
 ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20, 30, 40, 60, 120, 180)
 DEFAULT_LABEL_HORIZON = 1
@@ -494,6 +498,14 @@ class ExperimentConfig(BaseModel):
                 raise ValueError(
                     "stock_pool and universe_selection cannot be supplied together for new QE work"
                 )
+        try:
+            self.strategy_params = enforce_qe_universe_topk(
+                self.strategy_params,
+                universe_selection=self.universe_selection,
+                stock_pool=self.stock_pool,
+            )
+        except QEActiveDatasetProfileError as exc:
+            raise ValueError(str(exc)) from exc
         for source_name, source in (
             ("model_params_base", self.model_params_base),
             ("strategy_params", self.strategy_params),

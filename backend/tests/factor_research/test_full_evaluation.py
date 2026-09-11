@@ -11,10 +11,16 @@ import pytest
 from backend.services.factor_research.full_evaluation import (
     build_standard_windows,
     compute_correlation_views,
+    load_reference_values,
     validate_full_evaluation_spec,
 )
 from backend.services.factor_research.models import ResearchError
-from backend.services.factor_research.runner import CANONICAL_UNIVERSE, execute, validate_spec
+from backend.services.factor_research.runner import (
+    CANONICAL_UNIVERSE,
+    execute,
+    load_values,
+    validate_spec,
+)
 
 
 def _write_values(path: Path, name: str, dates: pd.DatetimeIndex, instruments: list[str]) -> None:
@@ -23,6 +29,50 @@ def _write_values(path: Path, name: str, dates: pd.DatetimeIndex, instruments: l
     )
     values = np.tile(np.arange(1.0, len(instruments) + 1.0), len(dates))
     pd.DataFrame({name: values}, index=index).to_hdf(path, key="data")
+
+
+def _write_reference_values(
+    path: Path, dates: pd.DatetimeIndex, instruments: list[str]
+) -> None:
+    index = pd.MultiIndex.from_product(
+        [dates, instruments], names=["datetime", "instrument"]
+    )
+    values = np.tile(np.arange(1.0, len(instruments) + 1.0), len(dates))
+    pd.DataFrame({"value": values}, index=index).to_parquet(path)
+
+
+def test_reference_loader_accepts_only_official_value_schema(tmp_path: Path) -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3)
+    instruments = ["000001.SZ", "000002.SZ"]
+    valid = tmp_path / "valid.parquet"
+    _write_reference_values(valid, dates, instruments)
+
+    loaded = load_reference_values(valid, "m_reference")
+
+    assert list(loaded.columns) == ["m_reference"]
+    assert loaded.index.names == ["datetime", "instrument"]
+    assert loaded["m_reference"].tolist() == [1.0, 2.0] * len(dates)
+
+    wrong_column = tmp_path / "wrong-column.parquet"
+    pd.read_parquet(valid).rename(columns={"value": "m_reference"}).to_parquet(
+        wrong_column
+    )
+    with pytest.raises(ResearchError, match="official value column"):
+        load_reference_values(wrong_column, "m_reference")
+
+    multiple_columns = tmp_path / "multiple-columns.parquet"
+    frame = pd.read_parquet(valid)
+    frame.assign(other=frame["value"]).to_parquet(multiple_columns)
+    with pytest.raises(ResearchError, match="official value column"):
+        load_reference_values(multiple_columns, "m_reference")
+
+    invalid_index = tmp_path / "invalid-index.parquet"
+    frame.reset_index(drop=True).to_parquet(invalid_index, index=False)
+    with pytest.raises(ResearchError, match="MultiIndex"):
+        load_reference_values(invalid_index, "m_reference")
+
+    with pytest.raises(ResearchError, match="named factor column"):
+        load_values(valid, "m_candidate")
 
 
 def test_standard_windows_use_actual_calendar_boundaries() -> None:
@@ -48,7 +98,10 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
     reference = tmp_path / "reference.h5"
     reference.write_bytes(b"not-read-by-validation")
     value = {
-        "reference_value_artifacts": {"m_reference": str(reference)},
+        "reference_value_artifacts": {
+            "m_reference": str(reference),
+            "CORD10": str(reference),
+        },
         "correlation_batch_size": 2,
         "correlation_half_life": 4,
         "correlation_min_stocks": 3,
@@ -59,6 +112,7 @@ def test_full_evaluation_requires_explicit_regular_reference_artifacts(tmp_path:
         value, candidate_names={"m_candidate"}, repo_root=Path(__file__).parents[3]
     )
     assert normalized["reference_value_artifacts"] == {
+        "CORD10": str(reference.resolve()),
         "m_reference": str(reference.resolve())
     }
 
@@ -73,10 +127,13 @@ def test_full_evaluation_reports_candidate_pairs_without_reference_pairs(tmp_pat
     dates = pd.bdate_range("2024-01-02", periods=4)
     instruments = ["000001.SZ", "000002.SZ", "000003.SZ"]
     paths = {}
-    for name in ("m_candidate_a", "m_candidate_b", "m_reference"):
+    for name in ("m_candidate_a", "m_candidate_b"):
         path = tmp_path / f"{name}.h5"
         _write_values(path, name, dates, instruments)
         paths[name] = path
+    reference_path = tmp_path / "m_reference.parquet"
+    _write_reference_values(reference_path, dates, instruments)
+    paths["m_reference"] = reference_path
     windows = build_standard_windows(
         dates, signal_start=str(dates[0].date()), signal_end=str(dates[-1].date())
     )
@@ -112,8 +169,8 @@ def test_runner_full_evaluation_is_opt_in_and_computes_only_selected_pairs(
     qlib_dir = tmp_path / "qlib"
     data_dir.mkdir()
     qlib_dir.mkdir()
-    reference_path = tmp_path / "reference.h5"
-    _write_values(reference_path, "m_reference", dates, instruments)
+    reference_path = tmp_path / "reference.parquet"
+    _write_reference_values(reference_path, dates, instruments)
 
     script = tmp_path / "candidate.py"
     script.write_text(
@@ -168,6 +225,12 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
         "st_pit_eligible_mask": close.notna(),
         "data_start": str(dates[0].date()),
         "data_end": str(dates[-1].date()),
+        "instrument_coverage": {
+            "requested_instrument_count": len(instruments),
+            "physical_price_instrument_count": len(instruments),
+            "missing_price_instrument_count": 0,
+            "missing_price_instruments": [],
+        },
     }
     calls: list[dict] = []
 
@@ -182,6 +245,7 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
     full = result["full_evaluation"]
     assert full["scope"] == "research_only_not_official_metrics_correlations_or_qe_result"
     assert full["official_database_writes"] == 0
+    assert full["all_requested_instruments_have_physical_prices"] is True
     assert full["correlations"]["reference_reference_pairs_computed"] == 0
     assert all(
         window["requested_pairs"] == 1

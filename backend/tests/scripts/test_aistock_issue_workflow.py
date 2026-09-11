@@ -15126,6 +15126,10 @@ def test_close_sync_apply_can_create_registry_worktree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     merge_commit = "a" * 40
+    source_root = isolated_workflow_root / "source-worktree"
+    source_root.mkdir()
+    _write_runtime_catalog(source_root)
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
         _bug(status="in_progress"),
@@ -15410,6 +15414,118 @@ def test_close_sync_worktree_reuses_clean_ahead_branch_after_push_failure(
     assert payload["reused"] is True
     assert payload["ahead_with_task_commits"] is True
     assert not any(args[:2] == ["merge", "--ff-only"] for args in git_calls)
+
+
+def test_close_sync_worktree_reuses_exact_dirty_bug_record_after_issue_sync_warning(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    bug_path = registry / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    _write_json(
+        bug_path,
+        _bug(
+            status="fixed",
+            fix_commit="a" * 40,
+            pr_url="https://github.example/pull/199",
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "chore/BUG-199-close-sync",
+            "dirty": True,
+            "dirty_count": 1,
+            "head": "source-merge",
+            "origin_main": "newer-main",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_dirty_files",
+        lambda root: ["tests/aistock_validation/bugs/bug199.json"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, cwd=None, **kwargs: {
+            "ok": args[-2:] == ["HEAD", "origin/main"],
+            "returncode": 0 if args[-2:] == ["HEAD", "origin/main"] else 1,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(
+        bug_id="BUG-199",
+        create=True,
+        dry_run=False,
+        issue_json=bug_path,
+    )
+
+    assert payload["reused"] is True
+    assert payload["recoverable_dirty_bug_json"] is True
+    assert payload["git"]["recoverable_dirty_record"]["bug_id"] == "BUG-199"
+
+
+@pytest.mark.parametrize(
+    ("dirty_files", "record_bug_id"),
+    [
+        (["tests/aistock_validation/bugs/bug199.json", "unexpected.log"], "BUG-199"),
+        (["tests/aistock_validation/bugs/bug199.json"], "BUG-200"),
+    ],
+)
+def test_close_sync_worktree_rejects_unbounded_dirty_recovery(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dirty_files: list[str],
+    record_bug_id: str,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    _write_json(
+        registry / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(
+            bug_id=record_bug_id,
+            status="fixed",
+            fix_commit="a" * 40,
+            pr_url="https://github.example/pull/199",
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(workflow, "_git_fetch_with_transport_retry", lambda args, **kwargs: "")
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "chore/BUG-199-close-sync",
+            "dirty": True,
+            "dirty_count": len(dirty_files),
+            "head": "source-merge",
+            "origin_main": "source-merge",
+        },
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: dirty_files)
+
+    with pytest.raises(workflow.WorkflowError, match="worktree is dirty"):
+        workflow._maybe_create_close_sync_worktree(
+            bug_id="BUG-199",
+            create=True,
+            dry_run=False,
+            issue_json=registry / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        )
 
 
 def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:
@@ -16171,6 +16287,56 @@ def test_cleanup_evidence_finalization_requires_structured_receipt(
     )
     assert mismatch["status"] == "bug_record_identity_mismatch"
     assert mismatch["durable_receipt_present"] is False
+
+
+def test_cleanup_evidence_finalization_uses_exact_origin_main_record_when_source_is_stale(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = isolated_workflow_root / "source-worktree"
+    canonical_root = isolated_workflow_root / "canonical"
+    source_path = _write_json(
+        source_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(status="in_progress", validation_evidence=[]),
+    )
+    canonical_path = canonical_root / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    canonical_path.parent.mkdir(parents=True)
+    fixed_record = _bug(
+        status="fixed",
+        fix_commit="a" * 40,
+        pr_url="https://github.example/pull/199",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    monkeypatch.setattr(workflow, "REPO_ROOT", source_root)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical_root)
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (json.loads(source_path.read_text(encoding="utf-8")), source_path),
+    )
+
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_run(command: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        calls.append((command, cwd))
+        assert command == ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"]
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(fixed_record), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    finalization = workflow._cleanup_evidence_finalization("BUG-199")
+
+    assert finalization["durable_receipt_present"] is True
+    assert finalization["status"] == "finalized_legacy_closed_bug"
+    assert finalization["evidence_source"] == "origin_main_exact_bug_record"
+    assert finalization["local_status"] == "missing_durable_receipt"
+    assert calls == [
+        (
+            ["git", "show", "origin/main:tests/aistock_validation/bugs/bug199.json"],
+            canonical_root,
+        )
+    ]
 
 
 def test_merged_pr_validation_receipt_profile_is_compact(

@@ -66,6 +66,16 @@ _POOL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
 _SIDECAR_RE = re.compile(r"^(?:stock_universe|index_pool__[a-z0-9_]+)\.txt$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SYMBOL_RE = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
+QE_STAR50_REQUIRED_TOPK = 20
+_STAR50_ALIASES = frozenset(
+    {
+        "star50",
+        "科创50",
+        "000688.sh",
+        "index_pool__star50",
+        "index_pool__star50.txt",
+    }
+)
 
 
 class QEActiveDatasetProfileError(RuntimeError):
@@ -194,6 +204,60 @@ class UniverseSelection:
 
     def as_dict(self) -> dict[str, Any]:
         return {"mode": self.mode, "pool_ids": list(self.pool_ids)}
+
+
+def is_pure_star50_universe(
+    *,
+    universe_selection: Mapping[str, Any] | None = None,
+    stock_pool: Any = None,
+) -> bool:
+    """Return whether one executable arm selects only the STAR50 universe."""
+
+    def _is_star50(value: Any) -> bool:
+        normalized = str(value or "").strip().lower().replace("\\", "/")
+        filename = normalized.rsplit("/", 1)[-1]
+        return normalized in _STAR50_ALIASES or filename in _STAR50_ALIASES
+
+    if universe_selection is not None:
+        mode = str(universe_selection.get("mode") or "")
+        raw_pool_ids = universe_selection.get("pool_ids")
+        pool_ids = raw_pool_ids if isinstance(raw_pool_ids, (list, tuple)) else []
+        return (
+            mode in {"single_index", "index_union"}
+            and len(pool_ids) == 1
+            and _is_star50(pool_ids[0])
+        )
+    return _is_star50(stock_pool)
+
+
+def enforce_qe_universe_topk(
+    strategy_params: Mapping[str, Any] | None,
+    *,
+    universe_selection: Mapping[str, Any] | None = None,
+    stock_pool: Any = None,
+) -> dict[str, Any]:
+    """Apply the STAR50 Top20 contract without changing any other universe."""
+
+    params = dict(strategy_params or {})
+    if not is_pure_star50_universe(
+        universe_selection=universe_selection,
+        stock_pool=stock_pool,
+    ):
+        return params
+
+    if params.get("topk") is None:
+        params["topk"] = QE_STAR50_REQUIRED_TOPK
+        return params
+
+    topk = params["topk"]
+    if isinstance(topk, bool) or not isinstance(topk, int) or topk != QE_STAR50_REQUIRED_TOPK:
+        raise _fail(
+            "qe_star50_topk_required",
+            "STAR50 single-index experiments require integer topk=20",
+            requested_topk=topk,
+            required_topk=QE_STAR50_REQUIRED_TOPK,
+        )
+    return params
 
 
 @dataclass(frozen=True, slots=True)

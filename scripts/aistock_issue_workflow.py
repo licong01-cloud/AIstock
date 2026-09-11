@@ -6349,18 +6349,32 @@ def _refresh_reused_close_sync_worktree(
     worktree: Path,
     branch: str,
     label: str,
+    recoverable_bug_id: str | None = None,
+    recoverable_issue_json: Path | None = None,
 ) -> tuple[dict[str, Any], str]:
     git = _git_snapshot(worktree)
     if not git.get("ok"):
         raise WorkflowError(f"target {label} worktree is not a git checkout: {worktree}")
-    if git.get("dirty"):
-        raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
     if git.get("branch") != branch:
         raise WorkflowError(
             f"target {label} worktree branch mismatch: expected={branch} actual={git.get('branch')}"
         )
     head = str(git.get("head") or "")
     origin_main = str(git.get("origin_main") or "")
+    if git.get("dirty"):
+        recovery = _recoverable_close_sync_dirty_record(
+            worktree,
+            recoverable_bug_id,
+            recoverable_issue_json,
+        )
+        if not recovery:
+            raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
+        if head and origin_main and head != origin_main:
+            behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
+            if not behind.get("ok"):
+                raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
+        git["recoverable_dirty_record"] = recovery
+        return git, "recoverable_dirty_bug_json"
     if not head or not origin_main or head == origin_main:
         return git, "current"
     behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
@@ -6376,7 +6390,55 @@ def _refresh_reused_close_sync_worktree(
     raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
 
 
-def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
+def _recoverable_close_sync_dirty_record(
+    worktree: Path,
+    bug_id: str | None,
+    issue_json: Path | None,
+) -> dict[str, Any] | None:
+    canonical_bug_id = str(bug_id or "").strip().upper()
+    dirty = [path.replace("\\", "/") for path in _dirty_files(worktree)]
+    if not canonical_bug_id or issue_json is None or len(dirty) != 1:
+        return None
+    relative_path = dirty[0]
+    if not relative_path.startswith("tests/aistock_validation/bugs/") or not relative_path.endswith(".json"):
+        return None
+    expected_target = _issue_json_path_for_worktree(issue_json, worktree)
+    try:
+        expected_relative = expected_target.resolve().relative_to(worktree.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    if relative_path != expected_relative:
+        return None
+    target = worktree / Path(relative_path)
+    try:
+        record = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if str(record.get("bug_id") or "").strip().upper() != canonical_bug_id:
+        return None
+    status = str(record.get("status") or "").strip()
+    if status not in {"fixed", "verified"}:
+        return None
+    if not str(record.get("fix_commit") or "").strip() or not str(record.get("pr_url") or "").strip():
+        return None
+    return {
+        "bug_id": canonical_bug_id,
+        "path": relative_path,
+        "status": status,
+        "fix_commit": str(record.get("fix_commit")),
+        "pr_url": str(record.get("pr_url")),
+    }
+
+
+def _maybe_create_close_sync_worktree(
+    *,
+    bug_id: str,
+    create: bool,
+    dry_run: bool,
+    issue_json: Path | None = None,
+) -> dict[str, Any]:
     branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
     plan = {
         "create_worktree": create,
@@ -6393,11 +6455,15 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
             worktree=worktree,
             branch=branch,
             label="close-sync",
+            recoverable_bug_id=bug_id,
+            recoverable_issue_json=issue_json,
         )
         if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
         elif relation == "ahead_with_task_commits":
             plan["ahead_with_task_commits"] = True
+        elif relation == "recoverable_dirty_bug_json":
+            plan["recoverable_dirty_bug_json"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
@@ -6407,6 +6473,8 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
             worktree=worktree,
             branch=branch,
             label="close-sync",
+            recoverable_bug_id=bug_id,
+            recoverable_issue_json=issue_json,
         )
         plan[relation] = True
         plan["reused_branch"] = True
@@ -14091,11 +14159,67 @@ def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
             "durable_receipt_present": False,
             "error": str(exc),
         }
-    return _cleanup_evidence_finalization_from_record(
+    local_finalization = _cleanup_evidence_finalization_from_record(
         record,
         source=_repo_rel(source_path),
         expected_bug_id=bug_id,
     )
+    if local_finalization.get("durable_receipt_present"):
+        return local_finalization
+
+    canonical_root = _canonical_root()
+    canonical_path = _issue_json_path_for_worktree(source_path, canonical_root)
+    try:
+        relative_path = canonical_path.resolve().relative_to(canonical_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "canonical_bug_path_unavailable",
+        }
+    origin_record = _run_command(
+        ["git", "show", f"origin/main:{relative_path}"],
+        cwd=canonical_root,
+        timeout=30,
+    )
+    if not origin_record.get("ok"):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "exact_bug_record_unavailable",
+        }
+    try:
+        candidate = json.loads(str(origin_record.get("stdout") or ""))
+    except (json.JSONDecodeError, TypeError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_invalid_json",
+        }
+    if not isinstance(candidate, dict):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_not_mapping",
+        }
+    origin_finalization = _cleanup_evidence_finalization_from_record(
+        candidate,
+        source=f"origin/main:{relative_path}",
+        expected_bug_id=bug_id,
+    )
+    if origin_finalization.get("durable_receipt_present"):
+        return {
+            **origin_finalization,
+            "evidence_source": "origin_main_exact_bug_record",
+            "local_status": local_finalization.get("status"),
+            "local_bug_json": local_finalization.get("bug_json"),
+            "origin_main_exact_record_checked": True,
+        }
+    return {
+        **local_finalization,
+        "origin_main_exact_record_checked": True,
+        "origin_main_status": origin_finalization.get("status"),
+    }
 
 
 def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
@@ -19257,11 +19381,11 @@ def build_close_sync_plan(
         bug_id=canonical_bug_id,
         create=create_registry_worktree,
         dry_run=not apply,
+        issue_json=source_path,
     )
     close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
     if create_registry_worktree and apply:
-        rel_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
-        target_source = close_sync_root / rel_source
+        target_source = _issue_json_path_for_worktree(source_path, close_sync_root)
         if not target_source.exists():
             raise WorkflowError(f"BUG JSON does not exist in close-sync worktree: {target_source}")
         record = _load_json(target_source)

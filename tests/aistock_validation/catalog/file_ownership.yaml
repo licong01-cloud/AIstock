@@ -613,6 +613,8 @@ rules:
       - backend/tests/quantevolver/test_official_factor_batch_compute.py
       - backend/tests/quantevolver/test_official_runtime_validation.py
       - backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py
+      - backend/tests/quantevolver/test_benchmark_from_bin_bug625.py
+      - backend/tests/quantevolver/test_payload_summary.py
       - backend/tests/quantevolver/test_qe_payload_summary_services.py
       - backend/tests/test_correlation_compute_independence.py
       - backend/tests/test_factor_st_pit_metrics_cache.py
