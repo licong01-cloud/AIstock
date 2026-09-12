@@ -518,7 +518,7 @@ def combined_corporate_action_source_snapshot(
 ) -> Mapping[str, Any]:
     identity = {
         "schema_version": "position_timing_pattern_corporate_action_source_snapshot_v1",
-        "action_types": ("DIVIDEND", "RIGHTS_ISSUE"),
+        "action_types": ["DIVIDEND", "RIGHTS_ISSUE"],
         "dividend_snapshot_sha256": _validated_sha256(
             dividend_snapshot_sha256,
             code="PATTERN_DIVIDEND_SNAPSHOT_IDENTITY_INVALID",
@@ -526,7 +526,7 @@ def combined_corporate_action_source_snapshot(
         "rights_issue_authority_file_sha256": authority.authority_reference["sha256"],
         "rights_issue_authority_canonical_sha256": authority.authority_canonical_sha256,
         "rights_issue_source_documents_sha256": authority.source_documents_sha256,
-        "rights_issue_event_ids": tuple(event.event_id for event in authority.events),
+        "rights_issue_event_ids": [event.event_id for event in authority.events],
         "rights_issue_event_count": len(authority.events),
     }
     return {**identity, "snapshot_sha256": canonical_sha256(identity)}

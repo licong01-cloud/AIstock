@@ -19,6 +19,7 @@ from backend.services.position_timing.contracts import (
 )
 from backend.services.position_timing.pattern_research import (
     FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+    PRE_OUTCOME_SUPERSESSION_REASON,
     _rights_issue_request_contract_invalid,
     audit_pattern_factor_action_coverage,
 )
@@ -161,7 +162,8 @@ def test_authority_reader_policy_and_application_are_hash_bound(tmp_path: Path):
         dividend_snapshot_sha256="a" * 64,
         authority=authority,
     )
-    assert combined["action_types"] == ("DIVIDEND", "RIGHTS_ISSUE")
+    assert combined["action_types"] == ["DIVIDEND", "RIGHTS_ISSUE"]
+    assert json.loads(canonical_json_bytes(combined)) == combined
     assert combined["snapshot_sha256"] == canonical_sha256(
         {key: value for key, value in combined.items() if key != "snapshot_sha256"}
     )
@@ -226,9 +228,10 @@ def test_rights_issue_binds_factor_change_without_creating_account_shares(
     assert audit["bound_material_factor_change_count"] == 1
     assert audit["rights_issue_bound_material_factor_change_count"] == 1
     assert audit["unbound_material_factor_change_count"] == 0
-    assert audit["bound_rights_issue_event_ids"] == (
-        "RIGHTS_ISSUE:000001.SZ:2024-01-04",
-    )
+    assert audit["bound_rights_issue_event_ids"] == [
+        "RIGHTS_ISSUE:000001.SZ:2024-01-04"
+    ]
+    assert json.loads(canonical_json_bytes(audit)) == audit
     assert audit["factor_account_participation_inference"] is False
     assert audit["coverage_complete"] is True
 
@@ -264,5 +267,12 @@ def test_rights_issue_binds_factor_change_without_creating_account_shares(
         },
     }
     assert _rights_issue_request_contract_invalid(request) is False
+    request["superseded_request"] = {"sha256": "9" * 64}
+    request["superseded_request_sha256"] = "8" * 64
+    request["supersession_reason"] = PRE_OUTCOME_SUPERSESSION_REASON
+    assert _rights_issue_request_contract_invalid(request) is False
+    request["supersession_reason"] = "UNREGISTERED_REASON"
+    assert _rights_issue_request_contract_invalid(request) is True
+    request["supersession_reason"] = PRE_OUTCOME_SUPERSESSION_REASON
     request["rights_issue_participation_policy_sha256"] = "0" * 64
     assert _rights_issue_request_contract_invalid(request) is True

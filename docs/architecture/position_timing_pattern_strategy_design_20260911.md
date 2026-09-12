@@ -5,7 +5,7 @@
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动及旧候选复权/公司行动覆盖缺口；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。请求前全量审计随后在第四批128股发现4个未绑定区间并拒绝生成正式 request。数据窗口现已交付不可变 r4 candidate（根 manifest 文件 SHA256 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`）及三项配股 authority（canonical SHA256 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`）；本版先冻结统一账户政策，再实现并重放，尚未读取第四批收益、尚无 serving 模型。
+> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动及旧候选复权/公司行动覆盖缺口；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。请求前全量审计随后在第四批128股发现4个未绑定区间并拒绝生成正式 request。数据窗口现已交付不可变 r4 candidate（根 manifest 文件 SHA256 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`）及三项配股 authority（canonical SHA256 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`）。首个r4 request `a9d8e5410f0baec676a058d0deae9253f59a04ff852948db2d21b90809cdf5e3` 在收益读取前因内存tuple经JSON持久化为list后直接对象比较而typed fail closed，未生成bundle；该request永久保留且不计为已观察收益的正式试验。修复仅允许以它为pre-outcome supersession并证明人口、输入和先验request集合完全相同，不删除旧request、不换股。当前尚未读取第四批收益、尚无serving模型。
 
 ## 1. Background / 目标与现状
 

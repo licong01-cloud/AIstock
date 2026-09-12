@@ -480,9 +480,14 @@ def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(
         tmp_path,
         exclude_request_sha256=digests[1],
     )
+    excluding_with_sequence = prior_timing_request_population(
+        tmp_path,
+        exclude_request_sha256s=(digests[1],),
+    )
 
     assert complete["forbidden_symbols"] == ("000001.SZ", "000002.SZ")
     assert excluding_current["forbidden_symbols"] == ("000001.SZ",)
+    assert excluding_with_sequence["forbidden_symbols"] == ("000001.SZ",)
 
 
 def test_snapshot_scope_fails_closed_for_new_evaluation_symbol(tmp_path):

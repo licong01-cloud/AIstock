@@ -100,6 +100,7 @@ EVOLUTION_FAMILY_SIZE = 5
 PREREGISTERED_FAMILY_COUNT = 2
 TOTAL_FORMAL_COMPARISON_COUNT = PROTOTYPE_FAMILY_SIZE + EVOLUTION_FAMILY_SIZE
 RESULT_CLASS = "EXPLORATORY_USER_PROPOSED_HYPOTHESIS_CROSS_SYMBOL_NOT_TEMPORAL_HOLDOUT"
+PRE_OUTCOME_SUPERSESSION_REASON = "PRE_OUTCOME_JSON_ROUND_TRIP_IDENTITY_FIX"
 
 CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
     "schema_version": "position_timing_pattern_corporate_action_application_policy_v2",
@@ -503,12 +504,12 @@ def audit_pattern_factor_action_coverage(
                                     "previous_factor": str(previous_factor),
                                     "current_factor": str(factor),
                                     "absolute_change_bps": str(change_bps),
-                                    "rights_issue_event_ids": tuple(
+                                    "rights_issue_event_ids": [
                                         event.event_id for event in rights_events
-                                    ),
-                                    "rights_issue_event_sha256s": tuple(
+                                    ],
+                                    "rights_issue_event_sha256s": [
                                         event.event_sha256 for event in rights_events
-                                    ),
+                                    ],
                                     "factor_account_participation_inference": False,
                                 }
                             )
@@ -564,14 +565,12 @@ def audit_pattern_factor_action_coverage(
                 "dividend_bound_material_factor_change_count": dividend_bound_change_count,
                 "rights_issue_bound_material_factor_change_count": rights_bound_change_count,
                 "bound_rights_issue_factor_changes": rights_bindings,
-                "bound_rights_issue_event_ids": tuple(
-                    sorted(
-                        {
-                            event_id
-                            for binding in rights_bindings
-                            for event_id in binding["rights_issue_event_ids"]
-                        }
-                    )
+                "bound_rights_issue_event_ids": sorted(
+                    {
+                        event_id
+                        for binding in rights_bindings
+                        for event_id in binding["rights_issue_event_ids"]
+                    }
                 ),
                 "factor_account_participation_inference": False,
             }
@@ -668,12 +667,18 @@ def prior_timing_request_population(
     research_root: Path,
     *,
     exclude_request_sha256: str | None = None,
+    exclude_request_sha256s: Sequence[str] = (),
 ) -> Mapping[str, Any]:
     """Bind prior request populations without opening any outcome or receipt."""
 
     root = research_root.resolve()
     records: list[dict[str, Any]] = []
     forbidden: set[str] = set()
+    excluded_request_ids = {
+        str(item) for item in exclude_request_sha256s if str(item)
+    }
+    if exclude_request_sha256:
+        excluded_request_ids.add(exclude_request_sha256)
     for path in sorted(root.glob("*/requests/*.json")):
         reference = file_reference(path)
         try:
@@ -684,7 +689,7 @@ def prior_timing_request_population(
         identity = {key: value for key, value in request.items() if key != "request_sha256"}
         if not isinstance(digest, str) or digest != canonical_sha256(identity):
             raise ActionValueError("PATTERN_PRIOR_REQUEST_IDENTITY_MISMATCH", path=path.as_posix())
-        if digest == exclude_request_sha256:
+        if digest in excluded_request_ids:
             continue
         symbols = _request_symbols(request)
         forbidden.update(symbols)
@@ -730,6 +735,7 @@ def plan_pattern_population(
     timing_root: Path,
     parent_request_path: Path,
     candidate_root: Path | None = None,
+    exclude_prior_request_sha256: str | None = None,
 ) -> Mapping[str, Any]:
     parent_ref = file_reference(parent_request_path)
     try:
@@ -756,7 +762,10 @@ def plan_pattern_population(
     candidate = DailyCandidate.open(
         candidate_root.resolve() if candidate_root is not None else Path(parent["candidate_root"])
     )
-    prior = prior_timing_request_population(timing_root.resolve() / "research")
+    prior = prior_timing_request_population(
+        timing_root.resolve() / "research",
+        exclude_request_sha256=exclude_prior_request_sha256,
+    )
     training = tuple(str(item).upper() for item in parent["training_symbols"])
     forbidden = tuple(sorted(set(prior["forbidden_symbols"]).union(training)))
     evaluation = select_pattern_evaluation_symbols(candidate.symbols, forbidden_symbols=forbidden)
@@ -2431,6 +2440,7 @@ def prepare_pattern_request(
     rights_authority_canonical_sha256: str,
     corporate_action_snapshot: Path,
     suspension_snapshot: Path,
+    supersedes_request_path: Path | None = None,
 ) -> Path:
     repository_root = repository_root.resolve()
     source_commit = _clean_repository_commit(repository_root)
@@ -2439,11 +2449,55 @@ def prepare_pattern_request(
         timing_root=timing_root
     )
     rights_policy_reference = file_reference(rights_policy_path)
+    superseded_request: Mapping[str, Any] | None = None
+    superseded_reference: Mapping[str, Any] | None = None
+    if supersedes_request_path is not None:
+        superseded_path = supersedes_request_path.resolve()
+        superseded_request = _load_request(superseded_path)
+        superseded_reference = file_reference(superseded_path)
+        superseded_bundle = (
+            timing_root
+            / "research"
+            / ARTIFACT_FOLDER
+            / "bundles"
+            / superseded_request["request_sha256"]
+        )
+        if (
+            superseded_request["schema_version"] != REQUEST_SCHEMA
+            or Path(superseded_request["timing_root"]).resolve() != timing_root
+            or Path(superseded_request["repository_root"]).resolve()
+            != repository_root
+            or Path(superseded_request["candidate_root"]).resolve()
+            != candidate_root.resolve()
+            or superseded_request["parent_request"]
+            != file_reference(parent_request_path.resolve())
+            or superseded_request.get("rights_issue_participation_policy_sha256")
+            != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+            or superseded_bundle.exists()
+        ):
+            raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_INVALID")
     plan = plan_pattern_population(
         timing_root=timing_root,
         parent_request_path=parent_request_path.resolve(),
         candidate_root=candidate_root,
+        exclude_prior_request_sha256=(
+            superseded_request["request_sha256"]
+            if superseded_request is not None
+            else None
+        ),
     )
+    if superseded_request is not None and (
+        tuple(plan["training_symbols"])
+        != tuple(superseded_request["training_symbols"])
+        or tuple(plan["evaluation_symbols"])
+        != tuple(superseded_request["evaluation_symbols"])
+        or tuple(plan["snapshot_symbols"])
+        != tuple(superseded_request["snapshot_symbols"])
+        or plan["population_spec"] != superseded_request["population_spec"]
+        or plan["prior_request_identity"]["aggregate_sha256"]
+        != superseded_request["prior_request_identity"]["aggregate_sha256"]
+    ):
+        raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_POPULATION_DRIFT")
     symbols = tuple(plan["snapshot_symbols"])
     start = date.fromisoformat(plan["population_spec"]["start"])
     end = date.fromisoformat(plan["population_spec"]["end"])
@@ -2452,6 +2506,17 @@ def prepare_pattern_request(
         expected_candidate_manifest_sha256=candidate_manifest_sha256,
         expected_authority_canonical_sha256=rights_authority_canonical_sha256,
     )
+    if superseded_request is not None and (
+        superseded_request.get("candidate_manifest_sha256")
+        != rights_authority.candidate_manifest_reference["sha256"]
+        or superseded_request.get("rights_issue_authority_canonical_sha256")
+        != rights_authority.authority_canonical_sha256
+        or superseded_request.get("corporate_action_snapshot_sha256")
+        != CorporateActionBook.open(corporate_action_snapshot.resolve()).snapshot_sha256
+        or superseded_request.get("suspension_snapshot_sha256")
+        != SuspensionSnapshotBook.open(suspension_snapshot.resolve()).snapshot_sha256
+    ):
+        raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_SOURCE_DRIFT")
     rights_application_audit = rights_issue_application_audit(
         rights_authority,
         symbols=symbols,
@@ -2554,6 +2619,17 @@ def prepare_pattern_request(
         "snapshot_symbols": symbols,
         "population_spec": plan["population_spec"],
         "prior_request_identity": plan["prior_request_identity"],
+        "superseded_request": superseded_reference,
+        "superseded_request_sha256": (
+            superseded_request["request_sha256"]
+            if superseded_request is not None
+            else None
+        ),
+        "supersession_reason": (
+            PRE_OUTCOME_SUPERSESSION_REASON
+            if superseded_request is not None
+            else None
+        ),
         "candidate_source_identity": coverage,
         "corporate_action_snapshot": file_reference(corporate_action_snapshot.resolve()),
         "corporate_action_snapshot_sha256": corporate_book.snapshot_sha256,
@@ -2632,6 +2708,17 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
     factor_audit = request.get("factor_action_coverage_audit")
     candidate_manifest = request.get("candidate_manifest")
     population = request.get("population_spec")
+    superseded_reference = request.get("superseded_request")
+    superseded_request_sha256 = request.get("superseded_request_sha256")
+    supersession_reason = request.get("supersession_reason")
+    has_supersession = any(
+        value is not None
+        for value in (
+            superseded_reference,
+            superseded_request_sha256,
+            supersession_reason,
+        )
+    )
     symbols = tuple(
         sorted({str(symbol).upper() for symbol in request.get("snapshot_symbols") or ()})
     )
@@ -2660,6 +2747,15 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
     )
     return (
         request.get("candidate_selection_authority") != "EXPLICIT_PREPARE_ARGUMENT"
+        or (
+            has_supersession
+            and (
+                not isinstance(superseded_reference, Mapping)
+                or len(str(superseded_reference.get("sha256", ""))) != 64
+                or len(str(superseded_request_sha256 or "")) != 64
+                or supersession_reason != PRE_OUTCOME_SUPERSESSION_REASON
+            )
+        )
         or not isinstance(candidate_manifest, Mapping)
         or request.get("candidate_manifest_sha256")
         != candidate_manifest.get("sha256")
@@ -3150,6 +3246,18 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
     bundle = timing_root / "research" / ARTIFACT_FOLDER / "bundles" / request["request_sha256"]
     if bundle.exists():
         return {"status": "ALREADY_MATERIALIZED", "bundle": bundle.as_posix(), **inspect_pattern_bundle(bundle)}
+    superseded_reference = request.get("superseded_request")
+    superseded_request_sha256 = request.get("superseded_request_sha256")
+    if isinstance(superseded_reference, Mapping):
+        superseded_bundle = (
+            timing_root
+            / "research"
+            / ARTIFACT_FOLDER
+            / "bundles"
+            / str(superseded_request_sha256)
+        )
+        if superseded_bundle.exists():
+            raise ActionValueError("PATTERN_SUPERSEDED_REQUEST_MATERIALIZED")
     for reference in (
         request["parent_request"],
         request["corporate_action_snapshot"],
@@ -3163,6 +3271,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             if request["schema_version"] == REQUEST_SCHEMA
             else ()
         ),
+        *((superseded_reference,) if isinstance(superseded_reference, Mapping) else ()),
         *request["source_code"].values(),
     ):
         if file_reference(Path(reference["path"])) != reference:
@@ -3173,7 +3282,11 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         raise ActionValueError("PATTERN_CANDIDATE_SOURCE_CHANGED")
     observed_prior = prior_timing_request_population(
         timing_root / "research",
-        exclude_request_sha256=request["request_sha256"],
+        exclude_request_sha256s=tuple(
+            item
+            for item in (request["request_sha256"], superseded_request_sha256)
+            if isinstance(item, str)
+        ),
     )
     if observed_prior["aggregate_sha256"] != request["prior_request_identity"]["aggregate_sha256"]:
         raise ActionValueError("PATTERN_PRIOR_REQUEST_SET_CHANGED")
@@ -3686,6 +3799,8 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
         "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
         "repository_commit": request["repository_commit"],
+        "superseded_request_sha256": superseded_request_sha256,
+        "supersession_reason": request.get("supersession_reason"),
         "created_at": datetime.now(TZ).isoformat(),
         "source_sha256": request["candidate_source_identity"]["source_sha256"],
         "candidate_manifest_sha256": request.get("candidate_manifest_sha256"),
@@ -3775,6 +3890,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--candidate-root", type=Path, required=True)
     prepare.add_argument("--candidate-manifest-sha256", required=True)
     prepare.add_argument("--rights-authority-canonical-sha256", required=True)
+    prepare.add_argument("--supersedes-request", type=Path)
     prepare.add_argument("--corporate-action-snapshot", type=Path, required=True)
     prepare.add_argument("--suspension-snapshot", type=Path, required=True)
     run = sub.add_parser("run")
@@ -3799,6 +3915,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rights_authority_canonical_sha256=(
                     args.rights_authority_canonical_sha256
                 ),
+                supersedes_request_path=args.supersedes_request,
                 corporate_action_snapshot=args.corporate_action_snapshot,
                 suspension_snapshot=args.suspension_snapshot,
             ).as_posix()
