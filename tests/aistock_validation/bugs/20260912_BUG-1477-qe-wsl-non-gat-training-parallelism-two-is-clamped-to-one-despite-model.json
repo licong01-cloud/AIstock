@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-09-12T21:30:47.026995Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f114da41128ef38e42bf4979a8ae8406ccb4c0b5",
+  "fixed_at": "2026-09-12T22:39:46Z",
   "github_issue_number": 4638,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4638",
   "last_seen_at": "2026-09-12T21:30:47.026995Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4639",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -182,6 +183,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -193,7 +195,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1477",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ea7a9165d6ffd167",
+    "recorded_at": "2026-09-12T22:41:32.208553Z",
+    "runtime_contract_digest": "670585d69f3b467d2fa3c1caa8557c3e73b8662f6c4aa08f3ad7c6de11eea9ec",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0a5e27e388f5869b0fdc6e0218f135a9975d991a",
+    "source_merge_commit": "f114da41128ef38e42bf4979a8ae8406ccb4c0b5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4639",
+    "validation_evidence": [
+      "CI verdict run 34721955395 head 0a5e27e38 passed"
+    ],
+    "validation_evidence_digest": "f4c87457bfc5c0db891f1403f41bb4e21c8a1e6ed674c713e8e8de2a7f229190"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -202,6 +225,9 @@
     "fingerprint": "d4999c65900a6b55a063b0d9",
     "source_event_id": "FE-20260912-d4999c65900a"
   },
+  "validation_evidence": [
+    "CI verdict run 34721955395 head 0a5e27e38 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
