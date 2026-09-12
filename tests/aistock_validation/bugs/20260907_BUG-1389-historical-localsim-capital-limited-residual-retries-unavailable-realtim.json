@@ -106,8 +106,8 @@
   },
   "first_seen_at": "2026-09-07T06:36:44.318111Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "24de16111c4ec6dbb1d7fdb18deb4b6df505bc58",
+  "fixed_at": "2026-09-09T07:37:46Z",
   "github_issue_number": 4379,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4379",
   "last_seen_at": "2026-09-09T06:49:49.415661Z",
@@ -115,6 +115,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4484",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -154,6 +155,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -165,7 +167,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1389",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "33a55f1756e4a210",
+    "recorded_at": "2026-09-09T07:38:48.613529Z",
+    "runtime_contract_digest": "baa18c3efdeadd89b1a3a388a7b6ecef2c37f3c46215bb00ae63f16227eda9d2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "be99c95e05dd4a3875748aa317ced257ff963ce3",
+    "source_merge_commit": "24de16111c4ec6dbb1d7fdb18deb4b6df505bc58",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4484",
+    "validation_evidence": [
+      "validation-receipt: id=2a393569f1468ff2 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0`",
+      "validation-receipt: id=5daeaf0e3bd48161 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=platform_api_backend status=passed command=`nox -s platform_api_backend` result=`15 passed`",
+      "validation-receipt: id=8ed60fee0c128c09 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=simulation_core_l2 status=passed command=`nox -s simulation_core_l2` result=`830 passed, 4 skipped`",
+      "validation-receipt: id=7b843439909df8a7 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_cross_day_recovers_historical_failed_localsim_active_generation -q` result=`3 passed`",
+      "validation-receipt: id=502ee979fceb1b12 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_execution/localsim/runtime.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed`",
+      "validation-receipt: id=17e2659be81fc4b3 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b747fce50a5958f28554e0ef3395dc5ed0087092b4dd33d1f2a23e9056bacec0"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -174,6 +202,14 @@
     "fingerprint": "404dc35a3f28d8e512c3a0d8",
     "source_event_id": "FE-20260907-404dc35a3f28"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2a393569f1468ff2 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0`",
+    "validation-receipt: id=5daeaf0e3bd48161 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=platform_api_backend status=passed command=`nox -s platform_api_backend` result=`15 passed`",
+    "validation-receipt: id=8ed60fee0c128c09 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=nox plan=simulation_core_l2 status=passed command=`nox -s simulation_core_l2` result=`830 passed, 4 skipped`",
+    "validation-receipt: id=7b843439909df8a7 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_cross_day_recovers_historical_failed_localsim_active_generation -q` result=`3 passed`",
+    "validation-receipt: id=502ee979fceb1b12 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=ruff plan=direct status=passed command=`ruff check backend/services/simulation_execution/localsim/runtime.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed`",
+    "validation-receipt: id=17e2659be81fc4b3 commit=be99c95e05dd4a3875748aa317ced257ff963ce3 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
