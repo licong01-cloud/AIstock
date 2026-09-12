@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
   type AdvisoryBindingPayload,
+  type AdvisoryDeliveryPreflight,
   type AdvisoryEpisode,
   type AdvisoryForwardRun,
   type AdvisoryForwardRunDetail,
@@ -686,6 +687,35 @@ function loadingReviewState(hint: string) {
   };
 }
 
+function deliveryPreflightSummary(result: AdvisoryDeliveryPreflight): ReactNode {
+  const universeLabels: Record<AdvisoryDeliveryPreflight["universe_compatibility"]["status"], string> = {
+    EXACT_UNIVERSE_MATCHED: "策略包股票池与荐股股票池精确匹配",
+    FILTER_ONLY_COMPATIBLE: "可在 Selection 候选后执行荐股股票池过滤，但不等同于 QE 指数池内重新推理",
+    LEGACY_UNIVERSE_UNSPECIFIED: "旧策略包未声明冻结股票池身份，将保留基线兼容但不能标记为精确匹配",
+    PACKAGE_IDENTITY_MISMATCH: "策略包股票池不能覆盖目标荐股股票池",
+    DELIVERY_CONTRACT_INCOMPLETE: "策略包交付的股票池合同缺失一致性或格式不完整",
+  };
+  const modelLabels: Record<AdvisoryDeliveryPreflight["model_compatibility"]["status"], string> = {
+    DESCRIPTOR_FILE_PRESENT: "当前绑定的模型描述文件存在；完整身份仍在正式发布时校验",
+    MODEL_DESCRIPTOR_UNAVAILABLE: "Advisory 模型描述文件不可用，Selection 基线仍可运行",
+    REQUIRED_AFTER_BINDING: "新绑定生效后才能生成并完整校验对应模型描述文件",
+    NOT_APPLICABLE: "交付身份被阻断，暂不检查模型描述文件",
+  };
+  const policyLabel = result.policy_compatibility.status === "ACTIVE_POLICY_MATCH"
+    ? `目标数量 ${result.policy_compatibility.requested_target_count} 与当前策略合同一致`
+    : `目标数量 ${result.policy_compatibility.requested_target_count} 将形成新的策略绑定身份`;
+  return (
+    <>
+      <strong>{result.overall_status === "BLOCKED" ? "交付预检未通过" : result.overall_status === "READY_WITH_MODEL" ? "交付预检通过（模型文件已存在）" : "交付预检通过（基线可用）"}</strong>
+      <div>{universeLabels[result.universe_compatibility.status]}</div>
+      <div>{policyLabel}</div>
+      <div>{modelLabels[result.model_compatibility.status]}</div>
+      {result.blockers.length ? <div>阻断：{result.blockers.join("；")}</div> : null}
+      {result.warnings.length ? <div className="pv2-muted">提示：{result.warnings.join("；")}</div> : null}
+    </>
+  );
+}
+
 function AdvisoryPageContent() {
   const params = useSearchParams();
   const prefillPackages = params.get("package_ids") || "";
@@ -733,6 +763,8 @@ function AdvisoryPageContent() {
   const [reviewResult, setReviewResult] = useState<AdvisoryReviewResult | null>(null);
   const [expandedStrategyProgramId, setExpandedStrategyProgramId] = useState("");
   const [programStrategyDrafts, setProgramStrategyDrafts] = useState<Record<string, ProgramStrategyDraft>>({});
+  const [createDeliveryPreflight, setCreateDeliveryPreflight] = useState<AdvisoryDeliveryPreflight | null>(null);
+  const [programDeliveryPreflights, setProgramDeliveryPreflights] = useState<Record<string, AdvisoryDeliveryPreflight>>({});
   const [strategyActionKey, setStrategyActionKey] = useState("");
   const [qualityRows, setQualityRows] = useState<QualityInputRow[]>(() => [{ ...newQualityRow(1), rowId: "quality-1" }]);
   const [qualityReport, setQualityReport] = useState<AdvisoryQualityReport | null>(null);
@@ -1070,6 +1102,15 @@ function AdvisoryPageContent() {
       const packageIds = packageIdsFromRows(packageRows);
       if (packageIds.length !== 1) throw new Error("请选择一个单 Alpha 策略包或一个原生多 Alpha 父包");
       const selectedUniverse = requireUniverseSelection(universeMode, universePoolIds);
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageIds[0],
+        universe_selection: selectedUniverse,
+        target_count: targetCount,
+      });
+      setCreateDeliveryPreflight(preflight);
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
       const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
       if (!confirmed) return;
       const program = await advisoryApi.createProgram({
@@ -1232,6 +1273,11 @@ function AdvisoryPageContent() {
   }
 
   function updateStrategyRow(programId: string, rowId: string, patch: Partial<PackageWeightRow>) {
+    setProgramDeliveryPreflights((rows) => {
+      const next = { ...rows };
+      delete next[programId];
+      return next;
+    });
     setProgramStrategyDraft(programId, (draft) => ({
       ...draft,
       rows: draft.rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row),
@@ -1245,6 +1291,17 @@ function AdvisoryPageContent() {
     setStrategyActionKey(`${program.program_id}:apply`);
     try {
       const binding = bindingPayloadFromDraft(draft);
+      const packageId = binding.package_ids[0];
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageId,
+        universe_selection: binding.universe_selection || DEFAULT_UNIVERSE_SELECTION,
+        target_count: Number(binding.target_count ?? program.target_count),
+        program_id: program.program_id,
+      });
+      setProgramDeliveryPreflights((rows) => ({ ...rows, [program.program_id]: preflight }));
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
       const defaults = await advisoryApi.bindingDefaults(program.program_id);
       const result = await advisoryApi.applyBinding(program.program_id, {
         binding,
@@ -1299,6 +1356,7 @@ function AdvisoryPageContent() {
   }
 
   function updatePackageRow(rowId: string, patch: Partial<PackageWeightRow>) {
+    setCreateDeliveryPreflight(null);
     setPackageRows((rows) => rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
   }
 
@@ -1472,6 +1530,7 @@ function AdvisoryPageContent() {
     const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
     const loadingBinding = strategyActionKey === `${program.program_id}:load-binding`;
     const applyRunning = strategyActionKey === `${program.program_id}:apply`;
+    const deliveryPreflight = programDeliveryPreflights[program.program_id];
     if (isLegacyManualMultiPackage(program)) {
       return (
         <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
@@ -1516,7 +1575,14 @@ function AdvisoryPageContent() {
               max={100}
               type="number"
               value={draft.targetCount}
-              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }))}
+              onChange={(event) => {
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
+                setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }));
+              }}
             />
           </label>
           <label className="pv2-field">
@@ -1536,6 +1602,11 @@ function AdvisoryPageContent() {
               value={draft.universeMode}
               onChange={(event) => {
                 const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
                 setProgramStrategyDraft(program.program_id, (current) => ({
                   ...current,
                   universeMode: mode,
@@ -1558,11 +1629,18 @@ function AdvisoryPageContent() {
                   data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
                   multiple
                   value={draft.universePoolIds}
-                  onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
-                    ...current,
-                    universePoolIds: Array.from(event.target.selectedOptions, (option) => option.value),
-                    applyResult: null,
-                  }))}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                      applyResult: null,
+                    }));
+                  }}
                 >
                   {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
                 </select>
@@ -1571,11 +1649,18 @@ function AdvisoryPageContent() {
                   className="pv2-select"
                   data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
                   value={draft.universePoolIds[0] || ""}
-                  onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
-                    ...current,
-                    universePoolIds: event.target.value ? [event.target.value] : [],
-                    applyResult: null,
-                  }))}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: event.target.value ? [event.target.value] : [],
+                      applyResult: null,
+                    }));
+                  }}
                 >
                   <option value="">选择核心指数</option>
                   {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
@@ -1637,6 +1722,11 @@ function AdvisoryPageContent() {
           </button>
           <span className="pv2-muted">历史验证是独立研究路径，不作为应用绑定的程序硬门禁；应用后仅替换本任务策略包配置。</span>
         </div>
+        {deliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-delivery-preflight-${program.program_id}`}>
+            {deliveryPreflightSummary(deliveryPreflight)}
+          </div>
+        ) : null}
         {draft.applyResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
             已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)} / 股票池 {draft.applyResult.universe_selection?.mode || "stock_universe"}{draft.applyResult.universe_selection?.pool_ids.length ? ` (${draft.applyResult.universe_selection.pool_ids.join("+")})` : ""}
@@ -1801,11 +1891,11 @@ function AdvisoryPageContent() {
             <h2>创建或管理独立荐股任务</h2>
             <p className="pv2-muted">每个任务绑定一个原生 StrategyPackage；单 Alpha 包和经过回测验证的多 Alpha 父包使用同一运行链路。</p>
           </div>
-          <button className="pv2-button-primary" onClick={createProgram} type="button">创建并启用</button>
+          <button className="pv2-button-primary" data-testid="advisory-create-program" onClick={createProgram} type="button">创建并启用</button>
         </div>
         <div className="pv2-form-grid">
           <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
-          <label className="pv2-field">目标数量<input className="pv2-input" type="number" min={1} max={100} value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} /></label>
+          <label className="pv2-field">目标数量<input className="pv2-input" data-testid="advisory-target-count" type="number" min={1} max={100} value={targetCount} onChange={(event) => { setCreateDeliveryPreflight(null); setTargetCount(Number(event.target.value)); }} /></label>
           <label className="pv2-field">
             荐股股票池
             <select
@@ -1814,6 +1904,7 @@ function AdvisoryPageContent() {
               value={universeMode}
               onChange={(event) => {
                 const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setCreateDeliveryPreflight(null);
                 setUniverseMode(mode);
                 setUniversePoolIds(mode === "stock_universe" ? [] : universePoolIds.slice(0, 1));
               }}
@@ -1832,7 +1923,10 @@ function AdvisoryPageContent() {
                   data-testid="advisory-universe-pools"
                   multiple
                   value={universePoolIds}
-                  onChange={(event) => setUniversePoolIds(Array.from(event.target.selectedOptions, (option) => option.value))}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(Array.from(event.target.selectedOptions, (option) => option.value));
+                  }}
                 >
                   {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
                 </select>
@@ -1841,7 +1935,10 @@ function AdvisoryPageContent() {
                   className="pv2-select"
                   data-testid="advisory-universe-pools"
                   value={universePoolIds[0] || ""}
-                  onChange={(event) => setUniversePoolIds(event.target.value ? [event.target.value] : [])}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(event.target.value ? [event.target.value] : []);
+                  }}
                 >
                   <option value="">选择核心指数</option>
                   {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
@@ -1882,6 +1979,11 @@ function AdvisoryPageContent() {
             </tbody>
           </table>
         </div>
+        {createDeliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-create-delivery-preflight">
+            {deliveryPreflightSummary(createDeliveryPreflight)}
+          </div>
+        ) : null}
         <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
           <table className="pv2-table">
             <thead><tr><th>名称</th><th>策略模式</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>

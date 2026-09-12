@@ -8,7 +8,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.advisory_phase0a.historical_research import (
     HistoricalAdvisoryResearchRunner,
@@ -29,6 +29,7 @@ from backend.services.advisory_program import (
     program_to_dict,
     review_result_to_dict,
 )
+from backend.services.advisory_delivery_preflight import AdvisoryDeliveryPreflightService
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
@@ -51,7 +52,10 @@ from backend.services.advisory_historical_range.service import (
     HistoricalRangeApplicationService,
     HistoricalRangeServiceError,
 )
-from backend.services.advisory_universe import advisory_universe_catalog
+from backend.services.advisory_universe import (
+    AdvisoryUniverseContractError,
+    advisory_universe_catalog,
+)
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +74,15 @@ class AdvisoryProgramCreateRequest(BaseModel):
     universe_selection: dict[str, Any] = Field(default_factory=lambda: {"mode": "stock_universe", "pool_ids": []})
     created_by: str | None = None
     status: str = "DRAFT"
+
+
+class AdvisoryDeliveryPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str = Field(min_length=1)
+    universe_selection: dict[str, Any]
+    target_count: int = Field(gt=0, le=100)
+    program_id: str | None = Field(default=None, min_length=1)
 
 
 class AdvisoryProgramUpdateRequest(BaseModel):
@@ -158,6 +171,12 @@ class AdvisoryQualityReportRequest(BaseModel):
 
 def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
+
+
+def get_advisory_delivery_preflight_service(
+    program_service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> AdvisoryDeliveryPreflightService:
+    return AdvisoryDeliveryPreflightService(program_service=program_service)
 
 
 def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
@@ -586,6 +605,22 @@ def list_historical_range_summaries(
 @router.get("/universe-options")
 def universe_options() -> dict[str, Any]:
     return {"ok": True, **advisory_universe_catalog()}
+
+
+@router.post("/delivery-preflight")
+def delivery_preflight(
+    req: AdvisoryDeliveryPreflightRequest,
+    service: AdvisoryDeliveryPreflightService = Depends(get_advisory_delivery_preflight_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.preflight(**req.model_dump())}
+    except AdvisoryUniverseContractError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
+        ) from exc
+    except TradingCoreError as exc:
+        _raise_http(exc)
 
 
 @router.get("/programs")
