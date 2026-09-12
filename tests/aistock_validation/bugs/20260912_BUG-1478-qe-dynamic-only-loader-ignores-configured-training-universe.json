@@ -5,6 +5,7 @@
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
     "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260912_BUG-1478-qe-dynamic-only-loader-ignores-configured-training-universe.json"
   ],
   "assigned_agent": null,
@@ -35,6 +36,12 @@
       "actor": "codex",
       "note": "CI correctly rejected the new regression test as unmapped. The exact test file is now registered in the existing qe_read_backend plan; no directory wildcard or validation policy relaxation was added.",
       "timestamp": "2026-09-12T23:12:00Z"
+    },
+    {
+      "action": "register_test_ownership_for_ci_selection",
+      "actor": "codex",
+      "note": "PR CI showed that nox execution alone did not establish catalog ownership. The exact new test path is now assigned to the existing QE active-dataset/universe ownership rule; no wildcard, module-wide downgrade, or classifier relaxation was added.",
+      "timestamp": "2026-09-13T00:00:00Z"
     }
   ],
   "evidence_uris": [
@@ -51,7 +58,8 @@
     "changed_files": [
       "backend/services/quantevolver/qe_custom_loaders.py",
       "backend/services/quantevolver/config_composer.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
