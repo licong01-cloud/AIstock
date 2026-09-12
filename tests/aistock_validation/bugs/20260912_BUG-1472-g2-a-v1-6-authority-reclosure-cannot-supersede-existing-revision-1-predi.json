@@ -100,9 +100,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required_before_separately_authorized_authority_reclosure_dml",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded commit 3fc09b3bb635f0aa90d22d3e89c82a701e30837c and exercised the full 19,220-row authority reclosure plus an idempotent retry without database or process control."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "backend",
