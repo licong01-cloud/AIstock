@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/repair_pt_next_018_source_data.py",
     "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260912_BUG-1475-pt-next-018-production-adj-factor-restatement-and-rights-issue-facts-are.json"
   ],
   "assigned_agent": null,
@@ -77,12 +79,16 @@
     },
     "planned_files": [
       "scripts/repair_pt_next_018_source_data.py",
-      "backend/tests/scripts/test_repair_pt_next_018_source_data.py"
+      "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/repair_pt_next_018_source_data.py",
-      "backend/tests/scripts/test_repair_pt_next_018_source_data.py"
+      "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py"
     ]
   },
   "first_seen_at": "2026-09-12T16:57:34.335885Z",

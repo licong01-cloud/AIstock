@@ -836,6 +836,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/services/sector_data_builder.py",
         "scripts/build_industry_pit_candidates.py",
         "scripts/build_sector_data_candidate.py",
+        "scripts/repair_pt_next_018_source_data.py",
         "noxfile.py",
         external=True,
     )
@@ -855,6 +856,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_build_industry_pit_candidates.py",
         "backend/tests/services/test_sector_data_builder.py",
         "backend/tests/scripts/test_build_sector_data_candidate.py",
+        "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
         "-q",
         "-p",
         "no:cacheprovider",
