@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1472",
-  "closed_at": null,
+  "closed_at": "2026-09-12T17:56:40.204691Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -85,8 +85,8 @@
   },
   "first_seen_at": "2026-09-12T09:30:50.340928Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9b9eace72a410b5fa105b6dafc2372b033fb258c",
+  "fixed_at": "2026-09-12T17:41:27Z",
   "github_issue_number": 4621,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4621",
   "last_seen_at": "2026-09-12T09:30:50.340928Z",
@@ -94,6 +94,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4622",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -102,10 +103,6 @@
   "required_verification": [
     "l0",
     "hmm_risk_backend"
-  ],
-  "validation_evidence": [
-    "validation-receipt: id=c7d63d69d4cf3941 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_prediction.py backend/tests/hmm_risk/test_rotation_l1_api.py -q -p no:cacheprovider` result=`28 passed`",
-    "validation-receipt: id=665ea59b71f51143 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed blocking=0`"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -123,9 +120,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1472/post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1472",
+      "business_smoke_semantic": {
+        "contract_id": "openapi_document",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5685f0476190b6931928ca1d4919c72da13f407880bc700fec5762880d1e700d",
+      "contract_digest": "ebf2a8e9547bb194b7e9f2ef7931ee48eed9f79335cf53b1803a5d0ebf09d9cd",
+      "expected_identity": "9b9eace72a410b5fa105b6dafc2372b033fb258c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-12T17:51:32.401039Z",
+      "mode": "read_only",
+      "observed_identity": "515dbf71981d70e5fbce71ee11ec4c5adb917ffd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c35b05b5de7e3a5fe6bef2d129f53cb692d7e2a92dc83e4c29ac143aef36d207",
+      "receipt_sha256": "77edba4152c5ec170755ceaf34af0ba7a5841dded8ca704644be18999d32ac45",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a609f0601ac3478503b2550a819a956ce0de1575c35df50b0537a77447968c49",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -135,7 +155,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1472",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c74ff0231c551537",
+    "recorded_at": "2026-09-12T17:42:47.778084Z",
+    "runtime_contract_digest": "ebf2a8e9547bb194b7e9f2ef7931ee48eed9f79335cf53b1803a5d0ebf09d9cd",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "134b8453d65fc0c39d28e42d9a9f54a636b02100",
+    "source_merge_commit": "9b9eace72a410b5fa105b6dafc2372b033fb258c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4622",
+    "validation_evidence": [
+      "PR #4622 CI run 34706760978 -> success; hmm_risk_backend 839 passed; pr_quality/l0/Semgrep passed"
+    ],
+    "validation_evidence_digest": "c5150d5c635d72f92a8cd4403e7610ca02d58d3bb04bfd11c4a4faca9716393d"
+  },
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -144,6 +185,12 @@
     "fingerprint": "4a5ff017eb15d07c06bfb0c7",
     "source_event_id": "FE-20260912-4a5ff017eb15"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c7d63d69d4cf3941 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_prediction.py backend/tests/hmm_risk/test_rotation_l1_api.py -q -p no:cacheprovider` result=`28 passed`",
+    "validation-receipt: id=665ea59b71f51143 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed blocking=0`",
+    "PR #4622 CI run 34706760978 -> success; hmm_risk_backend 839 passed; pr_quality/l0/Semgrep passed",
+    "post-restart-verify backend-main expected 9b9eace72a410b5fa105b6dafc2372b033fb258c -> verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
