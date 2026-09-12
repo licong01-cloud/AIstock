@@ -95,8 +95,8 @@
   },
   "first_seen_at": "2026-09-08T04:00:55.466124Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f55be774bb49a456ed394543ce80aece578468f7",
+  "fixed_at": "2026-09-08T04:26:25Z",
   "github_issue_number": 4439,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4439",
   "last_seen_at": "2026-09-08T04:00:55.466124Z",
@@ -104,6 +104,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4443",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -141,7 +143,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1407",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1c238aed5125fee6",
+    "recorded_at": "2026-09-08T04:34:37.109936Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7195c54b51efe286fb658d587779010694c17234",
+    "source_merge_commit": "f55be774bb49a456ed394543ce80aece578468f7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4443",
+    "validation_evidence": [
+      "pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry -q -> 1 passed",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed",
+      "python -m nox -s platform_api_backend -> 15 passed",
+      "python -m nox -s simulation_core_l2 -> 830 passed, 4 skipped",
+      "ruff check backend/services/simulation_execution/localsim/persistence.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "f390ec4becbca9d202c643127282c16bc05c3d84cc5a5ec64538962205cc5239"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -150,6 +179,15 @@
     "fingerprint": "dd53334f56cff44ff23400f9",
     "source_event_id": "FE-20260908-dd53334f56cf"
   },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry -q -> 1 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s platform_api_backend -> 15 passed",
+    "python -m nox -s simulation_core_l2 -> 830 passed, 4 skipped",
+    "ruff check backend/services/simulation_execution/localsim/persistence.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
