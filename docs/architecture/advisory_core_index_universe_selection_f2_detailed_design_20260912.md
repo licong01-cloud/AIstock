@@ -108,7 +108,7 @@ QE 已提供统一的股票池选择语义，可按全市场、单个核心指�
 
 2026-09-12 DEV 只读数据读回：`market.daily_basic` 与 Selection 实盘滚动 PIT 均覆盖至 `2026-09-11`，后者状态为 ready/clean、source fingerprint 合法；共享核心指数成分表覆盖五个 P0 pool。真实 resolver 在 `2026-09-11` 得到沪深300 `299` 只、沪深300与中证500并集 `795` 只，receipt 明确记录 `LIVE_SELECTION_ROLLING_PIT` 及其 key/rule/revision。冻结 canonical PIT 仍只覆盖至 `2026-08-31`，历史日期继续优先使用它。直接请求尚未覆盖的 `2026-09-14` 仍会 typed fail closed；但正式周一 forward 保存 `trade_date=2026-09-14`、以 `universe_as_of_trade_date=2026-09-11` 解析准入，无需读取未来 PIT。后续每日能否荐股取决于 D-1 日频行情、滚动 PIT 和指数成员流水线是否在决策截止前到位。
 
-该状态只证明“实盘日期股票池准入”已具备，不冒充“数据库盘中实时报价”已就绪。现有正式 forward 的 target-open 结算读取 `market.kline_daily_raw` 与 `market.suspend_d`；当前日 Selection 入场价/展示价仍由 `TDX_REALTIME` 直接取得。2026-09-12 DEV 只读检查显示 `market.quote_snapshot` 表存在但为 `0` 行，因此当前不能声明盘中实时价格可完全从数据库消费。若产品要求 DB-only 盘中荐股，必须先由行情数据所有者持续写入带时间戳、来源和新鲜度合同的实时快照，再由 Advisory 以只读 adapter 消费；本切片不得在表为空时静默改用日线或猜测实时价格。
+该状态只证明“实盘日期股票池准入”已具备，不冒充“数据库盘中实时报价”已就绪。现有正式 forward 的 target-open 结算读取 `market.kline_daily_raw` 与 `market.suspend_d`；普通同日 Selection 的 `AUTO` 入场价/展示价仍可读取 `TDX_REALTIME`。正式日频 Advisory 的 D→T 推荐则由并列 F1 合同强制 `DAILY_DB_ONLY`，逐股读取不晚于 D 的最后数据库收盘价，正常停牌保留且不调用 TDX；这不是盘中实时荐股。2026-09-12 DEV 只读检查显示 `market.quote_snapshot` 表存在但为 `0` 行，因此当前不能声明盘中实时价格可完全从数据库消费。若产品以后要求 DB-only 盘中荐股，必须先由行情数据所有者持续写入带时间戳、来源和新鲜度合同的实时快照，再由 Advisory 以只读 adapter 消费；本切片不得在表为空时静默改用日线或猜测实时价格。
 
 ## 7. Risks
 
