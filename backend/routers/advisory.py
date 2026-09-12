@@ -417,6 +417,23 @@ def list_historical_range_runs(
     return _page_envelope("runs", result)
 
 
+@router.get("/historical-range-batches/{batch_id}/comparison")
+def compare_historical_range_runs(
+    batch_id: str,
+    baseline_range_run_id: str = Query(min_length=1),
+    candidate_range_run_id: str = Query(min_length=1),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    comparison = _historical_range_call(
+        lambda: service.compare_runs(
+            batch_id=batch_id,
+            baseline_range_run_id=baseline_range_run_id,
+            candidate_range_run_id=candidate_range_run_id,
+        )
+    )
+    return {"ok": True, "data": {"comparison": comparison}}
+
+
 @router.get("/historical-range-batches/{batch_id}/operations")
 def list_historical_range_operations(
     batch_id: str,
