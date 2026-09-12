@@ -27,6 +27,9 @@ ConnFactory = Callable[[], Iterator[Any]]
 QuoteFetcher = Callable[[str], StockQuote]
 
 DISPLAY_COMPONENT_KEY = "selection_result_display"
+SELECTION_PRICE_MODE_AUTO = "AUTO"
+SELECTION_PRICE_MODE_DAILY_DB_ONLY = "DAILY_DB_ONLY"
+_SELECTION_PRICE_MODES = frozenset({SELECTION_PRICE_MODE_AUTO, SELECTION_PRICE_MODE_DAILY_DB_ONLY})
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 logger = logging.getLogger(__name__)
 
@@ -55,14 +58,37 @@ class SelectionResultEnrichmentService:
         rows = list(candidates)
         if not rows:
             return []
+        config = runtime_config or {}
+        price_mode = self._selection_price_mode(config)
         symbols = [row.symbol for row in rows]
-        names = self._symbol_name_resolver.resolve(symbols)
-        quotes = self._load_current_quotes(symbols)
         today = self._today_provider()
-        reference_trade_date = self._reference_price_trade_date(runtime_config or {}, fallback=trade_date)
-        historical_rows = {} if trade_date >= today else self._load_daily_rows(symbols, reference_trade_date)
+        reference_trade_date = self._reference_price_trade_date(config, fallback=trade_date)
+        daily_db_only = price_mode == SELECTION_PRICE_MODE_DAILY_DB_ONLY
+        if daily_db_only and reference_trade_date >= trade_date:
+            raise RuntimeConfigInvalidError(
+                "DAILY_DB_ONLY reference_price_trade_date must be before trade_date",
+                context={
+                    "reference_price_trade_date": reference_trade_date.isoformat(),
+                    "trade_date": trade_date.isoformat(),
+                    "selection_price_mode": price_mode,
+                },
+            )
+        names = self._symbol_name_resolver.resolve(symbols)
+        quotes = {} if daily_db_only else self._load_current_quotes(symbols)
+        use_daily_rows = daily_db_only or trade_date < today
+        historical_rows = (
+            self._load_daily_rows(
+                symbols,
+                reference_trade_date,
+                fail_closed=daily_db_only,
+                allow_prior_close=daily_db_only,
+            )
+            if use_daily_rows
+            else {}
+        )
         enriched: list[SelectionCandidate] = []
         missing_current_entry_price: list[str] = []
+        missing_daily_entry_price: list[str] = []
         for candidate in rows:
             symbol = candidate.symbol
             quote = quotes.get(symbol)
@@ -75,7 +101,18 @@ class SelectionResultEnrichmentService:
                 candidate.stock_name or names.get(symbol) or str(getattr(quote, "name", "") or "").strip() or None
             )
 
-            if trade_date >= today:
+            if daily_db_only:
+                entry_price = _positive_float(daily.get("close"))
+                price_trade_date = daily.get("trade_date") or reference_trade_date
+                entry_source = (
+                    f"market.kline_daily_raw.close:{price_trade_date.isoformat()}"
+                    if entry_price is not None
+                    else None
+                )
+                entry_time = price_trade_date.isoformat()
+                if entry_price is None:
+                    missing_daily_entry_price.append(symbol)
+            elif trade_date >= today:
                 entry_price = current_price or quote_previous_close
                 if current_price is not None:
                     entry_source = current_source or "TDX_REALTIME"
@@ -98,12 +135,13 @@ class SelectionResultEnrichmentService:
             if volume is None:
                 volume = _non_negative_float(daily.get("volume"))
 
+            effective_reference_trade_date = daily.get("trade_date") or reference_trade_date
             display_payload = {
                 "stock_name": stock_name,
                 "selection_entry_price": entry_price,
                 "selection_entry_price_source": entry_source if entry_price is not None else None,
                 "selection_entry_price_time": entry_time if entry_price is not None else None,
-                "reference_price_trade_date": reference_trade_date.isoformat(),
+                "reference_price_trade_date": effective_reference_trade_date.isoformat(),
                 "previous_close": previous_close,
                 "volume": volume,
                 "current_price": current_price,
@@ -141,6 +179,19 @@ class SelectionResultEnrichmentService:
                     "source": "TDX_REALTIME",
                 },
             )
+        if missing_daily_entry_price:
+            raise DataUnavailableError(
+                "DAILY_DB_ONLY selection requires authoritative database close prices",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "reference_price_trade_date": reference_trade_date.isoformat(),
+                    "missing_price_count": len(missing_daily_entry_price),
+                    "missing_price_examples": missing_daily_entry_price[:20],
+                    "price_role": "selection_entry_price",
+                    "source": "market.kline_daily_raw.close_li",
+                    "selection_price_mode": price_mode,
+                },
+            )
         return enriched
 
     def _load_current_quotes(self, symbols: Iterable[str]) -> dict[str, StockQuote]:
@@ -154,26 +205,60 @@ class SelectionResultEnrichmentService:
                 quotes[symbol] = quote
         return quotes
 
-    def _load_daily_rows(self, symbols: list[str], trade_date: date) -> dict[str, dict[str, float]]:
+    def _load_daily_rows(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        *,
+        fail_closed: bool = False,
+        allow_prior_close: bool = False,
+    ) -> dict[str, dict[str, Any]]:
         clean = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
         if not clean:
             return {}
         try:
             with self._conn_factory() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        """
-                        SELECT ts_code, close_li, volume_hand
-                        FROM market.kline_daily_raw
-                        WHERE trade_date = %s
-                          AND ts_code = ANY(%s)
-                          AND close_li IS NOT NULL
-                          AND close_li > 0
-                        """,
-                        (trade_date, clean),
-                    )
+                    if allow_prior_close:
+                        cur.execute(
+                            """
+                            SELECT DISTINCT ON (ts_code)
+                                   ts_code, trade_date, close_li, volume_hand
+                            FROM market.kline_daily_raw
+                            WHERE trade_date <= %s
+                              AND ts_code = ANY(%s)
+                              AND close_li IS NOT NULL
+                              AND close_li > 0
+                            ORDER BY ts_code, trade_date DESC
+                            """,
+                            (trade_date, clean),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT ts_code, trade_date, close_li, volume_hand
+                            FROM market.kline_daily_raw
+                            WHERE trade_date = %s
+                              AND ts_code = ANY(%s)
+                              AND close_li IS NOT NULL
+                              AND close_li > 0
+                            """,
+                            (trade_date, clean),
+                        )
                     rows = cur.fetchall()
         except Exception as exc:
+            if fail_closed:
+                raise DataUnavailableError(
+                    "DAILY_DB_ONLY selection database price query failed",
+                    context={
+                        "reference_price_trade_date": trade_date.isoformat(),
+                        "symbol_count": len(clean),
+                        "price_role": "selection_entry_price",
+                        "source": "market.kline_daily_raw.close_li",
+                        "error_type": type(exc).__name__,
+                        "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+                    },
+                ) from exc
             logger.warning(
                 "historical selection entry price query failed; using persisted candidate reference prices: "
                 "trade_date=%s symbol_count=%s source=%s error_type=%s",
@@ -183,16 +268,32 @@ class SelectionResultEnrichmentService:
                 type(exc).__name__,
             )
             return {}
-        result: dict[str, dict[str, float]] = {}
+        result: dict[str, dict[str, Any]] = {}
         for row in rows:
             symbol = str(row.get("ts_code") or "").strip()
             close = _positive_float(row.get("close_li"))
+            price_trade_date = _date_or_none(row.get("trade_date")) or trade_date
             if symbol and close is not None:
                 result[symbol] = {
                     "close": close / PRICE_UNIT_DIVISOR,
-                    "volume": _non_negative_float(row.get("volume_hand")) or 0.0,
+                    "volume": (
+                        _non_negative_float(row.get("volume_hand")) or 0.0
+                        if price_trade_date == trade_date
+                        else 0.0
+                    ),
+                    "trade_date": price_trade_date,
                 }
         return result
+
+    @staticmethod
+    def _selection_price_mode(runtime_config: dict[str, Any]) -> str:
+        raw = runtime_config.get("selection_price_mode", SELECTION_PRICE_MODE_AUTO)
+        if not isinstance(raw, str) or raw.strip().upper() not in _SELECTION_PRICE_MODES:
+            raise RuntimeConfigInvalidError(
+                "selection_price_mode must be AUTO or DAILY_DB_ONLY",
+                context={"selection_price_mode": raw},
+            )
+        return raw.strip().upper()
 
     @staticmethod
     def _reference_price_trade_date(runtime_config: dict[str, Any], *, fallback: date) -> date:
@@ -251,6 +352,17 @@ def _non_negative_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _date_or_none(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 def _tdx_pre_close_entry_source(source: str | None) -> str:

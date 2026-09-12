@@ -44,6 +44,7 @@ from backend.services.advisory_list_transition import (
 )
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.selection_center.result_enrichment import SELECTION_PRICE_MODE_DAILY_DB_ONLY
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
@@ -3402,6 +3403,7 @@ class AdvisoryProgramService:
                         "selection_as_of_trade_date": selection_as_of_trade_date.isoformat(),
                     },
                 )
+            config["selection_price_mode"] = SELECTION_PRICE_MODE_DAILY_DB_ONLY
             date_context["selection_as_of_trade_date"] = selection_as_of_trade_date.isoformat()
             artifact_config = deepcopy(
                 config.get("selection_artifact_config") or config.get("selection_artifact") or {}
