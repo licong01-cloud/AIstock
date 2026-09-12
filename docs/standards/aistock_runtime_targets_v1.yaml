@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-09-11"
+updated_at: "2026-09-13"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -93,6 +93,7 @@ targets:
       - backend/services/dataset_release/build_processor.py
       - backend/services/dataset_release/build_stage.py
       - backend/services/dataset_release/canonical_stock_transformer.py
+      - backend/services/dataset_release/factor_materializer.py
       - backend/services/dataset_release/index_contract.py
       - backend/services/dataset_release/index_sources.py
       - backend/services/dataset_release/minute_overlay.py
@@ -136,6 +137,7 @@ targets:
           - backend/services/dataset_release/build_processor.py
           - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/canonical_stock_transformer.py
+          - backend/services/dataset_release/factor_materializer.py
           - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py
