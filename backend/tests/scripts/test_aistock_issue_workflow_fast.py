@@ -128,6 +128,71 @@ def test_read_command_retry_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == 3
 
 
+def test_github_issue_create_retries_missing_nested_module_label_with_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if len(commands) == 1:
+            return _result(
+                ok=False,
+                stderr="could not add label: 'module:validation.workflow_automation' not found",
+                returncode=1,
+            )
+        return _result(stdout="https://github.com/licong01-cloud/AIstock/issues/4601\n")
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    body = tmp_path / "body.md"
+    body.write_text("issue", encoding="utf-8")
+
+    result = workflow._create_github_issue_with_recovery(
+        bug_id="BUG-1461",
+        title="BUG-1461 P2: example",
+        body_path=body,
+        labels=["aistock:bug", "module:validation.workflow_automation", "status:open"],
+        cwd=tmp_path,
+    )
+
+    assert result["number"] == 4601
+    assert result["warnings"] == [
+        "GitHub label module:validation.workflow_automation was unavailable; used module:validation"
+    ]
+    assert len(commands) == 2
+    assert "module:validation.workflow_automation" in commands[0][-1]
+    assert "module:validation" in commands[1][-1]
+    assert "module:validation.workflow_automation" not in commands[1][-1]
+
+
+def test_github_issue_create_does_not_retry_unknown_top_level_module_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _result(ok=False, stderr="could not add label: 'module:unknown' not found", returncode=1)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    body = tmp_path / "body.md"
+    body.write_text("issue", encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="module:unknown"):
+        workflow._create_github_issue_with_recovery(
+            bug_id="BUG-199",
+            title="BUG-199 P2: example",
+            body_path=body,
+            labels=["aistock:bug", "module:unknown", "status:open"],
+            cwd=tmp_path,
+        )
+
+    assert calls == 1
+
+
 def test_workflow_smoke_does_not_call_full_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     issue = tmp_path / "bug.json"
     issue.write_text(json.dumps({"bug_id": "BUG-199"}), encoding="utf-8")
