@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1467",
-  "closed_at": null,
+  "closed_at": "2026-09-12T11:57:50.837440Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -159,8 +159,8 @@
   },
   "first_seen_at": "2026-09-12T07:48:08.627567Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fef02101f16fa3196d50292b62f9acb5db112fa7",
+  "fixed_at": "2026-09-12T08:09:09Z",
   "github_issue_number": 4614,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4614",
   "last_seen_at": "2026-09-12T07:48:08.627567Z",
@@ -168,6 +168,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4615",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -194,9 +195,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1467/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1467",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c1358b78c18c4c27f18815c43cf119d02643b182e8b3329d4a5539f3ef18c0c9",
+      "contract_digest": "3ac98aa569716d2fde4147a4a5fc1913ae2cab4e5877c7abe4a31b435050e869",
+      "expected_identity": "fef02101f16fa3196d50292b62f9acb5db112fa7",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-12T11:55:33.536269Z",
+      "mode": "read_only",
+      "observed_identity": "b5e1270a003d0a3a81773a1cbc1be142757b3876",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "be322d497820017f2eb953e7de5af159745448bf50c4f4fe0a1b6dac6ba436bc",
+      "receipt_sha256": "92883270c96867c53a678b89ced5677b48becedb62e3e002c3f0735a3d91d1e4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "baefd7c3ae8f0a5347a4ad7732b0f007944c8df9f9ad76a95d3bca4aa2b7a9f5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -206,7 +230,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -215,6 +239,10 @@
     "fingerprint": "25681860b59b952790a71d55",
     "source_event_id": "FE-20260912-25681860b59b"
   },
+  "validation_evidence": [
+    "Windows fresh process capacity contract: WSL training=1, WSL backtest-only=2, remote=4 -> passed",
+    "Focused reservation/coordinator/executor regression -> 66 passed, 3 pre-existing PostgreSQL integration skips"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
