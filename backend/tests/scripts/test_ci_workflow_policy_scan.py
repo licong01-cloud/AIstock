@@ -313,8 +313,14 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
 
     assert refresh[True]["schedule"] == [{"cron": "30 18 * * *"}]
     assert refresh["jobs"]["refresh-after-main"]["needs"] == "security-runner-preflight"
+    assert "concurrency" not in refresh
+    assert refresh["jobs"]["refresh-after-main"]["concurrency"] == {
+        "group": "code-intelligence-refresh-main",
+        "cancel-in-progress": True,
+    }
     legacy = nightly["jobs"]["code-intelligence-weekly"]
     assert legacy["if"] == "github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+    assert legacy["concurrency"]["cancel-in-progress"] is True
     assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
 
 
