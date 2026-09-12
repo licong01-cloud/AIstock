@@ -28,12 +28,19 @@
   ],
   "expected": "A committed guarded migration validates and applies the two complete historical adj-factor series and three content-addressed RIGHTS_ISSUE facts in DEV, then applies the exact merged migration to production with deterministic before/after receipts; no candidate activation, experiment, strategy, service, DDL, or process action occurs.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/repair_pt_next_018_source_data.py",
+      "backend/tests/scripts/test_repair_pt_next_018_source_data.py"
+    ],
     "added_files": [
       "scripts/repair_pt_next_018_source_data.py",
       "backend/tests/scripts/test_repair_pt_next_018_source_data.py"
     ],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "scripts/repair_pt_next_018_source_data.py",
+      "backend/tests/scripts/test_repair_pt_next_018_source_data.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/repair_pt_next_018_source_data.py",
@@ -101,10 +108,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
