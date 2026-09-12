@@ -4,6 +4,7 @@
     "scripts/configure_aistock_github_runner.ps1",
     "backend/tests/scripts/test_configure_aistock_github_runner.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260912_BUG-1476-ordinary-ci-queues-behind-one-eligible-runner-while-idle-security-capaci.json"
   ],
   "assigned_agent": null,
@@ -22,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260912-9483ff99d1d3",
       "timestamp": "2026-09-12T17:52:08.627916Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add the machine standard catalog so its required normalized source digest stays synchronized with the sole Markdown authority.",
+      "timestamp": "2026-09-12T17:57:29.2119545Z"
     }
   ],
   "evidence_uris": [
@@ -33,14 +40,16 @@
     "changed_files": [
       "scripts/configure_aistock_github_runner.ps1",
       "backend/tests/scripts/test_configure_aistock_github_runner.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "scripts/configure_aistock_github_runner.ps1",
         "backend/tests/scripts/test_configure_aistock_github_runner.py",
-        "docs/standards/aistock_development_standard_v1.5_20260523.md"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "impacted_modules": [
         "scripts",
@@ -71,6 +80,15 @@
           "primary_module": "docs.standards",
           "risk_level": "medium",
           "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
         }
       ],
       "risk_levels": [
@@ -79,20 +97,23 @@
       "suggested_scope": [
         "scripts/configure_aistock_github_runner.ps1",
         "backend/tests/scripts/test_configure_aistock_github_runner.py",
-        "docs/standards/aistock_development_standard_v1.5_20260523.md"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/configure_aistock_github_runner.ps1",
       "backend/tests/scripts/test_configure_aistock_github_runner.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/configure_aistock_github_runner.ps1",
       "backend/tests/scripts/test_configure_aistock_github_runner.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
   "first_seen_at": "2026-09-12T17:52:08.627938Z",

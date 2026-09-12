@@ -28,9 +28,55 @@ def test_runner_configure_helper_keeps_registration_token_out_of_arguments() -> 
     assert "--replace" not in text
     assert "--disableupdate" in text
     assert "automatic_update_disabled" in text
-    assert "if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' }" in text
+    assert "@('aistock', 'aistock-ci', 'aistock-ci-security')" in text
+    assert "@('aistock-ci', 'aistock-ci-security')" in text
+    assert "General runner labels must not include aistock-ci-security" in text
     assert "AISTOCK_GITHUB_RUNNER_VERSION" in text
     assert "actions-runner-win-x64-2.334.0.zip" not in text
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
+def test_runner_configure_helper_enforces_work_conserving_role_labels(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "runners"
+    install_root = allowed_root / "security"
+    allowed_root.mkdir()
+
+    missing_shared_capacity = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            (
+                f"& '{SCRIPT}' -AllowedRoot '{allowed_root}' -InstallRoot '{install_root}' "
+                "-Role security -Labels @('aistock','aistock-ci-security') -AuditOnly -Json"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert missing_shared_capacity.returncode != 0
+    assert "must include aistock-ci" in (missing_shared_capacity.stdout + missing_shared_capacity.stderr)
+
+    unsafe_general_labels = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            (
+                f"& '{SCRIPT}' -AllowedRoot '{allowed_root}' -InstallRoot '{install_root}' "
+                "-Role general -Labels @('aistock','aistock-ci','aistock-ci-security') "
+                "-AuditOnly -Json"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert unsafe_general_labels.returncode != 0
+    assert "must not include aistock-ci-security" in (unsafe_general_labels.stdout + unsafe_general_labels.stderr)
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
