@@ -1575,11 +1575,19 @@ def test_scheduler_resolves_model_aware_gpu_training_policy(monkeypatch):
         "gat-model": {"model_id": "gat-model", "model_config": {"class": "EfficientGATs"}},
         "lstm-model": {"model_id": "lstm-model", "model_name": "LSTM"},
     }
-    monkeypatch.setattr(ConfigComposer, "_get_model_info", lambda _self, model_id: model_rows[model_id])
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_get_model_info",
+        lambda _self, model_id: model_rows.get(model_id),
+    )
 
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("gat-model") == "exclusive"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("lstm-model") == "parallel"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy(None) == "parallel"
+    assert AutoEvolutionScheduler._resolve_model_gpu_training_contract("missing-model") == (
+        "parallel",
+        False,
+    )
 
 
 def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkeypatch):
@@ -1589,31 +1597,60 @@ def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkey
 
     def _resolve(model_id):
         calls.append(model_id)
-        return policies[model_id]
+        return policies[model_id], True
 
-    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_policy", _resolve)
+    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_contract", _resolve)
 
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("exclusive", True)
+        allow_parallel_training=True,
+    ) == ("exclusive", True, False)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("parallel", False)
+        allow_parallel_training=True,
+    ) == ("parallel", False, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=True,
         full_train=True,
-    ) == ("parallel", True)
+        allow_parallel_training=True,
+    ) == ("parallel", True, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=True,
         full_train=False,
-    ) == ("parallel", False)
-    assert calls == ["gat-model", "lstm-model", "lstm-model"]
+        allow_parallel_training=True,
+    ) == ("parallel", False, False)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="lstm-model",
+        requested_phase_pipeline=False,
+        full_train=True,
+        allow_parallel_training=False,
+    ) == ("parallel", False, False)
+    assert calls == ["gat-model", "lstm-model", "lstm-model", "lstm-model"]
+
+
+def test_custom_evo_submission_propagates_proven_parallel_training_capacity():
+    source = inspect.getsource(AutoEvolutionScheduler._submit_custom_evo_loop_unified)
+
+    assert '"parallel_training_eligible": parallel_training_eligible' in source
+    assert 'submission_node_capacity=int(slot["limit"])' in source
+    assert "parallel_training_eligible=parallel_training_eligible" in source
+    assert "parallel_training_eligible=False" in source
+
+
+def test_custom_evo_retry_persists_parallel_training_capacity_before_submit():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+
+    persist_idx = source.index('config["parallel_training_eligible"]')
+    submit_idx = source.index("result = await executor.submit")
+    assert persist_idx < submit_idx
+    assert 'int(slot["limit"]) if slot is not None else None' in source
+    assert "parallel_training_eligible=retry_parallel_training_eligible" in source
 
 
 def test_scheduler_atomically_reserves_policy_specific_gpu_phase_sessions(monkeypatch):

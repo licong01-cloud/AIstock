@@ -374,6 +374,7 @@ class QEExecutionReservationRepository:
         *,
         node_capacity: int,
         allow_same_task_backtest_parallelism: bool = False,
+        allow_same_task_parallel_training: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: SourceClaim,
@@ -393,6 +394,9 @@ class QEExecutionReservationRepository:
                     requested_node_capacity=node_capacity,
                     allow_same_task_backtest_parallelism=(
                         allow_same_task_backtest_parallelism
+                    ),
+                    allow_same_task_parallel_training=(
+                        allow_same_task_parallel_training
                     ),
                 )
                 existing = self._find_source_reservation(cur, spec.source_kind, spec.source_execution_id)
@@ -1094,15 +1098,91 @@ class QEExecutionReservationRepository:
         *,
         requested_node_capacity: int,
         allow_same_task_backtest_parallelism: bool,
+        allow_same_task_parallel_training: bool,
     ) -> int:
-        """Allow WSL=2 only for one homogeneous, backtest-only QE task.
+        """Allow WSL=2 only for one homogeneous, explicitly proven QE task.
 
         The caller holds the node advisory lock, so this cohort proof and the
         following reservation insert are serialized against every QE source.
-        Missing loop metadata, retry aliases, mixed modes, and cross-task work
-        all fail closed to one slot.
+        Missing loop metadata, mixed modes, incompatible model policy, and
+        cross-task work all fail closed to one slot.
         """
-        if not allow_same_task_backtest_parallelism or requested_node_capacity <= 1:
+        if requested_node_capacity <= 1:
+            return requested_node_capacity
+        if not (
+            allow_same_task_backtest_parallelism
+            or allow_same_task_parallel_training
+        ):
+            return requested_node_capacity
+        if allow_same_task_backtest_parallelism and allow_same_task_parallel_training:
+            return 1
+        if allow_same_task_parallel_training:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS eligible_count
+                FROM qe_evolution_loops AS evolution_loop
+                WHERE evolution_loop.task_id = %s
+                  AND 'Loop' || evolution_loop.loop_index::text = %s
+                  AND evolution_loop.status = 'running'
+                  AND lower(
+                      COALESCE(evolution_loop.config_json ->> 'backtest_only', 'false')
+                  ) <> 'true'
+                  AND lower(
+                      COALESCE(
+                          evolution_loop.config_json ->> 'parallel_training_eligible',
+                          'false'
+                      )
+                  ) = 'true'
+                  AND lower(
+                      COALESCE(
+                          evolution_loop.config_json ->> 'gpu_training_policy',
+                          ''
+                      )
+                  ) = 'parallel'
+                """,
+                (spec.qe_task_id, spec.qe_loop_id),
+            )
+            if int(cur.fetchone()["eligible_count"]) != 1:
+                return 1
+            cur.execute(
+                """
+                SELECT COUNT(*) AS incompatible_count
+                FROM infra.qe_execution_reservation AS reservation
+                LEFT JOIN qe_evolution_loops AS evolution_loop
+                  ON reservation.source_kind = 'qe_evolution_loop'
+                 AND evolution_loop.task_id = reservation.qe_task_id
+                 AND 'Loop' || evolution_loop.loop_index::text = reservation.qe_loop_id
+                WHERE reservation.node_id = %s
+                  AND reservation.status = ANY(%s)
+                  AND NOT (
+                      reservation.source_kind = 'qe_evolution_loop'
+                      AND reservation.qe_task_id = %s
+                      AND evolution_loop.loop_id IS NOT NULL
+                      AND lower(
+                          COALESCE(evolution_loop.config_json ->> 'backtest_only', 'false')
+                      ) <> 'true'
+                      AND lower(
+                          COALESCE(
+                              evolution_loop.config_json ->> 'parallel_training_eligible',
+                              'false'
+                          )
+                      ) = 'true'
+                      AND lower(
+                          COALESCE(
+                              evolution_loop.config_json ->> 'gpu_training_policy',
+                              ''
+                          )
+                      ) = 'parallel'
+                  )
+                """,
+                (
+                    spec.node_id,
+                    list(ACTIVE_RESERVATION_STATUSES),
+                    spec.qe_task_id,
+                ),
+            )
+            if int(cur.fetchone()["incompatible_count"]) > 0:
+                return 1
             return requested_node_capacity
         cur.execute(
             """

@@ -303,6 +303,30 @@ class TestBacktestExecutorBasic:
         )
         assert source.source_execution_id == "task_normal_Loop3"
 
+    def test_evolution_source_preserves_resolved_parallel_training_contract(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_parallel",
+            loop_index=4,
+            experiment_name="task_parallel/Loop4",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_parallel_Loop4",
+            submission_node_capacity=2,
+            parallel_training_eligible=True,
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ):
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        assert source.requested_node_capacity == 2
+        assert source.parallel_training_eligible is True
+
     def test_qe_experiment_without_claim_id_uses_execution_id_for_claim(self):
         claim_source = MagicMock()
         record_waiting = MagicMock()

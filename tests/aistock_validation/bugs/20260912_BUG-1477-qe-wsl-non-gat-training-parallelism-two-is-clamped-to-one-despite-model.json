@@ -2,7 +2,13 @@
   "actual": "QEActiveExecutionCapacityService clamps every non-backtest WSL workload to one slot before the model-aware GPU policy can express the approved non-GAT parallel capacity.",
   "allowed_write_scope": [
     "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/quantevolver/qe_execution_reservation.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/executors/base.py",
     "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "backend/tests/unified_engine/test_backtest_executor.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260912_BUG-1477-qe-wsl-non-gat-training-parallelism-two-is-clamped-to-one-despite-model.json"
   ],
   "assigned_agent": null,
@@ -21,19 +27,52 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260912-d4999c65900a",
       "timestamp": "2026-09-12T21:30:47.026979Z"
+    },
+    {
+      "action": "expand_fix_scope_after_design_review",
+      "actor": "codex",
+      "note": "Global WSL capacity=2 was rejected because it widened unknown, cross-task, qe_experiment and GAT admission. Scope expanded to carry the resolved custom-evo model policy into the canonical reservation and prove one same-task parallel-training cohort while retaining the base cap of one.",
+      "timestamp": "2026-09-12T21:48:04.002091Z"
+    },
+    {
+      "action": "complete_fix_review_and_premerge_validation",
+      "actor": "codex",
+      "note": "Final review confirmed WSL baseline=1, same-task backtest=2, catalog-resolved non-GAT custom-evo full-train=2, node1=4, and fail-closed capacity=1 for GAT, unresolved models, other source kinds, cross-task cohorts and advisory consumers. Targeted tests, qe_read_backend, compile, Ruff, code-intelligence, L0, diff-check and fresh-process capacity smoke passed.",
+      "timestamp": "2026-09-12T22:05:32.960607Z"
     }
   ],
   "evidence_uris": [
-    "qe_20260913_031243_11a2: requested WSL=2, observed only one LSTM loop running at a time"
+    "qe_20260913_031243_11a2: requested WSL=2, observed only one LSTM loop running at a time",
+    "pytest: 82 passed across submission coordinator, backtest executor and GPU policy suites",
+    "nox: qe_read_backend 563 passed, 1 skipped; validation_module_registry_l0 passed",
+    "fresh-process: WSL baseline=1, parallel-training=2, backtest=2, node1=4"
   ],
-  "expected": "Registered custom-evo tasks may use two WSL slots for non-GAT training and pure backtests; GAT/EfficientGATs actual GPU training remains exclusive/serial through the existing model-aware phase gate; requested lower limits remain honored.",
+  "expected": "Only catalog-resolved non-GAT loops in one registered custom-evo task may use two WSL training slots after persisted cohort proof; pure same-task backtests retain two slots; GAT/EfficientGATs, unresolved models, cross-task work, qe_experiment, multi-alpha and advisory work remain fail-closed at one WSL slot; requested lower limits remain honored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260912_BUG-1477-qe-wsl-non-gat-training-parallelism-two-is-clamped-to-one-despite-model.json",
+      "backend/services/quantevolver/executors/backtest.py",
+      "backend/services/quantevolver/executors/base.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20260912_BUG-1477-qe-wsl-non-gat-training-parallelism-two-is-clamped-to-one-despite-model.json",
+      "backend/services/quantevolver/executors/backtest.py",
+      "backend/services/quantevolver/executors/base.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
@@ -86,12 +125,24 @@
     },
     "planned_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/executors/backtest.py",
+      "backend/services/quantevolver/executors/base.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/executors/backtest.py",
+      "backend/services/quantevolver/executors/base.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
     ]
   },
   "first_seen_at": "2026-09-12T21:30:47.026995Z",
@@ -117,11 +168,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260913_031243_11a2",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh_process_capacity_contract=PASS"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
