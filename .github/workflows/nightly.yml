@@ -494,7 +494,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence
     concurrency:
       group: code-intelligence-refresh-main
-      cancel-in-progress: false
+      cancel-in-progress: true
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     permissions:

@@ -274,6 +274,20 @@ def build_contract_evidence(
             and "needs: security-runner-preflight" in downstream
         )
 
+    def code_intelligence_preflight_precedes_refresh_concurrency(text: str) -> bool:
+        workflow_header = text.split("\njobs:", 1)[0]
+        refresh_match = re.search(
+            r"(?ms)^  refresh-after-main:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        refresh = refresh_match.group("body") if refresh_match else ""
+        return (
+            "concurrency:" not in workflow_header
+            and "concurrency:" in refresh
+            and "group: code-intelligence-refresh-main" in refresh
+            and "cancel-in-progress: true" in refresh
+        )
+
     nightly_code_intelligence_input_match = re.search(
         r"(?ms)^      run_code_intelligence:\n(?P<body>.*?)(?=^      [a-z0-9_]+:\n|^defaults:)",
         nightly_text,
@@ -415,6 +429,7 @@ def build_contract_evidence(
         "security_workflows_fail_fast_before_runner_allocation": (
             has_security_runner_preflight(codeql_text, "codeql-nightly")
             and has_security_runner_preflight(code_intelligence_refresh_text, "refresh-after-main")
+            and code_intelligence_preflight_precedes_refresh_concurrency(code_intelligence_refresh_text)
         ),
         "nightly_code_intelligence_has_single_scheduled_owner": (
             "schedule:" in code_intelligence_refresh_text
