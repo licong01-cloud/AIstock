@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2 G2-A `rotation_L1` 端到端详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.6.1（正式零fit终态与产品接线）
+> **文档版本**：v1.6.2（C-013 full authority重闭合）
 > **日期**：2026-09-10
 > **状态**：`V1_6_FORMAL_DEVELOPMENT_VERIFIED_PRODUCT_CLOSURE_IN_PROGRESS`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.50
@@ -16,6 +16,8 @@
 ---
 
 > **2026-09-10修订边界**：§10.1/§21/§23分别保留v1.3/v1.4/v1.5不可变合同。v1.5正式24/24 fits已完成，mean Rank IC=`0.015767451084082496`且较v1.4下降，tail未读。用户已授权按建议实施唯一v1.6；其精确合同见§24。该授权不读取tail、不写数据库、不切换生产identity、不执行runtime activation或进程控制。
+>
+> **2026-09-12 C-013重闭合边界**：用户已批准`C-013-G2A-V16-AUTHORITY-REBIND-A`。该合同只允许在旧/新G2-A canonical logical input完全相同且仅source/mapping authority变化时，把冻结v1.4 paired diagnostic与新C-013 v1.6计算合法闭合；不复用旧acceptance，不修改模型合同，不读取tail，也不授权数据库、runtime或进程动作。精确合同与状态见§24.8。
 
 ## 0. 背景、权威、现状与批准边界
 
@@ -906,3 +908,24 @@ research surface、rotation capability、forward confirmation与advisory五轴�
 固定源码`6448a35c7272bb7126a9d59042f0ac6569b26733`已在同一冻结bundle与单线程环境完成两个fresh Python processes。两次均为`planned=started=completed=failed=0`，reproducibility payload SHA-256一致；最终acceptance SHA-256为`1ae40d5601bd4f9123aca6c02dac3b26f9b3338a273913f0f5d0d089407676be`。620个OOF日期、19,220行中610日metric-valid，mean Rank IC=`0.039580909571655214`，two-sided HAC 95%区间=`[0.0013856051597341199,0.07777621398357631]`，`tail_access_gate=true`、`forward_power_status=INSUFFICIENT`、`tail_accessed=false`。该终态支持`RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`资格，不支持advisory或forward-confirmed声明。
 
 产品接线必须复用既有表、repository、read API与热力图。OOF转换时重新执行parent closure并显式传入冻结v1.4 reference和immutable input bundle；formula text、model/scoring hash、31-sector分母、input/mapping identity任一不一致均typed fail closed。单日入口只支持既有v1.3与当前v1.6：v1.6从显式direct-v2 release读取截至`t-1`的25个canonical session，计算两个重叠20日moneyflow intensity之差并作当日横截面average-rank；不得加载booster、market context、future target、v1.4/v1.5产品路径或旧score fallback。源码/测试/离线OOF转换通过后仍须真实writer/readback/API/UI和独立runtime授权，才能把surface标记为`AVAILABLE_EXPERIMENTAL`。
+
+### 24.8 C-013 full authority重闭合合同（C-013-G2A-V16-AUTHORITY-REBIND-A）
+
+2026-08-31 full C-013 authority重新冻结后，正式mapping identity由旧`3362543f...`变为`e478722f...`；旧v1.4 process仍绑定旧input identity，而新v1.6必须绑定新source/mapping identity。不得把旧manifest中的hash直接替换为新hash，也不得因业务面板恰好相同而忽略权威变化。用户批准的重闭合只解决这一authority-only过渡，不修改§24.1～§24.7的feature、公式、10D horizon、五fold、MBE、coverage、state、tail或产品语义。
+
+正式parent新增可选`--v14-input-root`，且只允许用于v1.6。正常同identity执行不得提供该参数；提供即视为歧义并fail closed。v1.5和v1.4不得使用该参数。旧/新identity不同时，该参数为必填，parent必须在创建输出目录、启动child之前分别通过正式reader读取：
+
+1. 冻结v1.4 process实际绑定的旧G2-A input bundle；
+2. 本次v1.6 child与score authority绑定的新G2-A input bundle。
+
+重闭合必须同时满足：旧process的`input_identity`逐字段等于旧bundle identity；新child逐字段等于新bundle identity；两identity字段集合相同；唯一允许变化的字段为`source_sha256`和/或`mapping_sha256`且至少一个真实变化；`feature_contract_sha256`、`development_end`、`source_cutoff`、tail maturity counts/hash全部相同。两个bundle各自先通过原有schema、31-sector、calendar、target maturity、feature/reason、benchmark和coverage验证，再要求canonical calendar、31-sector集合、完整panel（包括所有feature、target、reason、maturity）及CSI300 benchmark逐值完全相同，且canonical logical input SHA-256相同。任一实际数据、日期、sector、target、feature、reason、maturity或benchmark差异均使用`hmm_risk_rotation_input_contract_invalid`停止；不得改用allclose、缩短区间、丢列或重建旧结果。
+
+通过后，旧v1.4只作为paired diagnostic baseline，不成为当前模型权威，也不被重算、改写或伪装为新identity。v1.6必须在新bundle上重新执行两个fresh processes，重新计算score、metric、OOF rows、formula/model/input authority及新acceptance；不得复用或覆盖2026-09-11旧acceptance。`paired_v14_diagnostic`内持久化`hmm_risk_rotation_l1_g2a_input_authority_rebind_v1` receipt，至少包含旧/新完整input identity、变化字段、logical input/calendar/sector/benchmark canonical hashes、行数/日期数/sector数、`candidate_recomputed=true`、`baseline_model_authority_reused=false`与`tail_accessed=false`；receipt不得依赖路径或HDF容器字节hash作为业务相等依据。
+
+唯一OOF writer在把child转换为产品行、单日product executor在校验development authority时，也必须显式读取同一旧v1.4 input root并重放完全相同的parent closure；不得在产品边界省略authority-rebind receipt、绕过新acceptance或用旧identity生成产品行。该要求只扩展既有writer/executor参数，不新增第二套writer、repository、API、UI或运行时路径。
+
+该重闭合仍为零fit v1.6开发重算，不读取sealed tail，不执行数据库写入、DDL/DML、依赖安装、runtime activation或进程控制。通过只证明新C-013 authority下的development与paired diagnostic合法闭合；生产OOF写入、单日预测、API/UI readback和runtime状态仍须各自沿用既有授权与验证，不能由本receipt自动升级。
+
+| decision | 精确方案 | 状态 |
+|---|---|---|
+| C-013-G2A-V16-AUTHORITY-REBIND-A | v1.6显式双input读取；仅source/mapping identity可变；完整logical panel/benchmark必须bitwise canonical相同；重算双fresh-process与新acceptance | USER_APPROVED_IMPLEMENTED_TESTED_PENDING_FORMAL_RECLOSURE |

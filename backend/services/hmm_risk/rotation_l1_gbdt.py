@@ -3368,15 +3368,103 @@ def _validate_v15_training_target_authority(
     return str(authority["authority_sha256"])
 
 
-def _paired_v14_diagnostic(v14_reference: Mapping[str, Any], candidate_payload: Mapping[str, Any]) -> dict[str, Any]:
+def validate_v16_input_authority_rebind(
+    v14_reference: Mapping[str, Any],
+    v14_input_bundle: Mapping[str, Any],
+    candidate_input_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate an authority-only v1.4/v1.6 input identity transition.
+
+    The frozen v1.4 process remains diagnostic evidence only.  A rebind is
+    valid solely when both independently validated bundles contain exactly the
+    same logical panel and benchmark, while the versioned source and/or mapping
+    authority has changed.  Paths and mutable container hashes are deliberately
+    excluded from the receipt.
+    """
+
+    baseline = _validated_process(v14_reference, expected_index=1)
+    if baseline.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
+    old_frame, old_calendar, old_sectors, old_benchmark = validate_input_bundle(v14_input_bundle)
+    new_frame, new_calendar, new_sectors, new_benchmark = validate_input_bundle(candidate_input_bundle)
+    old_identity = dict(v14_input_bundle["identity"])
+    new_identity = dict(candidate_input_bundle["identity"])
+    if baseline.get("input_identity") != old_identity:
+        raise _fail(REASON_INPUT, "paired v1.4 process input authority differs", stage="closure")
+    if set(old_identity) != set(new_identity):
+        raise _fail(REASON_INPUT, "paired input authority fields differ", stage="closure")
+    changed_fields = tuple(sorted(key for key in old_identity if old_identity[key] != new_identity[key]))
+    if not changed_fields or not set(changed_fields).issubset({"source_sha256", "mapping_sha256"}):
+        raise _fail(REASON_INPUT, "paired input authority change is not an approved rebind", stage="closure")
+
+    old_logical_sha256 = _logical_input_sha256(old_frame, old_benchmark)
+    new_logical_sha256 = _logical_input_sha256(new_frame, new_benchmark)
+    comparison_columns = [*VALUE_COLUMNS, *REASON_COLUMNS, *MATURITY_COLUMNS]
+    if (
+        old_calendar != new_calendar
+        or old_sectors != new_sectors
+        or not old_frame.loc[:, comparison_columns].equals(new_frame.loc[:, comparison_columns])
+        or old_benchmark != new_benchmark
+        or old_logical_sha256 != new_logical_sha256
+    ):
+        raise _fail(REASON_INPUT, "paired input logical data differs", stage="closure")
+
+    calendar_sha256 = canonical_sha256([day.isoformat() for day in old_calendar])
+    sector_sha256 = canonical_sha256([*old_sectors])
+    benchmark_sha256 = canonical_sha256([[day.isoformat(), float(old_benchmark[day])] for day in sorted(old_benchmark)])
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_input_authority_rebind_v1",
+        "scope": "paired_v14_diagnostic_only",
+        "old_input_identity": old_identity,
+        "new_input_identity": new_identity,
+        "changed_identity_fields": [*changed_fields],
+        "logical_input_sha256": old_logical_sha256,
+        "calendar_sha256": calendar_sha256,
+        "sector_sha256": sector_sha256,
+        "benchmark_sha256": benchmark_sha256,
+        "row_count": len(old_frame),
+        "calendar_count": len(old_calendar),
+        "sector_count": len(old_sectors),
+        "candidate_recomputed": True,
+        "baseline_model_authority_reused": False,
+        "tail_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _paired_v14_diagnostic(
+    v14_reference: Mapping[str, Any],
+    candidate_payload: Mapping[str, Any],
+    *,
+    v14_input_bundle: Mapping[str, Any] | None = None,
+    candidate_input_bundle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     baseline = _validated_process(v14_reference, expected_index=1)
     if baseline.get("contract_version") != V14_CONTRACT_VERSION:
         raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
     candidate_version = candidate_payload.get("contract_version")
     if candidate_version not in {V15_CONTRACT_VERSION, V16_CONTRACT_VERSION}:
         raise _fail(REASON_INPUT, "paired candidate is not an approved v1.4 successor", stage="closure")
-    if baseline.get("input_identity") != candidate_payload.get("input_identity"):
-        raise _fail(REASON_INPUT, "paired v1.4 successor input identity differs", stage="closure")
+    baseline_identity = baseline.get("input_identity")
+    candidate_identity = candidate_payload.get("input_identity")
+    authority_rebind = None
+    if baseline_identity == candidate_identity:
+        if v14_input_bundle is not None:
+            raise _fail(
+                REASON_INPUT, "paired v1.4 input root is ambiguous without an authority change", stage="closure"
+            )
+    else:
+        if candidate_version != V16_CONTRACT_VERSION:
+            raise _fail(REASON_INPUT, "paired v1.4 successor input identity differs", stage="closure")
+        if v14_input_bundle is None or candidate_input_bundle is None:
+            raise _fail(REASON_INPUT, "v1.6 authority rebind requires both validated input bundles", stage="closure")
+        if candidate_identity != candidate_input_bundle.get("identity"):
+            raise _fail(REASON_INPUT, "v1.6 candidate input authority differs", stage="closure")
+        authority_rebind = validate_v16_input_authority_rebind(
+            v14_reference,
+            v14_input_bundle,
+            candidate_input_bundle,
+        )
 
     def daily_ic(payload: Mapping[str, Any]) -> dict[str, float]:
         metrics = payload.get("metrics")
@@ -3430,6 +3518,8 @@ def _paired_v14_diagnostic(v14_reference: Mapping[str, Any], candidate_payload: 
         "binding_gate_applied": False,
         "tail_accessed": False,
     }
+    if authority_rebind is not None:
+        body["input_authority_rebind"] = authority_rebind
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
@@ -3440,6 +3530,7 @@ def close_processes(
     v13_reference: Mapping[str, Any] | None = None,
     v14_reference: Mapping[str, Any] | None = None,
     input_bundle: Mapping[str, Any] | None = None,
+    v14_input_bundle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     first_payload = _validated_process(first, expected_index=1)
     second_payload = _validated_process(second, expected_index=2)
@@ -3454,6 +3545,8 @@ def close_processes(
     legacy = payload["contract_version"] == V13_CONTRACT_VERSION
     v15 = payload["contract_version"] == V15_CONTRACT_VERSION
     v16 = payload["contract_version"] == V16_CONTRACT_VERSION
+    if v14_input_bundle is not None and not v16:
+        raise _fail(REASON_INPUT, "v1.4 input authority rebind is supported only for v1.6", stage="closure")
     if not legacy and not v15 and not v16 and v13_reference is None:
         raise _fail(REASON_INPUT, "v1.4 closure requires the frozen v1.3 diagnostic reference", stage="closure")
     if v15 and (v14_reference is None or input_bundle is None):
@@ -3470,6 +3563,8 @@ def close_processes(
         )
     training_target_authority_sha256 = _validate_v15_training_target_authority(payload, input_bundle) if v15 else None
     if v16:
+        if payload.get("input_identity") != input_bundle.get("identity"):
+            raise _fail(REASON_INPUT, "v1.6 score authority input identity differs", stage="closure")
         score_authority = _v16_score_authority(input_bundle)
         if any(payload.get(field) != score_authority[field] for field in score_authority):
             raise _fail(REASON_REPRODUCIBILITY, "v1.6 score or metric authority differs", stage="closure")
@@ -3528,7 +3623,12 @@ def close_processes(
         body["score_transform"] = payload["score_transform"]
         body["scoring_contract_sha256"] = payload["scoring_contract_sha256"]
         body["score_authority_sha256"] = score_authority["prediction_sha256"]
-        body["paired_v14_diagnostic"] = _paired_v14_diagnostic(v14_reference, payload)
+        body["paired_v14_diagnostic"] = _paired_v14_diagnostic(
+            v14_reference,
+            payload,
+            v14_input_bundle=v14_input_bundle,
+            candidate_input_bundle=input_bundle,
+        )
     else:
         body["horizon_authority"] = payload["horizon_authority"]
         body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
@@ -3594,5 +3694,6 @@ __all__ = [
     "validate_input_bundle",
     "validate_v13_process_reference",
     "validate_v14_process_reference",
+    "validate_v16_input_authority_rebind",
     "write_input_bundle",
 ]

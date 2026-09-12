@@ -285,6 +285,7 @@ def build_oof_prediction_rows(
     sector_names: Mapping[str, str],
     v14_reference: Mapping[str, Any] | None = None,
     input_bundle: Mapping[str, Any] | None = None,
+    v14_input_bundle: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate verified OOF output into the only product-row contract."""
 
@@ -292,12 +293,13 @@ def build_oof_prediction_rows(
         raise RotationL1PredictionError(REASON_WRITER, "G2-A product requires two fresh-process reports")
     process_report = process_reports[0]
     try:
-        recomputed_acceptance = close_processes(
-            process_reports[0],
-            process_reports[1],
-            v14_reference=v14_reference,
-            input_bundle=input_bundle,
-        )
+        closure_kwargs = {
+            "v14_reference": v14_reference,
+            "input_bundle": input_bundle,
+        }
+        if v14_input_bundle is not None:
+            closure_kwargs["v14_input_bundle"] = v14_input_bundle
+        recomputed_acceptance = close_processes(process_reports[0], process_reports[1], **closure_kwargs)
     except RotationL1G2AError as exc:
         raise RotationL1PredictionError(exc.reason_code, str(exc)) from exc
     if dict(recomputed_acceptance) != dict(acceptance):
