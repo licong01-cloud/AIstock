@@ -101,6 +101,9 @@ PREREGISTERED_FAMILY_COUNT = 2
 TOTAL_FORMAL_COMPARISON_COUNT = PROTOTYPE_FAMILY_SIZE + EVOLUTION_FAMILY_SIZE
 RESULT_CLASS = "EXPLORATORY_USER_PROPOSED_HYPOTHESIS_CROSS_SYMBOL_NOT_TEMPORAL_HOLDOUT"
 PRE_OUTCOME_SUPERSESSION_REASON = "PRE_OUTCOME_JSON_ROUND_TRIP_IDENTITY_FIX"
+INCOMPLETE_COVERAGE_SUPERSESSION_REASON = (
+    "COVERAGE_INCOMPLETE_SUSPENDED_EX_DATE_REFERENCE_MAPPING_FIX"
+)
 
 CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
     "schema_version": "position_timing_pattern_corporate_action_application_policy_v2",
@@ -736,6 +739,7 @@ def plan_pattern_population(
     parent_request_path: Path,
     candidate_root: Path | None = None,
     exclude_prior_request_sha256: str | None = None,
+    exclude_prior_request_sha256s: Sequence[str] = (),
 ) -> Mapping[str, Any]:
     parent_ref = file_reference(parent_request_path)
     try:
@@ -765,6 +769,7 @@ def plan_pattern_population(
     prior = prior_timing_request_population(
         timing_root.resolve() / "research",
         exclude_request_sha256=exclude_prior_request_sha256,
+        exclude_request_sha256s=exclude_prior_request_sha256s,
     )
     training = tuple(str(item).upper() for item in parent["training_symbols"])
     forbidden = tuple(sorted(set(prior["forbidden_symbols"]).union(training)))
@@ -996,8 +1001,18 @@ def _mapped_reference_to_target(
 
     if reference is None or action is None:
         return reference
-    current_factor = money(bars.iloc[decision_ordinal]["factor"])
-    target_factor = money(bars.iloc[decision_ordinal + 1]["factor"])
+    try:
+        current_factor = money(bars.iloc[decision_ordinal]["factor"])
+        target_factor = money(bars.iloc[decision_ordinal + 1]["factor"])
+    except ActionValueError as exc:
+        if exc.code != "NON_FINITE_MONEY":
+            raise
+        theoretical_reference = (
+            reference - action.reference_price_cash_yuan_per_share
+        ) / action.quantity_multiplier
+        if not theoretical_reference.is_finite() or theoretical_reference <= 0:
+            raise ActionValueError("PATTERN_REFERENCE_ACTION_MAPPING_INVALID") from exc
+        return theoretical_reference
     if min(current_factor, target_factor) <= 0:
         raise ActionValueError("PATTERN_REFERENCE_FACTOR_INVALID")
     return reference * current_factor / target_factor
@@ -2451,6 +2466,8 @@ def prepare_pattern_request(
     rights_policy_reference = file_reference(rights_policy_path)
     superseded_request: Mapping[str, Any] | None = None
     superseded_reference: Mapping[str, Any] | None = None
+    superseded_lineage: list[str] = []
+    supersession_reason: str | None = None
     if supersedes_request_path is not None:
         superseded_path = supersedes_request_path.resolve()
         superseded_request = _load_request(superseded_path)
@@ -2473,18 +2490,48 @@ def prepare_pattern_request(
             != file_reference(parent_request_path.resolve())
             or superseded_request.get("rights_issue_participation_policy_sha256")
             != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
-            or superseded_bundle.exists()
         ):
             raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_INVALID")
+        prior_lineage = superseded_request.get("superseded_request_lineage_sha256s")
+        if prior_lineage is not None and (
+            not isinstance(prior_lineage, Sequence)
+            or isinstance(prior_lineage, (str, bytes))
+            or not all(isinstance(item, str) and len(item) == 64 for item in prior_lineage)
+        ):
+            raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_INVALID")
+        superseded_lineage = list(prior_lineage or ())
+        immediate_parent = superseded_request.get("superseded_request_sha256")
+        if isinstance(immediate_parent, str) and immediate_parent not in superseded_lineage:
+            superseded_lineage.append(immediate_parent)
+        if superseded_request["request_sha256"] not in superseded_lineage:
+            superseded_lineage.append(superseded_request["request_sha256"])
+        if len(superseded_lineage) != len(set(superseded_lineage)):
+            raise ActionValueError("PATTERN_PRE_OUTCOME_SUPERSESSION_INVALID")
+        if superseded_bundle.exists():
+            inspect_pattern_bundle(superseded_bundle)
+            try:
+                superseded_coverage = json.loads(
+                    (superseded_bundle / "coverage.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise ActionValueError(
+                    "PATTERN_INCOMPLETE_COVERAGE_SUPERSESSION_INVALID"
+                ) from exc
+            if (
+                superseded_coverage.get("coverage_complete") is not False
+                or superseded_coverage.get("excluded") != {"NON_FINITE_MONEY": 1}
+            ):
+                raise ActionValueError(
+                    "PATTERN_INCOMPLETE_COVERAGE_SUPERSESSION_INVALID"
+                )
+            supersession_reason = INCOMPLETE_COVERAGE_SUPERSESSION_REASON
+        else:
+            supersession_reason = PRE_OUTCOME_SUPERSESSION_REASON
     plan = plan_pattern_population(
         timing_root=timing_root,
         parent_request_path=parent_request_path.resolve(),
         candidate_root=candidate_root,
-        exclude_prior_request_sha256=(
-            superseded_request["request_sha256"]
-            if superseded_request is not None
-            else None
-        ),
+        exclude_prior_request_sha256s=superseded_lineage,
     )
     if superseded_request is not None and (
         tuple(plan["training_symbols"])
@@ -2625,11 +2672,10 @@ def prepare_pattern_request(
             if superseded_request is not None
             else None
         ),
-        "supersession_reason": (
-            PRE_OUTCOME_SUPERSESSION_REASON
-            if superseded_request is not None
-            else None
+        "superseded_request_lineage_sha256s": (
+            superseded_lineage if superseded_request is not None else None
         ),
+        "supersession_reason": supersession_reason,
         "candidate_source_identity": coverage,
         "corporate_action_snapshot": file_reference(corporate_action_snapshot.resolve()),
         "corporate_action_snapshot_sha256": corporate_book.snapshot_sha256,
@@ -2710,6 +2756,7 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
     population = request.get("population_spec")
     superseded_reference = request.get("superseded_request")
     superseded_request_sha256 = request.get("superseded_request_sha256")
+    superseded_lineage = request.get("superseded_request_lineage_sha256s")
     supersession_reason = request.get("supersession_reason")
     has_supersession = any(
         value is not None
@@ -2717,6 +2764,7 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
             superseded_reference,
             superseded_request_sha256,
             supersession_reason,
+            superseded_lineage,
         )
     )
     symbols = tuple(
@@ -2753,7 +2801,25 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
                 not isinstance(superseded_reference, Mapping)
                 or len(str(superseded_reference.get("sha256", ""))) != 64
                 or len(str(superseded_request_sha256 or "")) != 64
-                or supersession_reason != PRE_OUTCOME_SUPERSESSION_REASON
+                or supersession_reason
+                not in {
+                    PRE_OUTCOME_SUPERSESSION_REASON,
+                    INCOMPLETE_COVERAGE_SUPERSESSION_REASON,
+                }
+                or (
+                    superseded_lineage is not None
+                    and (
+                        not isinstance(superseded_lineage, Sequence)
+                        or isinstance(superseded_lineage, (str, bytes))
+                        or not superseded_lineage
+                        or superseded_lineage[-1] != superseded_request_sha256
+                        or len(superseded_lineage) != len(set(superseded_lineage))
+                        or not all(
+                            isinstance(item, str) and len(item) == 64
+                            for item in superseded_lineage
+                        )
+                    )
+                )
             )
         )
         or not isinstance(candidate_manifest, Mapping)
@@ -3167,6 +3233,12 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
             != request.get("rights_issue_application_sha256")
             or receipt.get("rights_issue_application_audit")
             != request.get("rights_issue_application_audit")
+            or receipt.get("superseded_request_sha256")
+            != request.get("superseded_request_sha256")
+            or receipt.get("superseded_request_lineage_sha256s")
+            != request.get("superseded_request_lineage_sha256s")
+            or receipt.get("supersession_reason")
+            != request.get("supersession_reason")
         )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
@@ -3248,6 +3320,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         return {"status": "ALREADY_MATERIALIZED", "bundle": bundle.as_posix(), **inspect_pattern_bundle(bundle)}
     superseded_reference = request.get("superseded_request")
     superseded_request_sha256 = request.get("superseded_request_sha256")
+    superseded_lineage = request.get("superseded_request_lineage_sha256s")
     if isinstance(superseded_reference, Mapping):
         superseded_bundle = (
             timing_root
@@ -3256,8 +3329,28 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             / "bundles"
             / str(superseded_request_sha256)
         )
-        if superseded_bundle.exists():
-            raise ActionValueError("PATTERN_SUPERSEDED_REQUEST_MATERIALIZED")
+        if request.get("supersession_reason") == PRE_OUTCOME_SUPERSESSION_REASON:
+            if superseded_bundle.exists():
+                raise ActionValueError("PATTERN_SUPERSEDED_REQUEST_MATERIALIZED")
+        elif request.get("supersession_reason") == INCOMPLETE_COVERAGE_SUPERSESSION_REASON:
+            if not superseded_bundle.exists():
+                raise ActionValueError("PATTERN_SUPERSEDED_REQUEST_UNAVAILABLE")
+            inspect_pattern_bundle(superseded_bundle)
+            try:
+                superseded_coverage = json.loads(
+                    (superseded_bundle / "coverage.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise ActionValueError(
+                    "PATTERN_INCOMPLETE_COVERAGE_SUPERSESSION_INVALID"
+                ) from exc
+            if (
+                superseded_coverage.get("coverage_complete") is not False
+                or superseded_coverage.get("excluded") != {"NON_FINITE_MONEY": 1}
+            ):
+                raise ActionValueError(
+                    "PATTERN_INCOMPLETE_COVERAGE_SUPERSESSION_INVALID"
+                )
     for reference in (
         request["parent_request"],
         request["corporate_action_snapshot"],
@@ -3284,7 +3377,13 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         timing_root / "research",
         exclude_request_sha256s=tuple(
             item
-            for item in (request["request_sha256"], superseded_request_sha256)
+            for item in dict.fromkeys(
+                (
+                    request["request_sha256"],
+                    *(superseded_lineage or ()),
+                    superseded_request_sha256,
+                )
+            )
             if isinstance(item, str)
         ),
     )
@@ -3800,6 +3899,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
         "repository_commit": request["repository_commit"],
         "superseded_request_sha256": superseded_request_sha256,
+        "superseded_request_lineage_sha256s": superseded_lineage,
         "supersession_reason": request.get("supersession_reason"),
         "created_at": datetime.now(TZ).isoformat(),
         "source_sha256": request["candidate_source_identity"]["source_sha256"],

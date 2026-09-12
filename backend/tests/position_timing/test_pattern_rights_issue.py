@@ -19,6 +19,7 @@ from backend.services.position_timing.contracts import (
 )
 from backend.services.position_timing.pattern_research import (
     FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+    INCOMPLETE_COVERAGE_SUPERSESSION_REASON,
     PRE_OUTCOME_SUPERSESSION_REASON,
     _rights_issue_request_contract_invalid,
     audit_pattern_factor_action_coverage,
@@ -269,8 +270,14 @@ def test_rights_issue_binds_factor_change_without_creating_account_shares(
     assert _rights_issue_request_contract_invalid(request) is False
     request["superseded_request"] = {"sha256": "9" * 64}
     request["superseded_request_sha256"] = "8" * 64
+    request["superseded_request_lineage_sha256s"] = ["7" * 64, "8" * 64]
     request["supersession_reason"] = PRE_OUTCOME_SUPERSESSION_REASON
     assert _rights_issue_request_contract_invalid(request) is False
+    request["supersession_reason"] = INCOMPLETE_COVERAGE_SUPERSESSION_REASON
+    assert _rights_issue_request_contract_invalid(request) is False
+    request["superseded_request_lineage_sha256s"] = ["7" * 64]
+    assert _rights_issue_request_contract_invalid(request) is True
+    request["superseded_request_lineage_sha256s"] = ["7" * 64, "8" * 64]
     request["supersession_reason"] = "UNREGISTERED_REASON"
     assert _rights_issue_request_contract_invalid(request) is True
     request["supersession_reason"] = PRE_OUTCOME_SUPERSESSION_REASON

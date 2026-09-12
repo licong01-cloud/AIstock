@@ -35,6 +35,7 @@ from backend.services.position_timing.pattern_research import (
     _effect_evidence,
     _manifest,
     _load_request,
+    _mapped_reference_to_target,
     _model_contract,
     _model_contract_sha256,
     _optimizer_contract,
@@ -488,6 +489,25 @@ def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(
     assert complete["forbidden_symbols"] == ("000001.SZ", "000002.SZ")
     assert excluding_current["forbidden_symbols"] == ("000001.SZ",)
     assert excluding_with_sequence["forbidden_symbols"] == ("000001.SZ",)
+
+
+def test_suspended_ex_date_maps_last_price_from_frozen_action_when_factor_is_missing():
+    bars = _bars(3)
+    bars.loc[:, "factor"] = np.nan
+    action = _stock_action(
+        bars.index[1].date(),
+        multiplier="1.5",
+        cash="0.3",
+    )
+
+    mapped = _mapped_reference_to_target(
+        Decimal("30"),
+        bars=bars,
+        decision_ordinal=0,
+        action=action,
+    )
+
+    assert mapped == Decimal("19.8")
 
 
 def test_snapshot_scope_fails_closed_for_new_evaluation_symbol(tmp_path):

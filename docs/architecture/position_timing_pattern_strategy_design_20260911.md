@@ -1,11 +1,11 @@
 # 自选股与持仓股形态择时研究设计
 
 > 版本：v1.9；日期：2026-09-13；Feature tier：F1（本模块研究扩展）
-> 状态：`RIGHTS_AUTHORITY_BOUND_SOURCE_PREFLIGHT_VERIFIED_FORMAL_REPLAY_PENDING_NOT_SERVING`
+> 状态：`RIGHTS_AUTHORITY_BOUND_FIRST_REPLAY_COVERAGE_DEFECT_FIXED_TECHNICAL_REPLAY_PENDING_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动及旧候选复权/公司行动覆盖缺口；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。请求前全量审计随后在第四批128股发现4个未绑定区间并拒绝生成正式 request。数据窗口现已交付不可变 r4 candidate（根 manifest 文件 SHA256 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`）及三项配股 authority（canonical SHA256 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`）。首个r4 request `a9d8e5410f0baec676a058d0deae9253f59a04ff852948db2d21b90809cdf5e3` 在收益读取前因内存tuple经JSON持久化为list后直接对象比较而typed fail closed，未生成bundle；该request永久保留且不计为已观察收益的正式试验。修复仅允许以它为pre-outcome supersession并证明人口、输入和先验request集合完全相同，不删除旧request、不换股。当前尚未读取第四批收益、尚无serving模型。
+> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动及旧候选复权/公司行动覆盖缺口；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不据其比较值调参。数据窗口现已交付不可变 r4 candidate及三项配股authority。首个r4 request `a9d8e5410f0baec676a058d0deae9253f59a04ff852948db2d21b90809cdf5e3` 在收益读取前因JSON round-trip对象类型比较而typed fail closed，未生成bundle；其pre-outcome supersession `40d1a9d4c1e10160e9939534922ad35ad7de1f657205b39b6b022b6c756be8c6` 已完成run/inspect/exact retry并证明配股/factor覆盖696/696，但`688109.SH`在长期停牌期间现金分红、factor不可用时触发`NON_FINITE_MONEY`，使原型及外层评价均仅63/64，九项结果均为覆盖不完整的`INCONCLUSIVE`，不得用于策略选择。修复只补充已有typed企业行动下的理论参考价映射，不改策略参数；下一次technical replay必须复用完全相同的人口、输入、日期、阈值和先验集合。上述request/bundle永久保留、不覆盖、不换股，当前尚无serving模型。
 
 ## 1. Background / 目标与现状
 
@@ -80,6 +80,8 @@ request展开并绑定显式 candidate root、根 `qe_dataset_manifest.json` 文
 r4 candidate路径显式冻结为 `X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260912-r4-candidate`，不读取仍指向r3的active profile。根manifest的文件SHA256为`ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`，内部`dataset_manifest_sha256`为`1db13b2129409c2ee4aabd8bc83c3f5e5eee1fde2a859a3cb2a722d885dd5c49`；配股authority文件SHA256为`545393b2e1bd7cba8f18979399152e15b1f34881eb851124b6ae3c67472e6d66`、canonical SHA256为`4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`，官方来源文件集合SHA256为`0041344ba9fdb76c3379b2c829f985935647a4d6b173b26ea928af9d30a4a47c`。统一不认购政策canonical SHA256为`4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。旧候选的`300506.SZ/688109.SH`拼接缝仅作为诊断历史保留；r4 source-only预审读回二者拼接点factor均为`1.0→1.0`，不再形成material interval。第四批仍为训练64股、评价64股、共128股，日期仍为2018-08-01..2026-08-31；696个material factor interval已全部绑定，其中三条绑定typed `RIGHTS_ISSUE`，未绑定区间和因子不足股票均为0。该预审未读取收益，也未在`position_timing`补因子、改manifest或激活profile。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
+
+当企业行动发生在连续停牌期间、行动日前后raw行情与factor均不可用时，持仓参考价不能以空factor计算，也不能保持原价后再叠加现金分红形成双计。冻结回放按该typed行动的理论除权恒等式`(last_reference - reference_price_cash_yuan_per_share) / quantity_multiplier`映射估值参考价，并由账户行动路径另行入账现金和股份；该映射只服务无行情日的持仓估值，不生成成交价、不填充OHLC/factor，也不改变形态信号。若公式结果非正或非有限仍typed fail closed。
 
 ### 4.1 首版固定参数
 
