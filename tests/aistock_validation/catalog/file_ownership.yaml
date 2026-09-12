@@ -160,6 +160,7 @@ rules:
       - backend/tests/quantevolver/test_qe_reconciliation_coordinator.py
       - backend/tests/quantevolver/test_qe_registered_submission.py
       - backend/tests/quantevolver/test_qe_dataset_universe_frontend_contract.py
+      - backend/tests/quantevolver/test_qe_custom_loader_instruments.py
       - backend/tests/quantevolver/test_qe_universe_comparison.py
       - backend/tests/test_aistock_qe_mcp_servers.py
       - backend/tests/unified_engine/test_custom_evo_mutation_routes.py
