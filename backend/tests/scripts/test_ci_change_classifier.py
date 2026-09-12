@@ -810,6 +810,23 @@ def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "frontend/src/app/paper-v2/advisory/page.tsx",
+            "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "frontend_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["frontend_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["frontend_test_targets"] == []
+    assert payload["unmapped_code_files"] == []
+
+
 def test_unmapped_frontend_code_blocks_instead_of_receiving_type_lint_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["frontend/src/app/unowned-feature/page.tsx"],
