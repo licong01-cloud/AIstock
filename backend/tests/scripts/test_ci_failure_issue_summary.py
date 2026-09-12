@@ -1594,6 +1594,48 @@ def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     assert "BUG ID: not applicable for infra-only issue" in issue_payload["body"]
 
 
+def test_nightly_runner_outage_uses_role_specific_health_evidence() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "failure",
+                "drSnapshot": "skipped",
+                "drValidate": "skipped",
+                "nightlyL3": "skipped",
+                "paperV2Live": "skipped",
+            },
+            "runner_health": {
+                "required_labels": ["self-hosted", "windows", "aistock-ci-security"],
+                "blocking": [
+                    "no online GitHub Actions runner matches required labels: "
+                    "self-hosted, windows, aistock-ci-security"
+                ],
+                "matching_stale_queued_runs": [
+                    {
+                        "run_id": 34532760217,
+                        "matching_queued_jobs": [
+                            {
+                                "name": "Code intelligence daily graph refresh and summary",
+                                "labels": ["aistock-ci-security", "self-hosted", "windows"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        run_id="9002",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
+    )
+
+    assert "aistock-ci-security" in payload["issue_title"]
+    assert "aistock-ci-security" in payload["failed_jobs"][0]["error_signature"]
+    assert any(
+        "Code intelligence daily graph refresh and summary" in line
+        for line in payload["failed_jobs"][0]["key_log_excerpt"]
+    )
+    assert payload["agent_handoff"]["handoff_mode"] == "infra_action_only"
+
+
 def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
     payload = summary.summarize_nightly_status(
         {
@@ -1628,11 +1670,15 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["full-summary"]["steps"]
     build_step = next(step for step in steps if step.get("name") == "Build Nightly failure issue context")
+    runner_health_step = next(step for step in steps if step.get("name") == "Download runner health evidence")
     script = next(step for step in steps if step.get("name") == "Auto-register failure as actionable GitHub Issue")[
         "with"
     ]["script"]
 
     assert build_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert runner_health_step["with"]["name"] == "runner-health-${{ github.run_id }}"
+    assert runner_health_step["continue-on-error"] is True
+    assert 'payload["runner_health"]' in build_step["run"]
     assert workflow["jobs"]["full-summary"]["permissions"]["actions"] == "read"
     assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script

@@ -31,15 +31,24 @@
   ],
   "expected": "Runner health must inspect queued job labels, block only the matching runner role, and emit role/job-specific diagnostics.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260912_BUG-1462-nightly-runner-health-attributes-stale-security-jobs-to-the-general-runn.json",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/aistock_runner_health.py",
+      "scripts/ci_failure_issue_summary.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/aistock_runner_health.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1462-nightly-runner-health-attributes-stale-security-jobs-to-the-general-runn.json",
+      ".github/workflows/nightly.yml",
       "backend/tests/scripts/test_aistock_runner_health.py",
-      "scripts/ci_failure_issue_summary.py",
       "backend/tests/scripts/test_ci_failure_issue_summary.py",
-      ".github/workflows/nightly.yml"
+      "scripts/aistock_runner_health.py",
+      "scripts/ci_failure_issue_summary.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_runner_health.py",
@@ -162,10 +171,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
