@@ -319,7 +319,10 @@ class BacktestExecutor(BaseExecutor):
             rdagent_config["long_trend_evaluation"] = long_trend_descriptor
 
         # 5. Reserve the canonical cross-source slot before the QE Workspace POST.
-        source = self._submission_source_for_context(ctx)
+        source = self._submission_source_for_context(
+            ctx,
+            backtest_only=mode == BacktestMode.BACKTEST_ONLY,
+        )
         submission_outcome = await self.submission_coordinator.submit(
             client=self.client,
             source=source,
@@ -362,7 +365,11 @@ class BacktestExecutor(BaseExecutor):
         )
 
     @staticmethod
-    def _submission_source_for_context(ctx: ExecutionContext) -> QEWorkspaceSubmissionSource:
+    def _submission_source_for_context(
+        ctx: ExecutionContext,
+        *,
+        backtest_only: bool = False,
+    ) -> QEWorkspaceSubmissionSource:
         node_id = str(ctx.node_id or "").strip()
         source_kind = str(ctx.submission_source_kind or "").strip()
         source_execution_id = str(ctx.submission_source_execution_id or "").strip()
@@ -420,5 +427,6 @@ class BacktestExecutor(BaseExecutor):
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
             requested_node_capacity=ctx.submission_node_capacity,
+            backtest_only=backtest_only,
             consumer_id=ctx.submission_consumer_id,
         )

@@ -82,9 +82,10 @@ class BacktestExecutor(ProductionBacktestExecutor):
             client,
             submission_coordinator=_UnitSubmissionCoordinator(),
         )
+        self.submission_backtest_only = []
 
-    @staticmethod
-    def _submission_source_for_context(_ctx):
+    def _submission_source_for_context(self, _ctx, *, backtest_only=False):
+        self.submission_backtest_only.append(backtest_only)
         return SimpleNamespace(submission_intent_hash="a" * 64)
 
 
@@ -371,6 +372,7 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" in result.wsl_command
+        assert executor.submission_backtest_only == [True]
 
     def test_full_train_does_not_inject_backtest_only(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())
@@ -382,6 +384,7 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" not in (result.wsl_command or "")
+        assert executor.submission_backtest_only == [False]
 
     def test_seed_ensemble_reaches_composer_but_not_model_params(self):
         composer = make_mock_composer()
