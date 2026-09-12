@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/tail_twap_strategy.py",
     "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
   ],
   "assigned_agent": null,
@@ -27,6 +29,12 @@
       "actor": "codex",
       "note": "Confirmed that the generic TailTWAP executor stores but does not apply the configured substitute reserve depth; scope is limited to the executor and a focused contract test.",
       "timestamp": "2026-09-12T06:45:19.684243Z"
+    },
+    {
+      "action": "scope_expanded_for_direct_validation_mapping",
+      "actor": "codex",
+      "note": "PR CI correctly rejected the previously unmapped QE executor and direct test. Add only those exact paths to the existing qe.core ownership rule and execute the new test in the existing qe_read_backend session; no classifier or gate is relaxed.",
+      "timestamp": "2026-09-12T06:58:57.026852Z"
     }
   ],
   "evidence_uris": [],
@@ -35,7 +43,9 @@
     "actual_changed_files": [
       "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json",
       "scripts/tail_twap_strategy.py",
-      "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py"
     ],
     "added_files": [
       "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
@@ -43,7 +53,9 @@
     "changed_files": [
       "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json",
       "scripts/tail_twap_strategy.py",
-      "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -57,12 +69,16 @@
     "planned_files": [
       "scripts/tail_twap_strategy.py",
       "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/tail_twap_strategy.py",
       "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
     ]
   },
