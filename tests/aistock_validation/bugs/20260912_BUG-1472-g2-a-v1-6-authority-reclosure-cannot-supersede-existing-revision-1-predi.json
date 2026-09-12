@@ -103,6 +103,10 @@
     "l0",
     "hmm_risk_backend"
   ],
+  "validation_evidence": [
+    "validation-receipt: id=c7d63d69d4cf3941 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_prediction.py backend/tests/hmm_risk/test_rotation_l1_api.py -q -p no:cacheprovider` result=`28 passed`",
+    "validation-receipt: id=665ea59b71f51143 commit=638f04d9e59b0101672b3095bbdd04ac20e47040 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed blocking=0`"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
