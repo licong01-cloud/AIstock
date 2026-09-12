@@ -28,12 +28,18 @@
   ],
   "expected": "A verified authority-only reclosure must produce an immutable revision chain that supersedes the exact prior model/date/sector rows, preserves scores and model identity, rejects missing or mismatched prior rows, and remains idempotent without overwriting history.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l1_prediction.py",
+      "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1472-g2-a-v1-6-authority-reclosure-cannot-supersede-existing-revision-1-predi.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l1_prediction.py",
-      "backend/tests/hmm_risk/test_rotation_l1_prediction.py"
+      "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1472-g2-a-v1-6-authority-reclosure-cannot-supersede-existing-revision-1-predi.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_prediction.py",
@@ -107,14 +113,15 @@
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "planned_target_ids": [
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
