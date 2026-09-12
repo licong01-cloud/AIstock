@@ -18,6 +18,7 @@ from .api_models import (
     HistoricalRangeRefreshOutcomesRequest,
 )
 from .canonical import canonical_json_sha256
+from .comparison import build_historical_range_comparison
 from .dataset_bridge import (
     HistoricalRangeDatasetBridgeApplicationService,
     HistoricalRangeDatasetBridgeArtifactV1,
@@ -57,6 +58,7 @@ from .outcome_service import HistoricalRangeOutcomeApplicationService
 from .planning_service import PLANNING_PRODUCER_CONTRACT_VERSION, HistoricalRangePlanningService
 from .query_repository import (
     HistoricalRangeNotFoundError,
+    HistoricalRangeQueryError,
     PostgresHistoricalRangeQueryRepository,
 )
 from .repository import PostgresHistoricalRangeRepository
@@ -1125,6 +1127,36 @@ class HistoricalRangeApplicationService:
 
     def get_run(self, range_run_id: str) -> dict[str, Any]:
         return self._query_runtime_factory().query.get_run(range_run_id)
+
+    def compare_runs(
+        self,
+        *,
+        batch_id: str,
+        baseline_range_run_id: str,
+        candidate_range_run_id: str,
+    ) -> dict[str, Any]:
+        if baseline_range_run_id == candidate_range_run_id:
+            raise HistoricalRangeQueryError(
+                "ADVISORY_HR_COMPARISON_RUNS_NOT_DISTINCT",
+                "baseline and candidate historical-range runs must be different",
+                context={"range_run_id": baseline_range_run_id},
+            )
+        facts = self._query_runtime_factory().query.get_comparison_facts(
+            (baseline_range_run_id, candidate_range_run_id)
+        )
+        by_id = {str(item.get("range_run_id")): item for item in facts}
+        for range_run_id in (baseline_range_run_id, candidate_range_run_id):
+            if range_run_id not in by_id:
+                raise HistoricalRangeNotFoundError(
+                    "ADVISORY_HR_RESOURCE_NOT_FOUND",
+                    "historical-range run does not exist",
+                    context={"run_id": range_run_id},
+                )
+        return build_historical_range_comparison(
+            batch_id=batch_id,
+            baseline=by_id[baseline_range_run_id],
+            candidate=by_id[candidate_range_run_id],
+        )
 
     def list_days(self, range_run_id: str, **kwargs: Any) -> dict[str, Any]:
         return self._query_runtime_factory().query.list_days(range_run_id=range_run_id, **kwargs)

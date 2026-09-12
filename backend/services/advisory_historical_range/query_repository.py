@@ -25,6 +25,12 @@ from .models import (
 )
 
 
+_NON_DAILY_RECALL_METRICS_JSONPATH = (
+    '$[*] ? (!(@.metric_key like_regex '
+    '"^(strategy|conditional)_recall@[0-9]+:[0-9]{4}-[0-9]{2}-[0-9]{2}:"))'
+)
+
+
 class HistoricalRangeQueryError(ValueError):
     def __init__(self, reason_code: str, message: str, *, context: Mapping[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -244,6 +250,106 @@ class PostgresHistoricalRangeQueryRepository:
             (range_run_id,),
         )
         return _one(rows, "run", range_run_id)
+
+    def get_comparison_facts(self, range_run_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """Return only the latest-summary fields needed by the comparison view."""
+
+        identities = tuple(dict.fromkeys(range_run_ids))
+        if len(identities) != 2 or any(not isinstance(item, str) or not item for item in identities):
+            raise HistoricalRangeQueryError(
+                "ADVISORY_HR_COMPARISON_RUNS_INVALID",
+                "historical-range comparison requires two distinct run identities",
+            )
+        rows = self._rows(
+            """
+            SELECT run.range_run_id,
+                   run.batch_id,
+                   run.research_program_id,
+                   run.package_id,
+                   run.package_version,
+                   run.manifest_sha256,
+                   run.status,
+                   summary.summary_id,
+                   summary.summary_version,
+                   summary.summary_artifact_hash,
+                   summary.summary_json->>'summary_policy_hash' AS summary_policy_hash,
+                   summary.summary_json->>'producer_code_hash' AS producer_code_hash,
+                   summary.metrics,
+                   summary.unavailable_metrics,
+                   summary.metric_total_count,
+                   summary.unavailable_metric_total_count,
+                   COALESCE(day_support.status_counts, '{}'::jsonb) AS day_status_counts
+            FROM app.advisory_historical_range_run run
+            LEFT JOIN LATERAL (
+                SELECT latest.summary_id,
+                       latest.summary_version,
+                       latest.summary_artifact_hash,
+                       latest.summary_json,
+                       CASE WHEN latest.summary_json ? 'metrics' THEN jsonb_path_query_array(
+                           COALESCE(latest.summary_json->'metrics', '[]'::jsonb), %s::jsonpath
+                       ) END AS metrics,
+                       CASE WHEN latest.summary_json ? 'unavailable_metrics'
+                           THEN jsonb_path_query_array(
+                               COALESCE(latest.summary_json->'unavailable_metrics', '[]'::jsonb),
+                               %s::jsonpath
+                           ) END AS unavailable_metrics,
+                       CASE WHEN latest.summary_json ? 'metrics' THEN jsonb_array_length(
+                           COALESCE(latest.summary_json->'metrics', '[]'::jsonb)
+                       ) END AS metric_total_count,
+                       CASE WHEN latest.summary_json ? 'unavailable_metrics' THEN jsonb_array_length(
+                           COALESCE(latest.summary_json->'unavailable_metrics', '[]'::jsonb)
+                       ) END AS unavailable_metric_total_count
+                FROM app.advisory_historical_range_summary latest
+                WHERE latest.range_run_id = run.range_run_id
+                ORDER BY latest.summary_version DESC, latest.summary_id DESC
+                LIMIT 1
+            ) summary ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(counted.status, counted.day_count) AS status_counts
+                FROM (
+                    SELECT day_run.status, count(*)::integer AS day_count
+                    FROM app.advisory_historical_range_day_run day_run
+                    WHERE day_run.range_run_id = run.range_run_id
+                    GROUP BY day_run.status
+                ) counted
+            ) day_support ON TRUE
+            WHERE run.range_run_id = ANY(%s)
+            ORDER BY run.range_run_id
+            """,
+            (
+                _NON_DAILY_RECALL_METRICS_JSONPATH,
+                _NON_DAILY_RECALL_METRICS_JSONPATH,
+                list(identities),
+            ),
+        )
+        for row in rows:
+            metric_total = row.pop("metric_total_count", None)
+            unavailable_total = row.pop("unavailable_metric_total_count", None)
+            if row.get("summary_id") is None:
+                row["omitted_metric_counts"] = None
+                continue
+            metrics = row.get("metrics")
+            unavailable_metrics = row.get("unavailable_metrics")
+            if (
+                isinstance(metric_total, bool)
+                or not isinstance(metric_total, int)
+                or isinstance(unavailable_total, bool)
+                or not isinstance(unavailable_total, int)
+                or not isinstance(metrics, list)
+                or not isinstance(unavailable_metrics, list)
+                or metric_total < len(metrics)
+                or unavailable_total < len(unavailable_metrics)
+            ):
+                raise HistoricalRangeQueryError(
+                    "ADVISORY_HR_COMPARISON_SUMMARY_INVALID",
+                    "historical-range summary metric counts are invalid",
+                    context={"range_run_id": row.get("range_run_id")},
+                )
+            row["omitted_metric_counts"] = {
+                "available_daily_recall": metric_total - len(metrics),
+                "unavailable_daily_recall": unavailable_total - len(unavailable_metrics),
+            }
+        return rows
 
     def list_operations(
         self,

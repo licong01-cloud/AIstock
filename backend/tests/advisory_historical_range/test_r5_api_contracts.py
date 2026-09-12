@@ -62,6 +62,7 @@ def test_all_r5_routes_are_registered() -> None:
         "/advisory/historical-range-batches",
         "/advisory/historical-range-batches/{batch_id}",
         "/advisory/historical-range-batches/{batch_id}/runs",
+        "/advisory/historical-range-batches/{batch_id}/comparison",
         "/advisory/historical-range-batches/{batch_id}/operations",
         "/advisory/historical-range-batches/{batch_id}/resume",
         "/advisory/historical-range-batches/{batch_id}/cancel",
