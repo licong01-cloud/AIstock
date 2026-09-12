@@ -31,15 +31,24 @@
   ],
   "expected": "The GitHub-hosted preflight must always run first; only the actual refresh job may hold the concurrency group, and a newer scheduled refresh must replace stale queued work.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1463-code-intelligence-concurrency-blocks-preflight-and-preserves-stale-secur.json"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/code-intelligence-refresh.yml",
       ".github/workflows/nightly.yml",
-      "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "backend/tests/scripts/test_code_intelligence_adapter.py"
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1463-code-intelligence-concurrency-blocks-preflight-and-preserves-stale-secur.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/code-intelligence-refresh.yml",
@@ -162,10 +171,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
