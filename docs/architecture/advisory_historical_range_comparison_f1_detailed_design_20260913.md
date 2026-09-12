@@ -1,7 +1,7 @@
 # Advisory 历史范围同批次业务对比 F1 详细设计 v1.0
 
 > 日期：2026-09-13
-> 状态：`PR_4635_OPEN_CI_PENDING`
+> 状态：`PR_4635_MERGED_RUNTIME_PENDING_USER_RESTART`
 > 归属：Selection Center / Advisory
 > 级别：F1（Advisory 单模块 API、服务和页面增量）
 
