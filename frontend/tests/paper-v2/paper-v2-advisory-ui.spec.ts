@@ -599,12 +599,14 @@ async function mockAdvisoryApis(page: Page, options: {
   forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
+  deliveryPreflight?: JsonObject | ((body: JsonObject) => JsonObject);
 } = {}) {
   const calls: string[] = [];
   const reviewBodies: JsonObject[] = [];
   const replayBodies: JsonObject[] = [];
   const applyBindingBodies: JsonObject[] = [];
   const createBodies: JsonObject[] = [];
+  const deliveryPreflightBodies: JsonObject[] = [];
   const wait = (ms = 0) => new Promise((resolve) => { setTimeout(resolve, ms); });
   let programStatus = options.initialProgramStatus ?? program.status;
   let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
@@ -692,6 +694,48 @@ async function mockAdvisoryApis(page: Page, options: {
           { pool_id: "csi300", index_code: "000300.SH", label: "沪深300", priority: "P0" },
           { pool_id: "csi500", index_code: "000905.SH", label: "中证500", priority: "P0" },
         ],
+      });
+    }
+    if (path.endsWith("/api/v1/advisory/delivery-preflight") && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      deliveryPreflightBodies.push(body);
+      const configured = typeof options.deliveryPreflight === "function"
+        ? options.deliveryPreflight(body)
+        : options.deliveryPreflight;
+      return json(route, configured || {
+        ok: true,
+        schema_version: "advisory_delivery_preflight_v1",
+        overall_status: "READY_BASELINE_ONLY",
+        package: {
+          package_id: body.package_id,
+          manifest_sha256: "a".repeat(64),
+          package_status: "SELECTION_ENABLED",
+          source_type: "qe_experiment",
+          source_id: "qe_test",
+          asset_eligible: true,
+          asset_blockers: [],
+        },
+        universe_compatibility: {
+          status: "LEGACY_UNIVERSE_UNSPECIFIED",
+          requested: body.universe_selection,
+          source_declared: null,
+          evidence_paths: [],
+          evidence_errors: [],
+        },
+        policy_compatibility: {
+          status: body.program_id ? "ACTIVE_POLICY_MATCH" : "NEW_POLICY_BINDING_REQUIRED",
+          requested_target_count: body.target_count,
+          active_target_count: body.program_id ? body.target_count : null,
+          package_backtest_topk: 50,
+          package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY",
+        },
+        model_compatibility: {
+          status: "REQUIRED_AFTER_BINDING",
+          validation_stage: "PUBLICATION_FULL_RESOLUTION",
+          binding_version_id: null,
+        },
+        blockers: [],
+        warnings: ["PACKAGE_UNIVERSE_IDENTITY_UNSPECIFIED"],
       });
     }
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
@@ -1028,7 +1072,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
-  return { calls, reviewBodies, replayBodies, applyBindingBodies, createBodies };
+  return { calls, reviewBodies, replayBodies, applyBindingBodies, createBodies, deliveryPreflightBodies };
 }
 
 async function activeSymbols(page: Page) {
@@ -1074,7 +1118,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
 
   const shell = await mockShellApis(page);
-  const { calls, reviewBodies, createBodies } = await mockAdvisoryApis(page);
+  const { calls, reviewBodies, createBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page);
   await page.goto("/paper-v2/advisory");
 
   await expect(page.getByRole("heading", { name: "运行中的荐股任务排行榜" })).toBeVisible();
@@ -1225,11 +1269,76 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await page.getByTestId("advisory-universe-pools").selectOption(["csi300", "csi500"]);
   await page.getByRole("button", { name: "创建并启用" }).click();
   await expect.poll(() => calls.filter((entry) => entry === "POST /api/v1/advisory/programs").length).toBe(1);
+  expect(deliveryPreflightBodies.at(-1)).toEqual({
+    package_id: "pkg_codex_smoke",
+    universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
+    target_count: 20,
+  });
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("旧策略包未声明冻结股票池身份");
   expect(createBodies[0]?.universe_selection).toEqual({ mode: "index_union", pool_ids: ["csi300", "csi500"] });
+  await page.getByTestId("advisory-target-count").fill("5");
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toHaveCount(0);
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(badResponses).toEqual([]);
+});
+
+test("Advisory delivery preflight blocks an incompatible package before create mutation", async ({ page }) => {
+  await mockShellApis(page);
+  const { calls, createBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page, {
+    deliveryPreflight: {
+      ok: true,
+      schema_version: "advisory_delivery_preflight_v1",
+      overall_status: "BLOCKED",
+      package: {
+        package_id: "pkg_codex_smoke",
+        manifest_sha256: "b".repeat(64),
+        package_status: "SELECTION_ENABLED",
+        source_type: "qe_experiment",
+        source_id: "qe_restricted",
+        asset_eligible: true,
+        asset_blockers: [],
+      },
+      universe_compatibility: {
+        status: "PACKAGE_IDENTITY_MISMATCH",
+        requested: { mode: "stock_universe", pool_ids: [] },
+        source_declared: { mode: "single_index", pool_ids: ["csi300"] },
+        evidence_paths: ["backtest_context.daily_strategy.custom_params.universe_selection"],
+        evidence_errors: [],
+      },
+      policy_compatibility: {
+        status: "NEW_POLICY_BINDING_REQUIRED",
+        requested_target_count: 20,
+        active_target_count: null,
+        package_backtest_topk: 20,
+        package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY",
+      },
+      model_compatibility: {
+        status: "NOT_APPLICABLE",
+        validation_stage: "NOT_APPLICABLE",
+        binding_version_id: null,
+      },
+      blockers: ["PACKAGE_UNIVERSE_IDENTITY_MISMATCH"],
+      warnings: [],
+    },
+  });
+  let dialogCount = 0;
+  page.on("dialog", async (dialog) => {
+    dialogCount += 1;
+    await dialog.dismiss();
+  });
+
+  await page.goto("/paper-v2/advisory");
+  await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
+  await page.getByTestId("advisory-create-program").click();
+
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("交付预检未通过");
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("策略包股票池不能覆盖目标荐股股票池");
+  expect(deliveryPreflightBodies).toHaveLength(1);
+  expect(createBodies).toHaveLength(0);
+  expect(calls.filter((entry) => entry === "POST /api/v1/advisory/programs")).toHaveLength(0);
+  expect(dialogCount).toBe(0);
 });
 
 test("Advisory calibrated outcome shows calibrated and raw values without hiding M4", async ({ page }) => {
@@ -1917,7 +2026,7 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       next_trading_day: "2026-06-11",
     },
   });
-  const { calls, applyBindingBodies } = await mockAdvisoryApis(page, {
+  const { calls, applyBindingBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page, {
     initialProgramStatus: "ENABLED",
     initialLatestReviewTradeDate: "2026-06-09",
     initialLastReviewStatus: "SUCCEEDED",
@@ -1942,6 +2051,12 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
   await page.getByTestId(`advisory-strategy-universe-pools-${rowProgramId}`).selectOption(["csi300", "csi500"]);
   await page.getByTestId(`advisory-strategy-apply-${rowProgramId}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/bindings/apply`)).length).toBe(1);
+  expect(deliveryPreflightBodies.at(-1)).toEqual({
+    package_id: "pkg_second_candidate",
+    universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
+    target_count: 20,
+    program_id: rowProgramId,
+  });
   expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/bindings/apply`))).toHaveLength(0);
   expect(applyBindingBodies.at(-1)).toMatchObject({
     binding: {
@@ -1957,6 +2072,9 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
     effective_from_trade_date: "2026-06-11",
   });
   await expect(page.getByTestId(`advisory-strategy-apply-result-${rowProgramId}`)).toContainText("已应用新策略绑定");
+  await expect(page.getByTestId(`advisory-strategy-delivery-preflight-${rowProgramId}`)).toContainText("基线可用");
+  await page.getByTestId(`advisory-strategy-target-count-${rowProgramId}`).fill("5");
+  await expect(page.getByTestId(`advisory-strategy-delivery-preflight-${rowProgramId}`)).toHaveCount(0);
   await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("预测目标：2026-06-09");
   await expect(page.getByTestId(`advisory-row-latest-context-${rowProgramId}`)).toContainText("预测目标：2026-06-10");
 
