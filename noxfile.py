@@ -1276,6 +1276,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_reconciliation_coordinator.py",
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
+        "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
         "backend/tests/unified_engine/test_qe_cleanup_path_policy.py",
         "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
