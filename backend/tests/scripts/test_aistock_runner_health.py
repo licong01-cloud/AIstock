@@ -186,6 +186,76 @@ def test_runner_health_blocks_api_online_idle_runner_that_does_not_accept_work()
     assert any("stuck self-update or listener" in item for item in payload["blocking"])
 
 
+def test_runner_health_does_not_attribute_other_role_queue_to_idle_runner() -> None:
+    payload = health.build_runner_health_report(
+        workflow="nightly.yml",
+        required_labels=["self-hosted", "windows", "aistock-ci"],
+        stale_queued_minutes=30,
+        now=datetime(2026, 9, 12, 5, 0, tzinfo=timezone.utc),
+        runners_payload={
+            "total_count": 2,
+            "runners": [
+                {
+                    "id": 26,
+                    "name": "aistock-general",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                    ],
+                },
+                {
+                    "id": 27,
+                    "name": "aistock-security",
+                    "os": "Windows",
+                    "status": "offline",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                },
+            ],
+        },
+        runs_payload={
+            "workflow_runs": [
+                {
+                    "id": 34532760217,
+                    "status": "queued",
+                    "created_at": "2026-09-10T21:32:39Z",
+                }
+            ]
+        },
+        jobs_payloads={
+            "34532760217": {
+                "jobs": [
+                    {
+                        "id": 103057261263,
+                        "name": "Code intelligence daily graph refresh and summary",
+                        "status": "queued",
+                        "labels": ["self-hosted", "Windows", "aistock-ci-security"],
+                    }
+                ]
+            }
+        },
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["online_but_not_accepting_work"] is False
+    assert payload["matching_stale_queued_runs"] == []
+    assert payload["other_role_stale_queued_runs"][0]["run_id"] == 34532760217
+    assert payload["stale_queued_runs"][0]["queued_jobs"][0]["labels"] == [
+        "aistock-ci-security",
+        "self-hosted",
+        "windows",
+    ]
+    assert any("other runner roles" in item for item in payload["warnings"])
+
+
 def test_runner_health_does_not_call_busy_runner_false_online() -> None:
     payload = health.build_runner_health_report(
         required_labels=["self-hosted", "windows", "aistock-ci"],
