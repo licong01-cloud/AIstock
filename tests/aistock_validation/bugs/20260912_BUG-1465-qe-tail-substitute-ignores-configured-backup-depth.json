@@ -1,6 +1,8 @@
 {
   "actual": "QE minute TWAP accepts and persists unfilled_backup_depth, but TailTWAPWithLimitStrategy never applies self._backup_depth while ScoreWeightedTopkStrategyV2 hard-codes a 100-name reserve scan. A task configured with backup_depth=15 can therefore consume candidates beyond the declared bound, making U0/U1 execution comparisons and UI configuration readback semantically false. Preserve TAIL_BOOST behavior, enforce exact TAIL_SUBSTITUTE reserve depth and add end-to-end contract tests; do not relax retired execution gates or change model, factor, dataset, universe, HMM or blacklist semantics.",
   "allowed_write_scope": [
+    "scripts/tail_twap_strategy.py",
+    "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
     "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
   ],
   "assigned_agent": null,
@@ -19,14 +21,31 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260912-c7dc11ba9743",
       "timestamp": "2026-09-12T06:41:45.372941Z"
+    },
+    {
+      "action": "scope_expanded_after_source_confirmation",
+      "actor": "codex",
+      "note": "Confirmed that the generic TailTWAP executor stores but does not apply the configured substitute reserve depth; scope is limited to the executor and a focused contract test.",
+      "timestamp": "2026-09-12T06:45:19.684243Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "TAIL_SUBSTITUTE must inspect no more than the configured ranked reserve depth and must leave TAIL_BOOST behavior unchanged.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json",
+      "scripts/tail_twap_strategy.py",
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
+    ],
+    "added_files": [
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json",
+      "scripts/tail_twap_strategy.py",
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +54,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/tail_twap_strategy.py",
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/tail_twap_strategy.py",
+      "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
+      "tests/aistock_validation/bugs/20260912_BUG-1465-qe-tail-substitute-ignores-configured-backup-depth.json"
+    ]
   },
   "first_seen_at": "2026-09-12T06:41:45.372956Z",
   "fix_branch": null,
@@ -54,7 +81,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/trading_core/test_tail_twap_substitute_depth.py -q -p no:cacheprovider",
   "required_verification": [
     "l0"
   ],
@@ -62,10 +89,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
