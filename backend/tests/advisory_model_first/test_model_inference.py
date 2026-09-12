@@ -842,3 +842,25 @@ def test_score_reuses_strict_numeric_contract_and_marks_unseen_sector_missing() 
     assert pd.api.types.is_float_dtype(booster.seen["market_up_ratio"])
     assert booster.seen["l2_code_id"].isna().all()
     assert booster.seen["l2_code_id__missing"].tolist() == [1, 1]
+
+
+def test_model_candidate_rows_follow_the_frozen_advisory_list_subset_and_ranks() -> None:
+    rows = [
+        SimpleNamespace(symbol="000001.SZ", rank=1),
+        SimpleNamespace(symbol="000002.SZ", rank=2),
+        SimpleNamespace(symbol="000003.SZ", rank=3),
+    ]
+    list_items = [
+        {"symbol": "000003.SZ", "rank": 1, "action": "WATCH"},
+        {"symbol": "000001.SZ", "rank": 2, "action": "HOLD"},
+        {"symbol": "000002.SZ", "rank": 3, "action": "EXIT"},
+    ]
+
+    projected = model_inference._candidate_rows_for_recommendation_list(rows, list_items)
+
+    assert [(row.symbol, row.rank) for row in projected] == [("000003.SZ", 1), ("000001.SZ", 2)]
+    assert [(row.symbol, row.rank) for row in rows] == [
+        ("000001.SZ", 1),
+        ("000002.SZ", 2),
+        ("000003.SZ", 3),
+    ]

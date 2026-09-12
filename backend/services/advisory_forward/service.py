@@ -469,6 +469,11 @@ class AdvisoryForwardService:
             )
             previous_items = self.program_service.repository.list_version_items(previous_list.list_version_id) if previous_list else []
             candidates = candidates_from_selection_run(selection_run)
+            candidates, runtime_config = self.program_service.apply_universe_admission(
+                candidates,
+                trade_date=target_date,
+                runtime_config=runtime_config,
+            )
             review_run_id = _stable_id(
                 "advrun",
                 program.program_id,
@@ -487,6 +492,7 @@ class AdvisoryForwardService:
                 active_episodes=active_episodes,
                 previous_list=previous_list,
                 previous_items=previous_items,
+                universe_receipt=runtime_config.get("advisory_universe_receipt"),
             )
             review_run = AdvisoryReviewRun(
                 review_run_id=review_run_id,
@@ -865,6 +871,10 @@ class AdvisoryForwardService:
             replace(candidate, next_open_executable=None, next_close=None)
             for candidate in candidates_from_selection_run(selection_run)
         ]
+        candidates = _publication_candidate_projection(
+            candidates,
+            publication_payload.get("items"),
+        )
         active_episodes = self.program_service.active_episode_objects(program_id)
         active_hash = _active_episode_state_hash(active_episodes)
         terminal = self._terminal_settlement(str(persisted["forward_run_id"]))
@@ -1057,6 +1067,7 @@ def _build_publication_list(
     active_episodes: list[Any],
     previous_list: AdvisoryRecommendationListVersion | None,
     previous_items: list[AdvisoryRecommendationListItem],
+    universe_receipt: Mapping[str, Any] | None = None,
 ) -> tuple[AdvisoryRecommendationListVersion, list[AdvisoryRecommendationListItem]]:
     previous_by_symbol = {item.symbol: item for item in previous_items}
     active_by_symbol = {item.symbol: item for item in active_episodes}
@@ -1170,6 +1181,8 @@ def _build_publication_list(
         "watch_count": sum(item.action == ACTION_WATCH for item in items),
         "manual_gate": False,
     }
+    if universe_receipt:
+        summary["advisory_universe_receipt"] = dict(universe_receipt)
     return (
         AdvisoryRecommendationListVersion(
             list_version_id=list_version_id,
@@ -1192,6 +1205,39 @@ def _build_publication_list(
         ),
         items,
     )
+
+
+def _publication_candidate_projection(
+    candidates: list[AdvisoryCandidate],
+    raw_items: Any,
+) -> list[AdvisoryCandidate]:
+    """Restore the exact candidate subset and ranks frozen at publication."""
+
+    if not isinstance(raw_items, list):
+        return candidates
+    rank_by_symbol: dict[str, int] = {}
+    component_scores_by_symbol: dict[str, dict[str, Any]] = {}
+    for raw in raw_items:
+        if not isinstance(raw, Mapping) or str(raw.get("action") or "").upper() == "EXIT":
+            continue
+        symbol = str(raw.get("symbol") or "").strip().upper()
+        rank = raw.get("rank")
+        if not symbol or not isinstance(rank, int) or isinstance(rank, bool) or rank <= 0:
+            continue
+        rank_by_symbol[symbol] = rank
+        component_scores = raw.get("component_scores_json")
+        if isinstance(component_scores, Mapping):
+            component_scores_by_symbol[symbol] = dict(component_scores)
+    projected = [
+        replace(
+            candidate,
+            rank=rank_by_symbol[candidate.symbol],
+            component_scores=component_scores_by_symbol.get(candidate.symbol, candidate.component_scores),
+        )
+        for candidate in candidates
+        if candidate.symbol in rank_by_symbol
+    ]
+    return sorted(projected, key=lambda row: (row.rank, row.symbol))
 
 
 def _maturity_date(target_date: date, *, horizons: list[Any], calendar: Any) -> date | None:

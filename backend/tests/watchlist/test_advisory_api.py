@@ -33,6 +33,45 @@ def _client(selection_service=None) -> tuple[TestClient, AdvisoryProgramService]
     return TestClient(app), service
 
 
+def test_advisory_universe_options_expose_qe_compatible_core_index_contract() -> None:
+    client, _service = _client()
+
+    response = client.get("/api/v1/advisory/universe-options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["modes"] == ["stock_universe", "single_index", "index_union"]
+    assert [row["pool_id"] for row in payload["pools"]] == [
+        "csi300",
+        "csi500",
+        "csi1000",
+        "star50",
+        "star100",
+    ]
+
+
+def test_advisory_api_create_exposes_normalized_index_union_on_binding() -> None:
+    client, _service = _client()
+
+    response = client.post(
+        "/api/v1/advisory/programs",
+        json={
+            "program_name": "Core index union advisory",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_a"],
+            "universe_selection": {"mode": "index_union", "pool_ids": ["csi500", "csi300", "csi500"]},
+        },
+    )
+
+    assert response.status_code == 200
+    program_id = response.json()["program"]["program_id"]
+    bindings = client.get(f"/api/v1/advisory/programs/{program_id}/bindings")
+    assert bindings.status_code == 200
+    binding = bindings.json()["bindings"][0]
+    assert binding["universe_selection"] == {"mode": "index_union", "pool_ids": ["csi300", "csi500"]}
+    assert binding["runtime_config_json"]["universe_selection"] == binding["universe_selection"]
+
+
 def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     client, _service = _client()
 
@@ -245,7 +284,9 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
                 runtime_config={
                     **runtime_config,
                     "point_in_time_context": {
-                        "reference_price_trade_date": runtime_config["advisory_date_context"]["selection_as_of_trade_date"],
+                        "reference_price_trade_date": runtime_config["advisory_date_context"][
+                            "selection_as_of_trade_date"
+                        ],
                     },
                 },
                 status=SelectionRunStatus.SUCCEEDED,
@@ -422,7 +463,10 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
     assert applied.json()["program"]["version"] == program["version"] + 1
     all_bindings = client.get(f"/api/v1/advisory/programs/{program_id}/bindings").json()["bindings"]
     assert sum(1 for row in all_bindings if row["activation_status"] == "ACTIVE") == 1
-    assert any(row["binding_version_id"] == before_binding["binding_version_id"] and row["activation_status"] == "RETIRED" for row in all_bindings)
+    assert any(
+        row["binding_version_id"] == before_binding["binding_version_id"] and row["activation_status"] == "RETIRED"
+        for row in all_bindings
+    )
     active_after = client.get(f"/api/v1/advisory/programs/{program_id}/active-pool").json()["active_pool"]
     assert [row["symbol"] for row in active_after] == [row["symbol"] for row in active_before]
 
