@@ -22,10 +22,21 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260912-3b23f9420871",
       "timestamp": "2026-09-12T22:44:14.494305Z"
+    },
+    {
+      "action": "fix_dynamic_loader_training_universe_contract",
+      "actor": "codex",
+      "note": "DynamicFactorsOnlyLoader now resolves Qlib market/list/dict instruments, applies PIT membership spans to the factor panel before labels/model fitting, preserves only the explicit instruments=None legacy no-filter case, and fails closed on resolution, contract, or empty-overlap errors. A real WSL r3 run-scoped overlay smoke retained CSI300 members and removed an out-of-pool stock.",
+      "timestamp": "2026-09-12T22:55:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "qe_20260913_031243_11a2_L7/L8: distinct pool-specific configs and model hashes but pred.pkl sha256=7e925367c805c987d91231d845f7697945e5fad867ed2dd33bfa5ca775e35fd7 identical to full-market seed314",
+    "direct QE loader/config regression matrix: 118 passed",
+    "nox qe_read_backend: 563 passed, 1 skipped; qe_sector_risk_overlay_backend: 91 passed",
+    "fresh-process WSL r3 run-scoped overlay: index_pool__csi300 kept 000001.SZ and rejected out-of-pool 000006.SZ"
+  ],
+  "expected": "DynamicFactorsOnlyLoader must apply the configured Qlib training/inference universe, including PIT membership spans, before loading labels or fitting a model; unsupported, missing, or empty universe resolution must fail closed rather than use the full factor panel.",
   "file_scope_contract": {
     "added_files": [
       "backend/tests/quantevolver/test_qe_custom_loader_instruments.py"
@@ -125,7 +136,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Compare qe_20260913_031243_11a2_L7/L8 conf.yaml, params.pkl and pred.pkl against the full-market LSTM seed314 source; pool-specific configs and distinct model hashes still yield one byte-identical 410635-row prediction artifact.",
   "required_verification": [
     "l0",
     "qe_read_backend",
@@ -134,11 +145,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh_process_wsl_r3_run_scoped_overlay_instrument_filter=PASS"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

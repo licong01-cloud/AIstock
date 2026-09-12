@@ -4562,8 +4562,8 @@ class ConfigComposer:
         elif has_custom_factors and disable_alpha158:
             # 自定义因子 + 禁用Alpha158基线：使用 DynamicFactorsOnlyLoader
             # 注意：使用实验目录中的 qe_custom_loaders（QE独立版本），不影响RDAgent
-            # DynamicFactorsOnlyLoader 会忽略 instruments 参数，直接加载 parquet 中所有数据
-            # 同时从 QLib provider 加载 label 数据，确保包含 feature 和 label 列
+            # DynamicFactorsOnlyLoader 会解析并严格应用 instruments/PIT 成员区间，
+            # 避免把 market 名称当作单只股票索引，同时禁止退化为全市场面板。
             lines.append("    data_loader:")
             lines.append("        class: DynamicFactorsOnlyLoader")
             lines.append("        module_path: qe_custom_loaders")
