@@ -31,16 +31,18 @@ from .action_value import (
 from .action_value_corporate_actions import CorporateActionBook
 from .action_value_data import BENCHMARK, DailyCandidate
 from .action_value_model import _lightgbm, estimator_parameters, monthly_training_windows, numeric_matrix
-from .action_value_research import REFERENCE_CAPITAL_CNY, _has_unbound_material_factor_change
+from .action_value_research import REFERENCE_CAPITAL_CNY
 from .contracts import canonical_sha256, validate_sha256
 from .pattern_research import (
     BLOCK_SESSIONS,
     INFERENCE_SEED,
     INITIAL_TRAINING_SESSIONS,
+    _has_unbound_pattern_factor_change,
     evaluate_entry_and_exit_mechanisms,
     mean_interval,
     replay_full_policy_symbol,
 )
+from .pattern_rights_issue import RightsIssueAuthority
 from .pattern_strategy import pattern_feature_frame, pattern_model_features
 
 
@@ -141,6 +143,7 @@ def build_pattern_model_rows(
     corporate_actions: CorporateActionBook,
     start: date,
     end: date,
+    rights_issues: RightsIssueAuthority | None = None,
 ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
     calendar_dates = tuple(timestamp.date() for timestamp in candidate.calendar)
     ordinals = {day: index for index, day in enumerate(calendar_dates)}
@@ -155,12 +158,13 @@ def build_pattern_model_rows(
     for symbol in symbols:
         try:
             bars = candidate.bars(symbol)
-            if _has_unbound_material_factor_change(
+            if _has_unbound_pattern_factor_change(
                 symbol=symbol,
                 bars=bars,
                 start_ordinal=start_ordinal,
                 end_ordinal=end_ordinal,
                 corporate_actions=corporate_actions,
+                rights_issues=rights_issues,
             ):
                 raise ActionValueError("UNBOUND_MATERIAL_FACTOR_CHANGE", symbol=symbol)
             pattern_frame = pattern_feature_frame(bars, symbol=symbol, corporate_actions=corporate_actions)
@@ -453,6 +457,7 @@ def replay_model_outer(
     start: date,
     end: date,
     models: Mapping[str, Sequence[PatternModel]],
+    rights_issues: RightsIssueAuthority | None = None,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
@@ -471,12 +476,13 @@ def replay_model_outer(
     for symbol in evaluation_symbols:
         try:
             bars = candidate.bars(symbol)
-            if _has_unbound_material_factor_change(
+            if _has_unbound_pattern_factor_change(
                 symbol=symbol,
                 bars=bars,
                 start_ordinal=start_ordinal,
                 end_ordinal=ordinals[end],
                 corporate_actions=corporate_actions,
+                rights_issues=rights_issues,
             ):
                 raise ActionValueError("UNBOUND_MATERIAL_FACTOR_CHANGE", symbol=symbol)
             pattern = pattern_feature_frame(bars, symbol=symbol, corporate_actions=corporate_actions)

@@ -1,11 +1,11 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v1.8；日期：2026-09-11；Feature tier：F1（本模块研究扩展）
-> 状态：`ENGINEERING_SOURCE_PREFLIGHT_VERIFIED_RIGHTS_ISSUE_CLASSIFIED_REPAIR_PENDING_NOT_SERVING`
+> 版本：v1.9；日期：2026-09-13；Feature tier：F1（本模块研究扩展）
+> 状态：`RIGHTS_AUTHORITY_BOUND_SOURCE_PREFLIGHT_VERIFIED_FORMAL_REPLAY_PENDING_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
-> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。当前已完成离线实现、直接测试与训练股开发烟测。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动、`300506.SZ` 未绑定复权因子基准拼接缝；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。新实现把全量因子—公司行动覆盖审计前移到 request 生成前；第四批128股在未读取收益时发现4个未绑定区间并拒绝生成正式 request。2026-09-11 的进一步只读核验已把其中三项从“未知资本变化”准确归类为配股，把另一项归类为复权因子全历史重述后的本地拼接缝。当前需要数据所属模块提供 PIT 配股 authority、修复两只股票的完整历史因子并重建新不可变候选；当前没有 serving 模型。
+> 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。前三次正式运行分别暴露根 manifest 漏项、`002086.SZ` 特殊非同比例资本变动及旧候选复权/公司行动覆盖缺口；三个不可变 request/bundle 与人口均永久保留，覆盖不完整时不读取比较值、不据其结果调参。第三次 request `ab159bebedee3ce1a0a200d400e57523921d296d00bcc4d93b09ebca60c406a9` 已通过 inspect 与 exact retry，但评价覆盖仍为63/64，因此不是有效收益证据。请求前全量审计随后在第四批128股发现4个未绑定区间并拒绝生成正式 request。数据窗口现已交付不可变 r4 candidate（根 manifest 文件 SHA256 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`）及三项配股 authority（canonical SHA256 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`）；本版先冻结统一账户政策，再实现并重放，尚未读取第四批收益、尚无 serving 模型。
 
 ## 1. Background / 目标与现状
 
@@ -47,7 +47,7 @@
 |---|---|
 | 历史日频源 | `action_value_data.py::DailyCandidate`；冻结 manifest、消费字段和文件 hash，读取现有候选 |
 | 行情与核心特征 | `action_value.py::market_features`；历史窗口、复权和完整性与现有实现一致 |
-| 公司行动/停牌/因子覆盖 | `action_value_corporate_actions.py`、`action_value_suspensions.py` 与 `pattern_research.py::audit_pattern_factor_action_coverage`；只读已有快照/已授权只读源，正式 request 前穷举未绑定因子变更。配股必须来自独立、PIT、typed authority，不能从 factor 或总股本变化猜测，也不能伪装成 `dividend` 送股 |
+| 公司行动/停牌/因子覆盖 | `action_value_corporate_actions.py`、`action_value_suspensions.py`、r4 candidate 内 `position_timing_source_authority_v1` 与 `pattern_research.py::audit_pattern_factor_action_coverage`；只读不可变文件，正式 request 前穷举未绑定因子变更。配股来自独立、PIT、typed authority，不从 factor 或总股本变化猜测，也不伪装成 `dividend` 送股 |
 | 交易日与合法交易 | candidate 全局 calendar、`action_value.py::daily_fill`、现有 board-lot；不使用自然日或统一100股规则 |
 | 成本和仓位 | `policy.py::PERSONAL_MANUAL_COMPONENT_COST_V1`、已有现金/库存/持仓成本更新；净佣最低5元与规费分别计 |
 | 持久化和统计 | `artifact_store.py` 的 hash、锁及原子提交；`action_value_research.py::circular_block_interval` |
@@ -59,7 +59,7 @@
 
 决策时点固定为全局交易日 T 的 20:00（Asia/Shanghai），动作有效期为 T+1 一个交易日。T日最终收盘价和全天成交量只能在收盘数据已可用后用于决策；禁止看完日线后假设当日收盘前成交。盘中未来若展示本策略，也只是提示已冻结建议；日频研究不能宣称捕捉到了当日冲顶最高价。
 
-request展开并绑定candidate manifest、全局calendar hash、实际列/文件hash、公司行动与停牌snapshot、费用和guard snapshot及代码commit；bundle级request/manifest提供统一`source_identity`。事件、成交、连续净值和模型标签行显式携带`decision_as_of/feature_available_at`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
+request展开并绑定显式 candidate root、根 `qe_dataset_manifest.json` 文件hash及其dataset identity、全局calendar hash、实际列/文件hash、`market.dividend`公司行动快照、candidate内配股authority的文件/canonical hash、二者组成的冻结公司行动source snapshot、停牌snapshot、配股参与政策、费用和guard snapshot及代码commit；不得读取active profile推导candidate。bundle级request/manifest提供统一`source_identity`。事件、成交、连续净值和模型标签行显式携带`decision_as_of/feature_available_at`；缺少历史精确到库时间时明确采用上游日频可见时钟假设，不伪造观测过的时间戳；正式来源晚于cutoff时该日不可用。inspect复核输入和输出hash，源码/data/spec变化创建新request；retry不得覆盖旧bundle。
 
 记 C/H/L 为同基准复权 OHLC：raw OHLC × factor，与 `market_features` 一致；MAk为包含当日的k日简单均线，ATR14为14日简单平均 true range。归一化的全部价格使用同一复权基准；成交/费用/涨跌停检查仍用原始人民币价格。复权因子与公司行动校验复用既有契约，不把除权缺口当突破/跌破。
 
@@ -73,11 +73,11 @@ request展开并绑定candidate manifest、全局calendar hash、实际列/文�
 
 2026-09-11 的 source-only 复核将第四批四个未绑定区间拆成两种确定问题。`000970.SZ`、`600008.SH`、`601236.SH` 均由正式公告确认是配股，不再笼统称为“未知非同比例资本事项”：中科三环记录日2022-02-15、缴款期02-16～02-22、除权及复牌日02-24，每10股可配1.5股、配股价4.50元；首创股份记录日2020-09-18、缴款期09-21～09-25、除权及复牌日09-29，每10股可配3股、配股价2.29元；红塔证券记录日2021-07-26、缴款期07-27～08-02、除权及复牌日08-04，每10股可配3股、配股价7.33元。证据分别为[中科三环配股股份上市公告](https://static.cninfo.com.cn/finalpage/2022-03-07/1212510377.PDF)、[首创股份配股说明书](https://static.cninfo.com.cn/finalpage/2020-09-16/1208445107.PDF)与[红塔证券配股提示性公告](https://static.cninfo.com.cn/finalpage/2021-07-29/1210588272.PDF)。
 
-配股是带认购价、认购期间与账户选择的现金交易，不是自动送股。现有 `market.dividend` 快照在这三个窗口均为0行，不能承载该语义；factor 只证明价格基准发生变化，不能证明某个合成账户已认购。后续数据 authority 至少必须提供 `event_type=RIGHTS_ISSUE`、`symbol`、`disclosure_available_at`、`record_date`、`payment_start_date`、`payment_end_date`、`ex_right_date`/`resume_date`、`listing_date`、`entitlement_ratio`、`subscription_price`、实际发行结果/成功状态、账户数量舍入规则、来源URL和内容hash。历史版本必须保留，`disclosure_available_at <= decision_as_of` 才可参与当时决策或训练。
+配股是带认购价、认购期间与账户选择的现金交易，不是自动送股。现有 `market.dividend` 快照在这三个窗口均为0行，不能承载该语义；factor 只证明价格基准发生变化，不能证明某个合成账户已认购。r4 authority 必须由 fail-closed reader 验证根canonical identity、candidate manifest中的文件path/hash/size、三条typed事件、日期顺序、正比例/正认购价、成功发行结果、唯一event key、官方文件相对路径/内容hash/size及 `outcomes_read/database/runtime=false`。任一不一致均在收益读取前失败，不回退到factor推断、数据库或网络。
 
-择时 request 还必须在读取第四批收益前冻结一个候选与全部 comparator 共用的配股参与政策，并把 policy id/hash 与逐事项处理结果写入 request/receipt。该政策需要显式定义是否认购、可认购数量、现金扣款、股份到账和可卖日期、现金不足及部分认购；不得把 factor 比例直接当 `quantity_multiplier`，不得默认全额认购、注入未记账外部现金，或让候选与基线采用不同政策。具体首版政策在数据 authority 的字段和发行结果可读后按账户因果语义冻结，不按收益选择；这是反事实定义的一部分，不是 MDE、最新日期或人工审批门禁。
+首版统一冻结 `position_timing_pattern_rights_issue_participation_policy_never_subscribe_v1`，它适用于R0～R7、两个family、九项正式比较及所有成本敏感性场景，且不按收益选择：`participation_decision=NEVER_SUBSCRIBE`；`subscription_cash=ZERO_NO_ACCOUNT_OR_EXTERNAL_CASH`；`cash_insufficient=NOT_APPLICABLE_NO_SUBSCRIPTION`；`partial_subscription=NOT_APPLICABLE_NO_SUBSCRIPTION`；`quantity_rounding=NO_ENTITLEMENT_MATERIALIZATION`；authority中的`listing_date`仍被校验和留证，但`share_credit_date/sellable_date=NO_ACCOUNT_SHARES_CREDITED`。因此账户raw-price财富会如实承受未认购造成的稀释，特征侧仍用candidate自身factor消除机械除权价格跳变；不得把factor比、配售比例或发行后总股本当账户数量倍数。该政策先以hash命名的timing-owned不可变文件落盘，再读取第四批候选收益；request/receipt同时绑定policy文件hash、canonical hash及逐事件`NOT_SUBSCRIBED`审计。它只是共同反事实，不宣称现实用户不认购最优；研究其他参与政策须另立预注册研究，不能改写本次九项结果。
 
-另两处是同类的全历史因子口径重述：`300506.SZ` 当前 Tushare 在2026-06-25～07-15全区间均返回6.4229，而本地/候选在07-03～07-06仍从4.844跳至6.4229；`688109.SH` 当前全区间均返回1.5459，而本地/候选在07-08～07-09仍从1.5415跳至1.5459。2026-09-05候选与`20260911-r3`候选对这五只股票的序列完全相同，故r3没有修复这两个拼接缝。数据所属模块应按完整股票历史重拉、原子替换并验证连续性，再重建新的不可变候选；不得只补最新日期、覆盖旧候选或在 `position_timing` 内手工改值。
+r4 candidate路径显式冻结为 `X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260912-r4-candidate`，不读取仍指向r3的active profile。根manifest的文件SHA256为`ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`，内部`dataset_manifest_sha256`为`1db13b2129409c2ee4aabd8bc83c3f5e5eee1fde2a859a3cb2a722d885dd5c49`；配股authority文件SHA256为`545393b2e1bd7cba8f18979399152e15b1f34881eb851124b6ae3c67472e6d66`、canonical SHA256为`4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`，官方来源文件集合SHA256为`0041344ba9fdb76c3379b2c829f985935647a4d6b173b26ea928af9d30a4a47c`。统一不认购政策canonical SHA256为`4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。旧候选的`300506.SZ/688109.SH`拼接缝仅作为诊断历史保留；r4 source-only预审读回二者拼接点factor均为`1.0→1.0`，不再形成material interval。第四批仍为训练64股、评价64股、共128股，日期仍为2018-08-01..2026-08-31；696个material factor interval已全部绑定，其中三条绑定typed `RIGHTS_ISSUE`，未绑定区间和因子不足股票均为0。该预审未读取收益，也未在`position_timing`补因子、改manifest或激活profile。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
 
@@ -317,6 +317,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | F-008 | 调优候选、时间选择边界、模型目标及阶段边界明确 |
 | F-009 | 候选场景和QE延后组合边界明确 |
 | F-010 | 直接测试、风险与证据交付要求明确 |
+| F-011 | r4 candidate、配股authority、共同账户政策及coverage身份闭合 |
 
 ## 12. Design Acceptance Matrix / 设计验收矩阵
 
@@ -334,6 +335,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | F-008 | `pattern_optimizer.py`；`pattern_model.py`；`pattern_research.py::run_pattern_request` | `backend/tests/position_timing/test_pattern_optimizer.py`；`test_pattern_model.py` | ENGINEERING_VERIFIED | none |
 | F-009 | 本文§7、§8；当前代码无HMM/QE/Agent import | `backend/tests/position_timing/test_pattern_research.py`；合入前显式import扫描 | ENGINEERING_VERIFIED | none |
 | F-010 | 本文§4、§9.2、§10、§13、§14；四个直接测试文件；官方配股公告与只读factor/candidate读回 | `python -m pytest backend/tests/position_timing/test_pattern_strategy.py backend/tests/position_timing/test_pattern_research.py backend/tests/position_timing/test_pattern_optimizer.py backend/tests/position_timing/test_pattern_model.py -q` | ENGINEERING_AND_SOURCE_DIAGNOSIS_VERIFIED | none |
+| F-011 | 本文§4“配股与复权历史重述补充契约”；`pattern_rights_issue.py`；`pattern_research.py` request v3；`pattern_optimizer.py`；`pattern_model.py` | `C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest -q backend/tests/position_timing`为304 passed；r4 manifest/authority/source document hash及128股source-only coverage已核验；正式artifact证据待执行 | ENGINEERING_AND_SOURCE_PREFLIGHT_VERIFIED | approved_by_user: formal_replay_pending |
 
 ## 13. Risks / 失败模式与 Production Gates
 

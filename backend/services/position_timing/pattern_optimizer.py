@@ -24,10 +24,11 @@ from .pattern_research import (
     BLOCK_SESSIONS,
     INFERENCE_SEED,
     INITIAL_TRAINING_SESSIONS,
+    _has_unbound_pattern_factor_change,
     mean_interval,
     replay_full_policy_symbol,
 )
-from .action_value_research import _has_unbound_material_factor_change
+from .pattern_rights_issue import RightsIssueAuthority
 from .pattern_strategy import PATTERN_TEMPLATE_SET_SHA256, TEMPLATES, pattern_feature_frame
 
 
@@ -67,6 +68,7 @@ def build_template_development_paths(
     corporate_actions: CorporateActionBook,
     start: date,
     end: date,
+    rights_issues: RightsIssueAuthority | None = None,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
@@ -84,12 +86,13 @@ def build_template_development_paths(
         symbol_rows: list[dict[str, Any]] = []
         try:
             bars = candidate.bars(symbol)
-            if _has_unbound_material_factor_change(
+            if _has_unbound_pattern_factor_change(
                 symbol=symbol,
                 bars=bars,
                 start_ordinal=start_ordinal,
                 end_ordinal=ordinals[end],
                 corporate_actions=corporate_actions,
+                rights_issues=rights_issues,
             ):
                 raise ActionValueError("UNBOUND_MATERIAL_FACTOR_CHANGE", symbol=symbol)
             features = pattern_feature_frame(bars, symbol=symbol, corporate_actions=corporate_actions)
@@ -243,6 +246,7 @@ def replay_optimizer_outer(
     start: date,
     end: date,
     schedule: pd.DataFrame,
+    rights_issues: RightsIssueAuthority | None = None,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
@@ -259,12 +263,13 @@ def replay_optimizer_outer(
     for symbol in evaluation_symbols:
         try:
             bars = candidate.bars(symbol)
-            if _has_unbound_material_factor_change(
+            if _has_unbound_pattern_factor_change(
                 symbol=symbol,
                 bars=bars,
                 start_ordinal=start_ordinal,
                 end_ordinal=ordinals[end],
                 corporate_actions=corporate_actions,
+                rights_issues=rights_issues,
             ):
                 raise ActionValueError("UNBOUND_MATERIAL_FACTOR_CHANGE", symbol=symbol)
             features = pattern_feature_frame(bars, symbol=symbol, corporate_actions=corporate_actions)

@@ -67,13 +67,23 @@ from .pattern_strategy import (
     breakout_observed,
     pattern_feature_frame,
 )
+from .pattern_rights_issue import (
+    RIGHTS_ISSUE_PARTICIPATION_POLICY,
+    RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
+    RightsIssueAuthority,
+    combined_corporate_action_source_snapshot,
+    freeze_rights_issue_participation_policy,
+    open_rights_issue_authority,
+    rights_issue_application_audit,
+)
 from .policy import COST_POLICY_SHA256, round_to_board_lot
 
 
 PIPELINE_ID = "POSITION_TIMING_PATTERN_STRATEGY_V1"
 ARTIFACT_FOLDER = "pattern_strategy_v1"
 LEGACY_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v1"
-REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v2"
+FACTOR_COVERAGE_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v2"
+REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v3"
 RECEIPT_SCHEMA = "position_timing_pattern_strategy_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_pattern_strategy_bundle_v1"
 POPULATION_SEED_TEXT = "20260911"
@@ -108,11 +118,26 @@ CORPORATE_ACTION_APPLICATION_POLICY_SHA256 = canonical_sha256(
     CORPORATE_ACTION_APPLICATION_POLICY
 )
 
-FACTOR_ACTION_COVERAGE_POLICY: Mapping[str, Any] = {
+LEGACY_FACTOR_ACTION_COVERAGE_POLICY: Mapping[str, Any] = {
     "schema_version": "position_timing_pattern_factor_action_coverage_policy_v1",
     "factor_change_tolerance_bps": str(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS),
     "factor_interval": "CONSECUTIVE_VALID_FACTOR_OBSERVATIONS_WITHIN_REQUEST_SCOPE",
     "bound_definition": "AT_LEAST_ONE_NORMALIZED_CORPORATE_ACTION_IN_INTERVAL",
+    "unbound_result": "FAIL_REQUEST_PREPARATION_CLOSED",
+    "outcomes_read": False,
+}
+LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256 = canonical_sha256(
+    LEGACY_FACTOR_ACTION_COVERAGE_POLICY
+)
+FACTOR_ACTION_COVERAGE_POLICY: Mapping[str, Any] = {
+    "schema_version": "position_timing_pattern_factor_action_coverage_policy_v2",
+    "factor_change_tolerance_bps": str(UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS),
+    "factor_interval": "CONSECUTIVE_VALID_FACTOR_OBSERVATIONS_WITHIN_REQUEST_SCOPE",
+    "bound_definition": (
+        "AT_LEAST_ONE_NORMALIZED_DIVIDEND_OR_TYPED_RIGHTS_ISSUE_EX_RIGHT_EVENT_IN_INTERVAL"
+    ),
+    "rights_issue_binding_date": "EX_RIGHT_DATE",
+    "factor_account_participation_inference": "FORBIDDEN",
     "unbound_result": "FAIL_REQUEST_PREPARATION_CLOSED",
     "outcomes_read": False,
 }
@@ -372,6 +397,10 @@ def audit_pattern_factor_action_coverage(
     start: date,
     end: date,
     candidate_source_sha256: str,
+    rights_issues: RightsIssueAuthority | None = None,
+    combined_corporate_action_snapshot_sha256: str | None = None,
+    rights_issue_application_sha256: str | None = None,
+    legacy_contract: bool = False,
 ) -> Mapping[str, Any]:
     """Find every material factor transition before outcomes can be read.
 
@@ -392,8 +421,42 @@ def audit_pattern_factor_action_coverage(
     ):
         raise ActionValueError("PATTERN_FACTOR_ACTION_COVERAGE_SCOPE_INVALID")
 
+    if legacy_contract and (
+        rights_issues is not None
+        or combined_corporate_action_snapshot_sha256 is not None
+        or rights_issue_application_sha256 is not None
+    ):
+        raise ActionValueError("PATTERN_FACTOR_ACTION_COVERAGE_LEGACY_CONTRACT_INVALID")
+    if not legacy_contract:
+        combined_corporate_action_snapshot_sha256 = (
+            combined_corporate_action_snapshot_sha256
+            or canonical_sha256(
+                {
+                    "dividend_application_sha256": corporate_actions.snapshot_sha256,
+                    "rights_issue_authority_canonical_sha256": (
+                        rights_issues.authority_canonical_sha256 if rights_issues else None
+                    ),
+                }
+            )
+        )
+        rights_issue_application_sha256 = rights_issue_application_sha256 or canonical_sha256(
+            {
+                "policy_sha256": RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
+                "event_count": len(rights_issues.events) if rights_issues else 0,
+                "outcomes_read": False,
+            }
+        )
+        if (
+            len(combined_corporate_action_snapshot_sha256) != 64
+            or len(rights_issue_application_sha256) != 64
+        ):
+            raise ActionValueError("PATTERN_FACTOR_ACTION_COVERAGE_SCOPE_INVALID")
+
     material_change_count = 0
     bound_change_count = 0
+    dividend_bound_change_count = 0
+    rights_bound_change_count = 0
+    rights_bindings: list[dict[str, Any]] = []
     unbound_changes: list[dict[str, Any]] = []
     insufficient_symbols: list[str] = []
     for symbol in normalized_symbols:
@@ -418,8 +481,37 @@ def audit_pattern_factor_action_coverage(
                         previous_timestamp.date(),
                         timestamp.date(),
                     )
-                    if actions:
+                    rights_events = (
+                        rights_issues.between(
+                            symbol,
+                            previous_timestamp.date(),
+                            timestamp.date(),
+                        )
+                        if rights_issues is not None
+                        else ()
+                    )
+                    if actions or rights_events:
                         bound_change_count += 1
+                        dividend_bound_change_count += int(bool(actions))
+                        rights_bound_change_count += int(bool(rights_events))
+                        if rights_events:
+                            rights_bindings.append(
+                                {
+                                    "symbol": symbol,
+                                    "previous_factor_date": previous_timestamp.date().isoformat(),
+                                    "current_factor_date": timestamp.date().isoformat(),
+                                    "previous_factor": str(previous_factor),
+                                    "current_factor": str(factor),
+                                    "absolute_change_bps": str(change_bps),
+                                    "rights_issue_event_ids": tuple(
+                                        event.event_id for event in rights_events
+                                    ),
+                                    "rights_issue_event_sha256s": tuple(
+                                        event.event_sha256 for event in rights_events
+                                    ),
+                                    "factor_account_participation_inference": False,
+                                }
+                            )
                     else:
                         unbound_changes.append(
                             {
@@ -435,10 +527,18 @@ def audit_pattern_factor_action_coverage(
             previous_factor = factor
 
     audit_identity = {
-        "schema_version": "position_timing_pattern_factor_action_coverage_audit_v1",
+        "schema_version": (
+            "position_timing_pattern_factor_action_coverage_audit_v1"
+            if legacy_contract
+            else "position_timing_pattern_factor_action_coverage_audit_v2"
+        ),
         "candidate_source_sha256": candidate_source_sha256,
         "corporate_action_application_sha256": corporate_actions.snapshot_sha256,
-        "policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+        "policy_sha256": (
+            LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            if legacy_contract
+            else FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        ),
         "scope": {
             "symbols_sha256": canonical_sha256(normalized_symbols),
             "symbol_count": len(normalized_symbols),
@@ -454,10 +554,74 @@ def audit_pattern_factor_action_coverage(
         "coverage_complete": not unbound_changes and not insufficient_symbols,
         "outcomes_read": False,
     }
+    if not legacy_contract:
+        audit_identity.update(
+            {
+                "combined_corporate_action_snapshot_sha256": (
+                    combined_corporate_action_snapshot_sha256
+                ),
+                "rights_issue_application_sha256": rights_issue_application_sha256,
+                "dividend_bound_material_factor_change_count": dividend_bound_change_count,
+                "rights_issue_bound_material_factor_change_count": rights_bound_change_count,
+                "bound_rights_issue_factor_changes": rights_bindings,
+                "bound_rights_issue_event_ids": tuple(
+                    sorted(
+                        {
+                            event_id
+                            for binding in rights_bindings
+                            for event_id in binding["rights_issue_event_ids"]
+                        }
+                    )
+                ),
+                "factor_account_participation_inference": False,
+            }
+        )
     return {
         **audit_identity,
         "audit_sha256": canonical_sha256(audit_identity),
     }
+
+
+def _has_unbound_pattern_factor_change(
+    *,
+    symbol: str,
+    bars: pd.DataFrame,
+    start_ordinal: int,
+    end_ordinal: int,
+    corporate_actions: CorporateActionBook,
+    rights_issues: RightsIssueAuthority | None,
+) -> bool:
+    if rights_issues is None:
+        return _has_unbound_material_factor_change(
+            symbol=symbol,
+            bars=bars,
+            start_ordinal=start_ordinal,
+            end_ordinal=end_ordinal,
+            corporate_actions=corporate_actions,
+        )
+    factors = pd.to_numeric(
+        bars.iloc[start_ordinal : end_ordinal + 1]["factor"], errors="coerce"
+    )
+    valid = factors.where(np.isfinite(factors) & factors.gt(0)).dropna()
+    previous_timestamp: pd.Timestamp | None = None
+    previous_factor: Decimal | None = None
+    for raw_timestamp, raw_factor in valid.items():
+        timestamp = pd.Timestamp(raw_timestamp)
+        factor = Decimal(str(raw_factor))
+        if previous_timestamp is not None and previous_factor is not None:
+            change_bps = abs(factor / previous_factor - Decimal(1)) * Decimal(10000)
+            if change_bps > UNBOUND_FACTOR_CHANGE_TOLERANCE_BPS and not (
+                corporate_actions.between(
+                    symbol, previous_timestamp.date(), timestamp.date()
+                )
+                or rights_issues.between(
+                    symbol, previous_timestamp.date(), timestamp.date()
+                )
+            ):
+                return True
+        previous_timestamp = timestamp
+        previous_factor = factor
+    return False
 
 
 def _snapshot_scope(path: Path, *, expected_symbols: Sequence[str], start: date, end: date) -> Mapping[str, Any]:
@@ -561,7 +725,12 @@ def select_pattern_evaluation_symbols(
     return selected
 
 
-def plan_pattern_population(*, timing_root: Path, parent_request_path: Path) -> Mapping[str, Any]:
+def plan_pattern_population(
+    *,
+    timing_root: Path,
+    parent_request_path: Path,
+    candidate_root: Path | None = None,
+) -> Mapping[str, Any]:
     parent_ref = file_reference(parent_request_path)
     try:
         parent = json.loads(parent_request_path.read_text(encoding="utf-8"))
@@ -584,7 +753,9 @@ def plan_pattern_population(*, timing_root: Path, parent_request_path: Path) -> 
         or parent.get("runtime_write") is not False
     ):
         raise ActionValueError("PATTERN_PARENT_REQUEST_CONTRACT_MISMATCH")
-    candidate = DailyCandidate.open(Path(parent["candidate_root"]))
+    candidate = DailyCandidate.open(
+        candidate_root.resolve() if candidate_root is not None else Path(parent["candidate_root"])
+    )
     prior = prior_timing_request_population(timing_root.resolve() / "research")
     training = tuple(str(item).upper() for item in parent["training_symbols"])
     forbidden = tuple(sorted(set(prior["forbidden_symbols"]).union(training)))
@@ -593,6 +764,9 @@ def plan_pattern_population(*, timing_root: Path, parent_request_path: Path) -> 
         "schema_version": "position_timing_pattern_population_plan_v1",
         "parent_request": parent_ref,
         "candidate_root": candidate.root.as_posix(),
+        "candidate_selection_authority": (
+            "EXPLICIT_PREPARE_ARGUMENT" if candidate_root is not None else "PARENT_REQUEST_COMPATIBILITY"
+        ),
         "training_symbols": training,
         "evaluation_symbols": evaluation,
         "snapshot_symbols": tuple(sorted(set(training).union(evaluation))),
@@ -2002,6 +2176,8 @@ def replay_prototype(
     *,
     symbols: Sequence[str],
     corporate_actions: CorporateActionBook,
+    rights_issues: RightsIssueAuthority | None = None,
+    rights_issue_policy_sha256: str | None = None,
     start: date,
     end: date,
     template_id: str = "R0",
@@ -2009,7 +2185,17 @@ def replay_prototype(
     additional_friction_bps: Decimal = Decimal(0),
     bootstrap_samples: int = BOOTSTRAP_SAMPLES,
 ) -> PrototypeReplayResult:
-    if template_id not in TEMPLATE_BY_ID or not symbols or len(set(symbols)) != len(symbols):
+    if (
+        template_id not in TEMPLATE_BY_ID
+        or not symbols
+        or len(set(symbols)) != len(symbols)
+        or (rights_issues is None) != (rights_issue_policy_sha256 is None)
+        or (
+            rights_issue_policy_sha256 is not None
+            and rights_issue_policy_sha256
+            != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        )
+    ):
         raise ActionValueError("PATTERN_REPLAY_SPEC_INVALID")
     calendar_dates = tuple(timestamp.date() for timestamp in candidate.calendar)
     date_to_ordinal = {day: ordinal for ordinal, day in enumerate(calendar_dates)}
@@ -2030,12 +2216,13 @@ def replay_prototype(
     for symbol in symbols:
         try:
             bars = candidate.bars(symbol)
-            if _has_unbound_material_factor_change(
+            if _has_unbound_pattern_factor_change(
                 symbol=symbol,
                 bars=bars,
                 start_ordinal=start_ordinal,
                 end_ordinal=end_ordinal,
                 corporate_actions=corporate_actions,
+                rights_issues=rights_issues,
             ):
                 raise ActionValueError("UNBOUND_MATERIAL_FACTOR_CHANGE", symbol=symbol)
             features = pattern_feature_frame(bars, symbol=symbol, corporate_actions=corporate_actions)
@@ -2109,6 +2296,10 @@ def replay_prototype(
         "evaluation_start": calendar_dates[start_ordinal].isoformat(),
         "evaluation_end": calendar_dates[terminal_ordinal].isoformat(),
         "source_end": end.isoformat(),
+        "rights_issue_policy_sha256": rights_issue_policy_sha256,
+        "rights_issue_authority_canonical_sha256": (
+            rights_issues.authority_canonical_sha256 if rights_issues else None
+        ),
     }
     coverage["coverage_sha256"] = canonical_sha256(coverage)
     result_class = RESULT_CLASS
@@ -2138,6 +2329,10 @@ def replay_prototype(
         "parent_order_count": parent_count,
         "additional_friction_bps_per_leg": str(additional_friction_bps),
         "gross_net_note": "NET_INCLUDES_COMPONENTIZED_FEES; GROSS_AND_SENSITIVITY_ARE_MATERIALIZED_BY_EXPLICIT_REPLAY_SCENARIOS",
+        "rights_issue_policy_sha256": rights_issue_policy_sha256,
+        "rights_issue_authority_canonical_sha256": (
+            rights_issues.authority_canonical_sha256 if rights_issues else None
+        ),
         "diagnostics": _research_diagnostics(events_frame, sleeves_frame, fills_frame),
         "registry_written": False,
         "current_written": False,
@@ -2231,16 +2426,38 @@ def prepare_pattern_request(
     timing_root: Path,
     repository_root: Path,
     parent_request_path: Path,
+    candidate_root: Path,
+    candidate_manifest_sha256: str,
+    rights_authority_canonical_sha256: str,
     corporate_action_snapshot: Path,
     suspension_snapshot: Path,
 ) -> Path:
     repository_root = repository_root.resolve()
     source_commit = _clean_repository_commit(repository_root)
     timing_root = timing_root.resolve()
-    plan = plan_pattern_population(timing_root=timing_root, parent_request_path=parent_request_path.resolve())
+    rights_policy_path = freeze_rights_issue_participation_policy(
+        timing_root=timing_root
+    )
+    rights_policy_reference = file_reference(rights_policy_path)
+    plan = plan_pattern_population(
+        timing_root=timing_root,
+        parent_request_path=parent_request_path.resolve(),
+        candidate_root=candidate_root,
+    )
     symbols = tuple(plan["snapshot_symbols"])
     start = date.fromisoformat(plan["population_spec"]["start"])
     end = date.fromisoformat(plan["population_spec"]["end"])
+    rights_authority = open_rights_issue_authority(
+        candidate_root=Path(plan["candidate_root"]),
+        expected_candidate_manifest_sha256=candidate_manifest_sha256,
+        expected_authority_canonical_sha256=rights_authority_canonical_sha256,
+    )
+    rights_application_audit = rights_issue_application_audit(
+        rights_authority,
+        symbols=symbols,
+        start=start,
+        end=end,
+    )
     corporate_scope = _snapshot_scope(
         corporate_action_snapshot.resolve(), expected_symbols=symbols, start=start, end=end
     )
@@ -2256,6 +2473,10 @@ def prepare_pattern_request(
     # binding only evaluation files would leave model training source mutable.
     coverage = candidate.coverage(symbols)
     corporate_book = CorporateActionBook.open(corporate_action_snapshot.resolve())
+    corporate_source_snapshot = combined_corporate_action_source_snapshot(
+        dividend_snapshot_sha256=corporate_book.snapshot_sha256,
+        authority=rights_authority,
+    )
     applied_corporate_book, corporate_application_audit = apply_pattern_corporate_action_policy(
         candidate,
         symbols=symbols,
@@ -2271,6 +2492,13 @@ def prepare_pattern_request(
         start=start,
         end=end,
         candidate_source_sha256=coverage["source_sha256"],
+        rights_issues=rights_authority,
+        combined_corporate_action_snapshot_sha256=corporate_source_snapshot[
+            "snapshot_sha256"
+        ],
+        rights_issue_application_sha256=rights_application_audit[
+            "application_sha256"
+        ],
     )
     if not factor_action_coverage_audit["coverage_complete"]:
         raise ActionValueError(
@@ -2298,6 +2526,9 @@ def prepare_pattern_request(
         "corporate_action_source": Path(__file__).with_name(
             "action_value_corporate_actions.py"
         ),
+        "rights_issue_source": Path(__file__).with_name(
+            "pattern_rights_issue.py"
+        ),
         "policy_source": Path(__file__).with_name("policy.py"),
     }
     request = {
@@ -2309,6 +2540,15 @@ def prepare_pattern_request(
         "timing_root": timing_root.as_posix(),
         "parent_request": file_reference(parent_request_path.resolve()),
         "candidate_root": candidate.root.as_posix(),
+        "candidate_selection_authority": plan["candidate_selection_authority"],
+        "candidate_manifest": rights_authority.candidate_manifest_reference,
+        "candidate_manifest_sha256": rights_authority.candidate_manifest_reference[
+            "sha256"
+        ],
+        "candidate_dataset_manifest_sha256": (
+            rights_authority.candidate_dataset_manifest_sha256
+        ),
+        "candidate_revision": rights_authority.candidate_revision,
         "training_symbols": plan["training_symbols"],
         "evaluation_symbols": plan["evaluation_symbols"],
         "snapshot_symbols": symbols,
@@ -2324,6 +2564,26 @@ def prepare_pattern_request(
         ),
         "corporate_action_application_audit": corporate_application_audit,
         "corporate_action_application_sha256": corporate_application_audit[
+            "application_sha256"
+        ],
+        "corporate_action_source_snapshot": corporate_source_snapshot,
+        "corporate_action_source_snapshot_sha256": corporate_source_snapshot[
+            "snapshot_sha256"
+        ],
+        "rights_issue_authority": rights_authority.authority_reference,
+        "rights_issue_authority_canonical_sha256": (
+            rights_authority.authority_canonical_sha256
+        ),
+        "rights_issue_source_documents_sha256": (
+            rights_authority.source_documents_sha256
+        ),
+        "rights_issue_participation_policy": RIGHTS_ISSUE_PARTICIPATION_POLICY,
+        "rights_issue_participation_policy_sha256": (
+            RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        ),
+        "rights_issue_participation_policy_artifact": rights_policy_reference,
+        "rights_issue_application_audit": rights_application_audit,
+        "rights_issue_application_sha256": rights_application_audit[
             "application_sha256"
         ],
         "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
@@ -2363,12 +2623,130 @@ def prepare_pattern_request(
     return path
 
 
+def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
+    policy = request.get("rights_issue_participation_policy")
+    policy_reference = request.get("rights_issue_participation_policy_artifact")
+    authority_reference = request.get("rights_issue_authority")
+    application = request.get("rights_issue_application_audit")
+    source_snapshot = request.get("corporate_action_source_snapshot")
+    factor_audit = request.get("factor_action_coverage_audit")
+    candidate_manifest = request.get("candidate_manifest")
+    population = request.get("population_spec")
+    symbols = tuple(
+        sorted({str(symbol).upper() for symbol in request.get("snapshot_symbols") or ()})
+    )
+    application_identity = (
+        {key: value for key, value in application.items() if key != "application_sha256"}
+        if isinstance(application, Mapping)
+        else {}
+    )
+    source_snapshot_identity = (
+        {key: value for key, value in source_snapshot.items() if key != "snapshot_sha256"}
+        if isinstance(source_snapshot, Mapping)
+        else {}
+    )
+    applications = application.get("applications") if isinstance(application, Mapping) else None
+    application_event_ids = (
+        tuple(item.get("event_id") for item in applications)
+        if isinstance(applications, Sequence)
+        and not isinstance(applications, (str, bytes))
+        and all(isinstance(item, Mapping) for item in applications)
+        else ()
+    )
+    expected_source_event_ids = (
+        tuple(source_snapshot.get("rights_issue_event_ids") or ())
+        if isinstance(source_snapshot, Mapping)
+        else ()
+    )
+    return (
+        request.get("candidate_selection_authority") != "EXPLICIT_PREPARE_ARGUMENT"
+        or not isinstance(candidate_manifest, Mapping)
+        or request.get("candidate_manifest_sha256")
+        != candidate_manifest.get("sha256")
+        or len(str(request.get("candidate_manifest_sha256", ""))) != 64
+        or len(str(request.get("candidate_dataset_manifest_sha256", ""))) != 64
+        or not str(request.get("candidate_revision") or "")
+        or not isinstance(authority_reference, Mapping)
+        or len(str(authority_reference.get("sha256", ""))) != 64
+        or len(str(request.get("rights_issue_authority_canonical_sha256", "")))
+        != 64
+        or len(str(request.get("rights_issue_source_documents_sha256", ""))) != 64
+        or policy != RIGHTS_ISSUE_PARTICIPATION_POLICY
+        or request.get("rights_issue_participation_policy_sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or canonical_sha256(policy) != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or not isinstance(policy_reference, Mapping)
+        or policy_reference.get("sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or not isinstance(application, Mapping)
+        or application.get("application_sha256")
+        != canonical_sha256(application_identity)
+        or request.get("rights_issue_application_sha256")
+        != application.get("application_sha256")
+        or application.get("authority_file_sha256")
+        != authority_reference.get("sha256")
+        or application.get("authority_canonical_sha256")
+        != request.get("rights_issue_authority_canonical_sha256")
+        or application.get("source_documents_sha256")
+        != request.get("rights_issue_source_documents_sha256")
+        or application.get("policy_sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or application.get("outcomes_read") is not False
+        or not isinstance(applications, Sequence)
+        or isinstance(applications, (str, bytes))
+        or application.get("event_count") != len(applications)
+        or not applications
+        or not all(isinstance(item, Mapping) for item in applications)
+        or any(
+            item.get("participation_decision") != "NOT_SUBSCRIBED"
+            or item.get("subscribed_quantity") != 0
+            or item.get("subscription_cash_cny") != "0"
+            or item.get("credited_quantity") != 0
+            or item.get("sellable_quantity_increment") != 0
+            or item.get("factor_account_quantity_inference") is not False
+            for item in applications
+        )
+        or application.get("account_quantity_change") != 0
+        or application.get("account_cash_change_cny") != "0"
+        or not isinstance(population, Mapping)
+        or not isinstance(application.get("scope"), Mapping)
+        or application["scope"].get("symbols_sha256") != canonical_sha256(symbols)
+        or application["scope"].get("symbol_count") != len(symbols)
+        or application["scope"].get("start") != population.get("start")
+        or application["scope"].get("end") != population.get("end")
+        or not isinstance(source_snapshot, Mapping)
+        or source_snapshot.get("snapshot_sha256")
+        != canonical_sha256(source_snapshot_identity)
+        or request.get("corporate_action_source_snapshot_sha256")
+        != source_snapshot.get("snapshot_sha256")
+        or source_snapshot.get("dividend_snapshot_sha256")
+        != request.get("corporate_action_snapshot_sha256")
+        or source_snapshot.get("rights_issue_authority_file_sha256")
+        != authority_reference.get("sha256")
+        or source_snapshot.get("rights_issue_authority_canonical_sha256")
+        != request.get("rights_issue_authority_canonical_sha256")
+        or source_snapshot.get("rights_issue_source_documents_sha256")
+        != request.get("rights_issue_source_documents_sha256")
+        or source_snapshot.get("rights_issue_event_count") != len(applications)
+        or expected_source_event_ids != application_event_ids
+        or not isinstance(factor_audit, Mapping)
+        or factor_audit.get("combined_corporate_action_snapshot_sha256")
+        != request.get("corporate_action_source_snapshot_sha256")
+        or factor_audit.get("rights_issue_application_sha256")
+        != request.get("rights_issue_application_sha256")
+        or tuple(factor_audit.get("bound_rights_issue_event_ids") or ())
+        != application_event_ids
+        or factor_audit.get("factor_account_participation_inference") is not False
+    )
+
+
 def _load_request(path: Path) -> dict[str, Any]:
     try:
         request = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ActionValueError("PATTERN_REQUEST_UNAVAILABLE") from exc
     identity = {key: value for key, value in request.items() if key != "request_sha256"}
+    request_schema = request.get("schema_version")
     false_flags = (
         "registry_write",
         "current_write",
@@ -2476,11 +2854,22 @@ def _load_request(path: Path) -> dict[str, Any]:
                 }
             )
         )
+        expected_factor_policy = (
+            LEGACY_FACTOR_ACTION_COVERAGE_POLICY
+            if request_schema == FACTOR_COVERAGE_REQUEST_SCHEMA
+            else FACTOR_ACTION_COVERAGE_POLICY
+        )
+        expected_factor_policy_sha256 = (
+            LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            if request_schema == FACTOR_COVERAGE_REQUEST_SCHEMA
+            else FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        )
         factor_coverage_contract_invalid = (
             request.get("factor_action_coverage_policy_sha256")
-            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            != expected_factor_policy_sha256
             or canonical_sha256(request.get("factor_action_coverage_policy"))
-            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            != expected_factor_policy_sha256
+            or request.get("factor_action_coverage_policy") != expected_factor_policy
             or not isinstance(factor_audit, Mapping)
             or factor_audit.get("audit_sha256")
             != canonical_sha256(factor_audit_identity)
@@ -2495,7 +2884,7 @@ def _load_request(path: Path) -> dict[str, Any]:
             or factor_audit.get("corporate_action_application_sha256")
             != request.get("corporate_action_application_sha256")
             or factor_audit.get("policy_sha256")
-            != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            != expected_factor_policy_sha256
             or factor_audit.get("coverage_complete") is not True
             or factor_audit.get("outcomes_read") is not False
             or factor_audit.get("unbound_material_factor_change_count") != 0
@@ -2513,10 +2902,15 @@ def _load_request(path: Path) -> dict[str, Any]:
             or factor_scope.get("end") != population.get("end")
         )
     if (
-        request.get("schema_version") not in {LEGACY_REQUEST_SCHEMA, REQUEST_SCHEMA}
+        request_schema
+        not in {LEGACY_REQUEST_SCHEMA, FACTOR_COVERAGE_REQUEST_SCHEMA, REQUEST_SCHEMA}
         or (
-            request.get("schema_version") == REQUEST_SCHEMA
+            request_schema in {FACTOR_COVERAGE_REQUEST_SCHEMA, REQUEST_SCHEMA}
             and (not has_application_contract or not has_factor_coverage_contract)
+        )
+        or (
+            request_schema == REQUEST_SCHEMA
+            and _rights_issue_request_contract_invalid(request)
         )
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("request_sha256") != canonical_sha256(identity)
@@ -2654,6 +3048,30 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
             or receipt.get("factor_action_coverage_audit")
             != request.get("factor_action_coverage_audit")
         )
+    rights_identity_mismatch = False
+    if request.get("schema_version") == REQUEST_SCHEMA:
+        authority_reference = request.get("rights_issue_authority") or {}
+        rights_identity_mismatch = (
+            receipt.get("candidate_manifest_sha256")
+            != request.get("candidate_manifest_sha256")
+            or receipt.get("candidate_dataset_manifest_sha256")
+            != request.get("candidate_dataset_manifest_sha256")
+            or receipt.get("candidate_revision") != request.get("candidate_revision")
+            or receipt.get("corporate_action_source_snapshot_sha256")
+            != request.get("corporate_action_source_snapshot_sha256")
+            or receipt.get("rights_issue_authority_file_sha256")
+            != authority_reference.get("sha256")
+            or receipt.get("rights_issue_authority_canonical_sha256")
+            != request.get("rights_issue_authority_canonical_sha256")
+            or receipt.get("rights_issue_source_documents_sha256")
+            != request.get("rights_issue_source_documents_sha256")
+            or receipt.get("rights_issue_participation_policy_sha256")
+            != request.get("rights_issue_participation_policy_sha256")
+            or receipt.get("rights_issue_application_sha256")
+            != request.get("rights_issue_application_sha256")
+            or receipt.get("rights_issue_application_audit")
+            != request.get("rights_issue_application_audit")
+        )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
         or manifest.get("manifest_sha256") != canonical_sha256(manifest_identity)
@@ -2684,6 +3102,7 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
         != canonical_sha256({key: value for key, value in evolution.items() if key != "receipt_sha256"})
         or application_identity_mismatch
         or factor_coverage_identity_mismatch
+        or rights_identity_mismatch
         or any(receipt.get(flag) is not False for flag in false_flags)
         or manifest.get("request_sha256") != request["request_sha256"]
         or manifest.get("receipt_sha256") != receipt["receipt_sha256"]
@@ -2735,6 +3154,15 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         request["parent_request"],
         request["corporate_action_snapshot"],
         request["suspension_snapshot"],
+        *(
+            (
+                request["candidate_manifest"],
+                request["rights_issue_authority"],
+                request["rights_issue_participation_policy_artifact"],
+            )
+            if request["schema_version"] == REQUEST_SCHEMA
+            else ()
+        ),
         *request["source_code"].values(),
     ):
         if file_reference(Path(reference["path"])) != reference:
@@ -2768,6 +3196,45 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         raise ActionValueError("PATTERN_SNAPSHOT_IDENTITY_DRIFT")
     start = date.fromisoformat(request["population_spec"]["start"])
     end = date.fromisoformat(request["population_spec"]["end"])
+    rights_authority: RightsIssueAuthority | None = None
+    rights_application_audit: Mapping[str, Any] | None = None
+    corporate_source_snapshot: Mapping[str, Any] | None = None
+    if request["schema_version"] == REQUEST_SCHEMA:
+        rights_authority = open_rights_issue_authority(
+            candidate_root=Path(request["candidate_root"]),
+            expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
+            expected_authority_canonical_sha256=request[
+                "rights_issue_authority_canonical_sha256"
+            ],
+        )
+        if (
+            rights_authority.candidate_manifest_reference
+            != request["candidate_manifest"]
+            or rights_authority.candidate_dataset_manifest_sha256
+            != request["candidate_dataset_manifest_sha256"]
+            or rights_authority.candidate_revision != request["candidate_revision"]
+            or rights_authority.authority_reference
+            != request["rights_issue_authority"]
+            or rights_authority.source_documents_sha256
+            != request["rights_issue_source_documents_sha256"]
+        ):
+            raise ActionValueError("RIGHTS_ISSUE_AUTHORITY_IDENTITY_DRIFT")
+        rights_application_audit = rights_issue_application_audit(
+            rights_authority,
+            symbols=tuple(request["snapshot_symbols"]),
+            start=start,
+            end=end,
+        )
+        corporate_source_snapshot = combined_corporate_action_source_snapshot(
+            dividend_snapshot_sha256=source_corporate_actions.snapshot_sha256,
+            authority=rights_authority,
+        )
+        if (
+            rights_application_audit != request["rights_issue_application_audit"]
+            or corporate_source_snapshot
+            != request["corporate_action_source_snapshot"]
+        ):
+            raise ActionValueError("RIGHTS_ISSUE_APPLICATION_IDENTITY_DRIFT")
     if "corporate_action_application_sha256" in request:
         corporate_actions, corporate_application_audit = apply_pattern_corporate_action_policy(
             candidate,
@@ -2798,6 +3265,20 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             start=start,
             end=end,
             candidate_source_sha256=observed_source["source_sha256"],
+            rights_issues=rights_authority,
+            combined_corporate_action_snapshot_sha256=(
+                corporate_source_snapshot["snapshot_sha256"]
+                if corporate_source_snapshot is not None
+                else None
+            ),
+            rights_issue_application_sha256=(
+                rights_application_audit["application_sha256"]
+                if rights_application_audit is not None
+                else None
+            ),
+            legacy_contract=(
+                request["schema_version"] == FACTOR_COVERAGE_REQUEST_SCHEMA
+            ),
         )
         if (
             factor_action_coverage_audit
@@ -2811,6 +3292,10 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         cached,
         symbols=evaluation_symbols,
         corporate_actions=corporate_actions,
+        rights_issues=rights_authority,
+        rights_issue_policy_sha256=(
+            request.get("rights_issue_participation_policy_sha256")
+        ),
         start=start,
         end=end,
     )
@@ -2845,6 +3330,10 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             cached,
             symbols=evaluation_symbols,
             corporate_actions=corporate_actions,
+            rights_issues=rights_authority,
+            rights_issue_policy_sha256=(
+                request.get("rights_issue_participation_policy_sha256")
+            ),
             start=start,
             end=end,
             parent_count=parent_count,
@@ -2899,6 +3388,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         corporate_actions=corporate_actions,
         start=start,
         end=end,
+        rights_issues=rights_authority,
     )
     calendar_dates = tuple(timestamp.date() for timestamp in cached.calendar)
     evaluation_start = calendar_dates[calendar_dates.index(start) + INITIAL_TRAINING_SESSIONS]
@@ -2917,6 +3407,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         start=start,
         end=end,
         schedule=schedule,
+        rights_issues=rights_authority,
     )
     optimizer_evidence_coverage_complete = bool(
         optimizer_development_coverage["coverage_complete"]
@@ -2944,6 +3435,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         corporate_actions=corporate_actions,
         start=start,
         end=end,
+        rights_issues=rights_authority,
     )
     walk = walk_forward_pattern_models(
         model_rows,
@@ -2958,6 +3450,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         corporate_actions=corporate_actions,
         start=start,
         end=end,
+        rights_issues=rights_authority,
     )
     model_outer = pd.DataFrame()
     historical_predictions = pd.DataFrame()
@@ -2990,6 +3483,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             start=start,
             end=end,
             models=walk.models,
+            rights_issues=rights_authority,
         )
         if not model_outer.empty:
             model_evidence = model_comparisons(
@@ -3041,6 +3535,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             start=start,
             end=end,
             schedule=schedule,
+            rights_issues=rights_authority,
             parent_count=parent_count,
         )
         optimizer_scenario_evidence_coverage_complete = bool(
@@ -3093,6 +3588,7 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
                 start=start,
                 end=end,
                 models=walk.models,
+                rights_issues=rights_authority,
                 parent_count=parent_count,
             )
             if not model_scenario_outer.empty:
@@ -3192,6 +3688,11 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         "repository_commit": request["repository_commit"],
         "created_at": datetime.now(TZ).isoformat(),
         "source_sha256": request["candidate_source_identity"]["source_sha256"],
+        "candidate_manifest_sha256": request.get("candidate_manifest_sha256"),
+        "candidate_dataset_manifest_sha256": request.get(
+            "candidate_dataset_manifest_sha256"
+        ),
+        "candidate_revision": request.get("candidate_revision"),
         "corporate_action_snapshot_sha256": source_corporate_actions.snapshot_sha256,
         "corporate_action_application_policy_sha256": request.get(
             "corporate_action_application_policy_sha256"
@@ -3207,6 +3708,25 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             "factor_action_coverage_audit_sha256"
         ),
         "factor_action_coverage_audit": factor_action_coverage_audit,
+        "corporate_action_source_snapshot_sha256": request.get(
+            "corporate_action_source_snapshot_sha256"
+        ),
+        "rights_issue_authority_file_sha256": (
+            request.get("rights_issue_authority", {}).get("sha256")
+        ),
+        "rights_issue_authority_canonical_sha256": request.get(
+            "rights_issue_authority_canonical_sha256"
+        ),
+        "rights_issue_source_documents_sha256": request.get(
+            "rights_issue_source_documents_sha256"
+        ),
+        "rights_issue_participation_policy_sha256": request.get(
+            "rights_issue_participation_policy_sha256"
+        ),
+        "rights_issue_application_sha256": request.get(
+            "rights_issue_application_sha256"
+        ),
+        "rights_issue_application_audit": rights_application_audit,
         "suspension_snapshot_sha256": suspension_book.snapshot_sha256,
         "research_model_outputs_written": True,
         "cost_sensitivity": sensitivity,
@@ -3252,6 +3772,9 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--timing-root", type=Path, required=True)
     prepare.add_argument("--repository-root", type=Path, required=True)
     prepare.add_argument("--parent-request", type=Path, required=True)
+    prepare.add_argument("--candidate-root", type=Path, required=True)
+    prepare.add_argument("--candidate-manifest-sha256", required=True)
+    prepare.add_argument("--rights-authority-canonical-sha256", required=True)
     prepare.add_argument("--corporate-action-snapshot", type=Path, required=True)
     prepare.add_argument("--suspension-snapshot", type=Path, required=True)
     run = sub.add_parser("run")
@@ -3271,6 +3794,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timing_root=args.timing_root,
                 repository_root=args.repository_root,
                 parent_request_path=args.parent_request,
+                candidate_root=args.candidate_root,
+                candidate_manifest_sha256=args.candidate_manifest_sha256,
+                rights_authority_canonical_sha256=(
+                    args.rights_authority_canonical_sha256
+                ),
                 corporate_action_snapshot=args.corporate_action_snapshot,
                 suspension_snapshot=args.suspension_snapshot,
             ).as_posix()
