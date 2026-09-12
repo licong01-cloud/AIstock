@@ -444,13 +444,22 @@ class AutoEvolutionScheduler:
         return gate
 
     @staticmethod
-    def _resolve_model_gpu_training_policy(model_id: str | None) -> str:
+    def _resolve_model_gpu_training_contract(model_id: str | None) -> tuple[str, bool]:
         if not model_id:
-            return GPU_TRAINING_POLICY_PARALLEL
+            return GPU_TRAINING_POLICY_PARALLEL, False
         from .config_composer import ConfigComposer
 
         model_info = ConfigComposer()._get_model_info(model_id)
-        return resolve_gpu_training_policy(model_info or {"model_id": model_id})
+        if not model_info:
+            return resolve_gpu_training_policy({"model_id": model_id}), False
+        return resolve_gpu_training_policy(model_info), True
+
+    @staticmethod
+    def _resolve_model_gpu_training_policy(model_id: str | None) -> str:
+        policy, _catalog_resolved = (
+            AutoEvolutionScheduler._resolve_model_gpu_training_contract(model_id)
+        )
+        return policy
 
     def _resolve_gpu_execution_contract(
         self,
@@ -458,16 +467,26 @@ class AutoEvolutionScheduler:
         model_id: str | None,
         requested_phase_pipeline: bool,
         full_train: bool,
-    ) -> tuple[str, bool]:
+        allow_parallel_training: bool,
+    ) -> tuple[str, bool, bool]:
         policy = GPU_TRAINING_POLICY_PARALLEL
+        model_catalog_resolved = False
         if full_train:
-            policy = self._resolve_model_gpu_training_policy(model_id)
+            policy, model_catalog_resolved = self._resolve_model_gpu_training_contract(
+                model_id
+            )
         phase_pipeline_enabled = resolve_gpu_phase_pipeline_enabled(
             requested=requested_phase_pipeline,
             full_train=full_train,
             policy=policy,
         )
-        return policy, phase_pipeline_enabled
+        parallel_training_eligible = bool(
+            full_train
+            and allow_parallel_training
+            and model_catalog_resolved
+            and policy == GPU_TRAINING_POLICY_PARALLEL
+        )
+        return policy, phase_pipeline_enabled, parallel_training_eligible
 
     async def _acquire_gpu_phase_lease(self, node_id: str, policy: str) -> GPUPhaseLease:
         """Acquire the process-wide fair gate; DB reservation is performed separately."""
@@ -4344,6 +4363,7 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
+        retry_slot = None
         if task.get("task_type") == "custom_evo":
             retry_slot = self._resolve_custom_evo_parallelism_slot(
                 dict(task),
@@ -4455,6 +4475,7 @@ class AutoEvolutionScheduler:
 
         # 4. Custom-evo retries queue until per-node node_parallelism capacity is free.
         retry_claim_statuses = ["pending"] if _capacity_resume else ["failed", "cancelled"]
+        slot = None
         if task.get("task_type") == "custom_evo":
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -4539,6 +4560,7 @@ class AutoEvolutionScheduler:
         retry_phase_pipeline_enabled = False
         retry_requested_phase_pipeline = False
         retry_gpu_training_policy = GPU_TRAINING_POLICY_PARALLEL
+        retry_parallel_training_eligible = False
         if task.get("task_type") == "custom_evo":
             retry_strategy_config = self._parse_custom_evo_strategy_config(
                 task.get("strategy_evo_config"),
@@ -4562,13 +4584,39 @@ class AutoEvolutionScheduler:
             task_for_retry["node_id"] = effective_node_id
             cfg = build_config_from_retry_loop(config, task_for_retry, experiment_name=f"{task_id}/{loop_id}")
             retry_full_train = retry_mode_name == QE_LOOP_RETRY_MODE_FULL_TRAIN
-            retry_gpu_training_policy, retry_phase_pipeline_enabled = (
-                self._resolve_gpu_execution_contract(
-                    model_id=cfg.model_id,
-                    requested_phase_pipeline=retry_requested_phase_pipeline,
-                    full_train=retry_full_train,
-                )
+            (
+                retry_gpu_training_policy,
+                retry_phase_pipeline_enabled,
+                retry_parallel_training_eligible,
+            ) = self._resolve_gpu_execution_contract(
+                model_id=cfg.model_id,
+                requested_phase_pipeline=retry_requested_phase_pipeline,
+                full_train=retry_full_train,
+                allow_parallel_training=(task.get("task_type") == "custom_evo"),
             )
+            config["gpu_training_policy"] = retry_gpu_training_policy
+            config["phase_pipeline_enabled"] = retry_phase_pipeline_enabled
+            config["parallel_training_eligible"] = retry_parallel_training_eligible
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_loops
+                        SET config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                          AND status = 'running'
+                        """,
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "retry loop lost its running source row before capacity metadata persistence: "
+                            f"loop={evolution_loop_db_id}"
+                        )
+                conn.commit()
             if retry_phase_pipeline_enabled:
                 if not retry_requested_phase_pipeline:
                     logger.info(
@@ -4628,6 +4676,10 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=retry_resource_session.source_run_key if retry_resource_session else None,
                 resource_session_token=retry_resource_session.token if retry_resource_session else None,
                 phase_pipeline_enabled=retry_phase_pipeline_enabled,
+                submission_node_capacity=(
+                    int(slot["limit"]) if slot is not None else None
+                ),
+                parallel_training_eligible=retry_parallel_training_eligible,
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=retry_source_execution_id,
                 submission_source_claim_id=evolution_loop_db_id,
@@ -7564,6 +7616,7 @@ class AutoEvolutionScheduler:
         resource_session = None
         gpu_phase_lease = None
         gpu_training_policy = GPU_TRAINING_POLICY_PARALLEL
+        parallel_training_eligible = False
         resource_waiter_started = False
         try:
             loop_config = dict(loop_config)
@@ -7581,10 +7634,15 @@ class AutoEvolutionScheduler:
                 task=task,
                 experiment_name=experiment_name,
             )
-            gpu_training_policy, phase_pipeline_enabled = self._resolve_gpu_execution_contract(
+            (
+                gpu_training_policy,
+                phase_pipeline_enabled,
+                parallel_training_eligible,
+            ) = self._resolve_gpu_execution_contract(
                 model_id=cfg.model_id,
                 requested_phase_pipeline=requested_phase_pipeline,
                 full_train=full_train_requested,
+                allow_parallel_training=True,
             )
             if phase_pipeline_enabled:
                 if not requested_phase_pipeline:
@@ -7643,6 +7701,7 @@ class AutoEvolutionScheduler:
                 "phase_pipeline_requested": requested_phase_pipeline,
                 "resource_telemetry_enabled": resource_telemetry_enabled,
                 "gpu_training_policy": gpu_training_policy,
+                "parallel_training_eligible": parallel_training_eligible,
                 "resource_session_id": resource_session.session_id if resource_session else None,
             }
             rerun_submission = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
@@ -7738,6 +7797,8 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=resource_session.source_run_key if resource_session else None,
                 resource_session_token=resource_session.token if resource_session else None,
                 phase_pipeline_enabled=phase_pipeline_enabled,
+                submission_node_capacity=int(slot["limit"]),
+                parallel_training_eligible=parallel_training_eligible,
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=submission_source_execution_id,
                 submission_source_claim_id=submission_source_claim_id,
@@ -7784,6 +7845,8 @@ class AutoEvolutionScheduler:
                     resource_source_run_key=resource_session.source_run_key if resource_session else None,
                     resource_session_token=resource_session.token if resource_session else None,
                     phase_pipeline_enabled=False,
+                    submission_node_capacity=int(slot["limit"]),
+                    parallel_training_eligible=False,
                     submission_source_kind="qe_evolution_loop",
                     submission_source_execution_id=submission_source_execution_id,
                     submission_source_claim_id=submission_source_claim_id,

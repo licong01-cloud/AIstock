@@ -428,5 +428,6 @@ class BacktestExecutor(BaseExecutor):
             record_waiting_capacity=record_waiting,
             requested_node_capacity=ctx.submission_node_capacity,
             backtest_only=backtest_only,
+            parallel_training_eligible=ctx.parallel_training_eligible,
             consumer_id=ctx.submission_consumer_id,
         )

@@ -65,6 +65,7 @@ class FakeReservationRepository:
         *,
         node_capacity: int,
         allow_same_task_backtest_parallelism: bool = False,
+        allow_same_task_parallel_training: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: Any,
@@ -76,6 +77,9 @@ class FakeReservationRepository:
                 "node_capacity": node_capacity,
                 "allow_same_task_backtest_parallelism": (
                     allow_same_task_backtest_parallelism
+                ),
+                "allow_same_task_parallel_training": (
+                    allow_same_task_parallel_training
                 ),
                 "owner_id": owner_id,
                 "lease_seconds": lease_seconds,
@@ -240,6 +244,7 @@ def _source(
     *,
     requested_node_capacity: int | None = None,
     backtest_only: bool = False,
+    parallel_training_eligible: bool = False,
 ) -> tuple[QEWorkspaceSubmissionSource, dict[str, Any]]:
     evidence: dict[str, Any] = {"claimed": 0, "waiting": 0}
     intent_hash = submission_intent_hash_for_source(
@@ -271,6 +276,7 @@ def _source(
             record_waiting_capacity=waiting,
             requested_node_capacity=requested_node_capacity,
             backtest_only=backtest_only,
+            parallel_training_eligible=parallel_training_eligible,
         ),
         evidence,
     )
@@ -286,12 +292,26 @@ def test_capacity_contract_keeps_training_at_one_and_allows_pure_backtest_two() 
         assert excinfo.value.reason_code == "qe_execution_capacity_node_alias_noncanonical"
     assert service.resolve_node_capacity("wsl2-5080", 1) == 1
     assert service.resolve_node_capacity("wsl2-5080", 8) == 1
+    assert service.resolve_node_capacity("wsl2-5080", 1, parallel_training=True) == 1
+    assert service.resolve_node_capacity("wsl2-5080", 2, parallel_training=True) == 2
+    assert service.resolve_node_capacity("wsl2-5080", 8, parallel_training=True) == 2
     assert service.resolve_node_capacity("wsl2-5080", 1, backtest_only=True) == 1
     assert service.resolve_node_capacity("wsl2-5080", 2, backtest_only=True) == 2
     assert service.resolve_node_capacity("wsl2-5080", 8, backtest_only=True) == 2
     assert service.resolve_node_capacity("rdagent-node1") == 4
     assert service.resolve_node_capacity("rdagent-node1", 3) == 3
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
+    assert service.resolve_node_capacity(
+        "rdagent-node1", 8, parallel_training=True
+    ) == 4
+    with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
+        service.resolve_node_capacity(
+            "wsl2-5080",
+            2,
+            backtest_only=True,
+            parallel_training=True,
+        )
+    assert excinfo.value.reason_code == "qe_execution_capacity_contract_invalid"
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError):
         service.resolve_node_capacity("rdagent-node1", 0)
 
@@ -318,6 +338,111 @@ def test_wsl_capacity_identity_is_canonicalized_before_reservation() -> None:
     assert outcome.submitted is True
     assert repository.reserve_calls[0]["spec"].node_id == "wsl2-5080"
     assert repository.reserve_calls[0]["node_capacity"] == 1
+
+
+def test_registered_parallel_training_submission_requests_two_proven_slots() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        parallel_training_eligible=True,
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 2
+    assert repository.reserve_calls[0]["allow_same_task_parallel_training"] is True
+    assert repository.reserve_calls[0]["allow_same_task_backtest_parallelism"] is False
+
+
+def test_registered_parallel_training_honours_lower_requested_limit() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=1,
+        parallel_training_eligible=True,
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 1
+    assert repository.reserve_calls[0]["allow_same_task_parallel_training"] is False
+
+
+def test_advisory_consumer_cannot_use_mainline_parallel_training_capacity() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        parallel_training_eligible=True,
+    )
+    source = replace(source, consumer_id="advisory")
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 1
+    assert repository.reserve_calls[0]["allow_same_task_parallel_training"] is False
+
+
+@pytest.mark.parametrize("model_id", ["__seed_EfficientGATs_v1__", "unknown-model"])
+def test_exclusive_or_unresolved_model_training_remains_one_slot(model_id: str) -> None:
+    payload = replace(_payload(), config={"model_id": model_id})
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        parallel_training_eligible=False,
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 1
+    assert repository.reserve_calls[0]["allow_same_task_parallel_training"] is False
+
+
+def test_non_evolution_source_cannot_self_declare_parallel_training_capacity() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        parallel_training_eligible=True,
+    )
+    source = replace(
+        source,
+        source_kind="qe_experiment",
+        source_execution_id="qe_experiment_training_1",
+        submission_intent_hash=submission_intent_hash_for_source(
+            source_kind="qe_experiment",
+            source_execution_id="qe_experiment_training_1",
+            node_id="wsl2-5080",
+            task_id=payload.task_id,
+            loop_id=payload.loop_id,
+        ),
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 1
+    assert repository.reserve_calls[0]["allow_same_task_parallel_training"] is False
 
 
 def test_wsl_backtest_only_submission_requests_safe_same_task_capacity_two() -> None:
@@ -407,6 +532,7 @@ def test_repository_backtest_cohort_proof_fails_closed_for_mixed_active_work(
         spec,
         requested_node_capacity=2,
         allow_same_task_backtest_parallelism=allow_parallelism,
+        allow_same_task_parallel_training=False,
     )
 
     assert capacity == expected_capacity
@@ -416,6 +542,116 @@ def test_repository_backtest_cohort_proof_fails_closed_for_mixed_active_work(
         assert "LEFT JOIN qe_evolution_loops" in query
         assert params[0] == "wsl2-5080"
         assert params[2] == "qe_task_1"
+
+
+@pytest.mark.parametrize(
+    ("incompatible_count", "expected_capacity"),
+    [(0, 2), (1, 1)],
+)
+def test_repository_parallel_training_cohort_proof_fails_closed_for_mixed_work(
+    incompatible_count: int,
+    expected_capacity: int,
+) -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+            self.fetch_count = 0
+
+        def execute(self, query: str, params: tuple[Any, ...]) -> None:
+            self.calls.append((query, params))
+
+        def fetchone(self) -> Mapping[str, int]:
+            self.fetch_count += 1
+            if self.fetch_count == 1:
+                return {"eligible_count": 1}
+            return {"incompatible_count": incompatible_count}
+
+    cursor = Cursor()
+    spec = QEExecutionReservationSpec(
+        node_id="wsl2-5080",
+        source_kind="qe_evolution_loop",
+        source_execution_id="qe_task_1_Loop2",
+        qe_task_id="qe_task_1",
+        qe_loop_id="Loop2",
+        submission_intent_hash="b" * 64,
+    )
+
+    capacity = QEExecutionReservationRepository._effective_node_capacity_for_source(
+        cursor,
+        spec,
+        requested_node_capacity=2,
+        allow_same_task_backtest_parallelism=False,
+        allow_same_task_parallel_training=True,
+    )
+
+    assert capacity == expected_capacity
+    assert len(cursor.calls) == 2
+    current_query, current_params = cursor.calls[0]
+    assert "eligible_count" in current_query
+    assert current_params == ("qe_task_1", "Loop2")
+    query, params = cursor.calls[1]
+    assert "parallel_training_eligible" in query
+    assert "gpu_training_policy" in query
+    assert params[0] == "wsl2-5080"
+    assert params[2] == "qe_task_1"
+
+
+def test_repository_parallel_training_requires_current_loop_metadata() -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, _query: str, _params: tuple[Any, ...]) -> None:
+            self.calls += 1
+
+        def fetchone(self) -> Mapping[str, int]:
+            return {"eligible_count": 0}
+
+    cursor = Cursor()
+    spec = QEExecutionReservationSpec(
+        node_id="wsl2-5080",
+        source_kind="qe_evolution_loop",
+        source_execution_id="qe_task_1_Loop2",
+        qe_task_id="qe_task_1",
+        qe_loop_id="Loop2",
+        submission_intent_hash="d" * 64,
+    )
+
+    capacity = QEExecutionReservationRepository._effective_node_capacity_for_source(
+        cursor,
+        spec,
+        requested_node_capacity=2,
+        allow_same_task_backtest_parallelism=False,
+        allow_same_task_parallel_training=True,
+    )
+
+    assert capacity == 1
+    assert cursor.calls == 1
+
+
+def test_repository_rejects_ambiguous_parallelism_mode() -> None:
+    class Cursor:
+        def execute(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("ambiguous mode must not query")
+
+    spec = QEExecutionReservationSpec(
+        node_id="wsl2-5080",
+        source_kind="qe_evolution_loop",
+        source_execution_id="qe_task_1_Loop2",
+        qe_task_id="qe_task_1",
+        qe_loop_id="Loop2",
+        submission_intent_hash="c" * 64,
+    )
+
+    capacity = QEExecutionReservationRepository._effective_node_capacity_for_source(
+        Cursor(),
+        spec,
+        requested_node_capacity=2,
+        allow_same_task_backtest_parallelism=True,
+        allow_same_task_parallel_training=True,
+    )
+
+    assert capacity == 1
 
 
 def test_full_capacity_persists_waiting_and_never_posts() -> None:
