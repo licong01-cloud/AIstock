@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from copy import copy
 from datetime import date
 from typing import Any, Mapping
 
@@ -351,8 +352,19 @@ class AdvisoryModelShadowService:
                 reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
                 context={"program_target_count": int(program.target_count)},
             )
+        summary = list_version.get("summary_json")
+        universe_receipt = summary.get("advisory_universe_receipt") if isinstance(summary, Mapping) else None
+        universe_selection = (
+            universe_receipt.get("universe_selection") if isinstance(universe_receipt, Mapping) else None
+        )
+        candidate_rows = (
+            _candidate_rows_for_recommendation_list(selection_run.aggregate_results, list_items)
+            if isinstance(universe_selection, Mapping)
+            and universe_selection.get("mode") in {"single_index", "index_union"}
+            else selection_run.aggregate_results
+        )
         candidates = _candidate_frame(
-            selection_run.aggregate_results,
+            candidate_rows,
             program_id=program_id,
             binding_version_id=binding["binding_version_id"],
             decision_date=decision_date,
@@ -1096,6 +1108,33 @@ def _candidate_frame(
             }
         )
     return pd.DataFrame(payloads)
+
+
+def _candidate_rows_for_recommendation_list(rows: list[Any], list_items: list[dict[str, Any]]) -> list[Any]:
+    """Project a persisted Selection run onto the exact Advisory list candidate set."""
+
+    rank_by_symbol: dict[str, int] = {}
+    for item in list_items:
+        if str(item.get("action") or "").upper() == "EXIT":
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        rank = item.get("rank")
+        if not symbol or not isinstance(rank, int) or isinstance(rank, bool) or rank <= 0:
+            continue
+        rank_by_symbol[symbol] = rank
+    projected: list[Any] = []
+    for row in rows:
+        symbol = str(row.symbol).strip().upper()
+        if symbol not in rank_by_symbol:
+            continue
+        model_copy = getattr(row, "model_copy", None)
+        if callable(model_copy):
+            projected.append(model_copy(update={"rank": rank_by_symbol[symbol]}))
+            continue
+        cloned = copy(row)
+        setattr(cloned, "rank", rank_by_symbol[symbol])
+        projected.append(cloned)
+    return sorted(projected, key=lambda row: (int(row.rank), str(row.symbol)))
 
 
 def build_frozen_candidate_frame(

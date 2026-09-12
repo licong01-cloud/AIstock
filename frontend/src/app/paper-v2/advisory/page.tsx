@@ -22,6 +22,8 @@ import {
   type AdvisoryReviewResult,
   type AdvisoryStrategyBindingVersion,
   type AdvisoryTradingDayDefaults,
+  type AdvisoryUniverseOptions,
+  type AdvisoryUniverseSelection,
 } from "@/lib/api/advisory";
 import { selectionCenterApi } from "@/lib/paper-v2/api";
 import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
@@ -51,6 +53,8 @@ type ProgramStrategyDraft = {
   packageMode: AdvisoryPackageMode;
   targetCount: string;
   rows: PackageWeightRow[];
+  universeMode: AdvisoryUniverseSelection["mode"];
+  universePoolIds: string[];
   activationReason: string;
   activeBindingVersionId?: string | null;
   applyResult: AdvisoryStrategyBindingVersion | null;
@@ -179,6 +183,28 @@ function short(value: unknown, len = 10): string {
 
 function packageIdsFromText(text: string): string[] {
   return text.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+const DEFAULT_UNIVERSE_SELECTION: AdvisoryUniverseSelection = { mode: "stock_universe", pool_ids: [] };
+
+function normalizeUniverseSelection(value?: AdvisoryUniverseSelection | null): AdvisoryUniverseSelection {
+  const mode = value?.mode || "stock_universe";
+  const poolIds = [...new Set(value?.pool_ids || [])].sort();
+  return { mode, pool_ids: mode === "stock_universe" ? [] : poolIds };
+}
+
+function requireUniverseSelection(
+  mode: AdvisoryUniverseSelection["mode"],
+  poolIds: string[],
+): AdvisoryUniverseSelection {
+  const selection = normalizeUniverseSelection({ mode, pool_ids: poolIds });
+  if (selection.mode === "single_index" && selection.pool_ids.length !== 1) {
+    throw new Error("单指数股票池必须选择一个核心指数");
+  }
+  if (selection.mode === "index_union" && selection.pool_ids.length < 1) {
+    throw new Error("多指数并集必须至少选择一个核心指数");
+  }
+  return selection;
 }
 
 function packageRowsFromText(text: string): PackageWeightRow[] {
@@ -543,10 +569,13 @@ function isLegacyManualMultiPackage(source: Pick<AdvisoryProgram, "package_mode"
 
 function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisoryStrategyBindingVersion | null): ProgramStrategyDraft {
   const source = binding || program;
+  const universeSelection = normalizeUniverseSelection(binding?.universe_selection);
   return {
     packageMode: source.package_mode,
     targetCount: String(program.target_count || 20),
     rows: packageRowsFromIds(source.package_ids, source.package_weights || {}),
+    universeMode: universeSelection.mode,
+    universePoolIds: universeSelection.pool_ids,
     activationReason: `替换荐股任务「${program.program_name}」策略包配置`,
     activeBindingVersionId: binding?.binding_version_id || null,
     applyResult: null,
@@ -565,6 +594,7 @@ function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPa
     package_ids: packageIds,
     package_weights: { [packageIds[0]]: 1 },
     target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
+    universe_selection: requireUniverseSelection(draft.universeMode, draft.universePoolIds),
   };
 }
 
@@ -671,6 +701,9 @@ function AdvisoryPageContent() {
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
   const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
   const [targetCount, setTargetCount] = useState(20);
+  const [universeOptions, setUniverseOptions] = useState<AdvisoryUniverseOptions | null>(null);
+  const [universeMode, setUniverseMode] = useState<AdvisoryUniverseSelection["mode"]>(DEFAULT_UNIVERSE_SELECTION.mode);
+  const [universePoolIds, setUniversePoolIds] = useState<string[]>(DEFAULT_UNIVERSE_SELECTION.pool_ids);
   const [reviewTradeDate, setReviewTradeDate] = useState("");
   const [reviewDateTouched, setReviewDateTouched] = useState(false);
   const [tradingDefaults, setTradingDefaults] = useState<AdvisoryTradingDayDefaults | null>(null);
@@ -1015,6 +1048,17 @@ function AdvisoryPageContent() {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    advisoryApi.universeOptions().then((options) => {
+      if (!alive) return;
+      setUniverseOptions(options);
+    }).catch((exc) => {
+      if (alive) setError(exc instanceof Error ? exc.message : String(exc));
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
     if (prefillPackages) {
       setPackageRows(packageRowsFromText(prefillPackages));
     }
@@ -1025,6 +1069,7 @@ function AdvisoryPageContent() {
     try {
       const packageIds = packageIdsFromRows(packageRows);
       if (packageIds.length !== 1) throw new Error("请选择一个单 Alpha 策略包或一个原生多 Alpha 父包");
+      const selectedUniverse = requireUniverseSelection(universeMode, universePoolIds);
       const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
       if (!confirmed) return;
       const program = await advisoryApi.createProgram({
@@ -1033,6 +1078,7 @@ function AdvisoryPageContent() {
         package_ids: packageIds,
         target_count: targetCount,
         package_weights: { [packageIds[0]]: 1 },
+        universe_selection: selectedUniverse,
         status: "ENABLED",
       });
       await refreshAll(program.program_id);
@@ -1482,6 +1528,61 @@ function AdvisoryPageContent() {
               onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, activationReason: event.target.value }))}
             />
           </label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid={`advisory-strategy-universe-mode-${program.program_id}`}
+              value={draft.universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setProgramStrategyDraft(program.program_id, (current) => ({
+                  ...current,
+                  universeMode: mode,
+                  universePoolIds: mode === "stock_universe" ? [] : current.universePoolIds.slice(0, 1),
+                  applyResult: null,
+                }));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {draft.universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{draft.universeMode === "index_union" ? "（可多选）" : ""}
+              {draft.universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  multiple
+                  value={draft.universePoolIds}
+                  onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
+                    ...current,
+                    universePoolIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                    applyResult: null,
+                  }))}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  value={draft.universePoolIds[0] || ""}
+                  onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
+                    ...current,
+                    universePoolIds: event.target.value ? [event.target.value] : [],
+                    applyResult: null,
+                  }))}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
           <table className="pv2-table">
@@ -1538,7 +1639,7 @@ function AdvisoryPageContent() {
         </div>
         {draft.applyResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
-            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)}
+            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)} / 股票池 {draft.applyResult.universe_selection?.mode || "stock_universe"}{draft.applyResult.universe_selection?.pool_ids.length ? ` (${draft.applyResult.universe_selection.pool_ids.join("+")})` : ""}
           </div>
         ) : null}
       </div>
@@ -1705,6 +1806,49 @@ function AdvisoryPageContent() {
         <div className="pv2-form-grid">
           <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
           <label className="pv2-field">目标数量<input className="pv2-input" type="number" min={1} max={100} value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} /></label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid="advisory-universe-mode"
+              value={universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setUniverseMode(mode);
+                setUniversePoolIds(mode === "stock_universe" ? [] : universePoolIds.slice(0, 1));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{universeMode === "index_union" ? "（可多选）" : ""}
+              {universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  multiple
+                  value={universePoolIds}
+                  onChange={(event) => setUniversePoolIds(Array.from(event.target.selectedOptions, (option) => option.value))}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  value={universePoolIds[0] || ""}
+                  onChange={(event) => setUniversePoolIds(event.target.value ? [event.target.value] : [])}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table">

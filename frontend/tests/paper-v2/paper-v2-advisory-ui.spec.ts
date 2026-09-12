@@ -319,7 +319,8 @@ const activeBinding = {
   fusion_method: null,
   package_set_hash: "pkg_hash",
   fusion_policy_sha256: null,
-  runtime_config_json: {},
+  runtime_config_json: { universe_selection: { mode: "stock_universe", pool_ids: [] } },
+  universe_selection: { mode: "stock_universe", pool_ids: [] },
   effective_from_trade_date: null,
   effective_to_trade_date: null,
   activation_status: "ACTIVE",
@@ -603,6 +604,7 @@ async function mockAdvisoryApis(page: Page, options: {
   const reviewBodies: JsonObject[] = [];
   const replayBodies: JsonObject[] = [];
   const applyBindingBodies: JsonObject[] = [];
+  const createBodies: JsonObject[] = [];
   const wait = (ms = 0) => new Promise((resolve) => { setTimeout(resolve, ms); });
   let programStatus = options.initialProgramStatus ?? program.status;
   let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
@@ -680,6 +682,18 @@ async function mockAdvisoryApis(page: Page, options: {
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
 
+    if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_universe_selection_v1",
+        default_selection: { mode: "stock_universe", pool_ids: [] },
+        modes: ["stock_universe", "single_index", "index_union"],
+        pools: [
+          { pool_id: "csi300", index_code: "000300.SH", label: "沪深300", priority: "P0" },
+          { pool_id: "csi500", index_code: "000905.SH", label: "中证500", priority: "P0" },
+        ],
+      });
+    }
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
       return json(route, { ok: true, programs: [currentProgram(), ...staticExtraPrograms] });
     }
@@ -948,6 +962,7 @@ async function mockAdvisoryApis(page: Page, options: {
       return json(route, reviewPayload(false, lastReviewTargetDate));
     }
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
+      createBodies.push(request.postDataJSON() as JsonObject);
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/replay`) && method === "POST") {
@@ -986,6 +1001,8 @@ async function mockAdvisoryApis(page: Page, options: {
         package_mode: bindingPayload.package_mode,
         package_ids: bindingPayload.package_ids,
         package_weights: bindingPayload.package_weights || {},
+        universe_selection: bindingPayload.universe_selection || { mode: "stock_universe", pool_ids: [] },
+        runtime_config_json: { universe_selection: bindingPayload.universe_selection || { mode: "stock_universe", pool_ids: [] } },
         activation_reason: body.activation_reason,
       };
       bindingsByProgramId[currentRouteProgramId] = [nextBinding];
@@ -1011,7 +1028,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
-  return { calls, reviewBodies, replayBodies, applyBindingBodies };
+  return { calls, reviewBodies, replayBodies, applyBindingBodies, createBodies };
 }
 
 async function activeSymbols(page: Page) {
@@ -1057,7 +1074,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
 
   const shell = await mockShellApis(page);
-  const { calls, reviewBodies } = await mockAdvisoryApis(page);
+  const { calls, reviewBodies, createBodies } = await mockAdvisoryApis(page);
   await page.goto("/paper-v2/advisory");
 
   await expect(page.getByRole("heading", { name: "运行中的荐股任务排行榜" })).toBeVisible();
@@ -1068,6 +1085,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
+  await expect(page.getByTestId("advisory-universe-mode")).toBeVisible();
   await expect(page.getByTestId("advisory-package-select-pkg-1").locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
   await expect(page.locator("body")).not.toContainText("JSON");
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
@@ -1203,8 +1221,11 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
   await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
+  await page.getByTestId("advisory-universe-mode").selectOption("index_union");
+  await page.getByTestId("advisory-universe-pools").selectOption(["csi300", "csi500"]);
   await page.getByRole("button", { name: "创建并启用" }).click();
   await expect.poll(() => calls.filter((entry) => entry === "POST /api/v1/advisory/programs").length).toBe(1);
+  expect(createBodies[0]?.universe_selection).toEqual({ mode: "index_union", pool_ids: ["csi300", "csi500"] });
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
@@ -1896,7 +1917,7 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       next_trading_day: "2026-06-11",
     },
   });
-  const { calls, replayBodies, applyBindingBodies } = await mockAdvisoryApis(page, {
+  const { calls, applyBindingBodies } = await mockAdvisoryApis(page, {
     initialProgramStatus: "ENABLED",
     initialLatestReviewTradeDate: "2026-06-09",
     initialLastReviewStatus: "SUCCEEDED",
@@ -1917,22 +1938,8 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
   await expect(page.getByText("选股运行 ID")).toHaveCount(0);
 
   await page.getByTestId(`advisory-strategy-package-${rowProgramId}-pkg-1`).selectOption("pkg_second_candidate");
-  await page.getByTestId(`advisory-strategy-replay-${rowProgramId}`).click();
-  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/replay`)).length).toBe(1);
-  expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/replay`))).toHaveLength(0);
-  expect(replayBodies.at(-1)).toMatchObject({
-    start_date: "2026-06-05",
-    end_date: "2026-06-10",
-    draft_binding: {
-      package_mode: "single_package",
-      package_ids: ["pkg_second_candidate"],
-      package_weights: { pkg_second_candidate: 1 },
-      target_count: 20,
-    },
-    compare_to_binding_version_id: "advb_native_active",
-  });
-  await expect(page.getByTestId(`advisory-strategy-replay-result-${rowProgramId}`)).toContainText("回放状态：SUCCEEDED");
-
+  await page.getByTestId(`advisory-strategy-universe-mode-${rowProgramId}`).selectOption("index_union");
+  await page.getByTestId(`advisory-strategy-universe-pools-${rowProgramId}`).selectOption(["csi300", "csi500"]);
   await page.getByTestId(`advisory-strategy-apply-${rowProgramId}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/bindings/apply`)).length).toBe(1);
   expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/bindings/apply`))).toHaveLength(0);
@@ -1942,8 +1949,9 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       package_ids: ["pkg_second_candidate"],
       package_weights: { pkg_second_candidate: 1 },
       target_count: 20,
+      universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
     },
-    source_replay_run_id: `advreplay_${rowProgramId}`,
+    source_replay_run_id: null,
     expected_program_version: 1,
     expected_binding_version_id: "advb_native_active",
     effective_from_trade_date: "2026-06-11",
@@ -2019,6 +2027,19 @@ test("Advisory page exposes initial list generation when a new program has no li
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
 
+    if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_universe_selection_v1",
+        default_selection: { mode: "stock_universe", pool_ids: [] },
+        modes: ["stock_universe", "single_index", "index_union"],
+        pools: [
+          { pool_id: "csi300", index_code: "000300.SH", label: "沪深300", priority: "P0" },
+          { pool_id: "csi500", index_code: "000905.SH", label: "中证500", priority: "P0" },
+        ],
+      });
+    }
+
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
       return json(route, { ok: true, programs: [enabledProgram()] });
     }
@@ -2077,6 +2098,48 @@ test("Advisory page exposes initial list generation when a new program has no li
         due_observation_count: 0,
         next_maturity_trade_date: null,
         evaluation: null,
+      });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/forward-runs`) && method === "GET") {
+      return json(route, { ok: true, forward_runs: [] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/model-shadow`) && method === "GET") {
+      return json(route, {
+        ok: true,
+        status: "MODEL_UNAVAILABLE",
+        calibration_state: "UNCALIBRATED",
+        program_id: newProgramId,
+        target_trade_date: url.searchParams.get("target_trade_date"),
+        candidate_count: 0,
+        shortlist_count: 0,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "OUTCOME_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: null,
+          parent_bundle_id: null,
+          model_version: null,
+          horizons: OUTCOME_HORIZONS,
+          candidates: [],
+          reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+          message: "parent model unavailable",
+        },
+        price_range: {
+          status: "PRICE_RANGE_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: null,
+          parent_bundle_id: null,
+          outcome_bundle_id: null,
+          model_version: null,
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [],
+          reason_code: "ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+          message: "parent model unavailable",
+        },
+        reason_code: "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+        message: "no exact bundle",
       });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {

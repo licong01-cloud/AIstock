@@ -8,6 +8,18 @@ export type AdvisoryPackageMode =
   | "intersection"
   | "sleeve_mode_future";
 
+export type AdvisoryUniverseSelection = {
+  mode: "stock_universe" | "single_index" | "index_union";
+  pool_ids: string[];
+};
+
+export type AdvisoryUniverseOptions = {
+  schema_version: string;
+  default_selection: AdvisoryUniverseSelection;
+  modes: AdvisoryUniverseSelection["mode"][];
+  pools: Array<{ pool_id: string; index_code: string; label: string; priority: string }>;
+};
+
 export type AdvisoryProgram = {
   program_id: string;
   program_name: string;
@@ -112,6 +124,7 @@ export type AdvisoryStrategyBindingVersion = {
   package_set_hash: string;
   fusion_policy_sha256?: string | null;
   runtime_config_json?: JsonObject | null;
+  universe_selection?: AdvisoryUniverseSelection;
   effective_from_trade_date?: string | null;
   effective_to_trade_date?: string | null;
   binding_interval_semantics?: "LEFT_CLOSED_RIGHT_OPEN" | string;
@@ -219,6 +232,7 @@ export type CreateAdvisoryProgramPayload = {
   entry_price_basis?: string;
   exit_price_basis?: string;
   review_schedule?: JsonObject;
+  universe_selection?: AdvisoryUniverseSelection;
   created_by?: string;
   status?: string;
 };
@@ -239,6 +253,7 @@ export type AdvisoryBindingPayload = {
   package_weights?: Record<string, number>;
   target_count?: number;
   runtime_config_json?: JsonObject;
+  universe_selection?: AdvisoryUniverseSelection;
 };
 
 export type AdvisoryBindingApplyPayload = {
@@ -896,6 +911,9 @@ function body(payload: unknown, method = "POST"): RequestInit {
 }
 
 export const advisoryApi = {
+  async universeOptions(): Promise<AdvisoryUniverseOptions> {
+    return apiFetch<AdvisoryUniverseOptions>("/advisory/universe-options");
+  },
   async programs(includeArchived = false): Promise<AdvisoryProgram[]> {
     const data = await apiFetch<{ programs: AdvisoryProgram[] }>(`/advisory/programs?include_archived=${includeArchived}`);
     return data.programs || [];

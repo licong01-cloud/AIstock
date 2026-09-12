@@ -51,6 +51,7 @@ from backend.services.advisory_historical_range.service import (
     HistoricalRangeApplicationService,
     HistoricalRangeServiceError,
 )
+from backend.services.advisory_universe import advisory_universe_catalog
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class AdvisoryProgramCreateRequest(BaseModel):
     entry_price_basis: str = PRICE_BASIS_NEXT_OPEN
     exit_price_basis: str = PRICE_BASIS_NEXT_OPEN
     review_schedule: dict[str, Any] = Field(default_factory=lambda: {"frequency": "daily_after_close"})
+    universe_selection: dict[str, Any] = Field(default_factory=lambda: {"mode": "stock_universe", "pool_ids": []})
     created_by: str | None = None
     status: str = "DRAFT"
 
@@ -80,6 +82,7 @@ class AdvisoryProgramUpdateRequest(BaseModel):
     entry_price_basis: str | None = None
     exit_price_basis: str | None = None
     review_schedule: dict[str, Any] | None = None
+    universe_selection: dict[str, Any] | None = None
     status: str | None = None
     expected_program_version: int | None = Field(default=None, ge=1)
     expected_binding_version_id: str | None = Field(default=None, min_length=1)
@@ -112,6 +115,7 @@ class AdvisoryBindingPayload(BaseModel):
     package_weights: dict[str, float] | None = None
     target_count: int | None = Field(default=None, gt=0, le=100)
     runtime_config_json: dict[str, Any] | None = None
+    universe_selection: dict[str, Any] | None = None
 
 
 class AdvisoryBindingApplyRequest(BaseModel):
@@ -423,9 +427,7 @@ def resume_historical_range_batch(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.resume_batch(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.resume_batch(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -438,9 +440,7 @@ def cancel_historical_range_batch(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.cancel_batch(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.cancel_batch(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -453,9 +453,7 @@ def refresh_historical_range_outcomes(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.refresh_outcomes(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.refresh_outcomes(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -523,7 +521,11 @@ def get_historical_range_day(
             candidate_limit=candidate_limit,
         )
     )
-    return {"ok": True, "data": {"day": result["day"], "candidates": result["candidates"]}, "page": result["candidate_page"]}
+    return {
+        "ok": True,
+        "data": {"day": result["day"], "candidates": result["candidates"]},
+        "page": result["candidate_page"],
+    }
 
 
 @router.get("/historical-range-runs/{range_run_id}/lists/{trade_date}")
@@ -577,10 +579,13 @@ def list_historical_range_summaries(
     limit: int = Query(default=50, ge=1, le=500),
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.list_summaries(range_run_id, cursor=cursor, limit=limit)
-    )
+    result = _historical_range_call(lambda: service.list_summaries(range_run_id, cursor=cursor, limit=limit))
     return _page_envelope("summaries", result)
+
+
+@router.get("/universe-options")
+def universe_options() -> dict[str, Any]:
+    return {"ok": True, **advisory_universe_catalog()}
 
 
 @router.get("/programs")
@@ -589,7 +594,10 @@ def list_programs(
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)]}
+        return {
+            "ok": True,
+            "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -609,8 +617,7 @@ def forward_status(
 
 
 @router.post("/forward/run-once")
-def run_forward_once(
-) -> dict[str, Any]:
+def run_forward_once() -> dict[str, Any]:
     try:
         return {"ok": True, **advisory_forward_scheduler.run_once()}
     except TradingCoreError as exc:
@@ -777,7 +784,9 @@ def set_program_status(
 
 
 @router.post("/programs/{program_id}/enable")
-def enable_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def enable_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "ENABLED"))}
     except TradingCoreError as exc:
@@ -785,7 +794,9 @@ def enable_program(program_id: str, service: AdvisoryProgramService = Depends(ge
 
 
 @router.post("/programs/{program_id}/pause")
-def pause_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def pause_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "PAUSED"))}
     except TradingCoreError as exc:
@@ -793,7 +804,9 @@ def pause_program(program_id: str, service: AdvisoryProgramService = Depends(get
 
 
 @router.post("/programs/{program_id}/archive")
-def archive_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def archive_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "ARCHIVED"))}
     except TradingCoreError as exc:
@@ -826,7 +839,9 @@ def leaderboard(
 
 
 @router.get("/programs/{program_id}/active-pool")
-def active_pool(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def active_pool(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "active_pool": service.active_pool(program_id)}
     except TradingCoreError as exc:
@@ -854,7 +869,10 @@ def list_versions(
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset)}
+        return {
+            "ok": True,
+            "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -882,7 +900,11 @@ def list_version_detail(
 @router.get("/programs/{program_id}/returns")
 def returns(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
     try:
-        return {"ok": True, "returns": service.return_history(program_id), "metrics": service.program_metrics(program_id)}
+        return {
+            "ok": True,
+            "returns": service.return_history(program_id),
+            "metrics": service.program_metrics(program_id),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
