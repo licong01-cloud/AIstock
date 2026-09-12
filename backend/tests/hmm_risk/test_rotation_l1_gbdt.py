@@ -525,6 +525,17 @@ class _CapturingEstimator(_FakeEstimator):
         return self
 
 
+@pytest.fixture(scope="module")
+def frozen_v14_reference() -> dict[str, object]:
+    return subject.run_gbdt_process(
+        _bundle(),
+        producer_commit="e" * 40,
+        process_index=1,
+        estimator_factory=_FakeEstimator,
+        runtime_validator=_test_runtime,
+    )
+
+
 def _as_v13_reference(child: dict[str, object]) -> dict[str, object]:
     legacy = copy.deepcopy(child)
     payload = legacy["reproducibility_payload"]
@@ -708,6 +719,69 @@ def test_cli_defaults_to_v14_and_requires_explicit_v15_selection() -> None:
     assert explicit_args.model_contract_version == subject.V15_CONTRACT_VERSION
 
 
+def test_v16_cli_requires_and_prevalidates_explicit_v14_input_root(tmp_path, monkeypatch, frozen_v14_reference) -> None:
+    old_bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    new_bundle = copy.deepcopy(old_bundle)
+    new_bundle["identity"] = {**new_bundle["identity"], "mapping_sha256": "2" * 64}
+    old_root = tmp_path / "old-input"
+    new_root = tmp_path / "new-input"
+    subject.write_input_bundle(old_bundle, old_root, forbidden_roots=())
+    subject.write_input_bundle(new_bundle, new_root, forbidden_roots=())
+    reference_path = tmp_path / "v14-process.json"
+    cli._write_once(reference_path, v14_reference)
+    base = {
+        "v13_process_file": None,
+        "v14_process_file": reference_path,
+        "input_root": new_root,
+        "output_root": tmp_path / "output",
+        "producer_commit": "f" * 40,
+        "model_contract_version": subject.V16_CONTRACT_VERSION,
+    }
+
+    with pytest.raises(RuntimeError, match="requires --v14-input-root"):
+        cli._run_parent(SimpleNamespace(**base, v14_input_root=None))
+
+    reached_output_creation = False
+
+    def stop_after_preflight(_path):
+        nonlocal reached_output_creation
+        reached_output_creation = True
+        raise RuntimeError("preflight complete")
+
+    monkeypatch.setattr(cli, "_ensure_external_new_directory", stop_after_preflight)
+    with pytest.raises(RuntimeError, match="preflight complete"):
+        cli._run_parent(SimpleNamespace(**base, v14_input_root=old_root))
+    assert reached_output_creation is True
+
+
+def test_v16_cli_rejects_unused_v14_input_root_before_output(tmp_path, monkeypatch, frozen_v14_reference) -> None:
+    bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    input_root = tmp_path / "input"
+    subject.write_input_bundle(bundle, input_root, forbidden_roots=())
+    reference_path = tmp_path / "v14-process.json"
+    cli._write_once(reference_path, v14_reference)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_external_new_directory",
+        lambda _path: pytest.fail("ambiguous authority must fail before output creation"),
+    )
+
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        cli._run_parent(
+            SimpleNamespace(
+                v13_process_file=None,
+                v14_process_file=reference_path,
+                v14_input_root=input_root,
+                input_root=input_root,
+                output_root=tmp_path / "output",
+                producer_commit="f" * 40,
+                model_contract_version=subject.V16_CONTRACT_VERSION,
+            )
+        )
+
+
 def test_v15_cli_failure_receipt_keeps_explicit_contract_identity(tmp_path) -> None:
     output = tmp_path / "fresh_process_1.json"
     assert (
@@ -851,6 +925,175 @@ def test_v16_zero_fit_process_closes_against_input_and_v14_authorities() -> None
     with pytest.raises(subject.RotationL1G2AError) as metric_drift:
         subject.close_processes(*children, v14_reference=v14_reference, input_bundle=changed_target)
     assert metric_drift.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
+def test_v16_authority_only_rebind_closes_with_exact_logical_input(frozen_v14_reference) -> None:
+    old_bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    new_bundle = copy.deepcopy(old_bundle)
+    new_bundle["identity"] = {
+        **new_bundle["identity"],
+        "source_sha256": "1" * 64,
+        "mapping_sha256": "2" * 64,
+    }
+    new_bundle["panel"] = new_bundle["panel"].sample(frac=1.0, random_state=42)
+    new_bundle["panel"] = new_bundle["panel"].loc[:, list(reversed(new_bundle["panel"].columns))]
+    children = [
+        subject.run_gbdt_process(
+            new_bundle,
+            producer_commit="f" * 40,
+            process_index=index,
+            model_contract_version=subject.V16_CONTRACT_VERSION,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+
+    acceptance = subject.close_processes(
+        *children,
+        v14_reference=v14_reference,
+        input_bundle=new_bundle,
+        v14_input_bundle=old_bundle,
+    )
+
+    receipt = acceptance["paired_v14_diagnostic"]["input_authority_rebind"]
+    assert receipt["schema_version"] == "hmm_risk_rotation_l1_g2a_input_authority_rebind_v1"
+    assert receipt["changed_identity_fields"] == ["mapping_sha256", "source_sha256"]
+    assert receipt["scope"] == "paired_v14_diagnostic_only"
+    assert receipt["candidate_recomputed"] is True
+    assert receipt["baseline_model_authority_reused"] is False
+    assert receipt["tail_accessed"] is False
+    assert receipt["row_count"] == len(new_bundle["panel"])
+    assert receipt["receipt_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    )
+    assert acceptance["producer_commit"] == "f" * 40
+    assert acceptance["tail_accessed"] is False
+
+
+def test_v16_authority_rebind_rejects_missing_ambiguous_and_non_authority_changes(frozen_v14_reference) -> None:
+    old_bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    new_bundle = copy.deepcopy(old_bundle)
+    new_bundle["identity"] = {**new_bundle["identity"], "mapping_sha256": "2" * 64}
+    children = [
+        subject.run_gbdt_process(
+            new_bundle,
+            producer_commit="f" * 40,
+            process_index=index,
+            model_contract_version=subject.V16_CONTRACT_VERSION,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+
+    with pytest.raises(subject.RotationL1G2AError, match="requires both") as missing:
+        subject.close_processes(*children, v14_reference=v14_reference, input_bundle=new_bundle)
+    assert missing.value.reason_code == subject.REASON_INPUT
+
+    same_identity_children = [
+        subject.run_gbdt_process(
+            old_bundle,
+            producer_commit="f" * 40,
+            process_index=index,
+            model_contract_version=subject.V16_CONTRACT_VERSION,
+            runtime_validator=_test_runtime,
+        )
+        for index in (1, 2)
+    ]
+    with pytest.raises(subject.RotationL1G2AError, match="ambiguous") as ambiguous:
+        subject.close_processes(
+            *same_identity_children,
+            v14_reference=v14_reference,
+            input_bundle=old_bundle,
+            v14_input_bundle=old_bundle,
+        )
+    assert ambiguous.value.reason_code == subject.REASON_INPUT
+
+    disallowed = copy.deepcopy(new_bundle)
+    disallowed["identity"] = {
+        **disallowed["identity"],
+        "feature_contract_sha256": "3" * 64,
+    }
+    with pytest.raises(subject.RotationL1G2AError, match="not an approved rebind") as identity_drift:
+        subject.validate_v16_input_authority_rebind(v14_reference, old_bundle, disallowed)
+    assert identity_drift.value.reason_code == subject.REASON_INPUT
+
+
+@pytest.mark.parametrize("drift", ["feature", "target", "reason", "maturity", "benchmark", "calendar", "sector"])
+def test_v16_authority_rebind_rejects_any_logical_data_drift(drift: str, frozen_v14_reference) -> None:
+    old_bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    new_bundle = copy.deepcopy(old_bundle)
+    new_bundle["identity"] = {**new_bundle["identity"], "mapping_sha256": "2" * 64}
+    if drift == "benchmark":
+        first_day = next(iter(new_bundle["benchmark_close"]))
+        new_bundle["benchmark_close"][first_day] += 1.0
+    elif drift == "calendar":
+        first_day = new_bundle["panel"].index.get_level_values("trade_date")[0]
+        new_bundle["panel"] = new_bundle["panel"].drop(index=first_day, level="trade_date")
+    elif drift == "sector":
+        frame = new_bundle["panel"].reset_index()
+        first_sector = frame["sector_code"].iloc[0]
+        frame.loc[frame["sector_code"] == first_sector, "sector_code"] = "809999"
+        new_bundle["panel"] = frame.set_index(["trade_date", "sector_code"])
+    elif drift == "reason":
+        column = "moneyflow_intensity_delta_5d"
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc(column)] = np.nan
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc(f"reason__{column}")] = "source_missing"
+    elif drift == "maturity":
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc("target_10d")] = np.nan
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc("reason__target_10d")] = "not_mature"
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc("target_10d_mature")] = False
+    else:
+        column = "target_10d" if drift == "target" else "moneyflow_intensity_delta_5d"
+        new_bundle["panel"].iloc[0, new_bundle["panel"].columns.get_loc(column)] += 1.0
+
+    with pytest.raises(subject.RotationL1G2AError, match="logical data differs") as caught:
+        subject.validate_v16_input_authority_rebind(v14_reference, old_bundle, new_bundle)
+
+    assert caught.value.reason_code == subject.REASON_INPUT
+
+
+def test_v16_authority_rebind_requires_v14_process_to_match_old_bundle(frozen_v14_reference) -> None:
+    process_bundle = _bundle()
+    v14_reference = frozen_v14_reference
+    old_bundle = copy.deepcopy(process_bundle)
+    old_bundle["identity"] = {**old_bundle["identity"], "source_sha256": "1" * 64}
+    new_bundle = copy.deepcopy(old_bundle)
+    new_bundle["identity"] = {**new_bundle["identity"], "mapping_sha256": "2" * 64}
+
+    with pytest.raises(subject.RotationL1G2AError, match="process input authority differs") as caught:
+        subject.validate_v16_input_authority_rebind(v14_reference, old_bundle, new_bundle)
+
+    assert caught.value.reason_code == subject.REASON_INPUT
+
+
+def test_v15_cannot_use_v16_authority_rebind(frozen_v14_reference, tmp_path, monkeypatch) -> None:
+    candidate = copy.deepcopy(frozen_v14_reference["reproducibility_payload"])
+    candidate["contract_version"] = subject.V15_CONTRACT_VERSION
+    candidate["input_identity"] = {**candidate["input_identity"], "mapping_sha256": "2" * 64}
+    with pytest.raises(subject.RotationL1G2AError, match="input identity differs") as mismatch:
+        subject._paired_v14_diagnostic(frozen_v14_reference, candidate)
+    assert mismatch.value.reason_code == subject.REASON_INPUT
+
+    monkeypatch.setattr(
+        cli,
+        "_load_v14_reference",
+        lambda _path: pytest.fail("v1.5 must reject the rebind option before loading an authority"),
+    )
+    with pytest.raises(RuntimeError, match="does not allow --v14-input-root"):
+        cli._run_parent(
+            SimpleNamespace(
+                v13_process_file=None,
+                v14_process_file=tmp_path / "v14.json",
+                v14_input_root=tmp_path / "old-input",
+                input_root=tmp_path / "new-input",
+                output_root=tmp_path / "output",
+                producer_commit="f" * 40,
+                model_contract_version=subject.V15_CONTRACT_VERSION,
+            )
+        )
 
 
 def test_v16_missing_score_is_unavailable_without_neutral_fallback() -> None:

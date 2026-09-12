@@ -197,6 +197,7 @@ def test_v16_oof_product_closure_passes_parent_authorities_to_revalidation() -> 
     process, acceptance = _v16_process_and_acceptance()
     v14_reference = {"authority": "v1.4"}
     input_bundle = {"authority": "immutable-input"}
+    v14_input_bundle = {"authority": "immutable-v1.4-input"}
 
     with patch.object(subject, "close_processes", return_value=acceptance) as close:
         rows = subject.build_oof_prediction_rows(
@@ -205,12 +206,14 @@ def test_v16_oof_product_closure_passes_parent_authorities_to_revalidation() -> 
             sector_names=SECTORS,
             v14_reference=v14_reference,
             input_bundle=input_bundle,
+            v14_input_bundle=v14_input_bundle,
         )
 
     assert len(rows) == 31
     assert close.call_args.kwargs == {
         "v14_reference": v14_reference,
         "input_bundle": input_bundle,
+        "v14_input_bundle": v14_input_bundle,
     }
 
 

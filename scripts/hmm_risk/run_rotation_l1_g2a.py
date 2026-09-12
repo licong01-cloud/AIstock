@@ -44,6 +44,7 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
     run_gbdt_process,
     validate_v13_process_reference,
     validate_v14_process_reference,
+    validate_v16_input_authority_rebind,
     write_input_bundle,
 )
 from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
@@ -300,14 +301,29 @@ def _run_child(command: list[str], failure_path: Path, *, contract_version: str 
 def _run_parent(args: argparse.Namespace) -> int:
     model_contract_version = getattr(args, "model_contract_version", V14_CONTRACT_VERSION)
     v14_process_file = getattr(args, "v14_process_file", None)
+    v14_input_root = getattr(args, "v14_input_root", None)
+    v14_input_bundle = None
     if model_contract_version in {V15_CONTRACT_VERSION, V16_CONTRACT_VERSION}:
         if v14_process_file is None or args.v13_process_file is not None:
             raise RuntimeError("v1.5/v1.6 requires only --v14-process-file")
+        if model_contract_version == V15_CONTRACT_VERSION and v14_input_root is not None:
+            raise RuntimeError("v1.5 does not allow --v14-input-root")
         v14_reference = _load_v14_reference(v14_process_file)
         v13_reference = None
         input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
+        if model_contract_version == V16_CONTRACT_VERSION:
+            baseline_identity = v14_reference["reproducibility_payload"]["input_identity"]
+            candidate_identity = input_bundle["identity"]
+            if baseline_identity == candidate_identity:
+                if v14_input_root is not None:
+                    raise RuntimeError("v1.6 --v14-input-root is ambiguous without an authority change")
+            else:
+                if v14_input_root is None:
+                    raise RuntimeError("v1.6 authority rebind requires --v14-input-root")
+                v14_input_bundle = read_input_bundle(v14_input_root, forbidden_roots=(ROOT,))["bundle"]
+                validate_v16_input_authority_rebind(v14_reference, v14_input_bundle, input_bundle)
     else:
-        if args.v13_process_file is None or v14_process_file is not None:
+        if args.v13_process_file is None or v14_process_file is not None or v14_input_root is not None:
             raise RuntimeError("v1.4 requires only --v13-process-file")
         v13_reference = _load_v13_reference(args.v13_process_file)
         v14_reference = None
@@ -338,6 +354,7 @@ def _run_parent(args: argparse.Namespace) -> int:
             v13_reference=v13_reference,
             v14_reference=v14_reference,
             input_bundle=input_bundle,
+            v14_input_bundle=v14_input_bundle,
         )
         _write_once(output / "acceptance.json", acceptance)
     except Exception as exc:
@@ -383,6 +400,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--output-root", type=Path, required=True)
     run.add_argument("--v13-process-file", type=Path)
     run.add_argument("--v14-process-file", type=Path)
+    run.add_argument("--v14-input-root", type=Path)
     run.add_argument(
         "--model-contract-version",
         choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION, V16_CONTRACT_VERSION),
