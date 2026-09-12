@@ -373,6 +373,7 @@ class QEExecutionReservationRepository:
         spec: QEExecutionReservationSpec,
         *,
         node_capacity: int,
+        allow_same_task_backtest_parallelism: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: SourceClaim,
@@ -386,6 +387,14 @@ class QEExecutionReservationRepository:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._acquire_identity_and_node_locks(cur, spec)
                 self._require_node(cur, spec.node_id)
+                effective_node_capacity = self._effective_node_capacity_for_source(
+                    cur,
+                    spec,
+                    requested_node_capacity=node_capacity,
+                    allow_same_task_backtest_parallelism=(
+                        allow_same_task_backtest_parallelism
+                    ),
+                )
                 existing = self._find_source_reservation(cur, spec.source_kind, spec.source_execution_id)
                 if existing is not None:
                     self._assert_reservation_identity(existing, spec)
@@ -394,7 +403,7 @@ class QEExecutionReservationRepository:
                         acquired=True,
                         duplicate_replay=True,
                         active_count=active_count,
-                        node_capacity=node_capacity,
+                        node_capacity=effective_node_capacity,
                         reservation=existing,
                         source_claim=None,
                     )
@@ -430,8 +439,10 @@ class QEExecutionReservationRepository:
                     )
 
                 active_count = self._count_active_on_node(cur, spec.node_id)
-                if active_count >= node_capacity:
-                    waiting_evidence = record_waiting_capacity(cur, active_count, node_capacity)
+                if active_count >= effective_node_capacity:
+                    waiting_evidence = record_waiting_capacity(
+                        cur, active_count, effective_node_capacity
+                    )
                     if waiting_evidence is None:
                         raise QEExecutionReservationError(
                             "source execution did not persist waiting_capacity evidence",
@@ -440,14 +451,14 @@ class QEExecutionReservationRepository:
                                 "source_kind": spec.source_kind,
                                 "source_execution_id": spec.source_execution_id,
                                 "active_count": active_count,
-                                "node_capacity": node_capacity,
+                                "node_capacity": effective_node_capacity,
                             },
                         )
                     return QEExecutionReservationAcquireResult(
                         acquired=False,
                         duplicate_replay=False,
                         active_count=active_count,
-                        node_capacity=node_capacity,
+                        node_capacity=effective_node_capacity,
                         reservation=None,
                         source_claim=None,
                     )
@@ -494,7 +505,7 @@ class QEExecutionReservationRepository:
                     acquired=True,
                     duplicate_replay=False,
                     active_count=active_count + 1,
-                    node_capacity=node_capacity,
+                    node_capacity=effective_node_capacity,
                     reservation=reservation,
                     source_claim=dict(source_claim),
                 )
@@ -1075,6 +1086,52 @@ class QEExecutionReservationRepository:
             (node_id, list(ACTIVE_RESERVATION_STATUSES)),
         )
         return int(cur.fetchone()["active_count"])
+
+    @staticmethod
+    def _effective_node_capacity_for_source(
+        cur: Any,
+        spec: QEExecutionReservationSpec,
+        *,
+        requested_node_capacity: int,
+        allow_same_task_backtest_parallelism: bool,
+    ) -> int:
+        """Allow WSL=2 only for one homogeneous, backtest-only QE task.
+
+        The caller holds the node advisory lock, so this cohort proof and the
+        following reservation insert are serialized against every QE source.
+        Missing loop metadata, retry aliases, mixed modes, and cross-task work
+        all fail closed to one slot.
+        """
+        if not allow_same_task_backtest_parallelism or requested_node_capacity <= 1:
+            return requested_node_capacity
+        cur.execute(
+            """
+            SELECT COUNT(*) AS incompatible_count
+            FROM infra.qe_execution_reservation AS reservation
+            LEFT JOIN qe_evolution_loops AS evolution_loop
+              ON reservation.source_kind = 'qe_evolution_loop'
+             AND evolution_loop.task_id = reservation.qe_task_id
+             AND 'Loop' || evolution_loop.loop_index::text = reservation.qe_loop_id
+            WHERE reservation.node_id = %s
+              AND reservation.status = ANY(%s)
+              AND NOT (
+                  reservation.source_kind = 'qe_evolution_loop'
+                  AND reservation.qe_task_id = %s
+                  AND evolution_loop.loop_id IS NOT NULL
+                  AND lower(
+                      COALESCE(evolution_loop.config_json ->> 'backtest_only', '')
+                  ) = 'true'
+              )
+            """,
+            (
+                spec.node_id,
+                list(ACTIVE_RESERVATION_STATUSES),
+                spec.qe_task_id,
+            ),
+        )
+        if int(cur.fetchone()["incompatible_count"]) > 0:
+            return 1
+        return requested_node_capacity
 
     @staticmethod
     def _assert_reservation_identity(

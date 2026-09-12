@@ -22,6 +22,8 @@ from backend.services.quantevolver.qe_active_execution_capacity import (
 from backend.services.quantevolver.qe_execution_reservation import (
     QEExecutionReservationAcquireResult,
     QEExecutionReservationError,
+    QEExecutionReservationRepository,
+    QEExecutionReservationSpec,
 )
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.qe_workspace_client import (
@@ -62,6 +64,7 @@ class FakeReservationRepository:
         spec: Any,
         *,
         node_capacity: int,
+        allow_same_task_backtest_parallelism: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: Any,
@@ -71,6 +74,9 @@ class FakeReservationRepository:
             {
                 "spec": spec,
                 "node_capacity": node_capacity,
+                "allow_same_task_backtest_parallelism": (
+                    allow_same_task_backtest_parallelism
+                ),
                 "owner_id": owner_id,
                 "lease_seconds": lease_seconds,
             }
@@ -233,6 +239,7 @@ def _source(
     payload: QEWorkspaceSubmissionPayload,
     *,
     requested_node_capacity: int | None = None,
+    backtest_only: bool = False,
 ) -> tuple[QEWorkspaceSubmissionSource, dict[str, Any]]:
     evidence: dict[str, Any] = {"claimed": 0, "waiting": 0}
     intent_hash = submission_intent_hash_for_source(
@@ -263,12 +270,13 @@ def _source(
             claim_source=claim_source,
             record_waiting_capacity=waiting,
             requested_node_capacity=requested_node_capacity,
+            backtest_only=backtest_only,
         ),
         evidence,
     )
 
 
-def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -> None:
+def test_capacity_contract_keeps_training_at_one_and_allows_pure_backtest_two() -> None:
     service = QEActiveExecutionCapacityService()
     assert service.resolve_node_capacity("wsl2-5080") == 1
     assert service.resolve_node_capacity("WSL2-5080") == 1
@@ -278,6 +286,9 @@ def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -
         assert excinfo.value.reason_code == "qe_execution_capacity_node_alias_noncanonical"
     assert service.resolve_node_capacity("wsl2-5080", 1) == 1
     assert service.resolve_node_capacity("wsl2-5080", 8) == 1
+    assert service.resolve_node_capacity("wsl2-5080", 1, backtest_only=True) == 1
+    assert service.resolve_node_capacity("wsl2-5080", 2, backtest_only=True) == 2
+    assert service.resolve_node_capacity("wsl2-5080", 8, backtest_only=True) == 2
     assert service.resolve_node_capacity("rdagent-node1") == 4
     assert service.resolve_node_capacity("rdagent-node1", 3) == 3
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
@@ -307,6 +318,104 @@ def test_wsl_capacity_identity_is_canonicalized_before_reservation() -> None:
     assert outcome.submitted is True
     assert repository.reserve_calls[0]["spec"].node_id == "wsl2-5080"
     assert repository.reserve_calls[0]["node_capacity"] == 1
+
+
+def test_wsl_backtest_only_submission_requests_safe_same_task_capacity_two() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        backtest_only=True,
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 2
+    assert repository.reserve_calls[0]["allow_same_task_backtest_parallelism"] is True
+
+
+def test_non_evolution_backtest_source_remains_at_one_wsl_slot() -> None:
+    payload = _payload()
+    source, _evidence = _source(
+        payload,
+        requested_node_capacity=2,
+        backtest_only=True,
+    )
+    source = replace(
+        source,
+        source_kind="qe_experiment",
+        source_execution_id="qe_experiment_1",
+        submission_intent_hash=submission_intent_hash_for_source(
+            source_kind="qe_experiment",
+            source_execution_id="qe_experiment_1",
+            node_id="wsl2-5080",
+            task_id=payload.task_id,
+            loop_id=payload.loop_id,
+        ),
+    )
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["node_capacity"] == 1
+    assert repository.reserve_calls[0]["allow_same_task_backtest_parallelism"] is False
+
+
+@pytest.mark.parametrize(
+    ("allow_parallelism", "incompatible_count", "expected_capacity", "query_count"),
+    [
+        (False, 0, 2, 0),
+        (True, 0, 2, 1),
+        (True, 1, 1, 1),
+    ],
+)
+def test_repository_backtest_cohort_proof_fails_closed_for_mixed_active_work(
+    allow_parallelism: bool,
+    incompatible_count: int,
+    expected_capacity: int,
+    query_count: int,
+) -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+        def execute(self, query: str, params: tuple[Any, ...]) -> None:
+            self.calls.append((query, params))
+
+        def fetchone(self) -> Mapping[str, int]:
+            return {"incompatible_count": incompatible_count}
+
+    cursor = Cursor()
+    spec = QEExecutionReservationSpec(
+        node_id="wsl2-5080",
+        source_kind="qe_evolution_loop",
+        source_execution_id="qe_task_1_Loop2",
+        qe_task_id="qe_task_1",
+        qe_loop_id="Loop2",
+        submission_intent_hash="a" * 64,
+    )
+
+    capacity = QEExecutionReservationRepository._effective_node_capacity_for_source(
+        cursor,
+        spec,
+        requested_node_capacity=2,
+        allow_same_task_backtest_parallelism=allow_parallelism,
+    )
+
+    assert capacity == expected_capacity
+    assert len(cursor.calls) == query_count
+    if cursor.calls:
+        query, params = cursor.calls[0]
+        assert "LEFT JOIN qe_evolution_loops" in query
+        assert params[0] == "wsl2-5080"
+        assert params[2] == "qe_task_1"
 
 
 def test_full_capacity_persists_waiting_and_never_posts() -> None:

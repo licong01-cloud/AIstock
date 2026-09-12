@@ -43,9 +43,11 @@ DEFAULT_WSL_NODE_ID = "wsl2-5080"
 NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
 # One local WSL training slot is the host-responsiveness contract.  A single
 # GeneralPTNN Loop can own a large dataset/GPU working set; cross-task overlap
-# previously drove Windows into memory compression and paging stalls.  Remote
-# CPU execution remains independently parallel.
+# previously drove Windows into memory compression and paging stalls.  Pure
+# backtest cohorts may use two slots when the repository proves that every
+# active WSL reservation belongs to the same backtest-only QE task.
 WSL_HARD_CAPACITY = 1
+WSL_BACKTEST_HARD_CAPACITY = 2
 REMOTE_HARD_CAPACITY = 4
 # The coordinator starts immediately and performs a safety sweep at most every
 # 60 seconds.  Keeping durable execution leases below that bound guarantees a
@@ -103,6 +105,7 @@ class QEWorkspaceSubmissionSource:
     claim_source: SourceClaim
     record_waiting_capacity: CapacityWaitRecorder
     requested_node_capacity: int | None = None
+    backtest_only: bool = False
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
     consumer_id: str = QE_RUN_DEFAULT_CONSUMER
 
@@ -153,6 +156,7 @@ class QEActiveExecutionCapacityService:
         *,
         wsl_node_id: str = DEFAULT_WSL_NODE_ID,
         wsl_hard_capacity: int = WSL_HARD_CAPACITY,
+        wsl_backtest_hard_capacity: int = WSL_BACKTEST_HARD_CAPACITY,
         remote_hard_capacity: int = REMOTE_HARD_CAPACITY,
     ) -> None:
         if not str(wsl_node_id or "").strip():
@@ -160,13 +164,18 @@ class QEActiveExecutionCapacityService:
                 "WSL node identity must not be empty",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
-        if wsl_hard_capacity < 1 or remote_hard_capacity < 1:
+        if (
+            wsl_hard_capacity < 1
+            or wsl_backtest_hard_capacity < wsl_hard_capacity
+            or remote_hard_capacity < 1
+        ):
             raise QEWorkspaceSubmissionCoordinatorError(
                 "QE node hard capacities must be positive",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
         self._wsl_node_id = str(wsl_node_id).strip().casefold()
         self._wsl_hard_capacity = int(wsl_hard_capacity)
+        self._wsl_backtest_hard_capacity = int(wsl_backtest_hard_capacity)
         self._remote_hard_capacity = int(remote_hard_capacity)
 
     def canonical_node_id(self, node_id: str) -> str:
@@ -187,10 +196,23 @@ class QEActiveExecutionCapacityService:
             return self._wsl_node_id
         return normalized_node_id
 
-    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+    def is_wsl_node(self, node_id: str) -> bool:
+        return self.canonical_node_id(node_id) == self._wsl_node_id
+
+    def resolve_node_capacity(
+        self,
+        node_id: str,
+        requested_limit: int | None = None,
+        *,
+        backtest_only: bool = False,
+    ) -> int:
         normalized_node_id = self.canonical_node_id(node_id)
         hard_cap = (
-            self._wsl_hard_capacity
+            (
+                self._wsl_backtest_hard_capacity
+                if backtest_only
+                else self._wsl_hard_capacity
+            )
             if normalized_node_id == self._wsl_node_id
             else self._remote_hard_capacity
         )
@@ -1060,9 +1082,15 @@ class QEWorkspaceSubmissionCoordinator:
     ) -> QEWorkspaceSubmissionOutcome:
         self._validate_payload(payload)
         self._repository.preflight_schema(raise_on_error=True)
+        same_task_backtest_cohort = (
+            source.backtest_only
+            and source.source_kind == "qe_evolution_loop"
+            and self._capacity_service.is_wsl_node(source.node_id)
+        )
         physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
             source.requested_node_capacity,
+            backtest_only=same_task_backtest_cohort,
         )
         capacity = self._effective_consumer_capacity(
             physical_capacity,
@@ -1106,6 +1134,9 @@ class QEWorkspaceSubmissionCoordinator:
         acquired = self._repository.reserve_execution_and_claim_source(
             spec,
             node_capacity=capacity,
+            allow_same_task_backtest_parallelism=(
+                same_task_backtest_cohort and capacity > WSL_HARD_CAPACITY
+            ),
             owner_id=source.owner_id,
             lease_seconds=source.lease_seconds,
             claim_source=source.claim_source,
