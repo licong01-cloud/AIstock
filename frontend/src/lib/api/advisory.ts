@@ -20,6 +20,57 @@ export type AdvisoryUniverseOptions = {
   pools: Array<{ pool_id: string; index_code: string; label: string; priority: string }>;
 };
 
+export type AdvisoryDeliveryPreflight = {
+  schema_version: "advisory_delivery_preflight_v1" | string;
+  overall_status: "READY_WITH_MODEL" | "READY_BASELINE_ONLY" | "BLOCKED";
+  package: {
+    package_id: string;
+    manifest_sha256: string;
+    package_status: string;
+    source_type: string;
+    source_id: string;
+    asset_eligible: boolean;
+    asset_blockers: string[];
+  };
+  universe_compatibility: {
+    status:
+      | "EXACT_UNIVERSE_MATCHED"
+      | "FILTER_ONLY_COMPATIBLE"
+      | "LEGACY_UNIVERSE_UNSPECIFIED"
+      | "PACKAGE_IDENTITY_MISMATCH"
+      | "DELIVERY_CONTRACT_INCOMPLETE";
+    requested: AdvisoryUniverseSelection;
+    source_declared?: AdvisoryUniverseSelection | null;
+    evidence_paths: string[];
+    evidence_errors: Array<{ path: string; reason_code: string }>;
+  };
+  policy_compatibility: {
+    status: "ACTIVE_POLICY_MATCH" | "NEW_POLICY_BINDING_REQUIRED";
+    requested_target_count: number;
+    active_target_count?: number | null;
+    package_backtest_topk?: number | null;
+    package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY" | string;
+  };
+  model_compatibility: {
+    status:
+      | "DESCRIPTOR_FILE_PRESENT"
+      | "MODEL_DESCRIPTOR_UNAVAILABLE"
+      | "REQUIRED_AFTER_BINDING"
+      | "NOT_APPLICABLE";
+    validation_stage: "PRESENCE_ONLY" | "PUBLICATION_FULL_RESOLUTION" | "NOT_APPLICABLE";
+    binding_version_id?: string | null;
+  };
+  blockers: string[];
+  warnings: string[];
+};
+
+export type AdvisoryDeliveryPreflightPayload = {
+  package_id: string;
+  universe_selection: AdvisoryUniverseSelection;
+  target_count: number;
+  program_id?: string;
+};
+
 export type AdvisoryProgram = {
   program_id: string;
   program_name: string;
@@ -913,6 +964,9 @@ function body(payload: unknown, method = "POST"): RequestInit {
 export const advisoryApi = {
   async universeOptions(): Promise<AdvisoryUniverseOptions> {
     return apiFetch<AdvisoryUniverseOptions>("/advisory/universe-options");
+  },
+  async deliveryPreflight(payload: AdvisoryDeliveryPreflightPayload): Promise<AdvisoryDeliveryPreflight> {
+    return apiFetch<AdvisoryDeliveryPreflight>("/advisory/delivery-preflight", body(payload));
   },
   async programs(includeArchived = false): Promise<AdvisoryProgram[]> {
     const data = await apiFetch<{ programs: AdvisoryProgram[] }>(`/advisory/programs?include_archived=${includeArchived}`);
