@@ -1,0 +1,231 @@
+{
+  "actual": "The general and security installs have no disableUpdate field or supervisor files; current dry-run exits on missing archive/version inputs before returning a structured fleet-health result.",
+  "allowed_write_scope": [
+    "scripts/configure_aistock_github_runner.ps1",
+    "backend/tests/scripts/test_configure_aistock_github_runner.py",
+    "tests/aistock_validation/bugs/20260912_BUG-1466-runner-lifecycle-drift-is-not-auditable-without-installation-inputs.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1466",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-12T06:43:25.717277Z",
+  "description": "The general and security installs have no disableUpdate field or supervisor files; current dry-run exits on missing archive/version inputs before returning a structured fleet-health result.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260912-9e6c34fc3f5c",
+      "timestamp": "2026-09-12T06:43:25.717277Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\github-actions-runner\\aistock-security\\.runner"
+  ],
+  "expected": "Provide a read-only audit mode that inspects an existing runner install, reports blocking lifecycle drift and exact bounded remediation without archive inputs or process control.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_configure_aistock_github_runner.py",
+      "scripts/configure_aistock_github_runner.ps1",
+      "tests/aistock_validation/bugs/20260912_BUG-1466-runner-lifecycle-drift-is-not-auditable-without-installation-inputs.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_configure_aistock_github_runner.py",
+      "scripts/configure_aistock_github_runner.ps1",
+      "tests/aistock_validation/bugs/20260912_BUG-1466-runner-lifecycle-drift-is-not-auditable-without-installation-inputs.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/configure_aistock_github_runner.ps1",
+        "backend/tests/scripts/test_configure_aistock_github_runner.py"
+      ],
+      "impacted_modules": [
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/configure_aistock_github_runner.ps1",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_configure_aistock_github_runner.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/configure_aistock_github_runner.ps1",
+        "backend/tests/scripts/test_configure_aistock_github_runner.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/configure_aistock_github_runner.ps1",
+      "backend/tests/scripts/test_configure_aistock_github_runner.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/configure_aistock_github_runner.ps1",
+      "backend/tests/scripts/test_configure_aistock_github_runner.py"
+    ]
+  },
+  "first_seen_at": "2026-09-12T06:43:25.717277Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4608,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4608",
+  "last_seen_at": "2026-09-12T06:43:25.717277Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "powershell -File scripts/configure_aistock_github_runner.ps1 -InstallRoot F:\\Dev\\github-actions-runner\\aistock-security -Role security -Json",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Runner lifecycle drift is not auditable without installation inputs",
+  "trigger_condition": {
+    "fingerprint": "9e6c34fc3f5c3a9171aef70a",
+    "source_event_id": "FE-20260912-9e6c34fc3f5c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
