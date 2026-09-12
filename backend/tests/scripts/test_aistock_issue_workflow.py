@@ -1848,6 +1848,40 @@ def test_repository_runtime_catalog_routes_source_pool_to_dataset_release_worker
     assert changed_file in heartbeat_route["source_globs"]
 
 
+def test_bug_1473_dataset_release_build_sources_have_one_worker_runtime_target() -> None:
+    root = Path(__file__).resolve().parents[3]
+    changed_files = [
+        "backend/services/dataset_release/artifact_ready_build_source.py",
+        "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_factor_partition_producer.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "scripts/dataset_release_source_stage.py",
+        "tests/aistock_validation/bugs/20260912_BUG-1471-pt-next-018-adj-factor-historical-restatement-cannot-produce-candidate-o.json",
+    ]
+
+    classification = workflow._classify_runtime_impact(changed_files, root=root)
+    genuine_mixed = workflow._classify_runtime_impact(
+        ["backend/main.py", "backend/services/dataset_release/factor_materializer.py"],
+        root=root,
+    )
+
+    assert classification == {
+        "runtime_impact": "worker_scheduler",
+        "observed_impacts": ["none", "worker_scheduler"],
+        "runtime_files": [
+            "backend/services/dataset_release/artifact_ready_build_source.py",
+            "backend/services/dataset_release/artifact_ready_source.py",
+            "backend/services/dataset_release/factor_materializer.py",
+            "scripts/dataset_release_source_stage.py",
+        ],
+        "target_ids": ["worker-scheduler"],
+    }
+    assert genuine_mixed["runtime_impact"] == "worker_scheduler"
+    assert genuine_mixed["target_ids"] == ["backend-main", "worker-scheduler"]
+
+
 def test_dataset_release_migration_profile_and_plan_are_exact_worker_sources() -> None:
     changed_files = [
         "backend/services/dataset_release/profile.py",
