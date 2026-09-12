@@ -56,6 +56,7 @@ REASON_CONFLICT = "hmm_risk_rotation_prediction_identity_conflict"
 REASON_NOT_FOUND = "hmm_risk_rotation_prediction_not_found"
 REASON_MODEL_AMBIGUOUS = "hmm_risk_rotation_prediction_model_ambiguous"
 REASON_INFERENCE = "hmm_risk_rotation_single_date_inference_failed"
+REASON_AUTHORITY_RECLOSURE = "hmm_risk_rotation_prediction_authority_reclosure_failed"
 PREDICTION_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "aistock:hmm-risk:rotation-l1-prediction:v1")
 
 PREDICTION_COLUMNS = (
@@ -97,6 +98,23 @@ _READ_ONE_SQL = f"""
 SELECT {",".join(PREDICTION_COLUMNS)}
 FROM hmm_risk.rotation_l1_prediction
 WHERE model_hash=%s AND trade_date=%s AND sector_code=%s AND revision=%s
+"""
+_READ_LATEST_BATCH_FOR_UPDATE_SQL = f"""
+WITH requested(model_hash,trade_date,sector_code) AS (
+  SELECT * FROM unnest(%s::text[],%s::date[],%s::text[])
+)
+SELECT {",".join("p." + column for column in PREDICTION_COLUMNS)}
+FROM hmm_risk.rotation_l1_prediction p
+JOIN requested r
+  ON r.model_hash=p.model_hash AND r.trade_date=p.trade_date AND r.sector_code=p.sector_code
+WHERE p.revision=(
+  SELECT max(newer.revision)
+  FROM hmm_risk.rotation_l1_prediction newer
+  WHERE newer.model_hash=p.model_hash AND newer.trade_date=p.trade_date
+    AND newer.sector_code=p.sector_code
+)
+ORDER BY p.model_hash,p.trade_date,p.sector_code
+FOR UPDATE OF p
 """
 
 
@@ -515,6 +533,52 @@ def _validate_write_batch(rows: Sequence[Mapping[str, Any]]) -> None:
             )
 
 
+def _stored_prediction_row(raw: Sequence[Any]) -> dict[str, Any]:
+    stored = dict(zip(PREDICTION_COLUMNS, raw, strict=True))
+    for field in ("model_hash", "input_hash", "mapping_snapshot_hash"):
+        stored[field] = str(stored[field]).strip()
+    if isinstance(stored["feature_contributions"], str):
+        stored["feature_contributions"] = json.loads(stored["feature_contributions"])
+    return _validate_row(stored)
+
+
+def _authority_reclosure_business_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    excluded = {
+        "prediction_id",
+        "input_hash",
+        "mapping_snapshot_hash",
+        "revision",
+        "supersedes_prediction_id",
+    }
+    return {column: _json_value(row[column]) for column in PREDICTION_COLUMNS if column not in excluded}
+
+
+def _insert_and_readback(cursor: Any, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    for row in rows:
+        values = [
+            json.dumps(row[column], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            if column == "feature_contributions" and row[column] is not None
+            else row[column]
+            for column in PREDICTION_COLUMNS
+        ]
+        cursor.execute(_INSERT_SQL, values)
+    readback: list[dict[str, Any]] = []
+    for row in rows:
+        cursor.execute(
+            _READ_ONE_SQL,
+            (row["model_hash"], row["trade_date"], row["sector_code"], row["revision"]),
+        )
+        raw = cursor.fetchone()
+        if raw is None:
+            raise RotationL1PredictionError(REASON_READBACK, "rotation prediction row is missing after write")
+        readback.append(_stored_prediction_row(raw))
+    expected_hash = canonical_sha256([_row_identity_payload(row) for row in rows])
+    actual_hash = canonical_sha256([_row_identity_payload(row) for row in readback])
+    if expected_hash != actual_hash:
+        raise RotationL1PredictionError(REASON_READBACK, "rotation prediction canonical readback differs")
+    return readback
+
+
 def build_single_date_raw_features(
     *,
     calendar: Sequence[date],
@@ -776,36 +840,127 @@ class RotationL1PredictionRepository:
             raise RotationL1PredictionError(REASON_CONFLICT, "rotation prediction write contains duplicate keys")
         with self.conn_factory() as conn:
             with conn.cursor() as cursor:
-                for row in validated:
-                    values = [
-                        json.dumps(row[column], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-                        if column == "feature_contributions" and row[column] is not None
-                        else row[column]
-                        for column in PREDICTION_COLUMNS
-                    ]
-                    cursor.execute(_INSERT_SQL, values)
-                readback: list[dict[str, Any]] = []
-                for row in validated:
-                    cursor.execute(
-                        _READ_ONE_SQL,
-                        (row["model_hash"], row["trade_date"], row["sector_code"], row["revision"]),
-                    )
-                    raw = cursor.fetchone()
-                    if raw is None:
-                        raise RotationL1PredictionError(
-                            REASON_READBACK, "rotation prediction row is missing after write"
-                        )
-                    stored = dict(zip(PREDICTION_COLUMNS, raw, strict=True))
-                    for field in ("model_hash", "input_hash", "mapping_snapshot_hash"):
-                        stored[field] = str(stored[field]).strip()
-                    if isinstance(stored["feature_contributions"], str):
-                        stored["feature_contributions"] = json.loads(stored["feature_contributions"])
-                    readback.append(_validate_row(stored))
-            expected_hash = canonical_sha256([_row_identity_payload(row) for row in validated])
+                readback = _insert_and_readback(cursor, validated)
             actual_hash = canonical_sha256([_row_identity_payload(row) for row in readback])
-            if expected_hash != actual_hash:
-                raise RotationL1PredictionError(REASON_READBACK, "rotation prediction canonical readback differs")
         return {"row_count": len(readback), "canonical_row_sha256": actual_hash, "idempotency_verified": True}
+
+    def write_authority_reclosure(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """Append an authority-only revision chain without changing prediction semantics."""
+
+        requested = sorted(
+            (_validate_row(row) for row in rows),
+            key=lambda row: (row["model_hash"], row["trade_date"], row["sector_code"]),
+        )
+        if not requested:
+            raise RotationL1PredictionError(REASON_AUTHORITY_RECLOSURE, "authority reclosure write is empty")
+        if any(row["revision"] != 1 or row["supersedes_prediction_id"] is not None for row in requested):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input must be a canonical revision-1 snapshot",
+            )
+        if any(
+            len({row[field] for row in requested}) != 1
+            for field in ("model_hash", "input_hash", "mapping_snapshot_hash")
+        ):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input does not bind one model and authority snapshot",
+            )
+        _validate_write_batch(requested)
+        keys = [(row["model_hash"], row["trade_date"], row["sector_code"]) for row in requested]
+        if len(keys) != len(set(keys)):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input contains duplicate identities",
+            )
+
+        with self.conn_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    _READ_LATEST_BATCH_FOR_UPDATE_SQL,
+                    (
+                        [row["model_hash"] for row in requested],
+                        [row["trade_date"] for row in requested],
+                        [row["sector_code"] for row in requested],
+                    ),
+                )
+                current = [_stored_prediction_row(raw) for raw in cursor.fetchall()]
+                if len(current) != len(requested):
+                    current_keys = {(row["model_hash"], row["trade_date"], row["sector_code"]) for row in current}
+                    missing = next(
+                        row
+                        for row in requested
+                        if (row["model_hash"], row["trade_date"], row["sector_code"]) not in current_keys
+                    )
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure prior prediction is missing",
+                        context={
+                            "trade_date": missing["trade_date"].isoformat(),
+                            "sector_code": missing["sector_code"],
+                        },
+                    )
+                if any(
+                    len({row[field] for row in current}) != 1
+                    for field in ("model_hash", "input_hash", "mapping_snapshot_hash", "revision")
+                ):
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure prior lineage is inconsistent",
+                    )
+                _validate_write_batch(current)
+
+                authority_matches: list[bool] = []
+                for desired, prior in zip(requested, current, strict=True):
+                    if (
+                        desired["model_hash"],
+                        desired["trade_date"],
+                        desired["sector_code"],
+                    ) != (prior["model_hash"], prior["trade_date"], prior["sector_code"]):
+                        raise RotationL1PredictionError(
+                            REASON_AUTHORITY_RECLOSURE,
+                            "authority reclosure prior identity differs",
+                        )
+                    if _authority_reclosure_business_payload(desired) != _authority_reclosure_business_payload(prior):
+                        raise RotationL1PredictionError(
+                            REASON_AUTHORITY_RECLOSURE,
+                            "authority reclosure business payload differs",
+                            context={
+                                "trade_date": desired["trade_date"].isoformat(),
+                                "sector_code": desired["sector_code"],
+                            },
+                        )
+                    authority_matches.append(
+                        desired["input_hash"] == prior["input_hash"]
+                        and desired["mapping_snapshot_hash"] == prior["mapping_snapshot_hash"]
+                    )
+
+                if all(authority_matches):
+                    readback = current
+                    action = "already_current"
+                elif any(authority_matches):
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure batch mixes current and stale authority identities",
+                    )
+                else:
+                    revised: list[dict[str, Any]] = []
+                    for desired, prior in zip(requested, current, strict=True):
+                        candidate = dict(desired)
+                        candidate["revision"] = prior["revision"] + 1
+                        candidate["supersedes_prediction_id"] = prior["prediction_id"]
+                        candidate["prediction_id"] = _prediction_id(candidate)
+                        revised.append(_validate_row(candidate))
+                    _validate_write_batch(revised)
+                    readback = _insert_and_readback(cursor, revised)
+                    action = "appended"
+
+        return {
+            "row_count": len(readback),
+            "canonical_row_sha256": canonical_sha256([_row_identity_payload(row) for row in readback]),
+            "idempotency_verified": True,
+            "authority_reclosure_action": action,
+        }
 
     def _resolve_model_hash(self, cursor: Any, explicit: str | None, *, trade_date: date | None = None) -> str:
         if explicit is not None:
