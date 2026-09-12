@@ -9,7 +9,7 @@ param(
   [string]$RepositoryUrl = 'https://github.com/licong01-cloud/AIstock',
   [string]$RunnerName = "$env:COMPUTERNAME-aistock-security",
   [string]$Role = 'security',
-  [string[]]$Labels = @('aistock', 'aistock-ci-security'),
+  [string[]]$Labels = @('aistock', 'aistock-ci', 'aistock-ci-security'),
   [string]$StartHelperPath,
   [switch]$AuditOnly,
   [switch]$Apply,
@@ -69,9 +69,20 @@ function Get-RunnerProcess {
 if (-not $Labels -or $Labels.Count -eq 0) {
   throw 'At least one explicit runner label is required'
 }
-$requiredRoleLabel = $(if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' })
-if ($Labels -notcontains $requiredRoleLabel) {
-  throw "Runner labels for role $Role must include $requiredRoleLabel"
+$requiredRoleLabels = $(
+  if ($Role -eq 'general') {
+    @('aistock-ci')
+  } else {
+    @('aistock-ci', 'aistock-ci-security')
+  }
+)
+foreach ($requiredRoleLabel in $requiredRoleLabels) {
+  if ($Labels -notcontains $requiredRoleLabel) {
+    throw "Runner labels for role $Role must include $requiredRoleLabel"
+  }
+}
+if ($Role -eq 'general' -and $Labels -contains 'aistock-ci-security') {
+  throw 'General runner labels must not include aistock-ci-security'
 }
 
 $resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
