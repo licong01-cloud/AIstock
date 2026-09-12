@@ -657,6 +657,48 @@ export type HistoricalRangeMutationData = {
   dispatch_state: string;
   links: Record<string, string>;
 };
+export type HistoricalRangeComparisonMetricSide = {
+  status: "AVAILABLE" | "UNAVAILABLE" | "NOT_REPORTED";
+  value: string | null;
+  reason_code: string | null;
+  coverage: JsonObject;
+};
+export type HistoricalRangeComparison = {
+  schema_version: "advisory_historical_range_comparison_v1";
+  batch_id: string;
+  comparability: {
+    status: "COMPARABLE" | "INCOMPLETE_EVIDENCE" | "INCOMPATIBLE";
+    blockers: string[];
+    warnings: string[];
+    summary_policy_hash: string | null;
+    producer_code_hash: string | null;
+    decision_use: "BUSINESS_VALIDATION_ONLY";
+  };
+  baseline: HistoricalRangeRecord;
+  candidate: HistoricalRangeRecord;
+  day_support: {
+    baseline: HistoricalRangeRecord;
+    candidate: HistoricalRangeRecord;
+  };
+  omitted_diagnostics: {
+    reason: "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE";
+    baseline: { available_daily_recall: number; unavailable_daily_recall: number };
+    candidate: { available_daily_recall: number; unavailable_daily_recall: number };
+  };
+  metrics: Array<{
+    metric_key: string;
+    group_key: string | null;
+    baseline: HistoricalRangeComparisonMetricSide;
+    candidate: HistoricalRangeComparisonMetricSide;
+    delta: string | null;
+    delta_semantics: "CANDIDATE_MINUS_BASELINE";
+  }>;
+  interpretation: {
+    delta_semantics: "CANDIDATE_MINUS_BASELINE";
+    winner_declared: false;
+    significance_claimed: false;
+  };
+};
 
 export class AdvisoryApiError extends Error {
   readonly http_status: number | null;
@@ -886,6 +928,138 @@ function requireHistoricalRangeMutation(value: unknown, path: string): Historica
   };
 }
 
+function requireHistoricalRangeComparison(value: unknown): HistoricalRangeComparison {
+  const comparison = requireHistoricalRangeFields(
+    requireHistoricalRangeRecord(value, "comparison"),
+    "comparison",
+    { schema_version: "string", batch_id: "string", comparability: "object", baseline: "object", candidate: "object", day_support: "object" },
+  );
+  if (comparison.schema_version !== "advisory_historical_range_comparison_v1") {
+    throw historicalRangeContractError("comparison.schema_version");
+  }
+  const comparability = requireHistoricalRangeRecord(comparison.comparability, "comparison.comparability");
+  if (!["COMPARABLE", "INCOMPLETE_EVIDENCE", "INCOMPATIBLE"].includes(String(comparability.status))
+    || comparability.decision_use !== "BUSINESS_VALIDATION_ONLY"
+    || !Array.isArray(comparability.blockers) || comparability.blockers.some((item) => typeof item !== "string")
+    || !Array.isArray(comparability.warnings) || comparability.warnings.some((item) => typeof item !== "string")
+    || (comparability.summary_policy_hash !== null && typeof comparability.summary_policy_hash !== "string")
+    || (comparability.producer_code_hash !== null && typeof comparability.producer_code_hash !== "string")) {
+    throw historicalRangeContractError("comparison.comparability");
+  }
+  if (comparability.status === "COMPARABLE"
+    && (![comparability.summary_policy_hash, comparability.producer_code_hash]
+      .every((item) => typeof item === "string" && /^[0-9a-f]{64}$/.test(item)))) {
+    throw historicalRangeContractError("comparison.comparability.identity");
+  }
+  for (const [side, rawIdentity] of [["baseline", comparison.baseline], ["candidate", comparison.candidate]] as const) {
+    const identity = requireHistoricalRangeRecord(rawIdentity, `comparison.${side}`);
+    if (typeof identity.range_run_id !== "string" || !identity.range_run_id
+      || typeof identity.package_id !== "string" || !identity.package_id) {
+      throw historicalRangeContractError(`comparison.${side}`);
+    }
+  }
+  const daySupport = requireHistoricalRangeRecord(comparison.day_support, "comparison.day_support");
+  for (const side of ["baseline", "candidate"] as const) {
+    const support = requireHistoricalRangeRecord(daySupport[side], `comparison.day_support.${side}`);
+    const counts = requireHistoricalRangeRecord(support.status_counts, `comparison.day_support.${side}.status_counts`);
+    if (![support.total_day_count, support.successful_day_count, support.valid_no_candidate_day_count]
+      .every((item) => Number.isInteger(item) && Number(item) >= 0)
+      || Object.values(counts).some((item) => !Number.isInteger(item) || Number(item) < 0)) {
+      throw historicalRangeContractError(`comparison.day_support.${side}`);
+    }
+  }
+  const omittedDiagnostics = requireHistoricalRangeRecord(
+    comparison.omitted_diagnostics,
+    "comparison.omitted_diagnostics",
+  );
+  if (omittedDiagnostics.reason !== "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE") {
+    throw historicalRangeContractError("comparison.omitted_diagnostics.reason");
+  }
+  const parseOmittedCounts = (side: "baseline" | "candidate") => {
+    const counts = requireHistoricalRangeRecord(
+      omittedDiagnostics[side],
+      `comparison.omitted_diagnostics.${side}`,
+    );
+    if (![counts.available_daily_recall, counts.unavailable_daily_recall]
+      .every((item) => Number.isInteger(item) && Number(item) >= 0)) {
+      throw historicalRangeContractError(`comparison.omitted_diagnostics.${side}`);
+    }
+    return {
+      available_daily_recall: Number(counts.available_daily_recall),
+      unavailable_daily_recall: Number(counts.unavailable_daily_recall),
+    };
+  };
+  const omittedCounts: HistoricalRangeComparison["omitted_diagnostics"] = {
+    reason: "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE",
+    baseline: parseOmittedCounts("baseline"),
+    candidate: parseOmittedCounts("candidate"),
+  };
+  if (!Array.isArray(comparison.metrics)) throw historicalRangeContractError("comparison.metrics");
+  const metrics = comparison.metrics.map((rawMetric, index) => {
+    const metric = requireHistoricalRangeRecord(rawMetric, `comparison.metrics[${index}]`);
+    if (typeof metric.metric_key !== "string" || !metric.metric_key
+      || (metric.group_key !== null && typeof metric.group_key !== "string")
+      || (metric.delta !== null && typeof metric.delta !== "string")
+      || metric.delta_semantics !== "CANDIDATE_MINUS_BASELINE") {
+      throw historicalRangeContractError(`comparison.metrics[${index}]`);
+    }
+    const parseSide = (raw: unknown, side: string): HistoricalRangeComparisonMetricSide => {
+      const item = requireHistoricalRangeRecord(raw, `comparison.metrics[${index}].${side}`);
+      if (!["AVAILABLE", "UNAVAILABLE", "NOT_REPORTED"].includes(String(item.status))
+        || (item.value !== null && typeof item.value !== "string")
+        || (item.reason_code !== null && typeof item.reason_code !== "string")
+        || (item.status === "AVAILABLE" && typeof item.value !== "string")
+        || (item.status !== "AVAILABLE" && item.value !== null)) {
+        throw historicalRangeContractError(`comparison.metrics[${index}].${side}`);
+      }
+      return {
+        status: item.status as HistoricalRangeComparisonMetricSide["status"],
+        value: item.value as string | null,
+        reason_code: item.reason_code as string | null,
+        coverage: requireHistoricalRangeRecord(item.coverage, `comparison.metrics[${index}].${side}.coverage`) as JsonObject,
+      };
+    };
+    return {
+      metric_key: metric.metric_key,
+      group_key: metric.group_key as string | null,
+      baseline: parseSide(metric.baseline, "baseline"),
+      candidate: parseSide(metric.candidate, "candidate"),
+      delta: metric.delta as string | null,
+      delta_semantics: "CANDIDATE_MINUS_BASELINE" as const,
+    };
+  });
+  const interpretation = requireHistoricalRangeRecord(comparison.interpretation, "comparison.interpretation");
+  if (interpretation.delta_semantics !== "CANDIDATE_MINUS_BASELINE"
+    || interpretation.winner_declared !== false || interpretation.significance_claimed !== false) {
+    throw historicalRangeContractError("comparison.interpretation");
+  }
+  return {
+    schema_version: "advisory_historical_range_comparison_v1",
+    batch_id: String(comparison.batch_id),
+    comparability: {
+      status: comparability.status as HistoricalRangeComparison["comparability"]["status"],
+      blockers: comparability.blockers as string[],
+      warnings: comparability.warnings as string[],
+      summary_policy_hash: comparability.summary_policy_hash as string | null,
+      producer_code_hash: comparability.producer_code_hash as string | null,
+      decision_use: "BUSINESS_VALIDATION_ONLY",
+    },
+    baseline: comparison.baseline as HistoricalRangeRecord,
+    candidate: comparison.candidate as HistoricalRangeRecord,
+    day_support: {
+      baseline: daySupport.baseline as HistoricalRangeRecord,
+      candidate: daySupport.candidate as HistoricalRangeRecord,
+    },
+    omitted_diagnostics: omittedCounts,
+    metrics,
+    interpretation: {
+      delta_semantics: "CANDIDATE_MINUS_BASELINE",
+      winner_declared: false,
+      significance_claimed: false,
+    },
+  };
+}
+
 function r5Body(payload: unknown, headers?: HeadersInit): RequestInit {
   return { method: "POST", body: JSON.stringify(payload), headers };
 }
@@ -912,6 +1086,17 @@ export const historicalRangeApi = {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
     const envelope = await historicalRangeFetch<{ runs: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/runs${query}`, { signal });
     return { rows: requireHistoricalRangeRows(envelope.data.runs, "runs", { range_run_id: "string", research_program_id: "string", status: "string", row_version: "number" }), page: requireHistoricalRangePage(envelope, "runs") };
+  },
+  async comparison(batchId: string, baselineRangeRunId: string, candidateRangeRunId: string, signal?: AbortSignal): Promise<HistoricalRangeComparison> {
+    const query = new URLSearchParams({
+      baseline_range_run_id: baselineRangeRunId,
+      candidate_range_run_id: candidateRangeRunId,
+    });
+    const envelope = await historicalRangeFetch<{ comparison: HistoricalRangeRecord }>(
+      `/advisory/historical-range-batches/${encodeURIComponent(batchId)}/comparison?${query.toString()}`,
+      { signal },
+    );
+    return requireHistoricalRangeComparison(envelope.data.comparison);
   },
   async operations(batchId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
