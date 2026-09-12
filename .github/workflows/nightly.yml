@@ -494,7 +494,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence
     concurrency:
       group: code-intelligence-refresh-main
-      cancel-in-progress: false
+      cancel-in-progress: true
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     permissions:
@@ -1029,6 +1029,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Download runner health evidence
+        if: always()
+        uses: actions/download-artifact@v8
+        with:
+          name: runner-health-${{ github.run_id }}
+          path: tmp/validation/runner_health
+        continue-on-error: true
+
       - name: Download code intelligence refs
         if: always()
         uses: actions/download-artifact@v8
@@ -1148,6 +1156,20 @@ jobs:
             "run_url": "${RUN_URL}"
           }
           EOF
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          status_path = Path("tmp/validation/nightly_failure_issue/status.json")
+          runner_health_path = Path("tmp/validation/runner_health/runner-health.json")
+          if runner_health_path.is_file():
+              payload = json.loads(status_path.read_text(encoding="utf-8"))
+              payload["runner_health"] = json.loads(runner_health_path.read_text(encoding="utf-8"))
+              status_path.write_text(
+                  json.dumps(payload, ensure_ascii=True, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+          PY
           python scripts/ci_failure_issue_summary.py \
             --repo "${{ github.repository }}" \
             --nightly-status-json tmp/validation/nightly_failure_issue/status.json \

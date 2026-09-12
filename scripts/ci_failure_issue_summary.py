@@ -1508,13 +1508,15 @@ def _nightly_job_from_statuses(
     run_url: str | None = None,
     failed_sessions: list[str] | None = None,
     failure_groups: list[dict[str, Any]] | None = None,
+    runner_health: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     failed_keys = _nightly_failed_keys(statuses)
     failed_sessions = _unique(failed_sessions or [])
     failure_groups = failure_groups or []
     heterogeneous_sessions = len(failure_groups) > 1
     if statuses.get("runner_preflight") == "failure":
-        error = "self-hosted Windows runner unavailable"
+        health_blocking = list((runner_health or {}).get("blocking") or [])
+        error = str(health_blocking[0]) if health_blocking else "self-hosted Windows runner unavailable"
         module = "validation"
         files = [".github/workflows/nightly.yml", "scripts/aistock_runner_health.py"]
     elif "nightly_l3" in failed_keys:
@@ -1559,7 +1561,16 @@ def _nightly_job_from_statuses(
         "failed_tests": [],
         "error_signature": error,
         "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS]
-        + [f"session {session}: failure" for session in failed_sessions],
+        + [f"session {session}: failure" for session in failed_sessions]
+        + [f"runner_health: {item}" for item in list((runner_health or {}).get("blocking") or [])]
+        + [
+            "runner_queue: "
+            + str(job.get("name") or job.get("job_id") or "unknown")
+            + " labels="
+            + ",".join(job.get("labels") or [])
+            for run in list((runner_health or {}).get("matching_stale_queued_runs") or [])
+            for job in list(run.get("matching_queued_jobs") or run.get("queued_jobs") or [])
+        ],
         "key_log_excerpt_omitted_count": 0,
         "suspected_module": module,
         "suspected_files": files,
@@ -1673,9 +1684,14 @@ def summarize_nightly_status(
     effective_commit = commit or payload.get("commit") or payload.get("headSha")
     fingerprint = _nightly_fingerprint(statuses)
     runner_failed = statuses.get("runner_preflight") == "failure"
+    runner_health = payload.get("runner_health") or payload.get("runnerHealth") or {}
+    if not isinstance(runner_health, dict):
+        runner_health = {}
+    health_blocking = list(runner_health.get("blocking") or [])
+    runner_failure_title = str(health_blocking[0]) if health_blocking else "self-hosted Windows runner unavailable"
     failed_keys = _nightly_failed_keys(statuses)
     title = (
-        "P1 Nightly blocked: self-hosted Windows runner unavailable"
+        f"P1 Nightly blocked: {runner_failure_title}"
         if runner_failed
         else "P1 Nightly failed: "
         + " ".join(
@@ -1695,6 +1711,7 @@ def summarize_nightly_status(
         run_url=effective_run_url,
         failed_sessions=failed_sessions,
         failure_groups=failure_groups,
+        runner_health=runner_health,
     )
     summary = finalize_summary(
         {
@@ -1715,6 +1732,7 @@ def summarize_nightly_status(
             "nightly_failed_stages": failed_keys,
             "nightly_failed_sessions": failed_sessions,
             "nightly_failure_groups": failure_groups,
+            "runner_health": runner_health,
         }
     )
     summary["fingerprint_source"] = fingerprint

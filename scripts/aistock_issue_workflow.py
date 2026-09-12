@@ -5570,23 +5570,41 @@ def _create_github_issue_with_recovery(
     labels: list[str],
     cwd: Path,
 ) -> dict[str, Any]:
-    result = _run_command(
-        [
-            "gh",
-            "issue",
-            "create",
-            "--repo",
-            GITHUB_REPO,
-            "--title",
-            title,
-            "--body-file",
-            str(body_path),
-            "--label",
-            _csv_arg(labels),
-        ],
-        cwd=cwd,
-        timeout=120,
-    )
+    def create(issue_labels: list[str]) -> dict[str, Any]:
+        return _run_command(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--repo",
+                GITHUB_REPO,
+                "--title",
+                title,
+                "--body-file",
+                str(body_path),
+                "--label",
+                _csv_arg(issue_labels),
+            ],
+            cwd=cwd,
+            timeout=120,
+        )
+
+    result = create(labels)
+    warnings: list[str] = []
+    if not result.get("ok"):
+        message = str(result.get("stderr") or result.get("stdout") or "")
+        missing_module = re.search(
+            r"could not add label:\s*['\"]?(module:([a-z0-9_.-]+))['\"]?\s+not found",
+            message,
+            re.IGNORECASE,
+        )
+        if missing_module and "." in missing_module.group(2):
+            missing_label = missing_module.group(1)
+            parent_label = f"module:{missing_module.group(2).rsplit('.', 1)[0]}"
+            fallback_labels = [parent_label if label == missing_label else label for label in labels]
+            result = create(flow._unique_strings(fallback_labels))
+            if result.get("ok"):
+                warnings.append(f"GitHub label {missing_label} was unavailable; used {parent_label}")
     issue_url = str(result.get("stdout") or "").splitlines()[-1].strip() if result.get("ok") else ""
     issue_number = _github_issue_number_from_url(issue_url) if issue_url else None
     if result.get("ok") and issue_url and issue_number:
@@ -5595,13 +5613,14 @@ def _create_github_issue_with_recovery(
             "url": issue_url,
             "number": issue_number,
             "recovered_after_transport_error": False,
-            "warnings": [],
+            "warnings": warnings,
         }
 
     message = str(result.get("stderr") or result.get("stdout") or "gh issue create failed")
     uncertain_remote_result = bool(result.get("ok")) or _looks_like_github_transport_failure(message)
     if uncertain_remote_result:
-        recovered, warnings = _github_bug_issue_for_id(bug_id)
+        recovered, recovery_warnings = _github_bug_issue_for_id(bug_id)
+        warnings.extend(recovery_warnings)
         if recovered is not None and str(recovered.get("title") or "").strip() == title.strip():
             recovered_number = recovered.get("github_issue_number")
             recovered_url = str(recovered.get("source") or _github_issue_url(recovered_number))
