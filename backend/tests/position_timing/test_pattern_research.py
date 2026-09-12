@@ -14,8 +14,10 @@ from backend.services.position_timing.pattern_research import (
     BUNDLE_SCHEMA,
     CORPORATE_ACTION_APPLICATION_POLICY,
     CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
-    FACTOR_ACTION_COVERAGE_POLICY,
+    FACTOR_COVERAGE_REQUEST_SCHEMA,
     FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+    LEGACY_FACTOR_ACTION_COVERAGE_POLICY,
+    LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256,
     LEGACY_REQUEST_SCHEMA,
     PIPELINE_ID,
     PREREGISTERED_FAMILY_COUNT,
@@ -23,7 +25,6 @@ from backend.services.position_timing.pattern_research import (
     PROTOTYPE_CONTRACT_SHA256,
     PROTOTYPE_FAMILY_SIZE,
     RECEIPT_SCHEMA,
-    REQUEST_SCHEMA,
     RESULT_CLASS,
     TOTAL_FORMAL_COMPARISON_COUNT,
     PrototypeReplayResult,
@@ -34,6 +35,7 @@ from backend.services.position_timing.pattern_research import (
     _effect_evidence,
     _manifest,
     _load_request,
+    _mapped_reference_to_target,
     _model_contract,
     _model_contract_sha256,
     _optimizer_contract,
@@ -336,7 +338,7 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
     path.write_text(json.dumps(request), encoding="utf-8")
     assert _load_request(path)["schema_version"] == LEGACY_REQUEST_SCHEMA
 
-    request["schema_version"] = REQUEST_SCHEMA
+    request["schema_version"] = FACTOR_COVERAGE_REQUEST_SCHEMA
     request["request_sha256"] = canonical_sha256(
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
@@ -371,7 +373,7 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
         "corporate_action_application_sha256": application_audit[
             "application_sha256"
         ],
-        "policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+        "policy_sha256": LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256,
         "scope": {
             "symbols_sha256": canonical_sha256(("000001.SZ",)),
             "symbol_count": 1,
@@ -399,8 +401,10 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
             "corporate_action_application_sha256": application_audit[
                 "application_sha256"
             ],
-            "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
-            "factor_action_coverage_policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+            "factor_action_coverage_policy": LEGACY_FACTOR_ACTION_COVERAGE_POLICY,
+            "factor_action_coverage_policy_sha256": (
+                LEGACY_FACTOR_ACTION_COVERAGE_POLICY_SHA256
+            ),
             "factor_action_coverage_audit": audit,
             "factor_action_coverage_audit_sha256": audit["audit_sha256"],
         }
@@ -409,7 +413,7 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
     path.write_text(json.dumps(request), encoding="utf-8")
-    assert _load_request(path)["schema_version"] == REQUEST_SCHEMA
+    assert _load_request(path)["schema_version"] == FACTOR_COVERAGE_REQUEST_SCHEMA
 
     without_application = dict(request)
     for key in (
@@ -477,9 +481,33 @@ def test_prior_population_includes_old_pattern_requests_but_can_exclude_current(
         tmp_path,
         exclude_request_sha256=digests[1],
     )
+    excluding_with_sequence = prior_timing_request_population(
+        tmp_path,
+        exclude_request_sha256s=(digests[1],),
+    )
 
     assert complete["forbidden_symbols"] == ("000001.SZ", "000002.SZ")
     assert excluding_current["forbidden_symbols"] == ("000001.SZ",)
+    assert excluding_with_sequence["forbidden_symbols"] == ("000001.SZ",)
+
+
+def test_suspended_ex_date_maps_last_price_from_frozen_action_when_factor_is_missing():
+    bars = _bars(3)
+    bars.loc[:, "factor"] = np.nan
+    action = _stock_action(
+        bars.index[1].date(),
+        multiplier="1.5",
+        cash="0.3",
+    )
+
+    mapped = _mapped_reference_to_target(
+        Decimal("30"),
+        bars=bars,
+        decision_ordinal=0,
+        action=action,
+    )
+
+    assert mapped == Decimal("19.8")
 
 
 def test_snapshot_scope_fails_closed_for_new_evaluation_symbol(tmp_path):
