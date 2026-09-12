@@ -6,6 +6,7 @@
     "backend/services/quantevolver/executors/backtest.py",
     "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
     "backend/tests/unified_engine/test_backtest_executor.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260912_BUG-1467-qe-wsl-backtest-only-parallelism-two-is-clamped-to-one.json"
   ],
   "assigned_agent": null,
@@ -37,7 +38,8 @@
       "backend/services/quantevolver/qe_execution_reservation.py",
       "backend/services/quantevolver/executors/backtest.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-      "backend/tests/unified_engine/test_backtest_executor.py"
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "noxfile.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -46,7 +48,8 @@
         "backend/services/quantevolver/qe_execution_reservation.py",
         "backend/services/quantevolver/executors/backtest.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-        "backend/tests/unified_engine/test_backtest_executor.py"
+        "backend/tests/unified_engine/test_backtest_executor.py",
+        "noxfile.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -131,7 +134,8 @@
         "backend/services/quantevolver/qe_execution_reservation.py",
         "backend/services/quantevolver/executors/backtest.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-        "backend/tests/unified_engine/test_backtest_executor.py"
+        "backend/tests/unified_engine/test_backtest_executor.py",
+        "noxfile.py"
       ],
       "unmatched_files": []
     },
@@ -140,7 +144,8 @@
       "backend/services/quantevolver/qe_execution_reservation.py",
       "backend/services/quantevolver/executors/backtest.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-      "backend/tests/unified_engine/test_backtest_executor.py"
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -148,7 +153,8 @@
       "backend/services/quantevolver/qe_execution_reservation.py",
       "backend/services/quantevolver/executors/backtest.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
-      "backend/tests/unified_engine/test_backtest_executor.py"
+      "backend/tests/unified_engine/test_backtest_executor.py",
+      "noxfile.py"
     ]
   },
   "first_seen_at": "2026-09-12T07:48:08.627567Z",
