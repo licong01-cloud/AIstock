@@ -302,6 +302,16 @@ class _Cursor:
             key = (str(values[0]), values[1], values[2], values[3])
             row = self.rows.get(key)
             self.result = [tuple(row[column] for column in subject.PREDICTION_COLUMNS)] if row else []
+        elif normalized.startswith("with requested(model_hash,trade_date,sector_code) as"):
+            requested = set(zip(values[0], values[1], values[2], strict=True))
+            latest = {}
+            for key, row in self.rows.items():
+                identity = key[:3]
+                if identity in requested and (identity not in latest or row["revision"] > latest[identity]["revision"]):
+                    latest[identity] = row
+            self.result = [
+                tuple(latest[identity][column] for column in subject.PREDICTION_COLUMNS) for identity in sorted(latest)
+            ]
         elif normalized.startswith("select distinct model_hash"):
             hashes = {key[0] for key in self.rows if "where trade_date=%s" not in normalized or key[1] == values[0]}
             self.result = [(item,) for item in sorted(hashes)]
@@ -437,6 +447,115 @@ def test_repository_rejects_partial_or_mixed_lineage_cross_section() -> None:
     mixed[0]["prediction_id"] = subject._prediction_id(mixed[0])
     with pytest.raises(subject.RotationL1PredictionError, match="31-sector"):
         repository.write_rows(mixed)
+
+
+def _authority_reclosure_rows(rows):
+    reclosed = copy.deepcopy(rows)
+    for row in reclosed:
+        row["input_hash"] = "d" * 64
+        row["mapping_snapshot_hash"] = "e" * 64
+        row["prediction_id"] = subject._prediction_id(row)
+    return reclosed
+
+
+def test_repository_authority_reclosure_appends_revision_and_preserves_prior_rows() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    receipt = repository.write_authority_reclosure(reclosed)
+    detail = repository.read_date(original[0]["trade_date"], model_hash=original[0]["model_hash"])
+
+    assert receipt["authority_reclosure_action"] == "appended"
+    assert receipt["row_count"] == 31
+    assert len(connection.rows) == 62
+    assert {row["revision"] for row in detail["rows"]} == {2}
+    assert {row["input_hash"] for row in detail["rows"]} == {"d" * 64}
+    assert {row["mapping_snapshot_hash"] for row in detail["rows"]} == {"e" * 64}
+    original_ids = {row["sector_code"]: row["prediction_id"] for row in original}
+    assert {row["sector_code"]: row["supersedes_prediction_id"] for row in detail["rows"]} == original_ids
+    assert all(
+        connection.rows[(row["model_hash"], row["trade_date"], row["sector_code"], 1)] == row for row in original
+    )
+
+
+def test_repository_authority_reclosure_retry_is_idempotent_without_revision_three() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    first = repository.write_authority_reclosure(reclosed)
+    second = repository.write_authority_reclosure(reclosed)
+
+    assert first["authority_reclosure_action"] == "appended"
+    assert second["authority_reclosure_action"] == "already_current"
+    assert first["canonical_row_sha256"] == second["canonical_row_sha256"]
+    assert len(connection.rows) == 62
+    assert {key[3] for key in connection.rows} == {1, 2}
+
+
+def test_repository_authority_reclosure_rejects_business_payload_drift() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    reclosed[0]["rotation_score"] += 1.0
+    reclosed[0]["prediction_id"] = subject._prediction_id(reclosed[0])
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    with pytest.raises(subject.RotationL1PredictionError, match="business payload differs"):
+        repository.write_authority_reclosure(reclosed)
+
+    assert len(connection.rows) == 31
+
+
+def test_repository_authority_reclosure_requires_complete_existing_lineage() -> None:
+    process, acceptance = _process_and_acceptance()
+    reclosed = _authority_reclosure_rows(_build_rows(process, acceptance))
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(_Connection()))
+
+    with pytest.raises(subject.RotationL1PredictionError, match="prior prediction is missing"):
+        repository.write_authority_reclosure(reclosed)
+
+
+def test_repository_authority_reclosure_rejects_mixed_requested_authority() -> None:
+    process, acceptance = _process_and_acceptance()
+    reclosed = _authority_reclosure_rows(_build_rows(process, acceptance))
+    reclosed[0]["mapping_snapshot_hash"] = "f" * 64
+    reclosed[0]["prediction_id"] = subject._prediction_id(reclosed[0])
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(_Connection()))
+
+    with pytest.raises(subject.RotationL1PredictionError, match="one model and authority snapshot") as error:
+        repository.write_authority_reclosure(reclosed)
+
+    assert error.value.reason_code == subject.REASON_AUTHORITY_RECLOSURE
+
+
+def test_repository_authority_reclosure_rejects_partially_revised_prior_lineage() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+    partial = dict(reclosed[0])
+    partial["revision"] = 2
+    partial["supersedes_prediction_id"] = original[0]["prediction_id"]
+    partial["prediction_id"] = subject._prediction_id(partial)
+    partial = subject._validate_row(partial)
+    connection.rows[(partial["model_hash"], partial["trade_date"], partial["sector_code"], 2)] = partial
+
+    with pytest.raises(subject.RotationL1PredictionError, match="prior lineage is inconsistent") as error:
+        repository.write_authority_reclosure(reclosed)
+
+    assert error.value.reason_code == subject.REASON_AUTHORITY_RECLOSURE
 
 
 class _Booster:
