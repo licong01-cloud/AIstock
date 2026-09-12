@@ -4,6 +4,7 @@
     "backend/services/quantevolver/qe_custom_loaders.py",
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260912_BUG-1478-qe-dynamic-only-loader-ignores-configured-training-universe.json"
   ],
   "assigned_agent": null,
@@ -28,12 +29,18 @@
       "actor": "codex",
       "note": "DynamicFactorsOnlyLoader now resolves Qlib market/list/dict instruments, applies PIT membership spans to the factor panel before labels/model fitting, preserves only the explicit instruments=None legacy no-filter case, and fails closed on resolution, contract, or empty-overlap errors. A real WSL r3 run-scoped overlay smoke retained CSI300 members and removed an out-of-pool stock.",
       "timestamp": "2026-09-12T22:55:00Z"
+    },
+    {
+      "action": "register_new_test_in_existing_qe_read_plan",
+      "actor": "codex",
+      "note": "CI correctly rejected the new regression test as unmapped. The exact test file is now registered in the existing qe_read_backend plan; no directory wildcard or validation policy relaxation was added.",
+      "timestamp": "2026-09-12T23:12:00Z"
     }
   ],
   "evidence_uris": [
     "qe_20260913_031243_11a2_L7/L8: distinct pool-specific configs and model hashes but pred.pkl sha256=7e925367c805c987d91231d845f7697945e5fad867ed2dd33bfa5ca775e35fd7 identical to full-market seed314",
     "direct QE loader/config regression matrix: 118 passed",
-    "nox qe_read_backend: 563 passed, 1 skipped; qe_sector_risk_overlay_backend: 91 passed",
+    "nox qe_read_backend: 572 passed, 1 skipped; qe_sector_risk_overlay_backend: 91 passed",
     "fresh-process WSL r3 run-scoped overlay: index_pool__csi300 kept 000001.SZ and rejected out-of-pool 000006.SZ"
   ],
   "expected": "DynamicFactorsOnlyLoader must apply the configured Qlib training/inference universe, including PIT membership spans, before loading labels or fitting a model; unsupported, missing, or empty universe resolution must fail closed rather than use the full factor panel.",
@@ -43,14 +50,16 @@
     ],
     "changed_files": [
       "backend/services/quantevolver/qe_custom_loaders.py",
-      "backend/services/quantevolver/config_composer.py"
+      "backend/services/quantevolver/config_composer.py",
+      "noxfile.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_custom_loaders.py",
         "backend/services/quantevolver/config_composer.py",
-        "backend/tests/quantevolver/test_qe_custom_loader_instruments.py"
+        "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+        "noxfile.py"
       ],
       "impacted_modules": [
         "qe.core",

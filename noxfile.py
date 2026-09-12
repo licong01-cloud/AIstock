@@ -1278,6 +1278,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_reconciliation_coordinator.py",
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
+        "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
         "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
         "backend/tests/unified_engine/test_backtest_executor.py",
