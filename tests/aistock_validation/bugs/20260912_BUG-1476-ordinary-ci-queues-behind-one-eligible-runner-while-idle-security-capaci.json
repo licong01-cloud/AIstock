@@ -36,14 +36,22 @@
   ],
   "expected": "Both isolated Windows runners should be eligible for ordinary CI when idle, while security jobs remain restricted to the security-labelled runner and total host concurrency remains two.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/configure_aistock_github_runner.ps1",
+    "actual_changed_files": [
       "backend/tests/scripts/test_configure_aistock_github_runner.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/configure_aistock_github_runner.ps1",
+      "tests/aistock_validation/bugs/20260912_BUG-1476-ordinary-ci-queues-behind-one-eligible-runner-while-idle-security-capaci.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_configure_aistock_github_runner.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/configure_aistock_github_runner.ps1",
+      "tests/aistock_validation/bugs/20260912_BUG-1476-ordinary-ci-queues-behind-one-eligible-runner-while-idle-security-capaci.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/configure_aistock_github_runner.ps1",
@@ -139,10 +147,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
