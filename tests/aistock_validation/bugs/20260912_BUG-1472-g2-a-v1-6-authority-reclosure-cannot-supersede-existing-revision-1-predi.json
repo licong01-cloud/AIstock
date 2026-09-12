@@ -101,7 +101,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
-    "database_readback_ref": "not_required_before_separately_authorized_authority_reclosure_dml",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/overview",
     "fresh_process_evidence": [
       "Fresh Python process loaded commit 3fc09b3bb635f0aa90d22d3e89c82a701e30837c and exercised the full 19,220-row authority reclosure plus an idempotent retry without database or process control."
     ],
