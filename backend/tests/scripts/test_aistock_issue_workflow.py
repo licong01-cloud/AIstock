@@ -3368,6 +3368,7 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
 _BUSINESS_SMOKE_ADVISORY_PROGRAMS_URL = "http://127.0.0.1:8001/api/v1/advisory/programs"
+_BUSINESS_SMOKE_QE_DATASET_PROFILE_URL = "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile"
 _BUSINESS_SMOKE_POSITION_TIMING_INTENTS_URL = "http://127.0.0.1:8001/api/v1/position-timing/intents"
 _BUSINESS_SMOKE_LOCALSIM_CUTOVER_URL = (
     "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness"
@@ -4176,6 +4177,106 @@ def test_post_restart_verify_blocks_unknown_business_smoke_endpoint(
     assert smoke["semantic"]["contract_id"] is None
     assert smoke["semantic"]["verdict"] == "failed"
     assert "no target-owned business-smoke semantic contract" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_accepts_complete_qe_dataset_profile(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_QE_DATASET_PROFILE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "mode": "active_profile",
+                    "generation": "20260911-v6",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "cutoff": "2026-08-31",
+                    "universes": [
+                        {"pool_id": "stock_universe", "gap_count": 0},
+                        {"pool_id": "csi300", "gap_count": 0},
+                    ],
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "qe_dataset_profile"
+    assert smoke["semantic"]["facts"] == {
+        "generation": "20260911-v6",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": "2026-08-31",
+        "universe_count": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("universes", "reason"),
+    [
+        ([], "non-empty universes"),
+        ([{"pool_id": "csi300", "gap_count": 1}], "gap_count"),
+        (
+            [
+                {"pool_id": "csi300", "gap_count": 0},
+                {"pool_id": "csi300", "gap_count": 0},
+            ],
+            "duplicate pool_id",
+        ),
+    ],
+)
+def test_post_restart_verify_rejects_unusable_qe_dataset_profile(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    universes: list[dict[str, object]],
+    reason: str,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_QE_DATASET_PROFILE_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "mode": "active_profile",
+                    "generation": "20260911-v6",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "cutoff": "2026-08-31",
+                    "universes": universes,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "qe_dataset_profile"
+    assert reason in smoke["semantic"]["reason"]
 
 
 def test_post_restart_verify_accepts_advisory_program_collection(
