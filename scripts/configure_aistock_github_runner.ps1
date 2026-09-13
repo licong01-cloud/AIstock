@@ -122,6 +122,11 @@ if ($AuditOnly) {
   }
   if (-not (Test-Path -LiteralPath $auditWrapperPath -PathType Leaf)) {
     $blocking += "runner wrapper is missing: $auditWrapperPath"
+  } else {
+    $auditWrapperText = Get-Content -Raw -LiteralPath $auditWrapperPath
+    if ($auditWrapperText -notmatch '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES="\s*$') {
+      $blocking += 'runner wrapper must clear GIT_ALTERNATE_OBJECT_DIRECTORIES; external object caches are not durable runner dependencies'
+    }
   }
   if (-not (Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf)) {
     $blocking += "runner supervisor is missing: $auditSupervisorPath"
@@ -313,6 +318,13 @@ $wrapperText = [regex]::Replace(
   ('cd /d "' + $resolvedRoot + '"'),
   1
 )
+$gitAlternatePattern = '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES=.*"\s*$'
+$gitAlternateClear = 'set "GIT_ALTERNATE_OBJECT_DIRECTORIES="'
+if ($wrapperText -match $gitAlternatePattern) {
+  $wrapperText = [regex]::Replace($wrapperText, $gitAlternatePattern, $gitAlternateClear)
+} else {
+  $wrapperText = $wrapperText -replace '(?im)^call run\.cmd', ($gitAlternateClear + "`r`ncall run.cmd")
+}
 if ($wrapperText -match '(?im)^set "AISTOCK_RUNNER_ROLE=.*"\s*$') {
   $wrapperText = [regex]::Replace(
     $wrapperText,

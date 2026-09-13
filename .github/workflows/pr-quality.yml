@@ -20,6 +20,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+
 jobs:
   pr-quality:
     name: Context, scope, and open-source tooling dry-run

@@ -15,6 +15,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+
 jobs:
   semgrep:
     name: AIstock Semgrep guardrails

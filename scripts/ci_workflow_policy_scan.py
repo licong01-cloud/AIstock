@@ -48,6 +48,7 @@ PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
 )
+GIT_ALTERNATE_CLEAR_MARKER = "\n  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -129,9 +130,18 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
 
     findings: list[dict[str, str]] = []
     for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if "self-hosted" in text and GIT_ALTERNATE_CLEAR_MARKER not in text:
+            findings.append(
+                {
+                    "path": path.as_posix(),
+                    "line": "1",
+                    "reason": "self-hosted workflow must clear inherited Git alternate object directories",
+                    "text": "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                }
+            )
         if path.name not in WINDOWS_CI_WORKFLOWS:
             continue
-        text = path.read_text(encoding="utf-8")
         expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[path.name]
         runner_re = re.compile(
             rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
@@ -303,6 +313,10 @@ def build_contract_evidence(
         and all("aistock-ci" in text.casefold() for text in ci_texts),
         "environment_fingerprint_match": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
         and all("ci_environment_verify.py" in text for text in ci_texts),
+        "self_hosted_workflows_clear_git_alternate_objects": all(
+            "self-hosted" not in text or GIT_ALTERNATE_CLEAR_MARKER in text
+            for text in workflow_text.values()
+        ),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
         "nox_ci_install_fail_closed_guard": bool(nox_text) and not scan_nox_text(nox_text, nox_path.as_posix()),
