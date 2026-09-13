@@ -2,8 +2,8 @@
 
 - init 模式：在给定日期区间内，按交易日循环，调用 Tushare pro.adj_factor(trade_date=YYYYMMDD)，
   将全市场复权因子写入 market.adj_factor。可选在开始前 TRUNCATE 目标表。
-- incremental 模式：从当前表中最大 trade_date + 1（或显式 start_date）开始，按交易日逐日推进，
-  一直跑到 end_date（默认今天），使用 ON CONFLICT(upsert) 以便重算修复数据。
+- incremental 模式：对本地相关股票逐只执行两次完整历史稳定读取，校验覆盖后，在单一事务内仅追加新后缀、
+  并替换发生历史重述的股票；不再使用只能发现新增日期的逐日 upsert 作为增量写入路径。
 
 Environment:
 - TUSHARE_TOKEN      用于初始化 Tushare pro_api
@@ -11,6 +11,7 @@ Environment:
 
 该脚本接入 ingestion_jobs / ingestion_logs，便于前端监控任务进度。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +19,7 @@ import datetime as dt
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -26,6 +28,11 @@ import psycopg2
 import psycopg2.extras as pgx
 from dotenv import load_dotenv
 import requests
+
+from backend.services.adj_factor_history_reconciler import (
+    AdjFactorHistoryReconciler,
+    PostgresAdjFactorHistoryRepository,
+)
 
 
 load_dotenv(override=True)
@@ -40,6 +47,8 @@ DB_CFG = dict(
     dbname=os.getenv("TDX_DB_NAME", "aistock"),
     application_name="AIstock-ingest-adj-factor",
 )
+
+_HISTORY_PROVIDER_LOCAL = threading.local()
 
 
 def _load_tushare():
@@ -56,14 +65,53 @@ def pro_api():
     return ts.pro_api(token)
 
 
+def _history_provider_factory():
+    provider = getattr(_HISTORY_PROVIDER_LOCAL, "provider", None)
+    if provider is None:
+        provider = pro_api()
+        _HISTORY_PROVIDER_LOCAL.provider = provider
+    return provider
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Tushare adj_factor into TimescaleDB")
     parser.add_argument("--mode", type=str, default="init", choices=["init", "incremental"], help="Ingestion mode")
-    parser.add_argument("--start-date", type=str, default=None, help="Start date YYYY-MM-DD (init or override for incremental)")
+    parser.add_argument(
+        "--start-date", type=str, default=None, help="Start date YYYY-MM-DD (init or override for incremental)"
+    )
     parser.add_argument("--end-date", type=str, default=None, help="End date YYYY-MM-DD (defaults to today)")
     parser.add_argument("--job-id", type=str, default=None, help="Existing job id to attach and update")
     parser.add_argument("--truncate", action="store_true", help="TRUNCATE market.adj_factor before init")
     parser.add_argument("--batch-sleep", type=float, default=0.1, help="Sleep seconds between trade_date batches")
+    parser.add_argument(
+        "--history-reconcile-workers",
+        type=int,
+        default=int(os.getenv("ADJ_FACTOR_HISTORY_RECONCILE_WORKERS", "4")),
+        help="Parallel readers for mandatory incremental full-history reconciliation",
+    )
+    parser.add_argument(
+        "--history-reconcile-rate-per-minute",
+        type=int,
+        default=int(os.getenv("ADJ_FACTOR_HISTORY_RATE_PER_MINUTE", "480")),
+        help="Shared Tushare request limit across reconciliation workers",
+    )
+    parser.add_argument(
+        "--history-reconcile-max-pages",
+        type=int,
+        default=int(os.getenv("ADJ_FACTOR_HISTORY_MAX_PAGES", "4")),
+        help="Maximum backward pages for provider-limited long histories",
+    )
+    parser.add_argument(
+        "--history-reconcile-symbol",
+        action="append",
+        default=None,
+        help="Limit reconciliation to one symbol; repeat only for controlled diagnostics",
+    )
+    parser.add_argument(
+        "--history-reconcile-dry-run",
+        action="store_true",
+        help="Audit stable full histories without replacing market.adj_factor rows",
+    )
     parser.add_argument(
         "--bulk-session-tune",
         action="store_true",
@@ -94,12 +142,10 @@ def _get_max_trade_date(conn) -> Optional[dt.date]:
 def _create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
     job_id = uuid.uuid4()
     with conn.cursor() as cur:
-        sql = (
-            """
+        sql = """
             INSERT INTO market.ingestion_jobs (job_id, job_type, status, created_at, started_at, summary)
             VALUES (%s, %s, 'running', NOW(), NOW(), %s)
             """
-        )
         payload = (job_id, job_type, json.dumps(summary, ensure_ascii=False))
         print("[DEBUG] _create_job SQL:", sql.strip().replace("\n", " "))
         print("[DEBUG] _create_job params:", payload)
@@ -112,13 +158,11 @@ def _create_job(conn, job_type: str, summary: Dict[str, Any]) -> uuid.UUID:
 
 def _start_existing_job(conn, job_id: uuid.UUID, summary: Dict[str, Any]) -> None:
     with conn.cursor() as cur:
-        sql = (
-            """
+        sql = """
             UPDATE market.ingestion_jobs
                SET status='running', started_at=COALESCE(started_at, NOW()), summary=%s
              WHERE job_id=%s
             """
-        )
         payload = (json.dumps(summary, ensure_ascii=False), job_id)
         print("[DEBUG] _start_existing_job SQL:", sql.strip().replace("\n", " "))
         print("[DEBUG] _start_existing_job params:", payload)
@@ -207,13 +251,11 @@ def _update_job_progress(conn, job_id: uuid.UUID, stats: Dict[str, Any]) -> None
         "done_days": done,
     }
     with conn.cursor() as cur:
-        sql = (
-            """
+        sql = """
             UPDATE market.ingestion_jobs
                SET summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
              WHERE job_id = %s
             """
-        )
         params = (json.dumps(payload, ensure_ascii=False), job_id)
         print("[DEBUG] _update_job_progress SQL:", sql.strip().replace("\n", " "))
         print("[DEBUG] _update_job_progress params:", params)
@@ -294,7 +336,6 @@ def run_ingestion(
     stats["total_days"] = len(days)
     for idx, d in enumerate(days, start=1):
         try:
-            last_exc: Optional[BaseException] = None
             for attempt in range(1, 4):
                 try:
                     rows = _fetch_adj_factor_for_date(pro, d)
@@ -306,12 +347,18 @@ def run_ingestion(
                     stats["success_days"] += 1
                     break
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as net_exc:
-                    last_exc = net_exc
                     if attempt >= 3:
                         raise
                     wait_seconds = 5 * attempt
-                    _log(conn, job_id, "warn", f"adj_factor {d} network error on attempt {attempt}: {net_exc}; retrying in {wait_seconds}s")
-                    print(f"[WARN] adj_factor {d} network error on attempt {attempt}: {net_exc}; retrying in {wait_seconds}s")
+                    _log(
+                        conn,
+                        job_id,
+                        "warn",
+                        f"adj_factor {d} network error on attempt {attempt}: {net_exc}; retrying in {wait_seconds}s",
+                    )
+                    print(
+                        f"[WARN] adj_factor {d} network error on attempt {attempt}: {net_exc}; retrying in {wait_seconds}s"
+                    )
                     time.sleep(wait_seconds)
         except Exception as exc:  # noqa: BLE001
             stats["failed_days"] += 1
@@ -326,15 +373,14 @@ def run_ingestion(
             # Progress update failure should not break ingestion; rollback this tx, log and continue.
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:  # noqa: BLE001
+                print(f"[ERROR] failed to rollback progress transaction: {rollback_exc}")
             msg = f"failed to update job progress: {exc}"
             print(f"[WARN] {msg}")
             try:
                 _log(conn, job_id, "warn", msg)
-            except Exception:
-                # 如果日志写入也失败，就静默忽略，避免影响主流程。
-                pass
+            except Exception as log_exc:  # noqa: BLE001
+                print(f"[ERROR] failed to persist progress warning: {log_exc}")
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats
@@ -386,8 +432,7 @@ def main() -> None:
                 else:
                     start_date = max_date + dt.timedelta(days=1)
             if start_date > end_date:
-                print("[INFO] adj_factor up to date; nothing to do")
-                return
+                print("[INFO] adj_factor daily rows are up to date; continuing with history reconciliation")
         else:
             print(f"[ERROR] unsupported mode: {mode}")
             sys.exit(1)
@@ -411,7 +456,54 @@ def main() -> None:
         _log(conn, job_id, "info", f"start tushare adj_factor ingestion {mode} {start_date} -> {end_date}")
 
         try:
-            stats = run_ingestion(conn, pro, mode, start_date, end_date, job_id, args.batch_sleep)
+            history_receipt = None
+            if mode == "incremental":
+                _log(
+                    conn,
+                    job_id,
+                    "info",
+                    "start mandatory no-LLM adj_factor complete-history reconciliation; "
+                    "this is the only incremental market.adj_factor write path",
+                )
+                history_receipt = AdjFactorHistoryReconciler(
+                    repository=PostgresAdjFactorHistoryRepository(conn),
+                    provider_factory=_history_provider_factory,
+                    workers=args.history_reconcile_workers,
+                    calls_per_minute=args.history_reconcile_rate_per_minute,
+                    max_pages=args.history_reconcile_max_pages,
+                ).reconcile(
+                    end_date=end_date,
+                    symbols=args.history_reconcile_symbol,
+                    dry_run=args.history_reconcile_dry_run,
+                )
+                _log(
+                    conn,
+                    job_id,
+                    "info",
+                    "adj_factor history reconciliation finished: "
+                    f"status={history_receipt['status']} "
+                    f"scanned={history_receipt['scanned_symbol_count']} "
+                    f"changed={history_receipt['changed_symbol_count']} "
+                    f"written_rows={history_receipt['written_row_count']}",
+                )
+                stats = {
+                    "total_days": 0,
+                    "success_days": 0,
+                    "failed_days": 0,
+                    "inserted_rows": history_receipt["written_row_count"],
+                }
+            else:
+                stats = run_ingestion(
+                    conn,
+                    pro,
+                    mode,
+                    start_date,
+                    end_date,
+                    job_id,
+                    args.batch_sleep,
+                )
+                if stats["failed_days"]:
+                    raise RuntimeError(f"adj_factor ingestion has {stats['failed_days']} failed date batches")
             # 更新 data_stats.last_updated_at，仅针对 adj_factor
             _touch_data_stats_last_updated(conn)
             # 结束时写一条总览日志，汇总成功/失败天数与插入行数
@@ -421,8 +513,14 @@ def main() -> None:
                 "info",
                 f"adj_factor finished: mode={mode} total_days={stats['total_days']} success_days={stats['success_days']} failed_days={stats['failed_days']} inserted_rows={stats['inserted_rows']}",
             )
-            _finish_job(conn, job_id, "success" if stats["failed_days"] == 0 else "failed", {"stats": stats})
-            print(f"[DONE] adj_factor mode={mode} stats={stats}")
+            finish_summary = {"stats": stats}
+            if history_receipt is not None:
+                finish_summary["history_reconciliation"] = history_receipt
+            _finish_job(conn, job_id, "success", finish_summary)
+            print(
+                f"[DONE] adj_factor mode={mode} stats={stats} "
+                f"history_status={(history_receipt or {}).get('status', 'not_run')}"
+            )
         except Exception as exc:  # noqa: BLE001
             _finish_job(conn, job_id, "failed", {"error": str(exc)})
             print(f"[ERROR] adj_factor failed: {exc}")

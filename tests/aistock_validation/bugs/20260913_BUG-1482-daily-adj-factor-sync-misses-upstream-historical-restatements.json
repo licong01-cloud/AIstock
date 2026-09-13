@@ -1,6 +1,11 @@
 {
   "actual": "market.adj_factor is synchronized BY_DATE, so upstream full-history revisions leave mixed old/new factor baselines. Add a deterministic no-LLM daily audit that stages stable provider histories, detects per-symbol revision drift, transactionally replaces affected symbol histories, records exact receipts, and preserves existing UI/API behavior. Ambiguous or unstable provider reads must fail closed; downstream dataset invalidation must be explicit.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/services/adj_factor_history_reconciler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+    "backend/tests/services/test_adj_factor_history_reconciler.py",
+    "scripts/ingest_tushare_adj_factor.py",
     "tests/aistock_validation/bugs/20260913_BUG-1482-daily-adj-factor-sync-misses-upstream-historical-restatements.json"
   ],
   "assigned_agent": null,
@@ -24,9 +29,19 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py"
+    ],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "scripts/ingest_tushare_adj_factor.py"
+    ],
+    "changed_files_source": "task_scope_expansion",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +50,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "scripts/ingest_tushare_adj_factor.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "scripts/ingest_tushare_adj_factor.py"
+    ]
   },
   "first_seen_at": "2026-09-13T17:11:57.533795Z",
   "fix_branch": null,
@@ -62,15 +89,29 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py::test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path -q -> passed",
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py::test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path -q -> 1 passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
