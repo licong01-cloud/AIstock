@@ -11,6 +11,9 @@ permissions:
   contents: read
   security-events: write
 
+env:
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+
 concurrency:
   group: codeql-nightly-main
   cancel-in-progress: true

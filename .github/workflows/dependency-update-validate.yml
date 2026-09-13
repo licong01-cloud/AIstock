@@ -14,6 +14,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+
 jobs:
   dependency-update-validate:
     name: Validate dependency update surface
