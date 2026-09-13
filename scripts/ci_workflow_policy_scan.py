@@ -436,7 +436,11 @@ def build_contract_evidence(
             and "default: false" in nightly_code_intelligence_input
             and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
             and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
-            and "--required-label aistock-ci" in nightly_text
+        ),
+        "nightly_preflight_requires_distinct_runner_roles": (
+            "--required-role general=self-hosted,windows,aistock-ci" in nightly_text
+            and "--required-role security=self-hosted,windows,aistock-ci-security" in nightly_text
+            and "--required-label aistock-ci" not in nightly_text
         ),
         "redundant_issue_event_workflows_retired": (
             "issue-auto-link.yml" not in workflow_text

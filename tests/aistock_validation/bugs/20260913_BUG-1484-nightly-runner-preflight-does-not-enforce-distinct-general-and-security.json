@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     ".github/workflows/nightly.yml",
     "backend/tests/scripts/test_aistock_runner_health.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260913_BUG-1484-nightly-runner-preflight-does-not-enforce-distinct-general-and-security.json"
   ],
   "assigned_agent": null,
@@ -31,13 +34,19 @@
     "added_files": [],
     "changed_files": [
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_aistock_runner_health.py"
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
-        "backend/tests/scripts/test_aistock_runner_health.py"
+        "backend/tests/scripts/test_aistock_runner_health.py",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -78,12 +87,18 @@
     },
     "planned_files": [
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_aistock_runner_health.py"
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_aistock_runner_health.py"
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
   "first_seen_at": "2026-09-13T17:33:58.555018Z",

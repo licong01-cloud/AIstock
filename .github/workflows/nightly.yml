@@ -111,9 +111,8 @@ jobs:
           python scripts/aistock_runner_health.py doctor \
             --repo "${{ github.repository }}" \
             --workflow "nightly.yml" \
-            --required-label self-hosted \
-            --required-label windows \
-            --required-label aistock-ci \
+            --required-role general=self-hosted,windows,aistock-ci \
+            --required-role security=self-hosted,windows,aistock-ci-security \
             --stale-queued-minutes 30 \
             --output-json tmp/validation/runner_health/runner-health.json \
             --output-md tmp/validation/runner_health/runner-health.md
