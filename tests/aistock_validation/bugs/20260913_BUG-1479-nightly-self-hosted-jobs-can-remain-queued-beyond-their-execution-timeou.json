@@ -2,6 +2,7 @@
   "actual": "Queued self-hosted jobs can outlive the next development cycle; preflight diagnoses but does not terminate stale same-workflow runs.",
   "allowed_write_scope": [
     ".github/workflows/nightly.yml",
+    ".github/workflows/runner-queue-watchdog.yml",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_runner_health.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -31,15 +32,28 @@
   ],
   "expected": "Superseded or orphaned main Nightly runs are bounded and finalized without cancelling already-running valid jobs or adding a PR gate.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260913_BUG-1479-nightly-self-hosted-jobs-can-remain-queued-beyond-their-execution-timeou.json",
       ".github/workflows/nightly.yml",
-      "scripts/aistock_runner_health.py",
       "backend/tests/scripts/test_aistock_runner_health.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_runner_health.py",
+      ".github/workflows/runner-queue-watchdog.yml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      ".github/workflows/runner-queue-watchdog.yml"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260913_BUG-1479-nightly-self-hosted-jobs-can-remain-queued-beyond-their-execution-timeou.json",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_runner_health.py",
+      ".github/workflows/runner-queue-watchdog.yml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -117,6 +131,7 @@
     },
     "planned_files": [
       ".github/workflows/nightly.yml",
+      ".github/workflows/runner-queue-watchdog.yml",
       "scripts/aistock_runner_health.py",
       "backend/tests/scripts/test_aistock_runner_health.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -125,6 +140,7 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       ".github/workflows/nightly.yml",
+      ".github/workflows/runner-queue-watchdog.yml",
       "scripts/aistock_runner_health.py",
       "backend/tests/scripts/test_aistock_runner_health.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -155,10 +171,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,

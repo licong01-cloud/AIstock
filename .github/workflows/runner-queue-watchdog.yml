@@ -1,0 +1,63 @@
+name: AIstock Runner Queue Watchdog
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: aistock-runner-queue-watchdog
+  cancel-in-progress: true
+
+jobs:
+  reconcile-scheduled-queues:
+    name: Reconcile stale scheduled queues
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cancel only stale scheduled runs without active jobs
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p tmp/validation/runner_queue_watchdog
+          for workflow in nightly.yml codeql.yml code-intelligence-refresh.yml; do
+            output="tmp/validation/runner_queue_watchdog/${workflow%.yml}.json"
+            python scripts/aistock_runner_health.py cancel-stale-queued \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "${workflow}" \
+              --stale-queued-minutes 30 \
+              --current-run-id "${GITHUB_RUN_ID}" \
+              --current-event schedule \
+              --expected-head-branch main \
+              --output-json "${output}"
+          done
+
+      - name: Summarize queue reconciliation
+        if: always()
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          receipts = []
+          for path in sorted(Path("tmp/validation/runner_queue_watchdog").glob("*.json")):
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              receipts.append(
+                  {
+                      "workflow": payload["workflow"],
+                      "gate": payload["workflow_gate"],
+                      "cancelled": payload["cancelled_run_ids"],
+                      "skipped": payload["skipped"],
+                  }
+              )
+          summary = ["## Runner queue watchdog", "", "```json", json.dumps(receipts, indent=2), "```"]
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write("\n".join(summary) + "\n")

@@ -307,6 +307,8 @@ PR CI 的评论、完整 artifact 上传和其他报告发布器属于非阻断�
 
 Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
 
+定时 Nightly、CodeQL 与 Code Intelligence 的 self-hosted job 排队不受 job `timeout-minutes` 约束，因此 GitHub-hosted 轻量 watchdog 与各自 preflight 必须对同一 workflow、`main`、`schedule` 事件中超过 30 分钟且仍为 queued、精确回读确认没有 `in_progress` job 的旧 run 执行有界终结，并留下结构化收据。watchdog 不 checkout 依赖、不领取 self-hosted runner、不运行测试；禁止取消普通 PR、手工 dispatch、其他分支、其他 workflow 或已经领取 runner 的 job。取消 API 失败时保持旧 run 并 fail closed。该队列终结属于基础设施维护，不增加 PR 门禁、业务测试、依赖安装或进程控制。
+
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
 Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 环境，不得调用生产 `AIstock` 环境代替测试环境；独立 DR 运维 job 仍按其授权目标使用运维环境，不受此替换。一次性 Nightly checkout 需要前端依赖时，只能在 `package-lock.json` SHA-256 一致且锁定的直接 Playwright CLI 存在后，把 canonical 预构建 `frontend/node_modules` 以目录链接挂入 workspace；禁止每轮安装、复制大型依赖树、静默跳过 UI 计划或在锁文件漂移时继续运行。清理一次性 workspace 时只删除链接本身，不得递归删除依赖源。

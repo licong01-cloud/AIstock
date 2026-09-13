@@ -80,6 +80,23 @@ def _github_get(path: str, *, token: str | None, timeout_seconds: int = 30) -> A
         raise RuntimeError(f"GitHub API {path} failed: {exc}") from exc
 
 
+def _github_post(path: str, *, token: str | None, timeout_seconds: int = 30) -> None:
+    request = urllib.request.Request(f"{GITHUB_API}{path}", data=b"", method="POST")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("User-Agent", "AIstock-runner-health")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds):
+            return
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub API {path} failed: HTTP {exc.code}: {body}") from exc
+    except Exception as exc:  # pragma: no cover - network failures vary by host
+        raise RuntimeError(f"GitHub API {path} failed: {exc}") from exc
+
+
 def _label_names(runner: dict[str, Any]) -> set[str]:
     return {str(item.get("name") or "").lower() for item in runner.get("labels") or []}
 
@@ -143,9 +160,93 @@ def _stale_queued_runs(runs: list[dict[str, Any]], *, stale_minutes: int, now: d
                     "url": run.get("html_url") or run.get("url"),
                     "head_branch": run.get("head_branch") or run.get("headBranch"),
                     "head_sha": run.get("head_sha") or run.get("headSha"),
+                    "event": run.get("event"),
                 }
             )
     return stale
+
+
+def cancel_stale_scheduled_runs(
+    *,
+    repo: str,
+    workflow: str,
+    stale_queued_minutes: int,
+    current_run_id: int,
+    current_event: str,
+    expected_head_branch: str,
+    token: str | None,
+    now: datetime | None = None,
+    runs_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Cancel only superseded scheduled runs which still have no active job."""
+    receipt: dict[str, Any] = {
+        "schema_version": "aistock_runner_queue_reconciliation_v1",
+        "workflow": workflow,
+        "current_run_id": current_run_id,
+        "current_event": current_event,
+        "expected_head_branch": expected_head_branch,
+        "stale_queued_minutes": stale_queued_minutes,
+        "cancelled_run_ids": [],
+        "skipped": [],
+        "errors": [],
+        "workflow_gate": "ready",
+    }
+    if current_event != "schedule":
+        receipt["action"] = "noop_non_scheduled_run"
+        return receipt
+    if not token:
+        receipt["errors"].append("GitHub Actions write token is unavailable")
+        receipt["workflow_gate"] = "blocked"
+        return receipt
+
+    try:
+        payload = runs_payload or _github_get(
+            f"/repos/{repo}/actions/workflows/{workflow}/runs?status=queued&per_page={MAX_QUEUED_RUNS_TO_INSPECT}",
+            token=token,
+        )
+    except Exception as exc:
+        receipt["errors"].append({"run_id": None, "error": str(exc)})
+        receipt["workflow_gate"] = "blocked"
+        receipt["action"] = "query_failed"
+        return receipt
+    stale_runs = _stale_queued_runs(
+        list(payload.get("workflow_runs") or payload.get("runs") or []),
+        stale_minutes=stale_queued_minutes,
+        now=now or datetime.now(timezone.utc),
+    )
+    for run in stale_runs:
+        run_id = run.get("run_id")
+        if not run_id or int(run_id) == int(current_run_id):
+            continue
+        if run.get("event") != "schedule" or run.get("head_branch") != expected_head_branch:
+            receipt["skipped"].append({"run_id": run_id, "reason": "identity_mismatch"})
+            continue
+        try:
+            exact = _github_get(f"/repos/{repo}/actions/runs/{run_id}", token=token)
+            if (
+                str(exact.get("status") or "").lower() != "queued"
+                or exact.get("event") != "schedule"
+                or exact.get("head_branch") != expected_head_branch
+            ):
+                receipt["skipped"].append({"run_id": run_id, "reason": "state_changed"})
+                continue
+            jobs = _github_get(f"/repos/{repo}/actions/runs/{run_id}/jobs?per_page=100", token=token)
+            active_jobs = [
+                job
+                for job in jobs.get("jobs") or []
+                if str(job.get("status") or "").lower() == "in_progress"
+            ]
+            if active_jobs:
+                receipt["skipped"].append({"run_id": run_id, "reason": "active_job"})
+                continue
+            _github_post(f"/repos/{repo}/actions/runs/{run_id}/cancel", token=token)
+            receipt["cancelled_run_ids"].append(int(run_id))
+        except Exception as exc:  # fail closed and retain the exact run
+            receipt["errors"].append({"run_id": run_id, "error": str(exc)})
+    if receipt["errors"]:
+        receipt["workflow_gate"] = "blocked"
+    receipt["action"] = "cancelled_stale_runs" if receipt["cancelled_run_ids"] else "noop"
+    return receipt
 
 
 def _queued_job_summaries(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -446,12 +547,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument("--output-json")
     doctor.add_argument("--output-md")
+    cancel = sub.add_parser(
+        "cancel-stale-queued",
+        help="Cancel stale scheduled runs after exact queued/no-active-job revalidation.",
+    )
+    cancel.add_argument("--repo", default=DEFAULT_REPO)
+    cancel.add_argument("--workflow", default=DEFAULT_WORKFLOW)
+    cancel.add_argument("--stale-queued-minutes", type=int, default=30)
+    cancel.add_argument("--current-run-id", type=int, required=True)
+    cancel.add_argument("--current-event", required=True)
+    cancel.add_argument("--expected-head-branch", default="main")
+    cancel.add_argument("--runs-json", help="Use a local workflow-runs payload for deterministic tests.")
+    cancel.add_argument("--output-json")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     token, token_source = resolve_github_token()
+    if args.command == "cancel-stale-queued":
+        receipt = cancel_stale_scheduled_runs(
+            repo=args.repo,
+            workflow=args.workflow,
+            stale_queued_minutes=args.stale_queued_minutes,
+            current_run_id=args.current_run_id,
+            current_event=args.current_event,
+            expected_head_branch=args.expected_head_branch,
+            token=token,
+            runs_payload=_read_json(args.runs_json) if args.runs_json else None,
+        )
+        receipt["token_source"] = token_source
+        if args.output_json:
+            path = Path(args.output_json)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(receipt, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        print(json.dumps(receipt, indent=2, ensure_ascii=True))
+        return 0 if receipt["workflow_gate"] == "ready" else 2
+
     required = args.required_label or ["self-hosted", "windows"]
     required_roles: dict[str, list[str]] = {}
     for raw in args.required_role:

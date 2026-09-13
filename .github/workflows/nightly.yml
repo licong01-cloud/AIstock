@@ -80,10 +80,25 @@ jobs:
       retry_run_id: ${{ steps.select_nightly_receipt.outputs.run_id }}
       retry_source_head: ${{ steps.select_nightly_receipt.outputs.head_sha }}
     permissions:
-      actions: read
+      actions: write
       contents: read
     steps:
       - uses: actions/checkout@v7
+
+      - name: Finalize superseded scheduled Nightly queue entries
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p tmp/validation/runner_health
+          python scripts/aistock_runner_health.py cancel-stale-queued \
+            --repo "${{ github.repository }}" \
+            --workflow "nightly.yml" \
+            --stale-queued-minutes 30 \
+            --current-run-id "${{ github.run_id }}" \
+            --current-event "${{ github.event_name }}" \
+            --expected-head-branch main \
+            --output-json tmp/validation/runner_health/queue-reconciliation.json
 
       - name: Check self-hosted runner availability
         env:
