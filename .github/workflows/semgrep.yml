@@ -17,6 +17,8 @@ defaults:
 
 env:
   GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+  GIT_HTTP_LOW_SPEED_LIMIT: '1'
+  GIT_HTTP_LOW_SPEED_TIME: '60'
 
 jobs:
   semgrep:
