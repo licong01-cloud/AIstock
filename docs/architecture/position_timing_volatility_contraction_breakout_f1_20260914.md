@@ -1,7 +1,7 @@
 # 波动收缩后区间突破择时研究设计
 
-> 版本：v1.1；日期：2026-09-14；Feature tier：F1（`position_timing` 单模块离线研究）
-> 状态：`ENGINEERING_VERIFIED_FORMAL_REPLAY_PENDING`
+> 版本：v1.2；日期：2026-09-14；Feature tier：F1（`position_timing` 单模块离线研究）
+> 状态：`FORMAL_REPLAY_COMPLETE_INCONCLUSIVE_NOT_SERVING`
 > 任务：`PT-NEXT-019 / VOLATILITY_CONTRACTION_BREAKOUT_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 前序方法队列：[自选股与持仓股形态择时研究设计](position_timing_pattern_strategy_design_20260911.md) §7
@@ -70,7 +70,7 @@ r4 DailyCandidate + 冻结公司行动/停牌/配股 authority
 |---|---:|
 | 区间上沿窗口 | 20 个全局交易日，严格为 T-20..T-1 的调整后最高价 |
 | ATR | 14 日简单平均 true range |
-| 历史波动基准 | `ATR14 / adjusted_close` 的此前 252 个有效比较值 |
+| 历史波动基准 | `ATR14 / adjusted_close` 在 T-253..T-2 的连续252个全局交易日观察；任一输入缺失则当前信号`UNAVAILABLE`，不删除缺失日另取更早值补足 |
 | 低波动阈值 | 30% 分位；阈值窗口截止 T-2，待比较值为 T-1 |
 | 成交量收缩 | T-5..T-1 的可比成交量均值 `<` T-20..T-1 均值 |
 | 突破 | T 日调整后收盘 `>` T-20..T-1 调整后最高价 |
@@ -158,7 +158,15 @@ receipt 至少包含：source/candidate/policy/rule/code hash、人口和日期�
 
 本地只运行直接测试、changed-file/scope 检查、ruff/compile、F1/F2 validator 与必要的 position_timing 回归；广泛重复覆盖交给 PR CI/Nightly，不为“多轮”机械重复同一套日志。正式收益 bundle、inspect 和 exact retry 是业务证据，不替代代码测试。
 
-当前工程读回：新增纯策略与专用研究管线各一个文件，只对既有 `replay_full_policy_symbol` 增加默认不变的入场观察函数和补充退出开关；新增两个直接测试文件，并在既有 pattern 测试中补默认等价反例。直接测试33项通过，完整 `backend/tests/position_timing` 在项目 `AIstock` Python环境为315项通过，ruff与compile通过。真实r4 source-only预检得到64只评价股、364/364个material factor interval已绑定、unbound=0、三条配股参与政策均冻结；固定开发股前2只产生19个市场匹配、9个现金态可行动信号和4,816行连续sleeve。上述只证明工程路径和来源闭合，不是正式收益结论。
+当前工程读回：新增纯策略与专用研究管线各一个文件，只对既有 `replay_full_policy_symbol` 增加默认不变的入场观察函数、补充退出开关和同风险退出的 always-open 基线开关；新增两个直接测试文件，并在既有 pattern 测试中补默认等价反例。直接测试36项通过；完整 `backend/tests/position_timing` 的最终数量以§9矩阵和本次PR记录为准。ruff与compile通过。真实r4 source-only预检得到64只评价股、364/364个material factor interval已绑定、unbound=0、三条配股参与政策均冻结；固定开发股前2只产生19个市场匹配、9个现金态可行动信号和4,816行连续sleeve。上述工程读回只证明路径和来源闭合，正式收益结论以§7.1唯一最终bundle为准。
+
+### 7.1 正式回放与审核修复
+
+正式运行保留四个不可变 request 身份。首个 `35016b2d...fdd989` 在收益读取前因 tuple/list JSON round-trip 直接比较失败且无bundle；修复改为canonical identity比较。第二个 `d691f08b...4e7b62` 完成计算，但错误地让2/3父订单诊断的合法拆单缺口否决1父订单主覆盖。第三个 `241f8aa7...fdef251c` 修正覆盖分层后完成计算，复核又发现其候选使用冻结风险退出而正式buy-and-hold comparator不退出，混合了入场与退出效应，不能作为OPEN机制结论。三者均原样保留且不用于最终证据；没有据其点估计修改股票、日期、信号或阈值。
+
+最终 request `c2a9598ada5eee9cb691d191454be61d64ca223c8eb3f66c1bc20e90184ce494` 绑定提交 `52217df3b4d86b5c9c4b82ee6ed8a072ec383412`，正式 comparator 改为与候选共享同一冻结风险退出、仅在现金入场时不同的 `ALWAYS_OPEN_RISK_MANAGED`。主1父订单路径64/64完整，364/364个material factor interval已绑定、unbound=0；共77,056条信号观察，其中341条市场匹配、185条现金态可行动。2/3父订单诊断各为63/64，因为`688052.SH`在对应情景无法合法拆单，记`COST_SENSITIVITY_INCOMPLETE`，不否决主证据。
+
+唯一正式比较 `VCB_V1_MINUS_ALWAYS_OPEN_RISK_MANAGED` 的成本后日均增量点估计为 `-4.2788 bps`，95%区间 `[-11.6889,+2.9364] bps`，1,204个有效交易日累计点估计 `-5,151.65 bps`；区间跨0，故为 `INCONCLUSIVE`、`selected_trial_count=0`，不是统计可分辨的负结论，更不是有效策略。bundle内manifest/receipt/coverage的canonical identity分别为`db7dd39ea5dc6b936d299662ff74bbd493fab56cce29c08c11396a992b61456c`、`a697c5e625908d401b2bf0311f8067e31032dc5fe834a3629d8e1828d8c2de2e`、`904efd348a0a65d066e8d9f862f37c17367adeaa460298381e31f9ae2ac911d9`；对应三个JSON文件的原始SHA256分别为`7a6057a42c71ce5c79b291db97f41e3d069b140efeb017be0ca52d9d448d04ee`、`219e7a73be23df80a39bf32c740e1d03960c688a1c48e67b0d37756c8ccb8b23`、`5993a31ba188676076614b2946c483320e49300b246573c4c3654c2fa1c175ef`。inspect为`BUNDLE_VALID`，exact retry为`ALREADY_MATERIALIZED`且hash不变。全部保护写入为false，不发布card、alert、registry/current或serving，也不沿负点估计继续调参。
 
 ## 8. Design Acceptance Index
 
@@ -175,22 +183,24 @@ receipt 至少包含：source/candidate/policy/rule/code hash、人口和日期�
 
 ## 9. Design Acceptance Matrix / 设计验收矩阵
 
-`ENGINEERING_VERIFIED` 表示代码、直接测试和当前source-only预检闭合，不表示正式回放已经完成、策略取得收益或运行功能已经发布。正式bundle完成后还必须逐行补入artifact证据；不得引用本矩阵声称策略有效。
+`ENGINEERING_AND_FORMAL_REPLAY_VERIFIED` 表示代码、直接测试、source与最终历史回放artifact闭合，不表示策略取得收益或运行功能已经发布。本次唯一正式区间跨0、selected=0；不得引用本矩阵、负点估计或coverage声称策略有效或已证明无效。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文§1、§2、§4.3；`volatility_contraction_breakout_research.py` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；父队列§7 | ENGINEERING_VERIFIED | none |
-| F-002 | `volatility_contraction_breakout.py` | `backend/tests/position_timing/test_volatility_contraction_breakout.py` | ENGINEERING_VERIFIED | none |
-| F-003 | `volatility_contraction_breakout_research.py::_source_contract/prepare_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；真实source-only预检364/364、rights=3 | ENGINEERING_VERIFIED | none |
-| F-004 | `volatility_contraction_breakout_research.py::_comparison/run_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py` | ENGINEERING_VERIFIED | none |
-| F-005 | `pattern_research.py::replay_full_policy_symbol` 两个默认不变参数 | `backend/tests/position_timing/test_pattern_research.py` 默认等价与即时T+1反例 | ENGINEERING_VERIFIED | none |
-| F-006 | `volatility_contraction_breakout_research.py::_publish_bundle/inspect_bundle/run_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py` 篡改与exact retry反例 | ENGINEERING_VERIFIED | none |
-| F-007 | 本文§2、§3；新文件仅导入`position_timing` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py` 写入布尔值；合入前scope/import扫描 | ENGINEERING_VERIFIED | none |
-| F-008 | 本文§6、§7、§10 | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；完整position_timing回归315 passed；`scripts/aistock_feature_workflow.py` F1 validator；PR CI待当前PR | ENGINEERING_VERIFIED | none |
+| F-001 | 本文§1、§2、§4.3；`volatility_contraction_breakout_research.py` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；最终request/receipt | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-002 | `volatility_contraction_breakout.py` | `backend/tests/position_timing/test_volatility_contraction_breakout.py`；最终341个市场匹配 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-003 | `volatility_contraction_breakout_research.py::_source_contract/prepare_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；最终`coverage.json`为source 364/364、unbound=0、rights=3 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-004 | `volatility_contraction_breakout_research.py::_comparison/run_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`；最终`receipt.json`主路径64/64、区间`[-11.6889,+2.9364]` | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-005 | `pattern_research.py::replay_full_policy_symbol` 默认不变参数与同风险退出基线 | `backend/tests/position_timing/test_pattern_research.py` 默认等价、即时T+1和同退出反例 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-006 | `volatility_contraction_breakout_research.py::_publish_bundle/inspect_bundle/run_request` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`篡改反例；最终manifest canonical identity `db7dd39e...b61456c`、原始文件SHA256 `7a6057a4...04ee`；inspect/exact retry | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-007 | 本文§2、§3；新文件仅导入`position_timing` | `backend/tests/position_timing/test_volatility_contraction_breakout_research.py`验证写入布尔值全false；`git diff --check`与scope/import扫描 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-008 | 本文§6、§7、§10 | `backend/tests/position_timing/test_volatility_contraction_breakout.py`、`test_volatility_contraction_breakout_research.py`与`test_pattern_research.py`共36项；完整position_timing及AIstock PATH集中nox均为318项；`scripts/aistock_feature_workflow.py`与PR CI | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
 
 ## 10. Risks and Compliance / 风险与符合性
 
 主要风险是阈值任意、信号稀少、复用人口的数据窥探、长期持币造成风格暴露差异、公司行动形成伪突破，以及把正点估计误称有效。处置是一次冻结而不搜索、完整 signal/coverage 计数、明确探索性结果类、连续账户与暴露诊断、共享 source authority 和区间结论。后续是否研究新参数或融合因子只能依据失败机制另立独立规格，不能在本 bundle 上追加赢家搜索。
+
+最终证据没有支持本规则产生成本后超额收益：点估计为负但区间跨0，所以该精确假设停止，不调30%分位、20日区间、量缩窗口、股票或成本情景来追逐结果。后续回到既有队列中机制不同的“突破失败/支撑失守 EXIT”问题；HMM、模型、QE和Agent融合继续不作为绕过当前不可分辨结果的手段。
 
 DESIGN-COMPLIANCE-001：①交付完整冻结策略、研究管线和真实历史结果，不以 POC、烟测或工程通过冒充完整；②unknown、no-signal、no-fill、coverage 缺口和篡改均显式，禁止静默填零；③不改变用户要求、共享 L1/L1a、账户政策或已批准边界，任何范围变化先回填设计；④不增加 MDE、最新日期、HMM、sealed holdout、人工审批或收益门禁，只有来源/因果/身份错误阻止对应错误计算。
 
