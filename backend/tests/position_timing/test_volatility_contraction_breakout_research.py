@@ -197,7 +197,7 @@ def test_source_identity_comparison_accepts_json_tuple_list_round_trip_only():
 def test_comparison_uses_one_daily_cross_symbol_estimand_and_coverage_constraint():
     rows = pd.DataFrame(
         {
-            "comparison": ["P_MINUS_BUY_AND_HOLD"] * 20,
+            "comparison": ["P_MINUS_ALWAYS_OPEN_RISK_MANAGED"] * 20,
             "valuation_date": pd.bdate_range("2026-01-02", periods=10).repeat(2),
             "incremental_net_value_bps": [1.0] * 20,
             "incremental_gross_value_bps": [1.2] * 20,

@@ -733,6 +733,39 @@ def test_full_policy_rule_injection_is_immediate_and_can_disable_supplemental_ex
     assert not any(row["policy_authority"] == "ACCELERATION_VOLUME_EXIT" for row in rows)
 
 
+def test_full_policy_can_use_same_risk_exit_with_always_open_entry_baseline():
+    bars = _bars(45)
+    features = pattern_feature_frame(bars, symbol="000001.SZ")
+    rows, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=20,
+        terminal_ordinal=35,
+        entry_observer=lambda _features, ordinal: ordinal == 22,
+        entry_selector=lambda **_kwargs: {
+            "choice": "E0",
+            "authority": "VOLATILITY_CONTRACTION_BREAKOUT_OPEN",
+        },
+        supplemental_exit_enabled=False,
+        risk_managed_open_baseline_enabled=True,
+    )
+
+    baseline_fills = [
+        item
+        for item in fills
+        if item["path_role"] == "FULL_ALWAYS_OPEN_RISK_MANAGED"
+    ]
+    assert baseline_fills[0]["decision_date"] == bars.index[20].date()
+    assert baseline_fills[0]["target_date"] == bars.index[21].date()
+    assert counts["ALWAYS_OPEN_RISK_MANAGED_BASELINE_ENABLED"] == 1
+    assert any(
+        row["comparison"] == "P_MINUS_ALWAYS_OPEN_RISK_MANAGED" for row in rows
+    )
+
+
 def test_full_policy_explicit_defaults_preserve_existing_behavior():
     bars = _bars(50)
     features = _forced_breakout_features(bars, 25, confirm=27)
@@ -750,6 +783,7 @@ def test_full_policy_explicit_defaults_preserve_existing_behavior():
         **arguments,
         entry_observer=None,
         supplemental_exit_enabled=True,
+        risk_managed_open_baseline_enabled=False,
     )
     assert implicit == explicit
 

@@ -78,7 +78,7 @@ INITIAL_HISTORY_SESSIONS = 756
 BOOTSTRAP_SAMPLES = 5000
 BLOCK_SESSIONS = 25
 INFERENCE_SEED = 20260914
-FORMAL_COMPARISON = "VCB_V1_MINUS_BUY_AND_HOLD"
+FORMAL_COMPARISON = "VCB_V1_MINUS_ALWAYS_OPEN_RISK_MANAGED"
 PARENT_COUNTS: tuple[int, ...] = (1, 2, 3)
 FALSE_WRITE_FLAGS: tuple[str, ...] = (
     "registry_write",
@@ -553,7 +553,7 @@ def _comparison(
     seed: int,
 ) -> Mapping[str, Any]:
     subset = sleeve_days.loc[
-        sleeve_days["comparison"].eq("P_MINUS_BUY_AND_HOLD")
+        sleeve_days["comparison"].eq("P_MINUS_ALWAYS_OPEN_RISK_MANAGED")
     ]
     if subset.empty:
         inference: Mapping[str, Any] = {
@@ -866,6 +866,7 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
                         "authority": "VOLATILITY_CONTRACTION_BREAKOUT_OPEN",
                     },
                     supplemental_exit_enabled=False,
+                    risk_managed_open_baseline_enabled=True,
                     parent_count=parent_count,
                     additional_friction_bps=Decimal(0),
                 )

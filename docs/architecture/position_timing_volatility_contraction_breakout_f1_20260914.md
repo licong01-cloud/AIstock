@@ -105,10 +105,10 @@ candidate 显式冻结为：
 每股从同一评价起点建立 100,000 元现金 sleeve：
 
 - 候选政策 `VCB_V1`：等待冻结信号后在 T+1 买入；持仓仅使用冻结风险退出；
-- 主 comparator `BUY_AND_HOLD`：评价起点首次可执行的 T+1 买入，此后持有并承受相同公司行动和成本；
-- `FROZEN_L1` 路径保留为回放诊断，但现金起点没有历史买入意图，不进入正式主结论。
+- 主 comparator `ALWAYS_OPEN_RISK_MANAGED`：评价起点首次可执行的 T+1 买入，使用与候选完全相同的冻结风险退出；风险卖出后在下一次合法决策立即计划重新买入；
+- `BUY_AND_HOLD` 路径保留为完整政策表现诊断，但因退出语义不同，不进入入场择时的正式主结论；默认 `FROZEN_L1` 路径仅供旧P0调用，新研究不使用它。
 
-主 estimand 是各全局交易日先对有效股票 sleeve 求均值后的 `VCB_V1 - BUY_AND_HOLD` 日度成本后增量 bps。报告期累计值、毛值、逐腿费用、暴露、最大回撤、signal/fill 计数均为解释字段。主情景采用 95% 的 25-session circular block bootstrap；一个 family 只含这一个正式比较，所以 family-wise 与 nominal 区间相同。
+主 estimand 是各全局交易日先对有效股票 sleeve 求均值后的 `VCB_V1 - ALWAYS_OPEN_RISK_MANAGED` 日度成本后增量 bps。两条路径的股票、资金、公司行动、风险退出和成交语义完全相同，唯一政策差异是现金时等待VCB信号还是始终尽快入场；因此主结论才可归因于入场择时。报告期累计值、毛值、逐腿费用、暴露、最大回撤、signal/fill 计数均为解释字段。主情景采用 95% 的 25-session circular block bootstrap；一个 family 只含这一个正式比较，所以 family-wise 与 nominal 区间相同。
 
 分类冻结为：区间下界 `> 0` 为 `SUPPORTED`，上界 `< 0` 为 `NEGATIVE`，其余为 `INCONCLUSIVE`。`economic_threshold_bps=0.0`；`power_status` 独立记录，未预注册同 estimand 尺度时为 `NOT_COMPUTABLE`，不以 MDE 阻止研究或合入。只有主比较 `SUPPORTED` 时 `selected_trial_count=1`，否则为 0；该字段不自动发布 serving。
 
