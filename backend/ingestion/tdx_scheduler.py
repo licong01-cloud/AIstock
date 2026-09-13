@@ -2434,16 +2434,27 @@ class TDXScheduler:
 
         if mode == "incremental":
             if dataset == "adj_factor":
-                # Tushare adj_factor init: date range + optional truncate + job id
-                args += ["--mode", "init"]
+                # Daily adj_factor ingestion also performs mandatory per-symbol
+                # full-history reconciliation inside the dedicated script.
+                args += ["--mode", "incremental"]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
                 if options.get("end_date"):
                     args += ["--end-date", str(options["end_date"])]
-                if options.get("truncate"):
-                    args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                history_options = {
+                    "history_reconcile_workers": "--history-reconcile-workers",
+                    "history_reconcile_rate_per_minute": "--history-reconcile-rate-per-minute",
+                    "history_reconcile_max_pages": "--history-reconcile-max-pages",
+                    "history_reconcile_symbol": "--history-reconcile-symbol",
+                }
+                for option_name, argument_name in history_options.items():
+                    option_value = options.get(option_name)
+                    if option_value is not None:
+                        args += [argument_name, str(option_value)]
+                if options.get("history_reconcile_dry_run"):
+                    args += ["--history-reconcile-dry-run"]
             elif dataset == "index_daily":
                 # 指数日线行情增量：直接透传起止日期和市场过滤 + job_id
                 args += ["--mode", "incremental"]
