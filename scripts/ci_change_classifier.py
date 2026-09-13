@@ -52,6 +52,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/codeql.yml",
     ".github/workflows/code-intelligence-refresh.yml",
     ".github/workflows/nightly.yml",
+    ".github/workflows/runner-queue-watchdog.yml",
     ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",
     ".github/workflows/semgrep.yml",
@@ -156,6 +157,10 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    ".github/workflows/runner-queue-watchdog.yml": (
+        "backend/tests/scripts/test_aistock_runner_health.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    ),
     ".github/workflows/test.yml": (
         "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_ci_test_plan_coverage.py",

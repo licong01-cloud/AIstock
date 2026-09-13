@@ -5,6 +5,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from scripts import aistock_runner_health as health
 
 
@@ -145,6 +147,115 @@ def test_runner_health_reports_stale_queued_runs() -> None:
     assert payload["stale_queued_runs"][0]["run_id"] == 123
     assert payload["stale_queued_runs"][0]["age_minutes"] == 60.0
     assert "queued nightly.yml run" in payload["warnings"][0]
+
+
+def test_cancel_stale_scheduled_runs_revalidates_identity_and_active_jobs(monkeypatch) -> None:
+    posts: list[str] = []
+
+    def fake_get(path: str, *, token: str | None, timeout_seconds: int = 30):
+        assert token == "token"
+        if path.endswith("/runs/123"):
+            return {"id": 123, "status": "queued", "event": "schedule", "head_branch": "main"}
+        if path.endswith("/runs/123/jobs?per_page=100"):
+            return {"jobs": [{"id": 10, "status": "queued"}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(health, "_github_get", fake_get)
+    monkeypatch.setattr(
+        health,
+        "_github_post",
+        lambda path, *, token, timeout_seconds=30: posts.append(path),
+    )
+    receipt = health.cancel_stale_scheduled_runs(
+        repo="licong01-cloud/AIstock",
+        workflow="nightly.yml",
+        stale_queued_minutes=30,
+        current_run_id=999,
+        current_event="schedule",
+        expected_head_branch="main",
+        token="token",
+        now=datetime(2026, 9, 13, 3, 0, tzinfo=timezone.utc),
+        runs_payload={
+            "workflow_runs": [
+                {
+                    "id": 123,
+                    "status": "queued",
+                    "event": "schedule",
+                    "head_branch": "main",
+                    "created_at": "2026-09-13T01:00:00Z",
+                },
+                {
+                    "id": 124,
+                    "status": "queued",
+                    "event": "workflow_dispatch",
+                    "head_branch": "main",
+                    "created_at": "2026-09-13T01:00:00Z",
+                },
+            ]
+        },
+    )
+
+    assert receipt["workflow_gate"] == "ready"
+    assert receipt["cancelled_run_ids"] == [123]
+    assert receipt["skipped"] == [{"run_id": 124, "reason": "identity_mismatch"}]
+    assert posts == ["/repos/licong01-cloud/AIstock/actions/runs/123/cancel"]
+
+
+def test_cancel_stale_scheduled_runs_never_cancels_active_job(monkeypatch) -> None:
+    def fake_get(path: str, *, token: str | None, timeout_seconds: int = 30):
+        if path.endswith("/runs/123"):
+            return {"id": 123, "status": "queued", "event": "schedule", "head_branch": "main"}
+        if path.endswith("/runs/123/jobs?per_page=100"):
+            return {"jobs": [{"id": 10, "status": "in_progress"}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(health, "_github_get", fake_get)
+    monkeypatch.setattr(health, "_github_post", lambda *args, **kwargs: pytest.fail("must not cancel"))
+    receipt = health.cancel_stale_scheduled_runs(
+        repo="licong01-cloud/AIstock",
+        workflow="nightly.yml",
+        stale_queued_minutes=30,
+        current_run_id=999,
+        current_event="schedule",
+        expected_head_branch="main",
+        token="token",
+        now=datetime(2026, 9, 13, 3, 0, tzinfo=timezone.utc),
+        runs_payload={
+            "workflow_runs": [
+                {
+                    "id": 123,
+                    "status": "queued",
+                    "event": "schedule",
+                    "head_branch": "main",
+                    "created_at": "2026-09-13T01:00:00Z",
+                }
+            ]
+        },
+    )
+
+    assert receipt["cancelled_run_ids"] == []
+    assert receipt["skipped"] == [{"run_id": 123, "reason": "active_job"}]
+
+
+def test_cancel_stale_scheduled_runs_returns_structured_failure_when_query_fails(monkeypatch) -> None:
+    def fail_get(*args, **kwargs):
+        raise RuntimeError("EOF")
+
+    monkeypatch.setattr(health, "_github_get", fail_get)
+    receipt = health.cancel_stale_scheduled_runs(
+        repo="licong01-cloud/AIstock",
+        workflow="nightly.yml",
+        stale_queued_minutes=30,
+        current_run_id=999,
+        current_event="schedule",
+        expected_head_branch="main",
+        token="token",
+        now=datetime(2026, 9, 13, 3, 0, tzinfo=timezone.utc),
+    )
+
+    assert receipt["workflow_gate"] == "blocked"
+    assert receipt["action"] == "query_failed"
+    assert receipt["errors"] == [{"run_id": None, "error": "EOF"}]
 
 
 def test_runner_health_blocks_api_online_idle_runner_that_does_not_accept_work() -> None:
