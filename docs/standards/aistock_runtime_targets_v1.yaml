@@ -23,6 +23,8 @@ non_runtime_source_paths:
   - backend/services/hmm_risk/rotation_l1_input_bundle.py
   - backend/services/hmm_risk/state_model_set.py
   - backend/services/hmm_risk/stock_fact_repository.py
+  - backend/services/validation/catalog_integrity.py
+  - backend/services/validation/plan_catalog.py
   - noxfile.py
   - scripts/aistock_runner_health.py
   - scripts/configure_aistock_github_runner.ps1

@@ -12,6 +12,8 @@
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/services/validation/plan_catalog.py",
     "backend/tests/test_validation_catalog_integrity.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/test_aistock_guardrail_scan.py",
     "tests/aistock_validation/bugs/20260913_BUG-1481-local-hmm-changes-select-the-full-839-test-backend-suite-on-every-pr.json"
   ],
   "assigned_agent": null,
@@ -49,7 +51,9 @@
       "scripts/nightly_adaptive_scheduler.py",
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "backend/services/validation/plan_catalog.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "backend/tests/test_validation_catalog_integrity.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/test_aistock_guardrail_scan.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -64,7 +68,9 @@
         "scripts/nightly_adaptive_scheduler.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "backend/services/validation/plan_catalog.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "backend/tests/test_validation_catalog_integrity.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/test_aistock_guardrail_scan.py"
       ],
       "impacted_modules": [
         "validation.runner",
@@ -186,7 +192,9 @@
       "scripts/nightly_adaptive_scheduler.py",
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "backend/services/validation/plan_catalog.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "backend/tests/test_validation_catalog_integrity.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/test_aistock_guardrail_scan.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -200,7 +208,9 @@
       "scripts/nightly_adaptive_scheduler.py",
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "backend/services/validation/plan_catalog.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "backend/tests/test_validation_catalog_integrity.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/test_aistock_guardrail_scan.py"
     ]
   },
   "first_seen_at": "2026-09-13T16:32:05.727993Z",
