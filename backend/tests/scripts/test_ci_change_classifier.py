@@ -194,9 +194,8 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
     assert payload["frontend_required"] is False
     assert payload["workflow_test_targets"] == [
         "backend/tests/test_aistock_guardrail_scan.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
-        "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_issue_flow.py",
     ]
 
 
@@ -933,6 +932,21 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
     assert payload["workflow_gate"] == "passed"
     assert payload["unmapped_code_files"] == []
     assert payload["workflow_test_targets"] == ["backend/tests/scripts/test_aistock_issue_workflow_fast.py"]
+
+
+def test_runtime_catalog_uses_compact_contract_targets(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/standards/aistock_runtime_targets_v1.yaml"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    ]
+    assert "backend/tests/scripts/test_aistock_issue_workflow.py" not in payload["workflow_test_targets"]
 
 
 def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: Path) -> None:

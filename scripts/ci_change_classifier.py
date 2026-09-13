@@ -184,7 +184,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml": ("backend/tests/test_aistock_guardrail_scan.py",),
     "docs/standards/aistock_runtime_targets_v1.yaml": (
         "backend/tests/test_aistock_guardrail_scan.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     ),
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
