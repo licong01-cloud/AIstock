@@ -49,6 +49,10 @@ STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
 )
 GIT_ALTERNATE_CLEAR_MARKER = "\n  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
+GIT_HTTP_LOW_SPEED_MARKERS = (
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
+)
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -138,6 +142,15 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
                     "line": "1",
                     "reason": "self-hosted workflow must clear inherited Git alternate object directories",
                     "text": "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                }
+            )
+        if "self-hosted" in text and not all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS):
+            findings.append(
+                {
+                    "path": path.as_posix(),
+                    "line": "1",
+                    "reason": "self-hosted workflow must bound stalled Git HTTP transfers",
+                    "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME",
                 }
             )
         if path.name not in WINDOWS_CI_WORKFLOWS:
@@ -315,6 +328,11 @@ def build_contract_evidence(
         and all("ci_environment_verify.py" in text for text in ci_texts),
         "self_hosted_workflows_clear_git_alternate_objects": all(
             "self-hosted" not in text or GIT_ALTERNATE_CLEAR_MARKER in text
+            for text in workflow_text.values()
+        ),
+        "self_hosted_git_http_stalls_are_bounded": all(
+            "self-hosted" not in text
+            or all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS)
             for text in workflow_text.values()
         ),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
