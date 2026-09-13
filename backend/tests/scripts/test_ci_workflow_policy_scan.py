@@ -69,6 +69,18 @@ def test_repository_runner_contract_is_explicit() -> None:
     assert findings == []
 
 
+def test_self_hosted_workflow_must_clear_inherited_git_alternates(tmp_path: Path) -> None:
+    workflow = tmp_path / "codeql.yml"
+    workflow.write_text(
+        "jobs:\n  scan:\n    runs-on: [self-hosted, Windows, aistock-ci-security]\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    assert any("must clear inherited Git alternate object directories" in item["reason"] for item in findings)
+
+
 def test_repository_contract_evidence_matches_machine_standard() -> None:
     paths = sorted(Path(".github/workflows").glob("*.yml"))
     evidence = build_contract_evidence(paths)
@@ -101,6 +113,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
+    assert evidence["self_hosted_workflows_clear_git_alternate_objects"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
 
