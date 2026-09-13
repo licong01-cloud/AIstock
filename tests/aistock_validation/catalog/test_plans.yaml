@@ -624,8 +624,41 @@ plans:
     mock_api_used: true
     max_duration_seconds: 300
     evidence_kinds: [playwright]
+  - plan_key: hmm_risk_pr_slice
+    title: HMM Risk changed-test and direct-neighbor PR contracts
+    module: hmm.risk
+    level: L2
+    command_key: nox_hmm_risk_pr_slice
+    nox_session: hmm_risk_pr_slice
+    ci_lane: backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    execution_scope: pr
+    nightly_replacement_plan: hmm_risk_backend
+    max_duration_seconds: 600
+    evidence_kinds: [pytest, compileall]
+    change_applicability:
+      include:
+        - backend/services/hmm_risk/**
+        - backend/tests/hmm_risk/**
+        - scripts/hmm_risk/**
+      exclude:
+        - backend/services/hmm_risk/__init__.py
+        - backend/services/hmm_risk/canonical_stock_fact_source.py
+        - backend/services/hmm_risk/observation_eligibility.py
+        - backend/services/hmm_risk/security_identity.py
+        - backend/services/hmm_risk/state_model_set.py
+        - backend/services/hmm_risk/stock_fact_repository.py
+      no_match_reason: hmm_risk_change_requires_full_cross_contract_validation_or_is_not_a_backend_slice
   - plan_key: hmm_risk_backend
-    title: HMM Risk isolated backend contract tests
+    title: HMM Risk full package coverage for cross-contract changes and Nightly
     module: hmm.risk
     level: L2
     command_key: nox_hmm_risk_backend
@@ -640,9 +673,20 @@ plans:
     writes_artifacts: true
     writes_business_state: false
     runner_enabled: true
-    max_duration_seconds: 300
+    max_duration_seconds: 1800
     evidence_kinds: [pytest, coverage, junit]
     coverage_required: true
+    change_applicability:
+      include:
+        - backend/db/init_hmm_risk_schema.py
+        - backend/routers/hmm_risk.py
+        - backend/services/hmm_risk/__init__.py
+        - backend/services/hmm_risk/canonical_stock_fact_source.py
+        - backend/services/hmm_risk/observation_eligibility.py
+        - backend/services/hmm_risk/security_identity.py
+        - backend/services/hmm_risk/state_model_set.py
+        - backend/services/hmm_risk/stock_fact_repository.py
+      no_match_reason: hmm_risk_change_is_local_and_uses_the_pr_slice
   - plan_key: qe_archive_l3
     title: QE archive local L3 validation
     module: qe_archive

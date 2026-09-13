@@ -3353,6 +3353,98 @@ def hmm_evolution_backend(session: nox.Session) -> None:
     )
 
 
+HMM_RISK_PR_SMOKE_TESTS = (
+    "backend/tests/hmm_risk/test_isolation.py",
+    "backend/tests/hmm_risk/test_schema.py",
+    "backend/tests/hmm_risk/test_security_identity.py",
+)
+HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
+    "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
+    "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
+    "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "scripts/hmm_risk/prepare_state_model_set.py": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "scripts/hmm_risk/repair_b3_stock_fact_gaps.py": "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+    "scripts/hmm_risk/run_rotation_l1_g2a.py": "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+    "scripts/hmm_risk/run_rotation_l1_product.py": "backend/tests/hmm_risk/test_run_rotation_l1_product.py",
+}
+
+
+def _hmm_risk_pr_test_targets() -> list[str]:
+    selection_root = "backend/tests/hmm_risk"
+    summary_value = os.environ.get("AISTOCK_CI_CLASSIFIER_SUMMARY", "").strip()
+    if not summary_value:
+        return [selection_root]
+    summary_path = Path(summary_value)
+    if not summary_path.is_absolute():
+        summary_path = ROOT / summary_path
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid HMM PR classifier summary {summary_path}: {exc}") from exc
+    changed_files = payload.get("changed_files") if isinstance(payload, dict) else None
+    if not isinstance(changed_files, list) or not all(isinstance(item, str) for item in changed_files):
+        raise ValueError("HMM PR classifier summary changed_files must be a string list")
+
+    targets = list(HMM_RISK_PR_SMOKE_TESTS)
+    for raw_path in changed_files:
+        path = raw_path.replace("\\", "/")
+        if path.startswith("backend/tests/hmm_risk/") and path.endswith(".py") and "/test_" in path:
+            targets.append(path)
+            continue
+        override = HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(path)
+        if override:
+            targets.append(override)
+            continue
+        if path.startswith("backend/services/hmm_risk/") and path.endswith(".py"):
+            candidate = f"backend/tests/hmm_risk/test_{Path(path).name}"
+        elif path.startswith("scripts/hmm_risk/") and path.endswith(".py"):
+            candidate = f"backend/tests/hmm_risk/test_{Path(path).stem.removeprefix('run_')}.py"
+        else:
+            continue
+        if (ROOT / candidate).is_file():
+            targets.append(candidate)
+        elif Path(path).name != "__init__.py":
+            raise ValueError(f"HMM PR slice lacks a direct-neighbor test mapping for {path}")
+
+    ordered = list(dict.fromkeys(targets))
+    missing = [path for path in ordered if not (ROOT / path).is_file()]
+    if missing:
+        raise ValueError(f"HMM PR slice test target is missing: {missing}")
+    return ordered
+
+
+@nox.session(venv_backend="none")
+def hmm_risk_pr_slice(session: nox.Session) -> None:
+    """Run changed HMM tests, direct neighbors and stable isolation smoke."""
+    test_targets = ["backend/tests/hmm_risk"]
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/hmm_risk",
+        "backend/db/init_hmm_risk_schema.py",
+        "scripts/hmm_risk",
+        external=True,
+    )
+    try:
+        test_targets = _hmm_risk_pr_test_targets()
+    except (OSError, ValueError) as exc:
+        session.error(str(exc))
+        return
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        *test_targets,
+        "-m",
+        "not integration",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        external=True,
+    )
+
+
 @nox.session(venv_backend="none")
 def hmm_risk_backend(session: nox.Session) -> None:
     """Run the isolated HMM Risk schema and state-model-set contracts."""

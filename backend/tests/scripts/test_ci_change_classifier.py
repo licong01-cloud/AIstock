@@ -1250,6 +1250,26 @@ def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
     assert payload["backend_sessions"] == ["hmm_data_source_backend"]
 
 
+def test_hmm_local_change_uses_pr_slice_and_cross_contract_change_escalates(tmp_path: Path) -> None:
+    local = classifier.classify_changed_files(
+        [
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ],
+        repo_root=Path.cwd(),
+    )
+    critical = classifier.classify_changed_files(
+        ["backend/services/hmm_risk/state_model_set.py"],
+        repo_root=Path.cwd(),
+    )
+
+    assert local["workflow_gate"] == "passed"
+    assert local["backend_sessions"] == ["hmm_risk_pr_slice"]
+    assert local["unexecuted_test_files"] == []
+    assert critical["workflow_gate"] == "passed"
+    assert critical["backend_sessions"] == ["hmm_risk_backend"]
+
+
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

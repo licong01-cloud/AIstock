@@ -154,6 +154,7 @@ def build_nightly_execution_plan(
             key
             for key, plan in plans.items()
             if key not in CHANGE_FILE_ONLY_PLAN_KEYS
+            and plan.get("execution_scope") != "pr"
             and plan.get("enabled", True)
             and plan.get("runner_enabled")
             and plan.get("nox_session")
@@ -164,7 +165,26 @@ def build_nightly_execution_plan(
 
     selected_plan_keys: list[str] = []
     selected_sessions: list[str] = []
+    nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
+        plan = plans.get(key) or {}
+        if not full_run and plan.get("execution_scope") == "pr":
+            replacement_key = str(plan.get("nightly_replacement_plan") or "").strip()
+            replacement = plans.get(replacement_key) or {}
+            if (
+                not replacement_key
+                or not replacement
+                or replacement.get("execution_scope") == "pr"
+                or not replacement.get("enabled", True)
+                or not replacement.get("runner_enabled", False)
+                or not str(replacement.get("nox_session") or "").strip()
+            ):
+                raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
+            key = replacement_key
+        if key not in nightly_plan_keys:
+            nightly_plan_keys.append(key)
+
+    for key in nightly_plan_keys:
         plan = plans.get(key) or {}
         session = str(plan.get("nox_session") or "").strip()
         if not session or not plan.get("enabled", True) or not plan.get("runner_enabled", False):
@@ -175,7 +195,10 @@ def build_nightly_execution_plan(
     enabled_sessions = {
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
-        if plan.get("enabled", True) and plan.get("runner_enabled") and str(plan.get("nox_session") or "").strip()
+        if plan.get("execution_scope") != "pr"
+        and plan.get("enabled", True)
+        and plan.get("runner_enabled")
+        and str(plan.get("nox_session") or "").strip()
     }
     unknown_retry_sessions = [session for session in retry_sessions if session not in enabled_sessions]
     if unknown_retry_sessions:
@@ -205,6 +228,9 @@ def build_nightly_execution_plan(
         "changed_files_count": len(normalized),
         "full_run": full_run,
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
+        "excluded_pr_only_plans": (
+            sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
+        ),
         "selected_plan_keys": selected_plan_keys,
         "selected_sessions": selected_sessions,
         "retry_sessions": retry_sessions,

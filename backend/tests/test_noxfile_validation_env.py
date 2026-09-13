@@ -100,6 +100,56 @@ def test_validation_registry_l0_keeps_business_dependencies_out(monkeypatch: pyt
     assert "backend/tests/test_validation_ui_target_catalog.py" not in pytest_args
 
 
+def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    targets = [
+        *noxfile.HMM_RISK_PR_SMOKE_TESTS,
+        "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
+    ]
+    for relative in targets:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# test fixture\n", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "changed_files": [
+                    "backend/services/hmm_risk/rotation_l1_prediction.py",
+                    "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+                    "scripts/hmm_risk/run_rotation_l1_g2a.py",
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
+
+    assert noxfile._hmm_risk_pr_test_targets() == targets
+
+
+def test_hmm_risk_pr_targets_fail_closed_without_neighbor_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for relative in noxfile.HMM_RISK_PR_SMOKE_TESTS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# test fixture\n", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"changed_files": ["backend/services/hmm_risk/new_contract.py"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
+
+    with pytest.raises(ValueError, match="lacks a direct-neighbor test mapping"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
 def test_changed_file_guardrail_uses_committed_branch_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[tuple[object, ...]] = []
 
