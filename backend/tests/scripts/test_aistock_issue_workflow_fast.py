@@ -70,6 +70,30 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
     assert summary["passed"] == []
 
 
+@pytest.mark.parametrize(
+    ("changed_file", "expected_impact", "expected_targets"),
+    [
+        ("backend/main.py", "backend", ["backend-main"]),
+        (
+            "backend/services/dataset_release/index_contract.py",
+            "worker_scheduler",
+            ["worker-scheduler"],
+        ),
+        ("backend/services/hmm_risk/rotation_l1_gbdt.py", "none", []),
+        ("scripts/aistock_runner_health.py", "none", []),
+    ],
+)
+def test_repository_runtime_catalog_preserves_representative_roles(
+    changed_file: str,
+    expected_impact: str,
+    expected_targets: list[str],
+) -> None:
+    payload = workflow._classify_runtime_impact([changed_file])
+
+    assert payload["runtime_impact"] == expected_impact
+    assert payload["target_ids"] == expected_targets
+
+
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
