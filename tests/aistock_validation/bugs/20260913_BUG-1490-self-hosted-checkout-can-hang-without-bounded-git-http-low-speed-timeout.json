@@ -36,20 +36,34 @@
   ],
   "expected": "Every self-hosted workflow aborts stalled Git HTTP transfers quickly so actions/checkout can retry and release the runner within a bounded interval.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      ".github/workflows/test.yml",
-      ".github/workflows/codeql.yml",
-      ".github/workflows/nightly.yml",
+    "actual_changed_files": [
       ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/nightly.yml",
       ".github/workflows/pr-quality.yml",
       ".github/workflows/semgrep.yml",
-      ".github/workflows/dependency-update-validate.yml",
-      "scripts/ci_workflow_policy_scan.py",
+      ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260913_BUG-1490-self-hosted-checkout-can-hang-without-bounded-git-http-low-speed-timeout.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260913_BUG-1490-self-hosted-checkout-can-hang-without-bounded-git-http-low-speed-timeout.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
@@ -242,10 +256,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
