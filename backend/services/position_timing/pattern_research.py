@@ -1649,13 +1649,26 @@ def replay_full_policy_symbol(
     template_schedule: Mapping[str, str] | None = None,
     entry_selector: Callable[..., Mapping[str, Any]] | None = None,
     exit_selector: Callable[..., Mapping[str, Any]] | None = None,
+    entry_observer: Callable[[pd.DataFrame, int], bool] | None = None,
+    supplemental_exit_enabled: bool = True,
+    risk_managed_open_baseline_enabled: bool = False,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Counter[str]]:
+    if not isinstance(supplemental_exit_enabled, bool) or not isinstance(
+        risk_managed_open_baseline_enabled, bool
+    ):
+        raise ActionValueError("PATTERN_OPTION_FLAG_INVALID")
+    observe_entry = entry_observer or breakout_observed
+    l1_baseline = (
+        "ALWAYS_OPEN_RISK_MANAGED"
+        if risk_managed_open_baseline_enabled
+        else "FROZEN_L1"
+    )
     states = {
         "POLICY": PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
         "BUY_AND_HOLD": PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
-        "FROZEN_L1": PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
+        l1_baseline: PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
     }
     buy_hold_complete = False
     active_event: BreakoutEvent | None = None
@@ -1663,8 +1676,8 @@ def replay_full_policy_symbol(
     blocked_until = start_ordinal
     exit_edge_active = False
     exit_edge_template_id = template_id
-    previous_difference = {"BUY_AND_HOLD": Decimal(0), "FROZEN_L1": Decimal(0)}
-    previous_gross_difference = {"BUY_AND_HOLD": Decimal(0), "FROZEN_L1": Decimal(0)}
+    previous_difference = {"BUY_AND_HOLD": Decimal(0), l1_baseline: Decimal(0)}
+    previous_gross_difference = {"BUY_AND_HOLD": Decimal(0), l1_baseline: Decimal(0)}
     cumulative_fees = {key: Decimal(0) for key in states}
     last_prices: dict[str, Decimal | None] = {key: None for key in states}
     rows: list[dict[str, Any]] = []
@@ -1732,7 +1745,7 @@ def replay_full_policy_symbol(
                 role: (state.cash + cumulative_fees[role] + Decimal(state.quantity) * (last_prices[role] or Decimal(0)))
                 for role, state in states.items()
             }
-            for baseline in ("BUY_AND_HOLD", "FROZEN_L1"):
+            for baseline in ("BUY_AND_HOLD", l1_baseline):
                 difference = wealth["POLICY"] - wealth[baseline]
                 increment = difference - previous_difference[baseline]
                 previous_difference[baseline] = difference
@@ -1767,16 +1780,23 @@ def replay_full_policy_symbol(
         policy_plan: ActionPlan | None = None
         policy_authority = "WAIT" if not policy_state.quantity else "HOLD"
         if policy_state.quantity:
-            policy_plan, exit_edge_active, metadata = _policy_plan(
-                symbol=symbol,
-                state=policy_state,
-                reference=reference,
-                features=features,
-                ordinal=ordinal,
-                template_id=current_template_id,
-                exit_edge_active=exit_edge_active,
-                exit_selector=exit_selector,
-            )
+            if supplemental_exit_enabled:
+                policy_plan, exit_edge_active, metadata = _policy_plan(
+                    symbol=symbol,
+                    state=policy_state,
+                    reference=reference,
+                    features=features,
+                    ordinal=ordinal,
+                    template_id=current_template_id,
+                    exit_edge_active=exit_edge_active,
+                    exit_selector=exit_selector,
+                )
+            else:
+                policy_plan = risk_exit_plan(symbol, policy_state, reference)
+                exit_edge_active = False
+                metadata = {
+                    "authority": "FROZEN_RISK_EXIT" if policy_plan is not None else "HOLD"
+                }
             policy_authority = str(metadata["authority"])
             active_event = None
             event_reference = None
@@ -1809,7 +1829,7 @@ def replay_full_policy_symbol(
                 active_event is None
                 and policy_plan is None
                 and ordinal >= blocked_until
-                and breakout_observed(features, ordinal)
+                and observe_entry(features, ordinal)
             ):
                 candidate = _max_budgeted_buy(symbol, policy_state, reference)
                 selection = (
@@ -1842,8 +1862,18 @@ def replay_full_policy_symbol(
             plans["BUY_AND_HOLD"] = _max_budgeted_buy(symbol, states["BUY_AND_HOLD"], reference)
         else:
             plans["BUY_AND_HOLD"] = ActionPlan(symbol, 0, reference)
-        l1_risk = risk_exit_plan(symbol, states["FROZEN_L1"], reference)
-        plans["FROZEN_L1"] = l1_risk or ActionPlan(symbol, 0, reference)
+        l1_risk = risk_exit_plan(symbol, states[l1_baseline], reference)
+        if (
+            l1_risk is None
+            and risk_managed_open_baseline_enabled
+            and states[l1_baseline].quantity == 0
+            and bool(bars.iloc[ordinal].get("pit_active"))
+        ):
+            plans[l1_baseline] = _max_budgeted_buy(
+                symbol, states[l1_baseline], reference
+            )
+        else:
+            plans[l1_baseline] = l1_risk or ActionPlan(symbol, 0, reference)
 
         target_references: dict[str, Decimal] = {}
         for role, plan in plans.items():
@@ -1896,7 +1926,7 @@ def replay_full_policy_symbol(
             role: (state.cash + cumulative_fees[role] + Decimal(state.quantity) * (last_prices[role] or Decimal(0)))
             for role, state in states.items()
         }
-        for baseline in ("BUY_AND_HOLD", "FROZEN_L1"):
+        for baseline in ("BUY_AND_HOLD", l1_baseline):
             difference = wealth["POLICY"] - wealth[baseline]
             increment = difference - previous_difference[baseline]
             previous_difference[baseline] = difference
@@ -1923,7 +1953,11 @@ def replay_full_policy_symbol(
                     "template_id": current_template_id,
                 }
             )
-    counts["L1_BASELINE_INFORMATION_LIMITATION_CASH_WITHOUT_HISTORICAL_INTENT"] += 1
+    counts[
+        "ALWAYS_OPEN_RISK_MANAGED_BASELINE_ENABLED"
+        if risk_managed_open_baseline_enabled
+        else "L1_BASELINE_INFORMATION_LIMITATION_CASH_WITHOUT_HISTORICAL_INTENT"
+    ] += 1
     return rows, fills, counts
 
 
