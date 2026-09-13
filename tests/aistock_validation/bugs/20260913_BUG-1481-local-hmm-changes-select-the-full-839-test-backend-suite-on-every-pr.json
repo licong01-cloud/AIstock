@@ -8,6 +8,10 @@
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/test_noxfile_validation_env.py",
     "backend/tests/scripts/test_issue_flow.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/services/validation/plan_catalog.py",
+    "backend/tests/test_validation_catalog_integrity.py",
     "tests/aistock_validation/bugs/20260913_BUG-1481-local-hmm-changes-select-the-full-839-test-backend-suite-on-every-pr.json"
   ],
   "assigned_agent": null,
@@ -41,7 +45,11 @@
       "scripts/ci_change_classifier.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/test_noxfile_validation_env.py",
-      "backend/tests/scripts/test_issue_flow.py"
+      "backend/tests/scripts/test_issue_flow.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/test_validation_catalog_integrity.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -52,7 +60,11 @@
         "scripts/ci_change_classifier.py",
         "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/test_noxfile_validation_env.py",
-        "backend/tests/scripts/test_issue_flow.py"
+        "backend/tests/scripts/test_issue_flow.py",
+        "scripts/nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/services/validation/plan_catalog.py",
+        "backend/tests/test_validation_catalog_integrity.py"
       ],
       "impacted_modules": [
         "validation.runner",
@@ -170,7 +182,11 @@
       "scripts/ci_change_classifier.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/test_noxfile_validation_env.py",
-      "backend/tests/scripts/test_issue_flow.py"
+      "backend/tests/scripts/test_issue_flow.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/test_validation_catalog_integrity.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -180,7 +196,11 @@
       "scripts/ci_change_classifier.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/test_noxfile_validation_env.py",
-      "backend/tests/scripts/test_issue_flow.py"
+      "backend/tests/scripts/test_issue_flow.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/test_validation_catalog_integrity.py"
     ]
   },
   "first_seen_at": "2026-09-13T16:32:05.727993Z",

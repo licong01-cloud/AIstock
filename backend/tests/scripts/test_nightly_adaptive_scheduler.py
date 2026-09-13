@@ -452,7 +452,54 @@ def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
     assert plan["excluded_change_file_only_plans"] == ["l0"]
     assert "l0" not in plan["selected_plan_keys"]
     assert "l0" not in plan["selected_sessions"]
+    assert "hmm_risk_pr_slice" in plan["excluded_pr_only_plans"]
+    assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
+    assert "hmm_risk_backend" in plan["selected_sessions"]
     assert plan["selected_sessions"]
+
+
+def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
+    plan = scheduler.build_nightly_execution_plan(
+        ["backend/services/hmm_risk/prediction.py"],
+        head_commit="def456",
+    )
+
+    assert "hmm_risk_pr_slice" not in plan["selected_plan_keys"]
+    assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
+    assert "hmm_risk_backend" in plan["selected_plan_keys"]
+    assert "hmm_risk_backend" in plan["selected_sessions"]
+
+
+def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> None:
+    monkeypatch.setattr(
+        scheduler.issue_flow,
+        "select_validation",
+        lambda _paths: {
+            "ownership": {"unmatched_files": []},
+            "required_plans": ["pr_only"],
+            "recommended_plans": [],
+        },
+    )
+    monkeypatch.setattr(
+        scheduler.issue_flow,
+        "_plans_by_key",
+        lambda: {
+            "pr_only": {
+                "enabled": True,
+                "runner_enabled": True,
+                "nox_session": "pr_only",
+                "execution_scope": "pr",
+                "nightly_replacement_plan": "missing",
+            }
+        },
+    )
+
+    try:
+        scheduler.build_nightly_execution_plan(["scripts/example.py"])
+    except ValueError as exc:
+        assert "Nightly replacement plan is invalid" in str(exc)
+    else:
+        raise AssertionError("Nightly must fail closed when a PR-only plan lacks a valid replacement")
 
 
 def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> None:

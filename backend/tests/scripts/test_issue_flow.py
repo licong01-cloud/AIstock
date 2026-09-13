@@ -332,6 +332,21 @@ def test_validation_select_does_not_treat_dataset_release_plan_yaml_as_ddl(
     assert flow._requires_production_ddl("backend/db/migrations/run_watchlist_migration.py") is True
 
 
+def test_hmm_validation_select_uses_slice_and_escalates_cross_contract_sources() -> None:
+    local = flow.select_validation(
+        [
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ]
+    )
+    critical = flow.select_validation(["backend/services/hmm_risk/state_model_set.py"])
+
+    assert "hmm_risk_pr_slice" in local["required_plans"]
+    assert "hmm_risk_backend" not in local["required_plans"]
+    assert "hmm_risk_backend" in critical["required_plans"]
+    assert "hmm_risk_pr_slice" not in critical["required_plans"]
+
+
 def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",

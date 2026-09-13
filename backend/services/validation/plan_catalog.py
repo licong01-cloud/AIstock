@@ -39,6 +39,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_qe_long_trend_phase4_ui": "qe_long_trend_phase4_ui",
     "nox_qe_sector_risk_overlay_backend": "qe_sector_risk_overlay_backend",
     "nox_hmm_evolution_backend": "hmm_evolution_backend",
+    "nox_hmm_risk_pr_slice": "hmm_risk_pr_slice",
     "nox_hmm_risk_backend": "hmm_risk_backend",
     "nox_platform_api_backend": "platform_api_backend",
     "nox_position_timing_backend": "position_timing_backend",
