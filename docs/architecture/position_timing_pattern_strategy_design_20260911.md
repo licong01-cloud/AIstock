@@ -1,7 +1,7 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v2.0；日期：2026-09-13；Feature tier：F1（本模块研究扩展）
-> 状态：`PT_NEXT_018_FORMAL_REPLAY_COMPLETE_INCONCLUSIVE_NOT_SERVING`
+> 版本：v2.1；日期：2026-09-14；Feature tier：F1（本模块研究扩展）
+> 状态：`METHOD_QUEUE_UPDATED_PT_NEXT_019_INCONCLUSIVE_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
@@ -217,7 +217,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | 优先级/候选 | 场景代理（待各自规格冻结） | 动作与要检验的机制 | 与首项的区别 |
 |---|---|---|---|
 | P0 本设计 | 低位突破后回踩；盈利趋势突然加速放量 | OPEN/EXIT；等待确认与提前退出的机会成本 | 当前唯一完整设计 |
-| P1 波动收缩后区间突破 | 历史波动与量能收缩，突破过去区间上沿 | OPEN；新信息是否结束盘整并形成持续性 | 不依赖先见低点/均线回踩 |
+| P1 波动收缩后区间突破（PT-NEXT-019已完成） | 历史波动与量能收缩，突破过去区间上沿 | OPEN；正式同风险退出比较为`INCONCLUSIVE/selected=0` | 精确冻结版本停止，不依赖先见低点/均线回踩 |
 | P1 突破失败或支撑失守 | 原突破后收盘重新落回事先冻结的区间 | EXIT；及早识别失败能否降低成本后损失 | 失败风险，不以浮盈或放量加速为前提 |
 | P2 平稳区间中的过度偏离回归 | 低趋势斜率、相对波动的异常下跌后收复 | OPEN/WAIT；流动性冲击是否暂时 | 反转机制，强下跌趋势下可能失效 |
 | P2 市场回撤中的相对强势修复 | 个股相对指数抗跌，市场修复时重新走强 | OPEN；共同市场波动与个股强弱的交互 | 市场背景条件，不直接复活已NEGATIVE的旧行业字段 |
@@ -240,8 +240,9 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 |---|---|---|
 | 规则历史研究 | 已实现纯形态与事件状态、四项固定比较、连续账户回放、不可变request/bundle/receipt及请求前因子—公司行动覆盖审计 | r4 最终正式 replay 为64/64、无排除；四项区间均跨零，结论均为`INCONCLUSIVE` |
 | 有界优化、模型条件化与历史解释 | 已实现8模板训练期选择、同状态两头监督、core/增强对照、历史逐股解释 | r4 优化器和模型外层均64/64、无排除；五项区间均跨零，`selected_trial_count=0`，不接 serving |
+| 后续独立OPEN机制 | PT-NEXT-019已按独立F1设计实现波动收缩、量缩、20日收盘突破后T+1入场，并以同风险退出always-open作唯一正式对照 | 主路径64/64；成本后`-4.2788 bps/日`、95%区间`[-11.6889,+2.9364]`，`INCONCLUSIVE/selected=0`，不接serving |
 
-其他策略和QE组合留在后续队列，不占当前实现量。当前工程不接卡片、提醒或serving；正式结果无论正、负或不确定都如实回填，不把研究分类作为源码合入门槛。
+其他策略和QE组合留在后续队列，不占当前实现量。PT-NEXT-019 的权威规格、失败谱系和不可变证据见[波动收缩后区间突破择时研究设计](position_timing_volatility_contraction_breakout_f1_20260914.md)；该精确规则不再调参。下一优先项为表中机制不同的“突破失败或支撑失守”EXIT。当前工程不接卡片、提醒或serving；正式结果无论正、负或不确定都如实回填，不把研究分类作为源码合入门槛。
 
 ### 9.1 单次长任务执行包：实现与初步正式验证
 
@@ -277,7 +278,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
 - 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。第二次正式运行后又据真实 source/factor 对照修正公司行动身份：同一 `(end_date, record_date)`、不同 `base_date` 是修订；唯一已实施条款覆盖较早预案，只有不同财报期的同日分配才相加。形态研究在源 snapshot 之上增加 hash-bound 因子一致性应用审计；只有已由公告与源身份支持的定向转增/重整等特殊事项才能按冻结策略 no-op 或 factor-map，配股明确排除在该通用映射之外，其他不一致继续拒绝。修复均有直接反例，不改变形态阈值、模型规格或已冻结评价人口。
-- 验证状态：完整 `backend/tests/position_timing` 回归在最终源码上为305项通过；新增 authority reader、JSON round-trip、supersession lineage、停牌跨除权日理论参考价和拒绝不合法映射均有直接反例。position-timing源码/测试 ruff、compile、F1/F2 validator 与 `git diff --check` 仍须在合入前再次通过；本地结果不替代最终CI或收益证据。
+- 验证状态：PT-NEXT-018合入时完整 `backend/tests/position_timing` 回归为305项通过；叠加PT-NEXT-019后的当前分支为318项通过。新增 authority reader、JSON round-trip、supersession lineage、停牌跨除权日理论参考价和拒绝不合法映射均有直接反例。当前分支的Ruff、compile、AIstock PATH集中nox、F1/F2 validator与`git diff --check`均已通过；本地结果不替代最终CI或收益证据。
 - 首次正式运行：request `df591f237f6263873e720a678218b59042cc9490c63a0f482ffd0891c60d4a12` 绑定提交 `888a6576e2fa54cccfcfbac91cbcc2c92c3e9be5`、64训练股、64只此前未评价股票、2个family和9项比较。计算生成了receipt与模型文件，但根 manifest 构造使用 `path.name != "manifest.json"`，错误排除了114个模型子目录 manifest；inspect得到 `PATTERN_BUNDLE_FILE_SET_MISMATCH`，故整份bundle按fail-closed处理，不读取或报告其中收益。这是artifact完整性缺陷，不是统计结论；旧request、bundle与评价人口永久保留，禁止原地补manifest。
 - 修复与重跑：根 manifest 只排除bundle根自身的 `manifest.json`，嵌套模型manifest必须进入文件集并绑定hash；Pattern专属LightGBM参数只增加 `verbosity=-1` 以压制重复日志，不改树、目标、样本、阈值或预测语义。新request须绑定修复后的干净提交，并把首次64只评价股票纳入prior-request禁用集合后确定性选择新评价人口；所需公司行动/停牌快照重新按新128股范围只读冻结。首次公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 与停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 仅属于失败request的输入谱系，不覆盖未来新人口。没有研究模型current、selected或任何运行态写入。
 - 新人口数据适配：新评价股 `600803.SH` 的 `2025-07-22` 已实施分红行缺少 `imp_ann_date`，但唯一 `record_date=2025-07-21`。快照按§4的record-date保守代理契约升级为v3并显式留证；不删除该股票、不使用更早 `ann_date=2025-03-27` 推定最终条款，也不修改生产数据。v1/v2不可变快照继续只读兼容。
@@ -298,7 +299,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 ## 10. Verification Plan / 测试与验收
 
-直接测试已落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py`、`test_pattern_model.py`与`test_pattern_rights_issue.py`，并复用/扩展 `test_action_value_corporate_actions.py`；最终源码完整position-timing 305项通过，覆盖如下：
+PT-NEXT-018直接测试落在 `backend/tests/position_timing/test_pattern_strategy.py`、`test_pattern_research.py`、`test_pattern_optimizer.py`、`test_pattern_model.py`与`test_pattern_rights_issue.py`，并复用/扩展 `test_action_value_corporate_actions.py`；该任务合入时完整position-timing为305项，叠加PT-NEXT-019后的当前分支为318项通过，覆盖如下：
 
 1. 因果形态：仅修改T之后数据不改变T事件；low并列规则、b+5边界、确认日次日才成交、停牌不压缩时间；除权前后经济等价样本不产生伪突破，送股导致的成交股数变化不造假放量；同日独立分红相加而同一方案冲突继续拒绝。
 2. 状态与动作：不确认、假突破、一次入场、过期、退出边沿、持仓不可ADD、风险退出优先；EXIT目标与可卖/部分成交区别；真实成本未知不伪称盈利。
@@ -341,7 +342,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 | F-007 | `backend/services/position_timing/pattern_*.py`；timing-owned artifact root | `backend/tests/position_timing/test_pattern_research.py`；`python -m pytest backend/tests/position_timing -q` | ENGINEERING_VERIFIED | none |
 | F-008 | `pattern_optimizer.py`；`pattern_model.py`；`pattern_research.py::run_pattern_request` | `backend/tests/position_timing/test_pattern_optimizer.py`；`test_pattern_model.py` | ENGINEERING_VERIFIED | none |
 | F-009 | 本文§7、§8；当前代码无HMM/QE/Agent import | `backend/tests/position_timing/test_pattern_research.py`；合入前显式import扫描 | ENGINEERING_VERIFIED | none |
-| F-010 | 本文§4、§9.2、§10、§13、§14；五个pattern直接测试文件；官方配股公告与candidate authority读回 | `C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest -q backend/tests/position_timing`为305 passed；F1/F2 validator与CI以本次PR记录为准 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
+| F-010 | 本文§4、§9.2、§10、§13、§14；五个pattern直接测试文件；官方配股公告与candidate authority读回 | `backend/tests/position_timing/test_pattern_research.py`；PT-NEXT-018合入时305 passed，叠加PT-NEXT-019后的当前模块回归及AIstock PATH集中nox均为318 passed；`scripts/aistock_feature_workflow.py`与CI以本次PR记录为准 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
 | F-011 | 本文§4“配股与复权历史重述补充契约”；`pattern_rights_issue.py`；`pattern_research.py` request v3；`pattern_optimizer.py`；`pattern_model.py` | `backend/tests/position_timing/test_pattern_rights_issue.py`；`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/bundles/2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f/receipt.json`：source 696/696、rights 3、三层64/64、九项`INCONCLUSIVE`、selected=0；bundle inspect与exact retry通过 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
 
 ## 13. Risks / 失败模式与 Production Gates

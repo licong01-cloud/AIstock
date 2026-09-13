@@ -81,6 +81,34 @@ def test_self_hosted_workflow_must_clear_inherited_git_alternates(tmp_path: Path
     assert any("must clear inherited Git alternate object directories" in item["reason"] for item in findings)
 
 
+def test_self_hosted_workflow_must_bound_stalled_git_http_transfer(tmp_path: Path) -> None:
+    workflow = tmp_path / "codeql.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
+        "jobs:\n"
+        "  scan:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci-security]\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    assert any("must bound stalled Git HTTP transfers" in item["reason"] for item in findings)
+
+
+def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
+
+
 def test_repository_contract_evidence_matches_machine_standard() -> None:
     paths = sorted(Path(".github/workflows").glob("*.yml"))
     evidence = build_contract_evidence(paths)
@@ -115,6 +143,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
     assert evidence["self_hosted_workflows_clear_git_alternate_objects"] is True
+    assert evidence["self_hosted_git_http_stalls_are_bounded"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
 
@@ -379,6 +408,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "javascript_actions_use_approved_native_node24_majors",
         "merge_quality_contexts_are_change_scoped",
         "bounded_dual_runner_roles",
+        "self_hosted_git_http_stalls_are_bounded",
         "runner_lifecycle_is_pinned_and_supervised",
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
