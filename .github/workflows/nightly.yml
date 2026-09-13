@@ -1045,7 +1045,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Download runner health evidence
-        if: always()
+        if: always() && needs.runner-preflight.result != 'skipped' && needs.runner-preflight.result != 'cancelled'
         uses: actions/download-artifact@v8
         with:
           name: runner-health-${{ github.run_id }}
@@ -1053,7 +1053,7 @@ jobs:
         continue-on-error: true
 
       - name: Download code intelligence refs
-        if: always()
+        if: always() && needs.code-intelligence-weekly.result != 'skipped' && needs.code-intelligence-weekly.result != 'cancelled'
         uses: actions/download-artifact@v8
         with:
           name: code-intelligence-${{ github.run_id }}
@@ -1061,7 +1061,7 @@ jobs:
         continue-on-error: true
 
       - name: Download Nightly L3 session results
-        if: always()
+        if: always() && needs.nightly-l3.result != 'skipped' && needs.nightly-l3.result != 'cancelled'
         uses: actions/download-artifact@v8
         with:
           name: nightly-l3-results-${{ github.run_id }}
@@ -1348,6 +1348,18 @@ jobs:
             echo "workflow_gate=skipped reason=nightly_issue_number_empty" | tee "${PROMOTION_STATUS}"
             exit 0
           fi
+          TRIAGE_JSON="tmp/validation/nightly_failure_issue/triage-ci-issue.json"
+          python scripts/aistock_issue_workflow.py triage-ci-issue \
+            --issue "${ISSUE_NUMBER}" \
+            --summary-json tmp/validation/nightly_failure_issue/summary.json \
+            --output "${TRIAGE_JSON}" \
+            --output-format compact
+          NEEDS_BUG_JSON="$(python -c "import json; p=json.load(open('${TRIAGE_JSON}', encoding='utf-8')); print(str(bool(p.get('needs_bug_json'))).lower())")"
+          if [ "${NEEDS_BUG_JSON}" != "true" ]; then
+            CLASSIFICATION="$(python -c "import json; p=json.load(open('${TRIAGE_JSON}', encoding='utf-8')); print(p.get('classification_recommendation') or 'unknown')")"
+            echo "workflow_gate=skipped reason=nightly_issue_does_not_require_bug_json issue=${ISSUE_NUMBER} classification=${CLASSIFICATION}" | tee "${PROMOTION_STATUS}"
+            exit 0
+          fi
           export ISSUE_NUMBER
           PROMOTION_GATE="promoted"
           REGISTRY_PR_STATUS="not_attempted"
@@ -1465,6 +1477,7 @@ jobs:
           path: |
             tmp/validation/nightly_failure_issue/bug-promotion*.json
             tmp/validation/nightly_failure_issue/bug-promotion-status.txt
+            tmp/validation/nightly_failure_issue/triage-ci-issue.json
             tmp/validation/nightly_failure_issue/bug-registry-pr-body.md
             tmp/validation/nightly_failure_issue/github-issue-number.txt
             tmp/validation/nightly_failure_issue/github-issue-numbers.json
@@ -1472,12 +1485,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Close stale Nightly failure issues after recovery
-        if: success()
+      - name: Close recovered Nightly runner issues and stale superseded issues
+        if: always() && needs.runner-preflight.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact
+          python scripts/aistock_issue_workflow.py ci-issue-janitor --runner-recovered-only --apply --stdout-format compact
 
       - name: Upload summary
         if: always()

@@ -18916,6 +18916,63 @@ def test_ci_issue_janitor_superseded_only_leaves_infra_for_manual_ops(
     assert closed == [642]
 
 
+def test_ci_issue_janitor_runner_recovery_closes_only_nightly_runner_infra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int | str] = []
+
+    def fake_triage(issue_number: int | str, **kwargs: Any) -> dict[str, Any]:
+        issue = int(issue_number)
+        workflow_name = "AIstock Nightly L3 + DR" if issue != 703 else "AIstock CI"
+        signature = (
+            "no online GitHub Actions runner matches required labels: self-hosted, windows"
+            if issue != 702
+            else "network timeout while downloading an artifact"
+        )
+        return {
+            "classification_recommendation": "infra_blocker" if issue != 702 else "infra_flaky",
+            "needs_bug_json": False,
+            "linked_bug": None,
+            "github_issue": {"number": issue, "state": "OPEN", "title": "Nightly infrastructure failure"},
+            "summary": {
+                "workflow": workflow_name,
+                "failed_jobs": [{"job_name": "Runner preflight", "error_signature": signature}],
+            },
+            "infra_action": {"workflow_gate": "infra_action_required", "reason": signature, "next_actions": []},
+        }
+
+    def fake_close(issue_number: int | str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        closed.append(issue_number)
+        return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", fake_triage)
+    monkeypatch.setattr(workflow, "_close_infra_ci_issue", fake_close)
+
+    payload = workflow.build_ci_issue_janitor_plan(
+        issue_numbers=[701, 702, 703],
+        apply=True,
+        runner_recovered_only=True,
+    )
+
+    assert payload["runner_recovered_only"] is True
+    assert payload["closed_issues"] == [701]
+    assert payload["issues"][1]["reason"] == "not_nightly_runner_recovery_scope"
+    assert payload["issues"][2]["reason"] == "not_nightly_runner_recovery_scope"
+    assert closed == [701]
+
+
+def test_nightly_workflow_skips_absent_artifacts_and_non_bug_promotion() -> None:
+    text = (workflow.REPO_ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+
+    assert "needs.runner-preflight.result != 'skipped'" in text
+    assert "needs.code-intelligence-weekly.result != 'skipped'" in text
+    assert "needs.nightly-l3.result != 'skipped'" in text
+    assert "nightly_issue_does_not_require_bug_json" in text
+    assert "p.get('needs_bug_json')" in text
+    assert "if: always() && needs.runner-preflight.result == 'success'" in text
+    assert "ci-issue-janitor --runner-recovered-only --apply" in text
+
+
 def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
     edited = False
