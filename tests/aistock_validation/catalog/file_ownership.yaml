@@ -1547,6 +1547,7 @@ rules:
       - frontend/src/lib/**
       - frontend/src/app/Sidebar.tsx
       - frontend/src/app/layout.tsx
+      - frontend/src/app/page.tsx
       - frontend/tsconfig.json
       - frontend/package.json
       - frontend/playwright*.config.ts
