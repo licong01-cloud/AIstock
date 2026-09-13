@@ -89,6 +89,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert evidence["security_workflows_fail_fast_before_runner_allocation"] is True
     assert evidence["nightly_code_intelligence_has_single_scheduled_owner"] is True
+    assert evidence["nightly_preflight_requires_distinct_runner_roles"] is True
     assert evidence["redundant_issue_event_workflows_retired"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
@@ -342,6 +343,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "code_intelligence_refresh_has_no_external_artifact_action_dependency",
         "security_workflows_fail_fast_before_runner_allocation",
         "nightly_code_intelligence_has_single_scheduled_owner",
+        "nightly_preflight_requires_distinct_runner_roles",
         "redundant_issue_event_workflows_retired",
         "javascript_actions_use_approved_native_node24_majors",
         "merge_quality_contexts_are_change_scoped",

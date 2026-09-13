@@ -10,6 +10,15 @@ import pytest
 from scripts import aistock_runner_health as health
 
 
+def test_nightly_preflight_requires_distinct_general_and_security_roles() -> None:
+    root = Path(__file__).resolve().parents[3]
+    workflow = (root / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+
+    assert "--required-role general=self-hosted,windows,aistock-ci" in workflow
+    assert "--required-role security=self-hosted,windows,aistock-ci-security" in workflow
+    assert "--required-label aistock-ci" not in workflow
+
+
 def test_runner_health_blocks_when_no_matching_runner() -> None:
     payload = health.build_runner_health_report(
         repo="licong01-cloud/AIstock",

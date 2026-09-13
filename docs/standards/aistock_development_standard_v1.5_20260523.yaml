@@ -744,6 +744,7 @@ rules:
         - prebuilt_aistock_ci_environment
         - environment_fingerprint_match
         - bounded_dual_runner_roles
+        - nightly_preflight_requires_distinct_runner_roles
         - runner_lifecycle_is_pinned_and_supervised
         - policy_evidence_remains_one_scanner_step
         - no_setup_actions
