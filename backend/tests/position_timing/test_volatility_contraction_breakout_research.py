@@ -37,6 +37,7 @@ from backend.services.position_timing.volatility_contraction_breakout_research i
     _comparison,
     _load_request,
     _publish_bundle,
+    _same_canonical_identity,
     inspect_bundle,
     run_request,
 )
@@ -179,6 +180,17 @@ def test_request_identity_rejects_result_read_or_audit_tamper(tmp_path: Path):
     path.write_bytes(canonical_json_bytes(request))
     with pytest.raises(ActionValueError, match="VCB_REQUEST_IDENTITY_MISMATCH"):
         _load_request(path)
+
+
+def test_source_identity_comparison_accepts_json_tuple_list_round_trip_only():
+    assert _same_canonical_identity(
+        {"files": ("a.parquet", "b.parquet")},
+        {"files": ["a.parquet", "b.parquet"]},
+    )
+    assert not _same_canonical_identity(
+        {"files": ("a.parquet", "b.parquet")},
+        {"files": ["a.parquet", "changed.parquet"]},
+    )
 
 
 def test_comparison_uses_one_daily_cross_symbol_estimand_and_coverage_constraint():

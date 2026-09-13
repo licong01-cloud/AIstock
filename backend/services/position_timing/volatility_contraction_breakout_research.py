@@ -108,6 +108,12 @@ def _without_path(reference: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in reference.items() if key != "path"}
 
 
+def _same_canonical_identity(left: Any, right: Any) -> bool:
+    """Compare JSON identities without tuple/list round-trip false negatives."""
+
+    return canonical_sha256(left) == canonical_sha256(right)
+
+
 def _assert_file_reference(reference: Mapping[str, Any], *, code: str) -> Path:
     try:
         path = Path(str(reference["path"])).resolve()
@@ -773,7 +779,10 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
             "factor_action_coverage_audit_sha256",
         )
     )
-    if any(request[key] != value for key, value in identity_pairs):
+    if any(
+        not _same_canonical_identity(request[key], value)
+        for key, value in identity_pairs
+    ):
         raise ActionValueError("VCB_SOURCE_CONTRACT_DRIFT")
     candidate = SuspensionSnapshotBook.open(
         Path(request["suspension_snapshot"]["path"])
