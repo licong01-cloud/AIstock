@@ -421,6 +421,9 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
 
     assert expected <= required
     assert "immutable CodeQL Action release" not in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=1" in standard
+    assert "GIT_HTTP_LOW_SPEED_TIME=60" in standard
+    assert "该设置不是新的 PR 门禁" in standard
     assert "禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`" in standard
     for action_ref in (
         "actions/checkout@v7",
