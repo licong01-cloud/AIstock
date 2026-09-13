@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     ".github/workflows/nightly.yml",
     ".github/workflows/runner-queue-watchdog.yml",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_runner_health.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -55,8 +57,10 @@
     ],
     "changed_files_source": "git_finish",
     "ownership": {
-      "changed_files": [
-        ".github/workflows/nightly.yml",
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
         "scripts/aistock_runner_health.py",
         "backend/tests/scripts/test_aistock_runner_health.py",
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -132,6 +136,8 @@
     "planned_files": [
       ".github/workflows/nightly.yml",
       ".github/workflows/runner-queue-watchdog.yml",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/aistock_runner_health.py",
       "backend/tests/scripts/test_aistock_runner_health.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
@@ -141,6 +147,8 @@
     "scope_files": [
       ".github/workflows/nightly.yml",
       ".github/workflows/runner-queue-watchdog.yml",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/aistock_runner_health.py",
       "backend/tests/scripts/test_aistock_runner_health.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
