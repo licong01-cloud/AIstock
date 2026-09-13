@@ -270,6 +270,12 @@ FRONTEND_FILES = {
     "frontend/tsconfig.json",
     "frontend/next.config.mjs",
 }
+DEPENDENCY_FILES = {
+    ".github/renovate.json",
+    "pyproject.toml",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+}
 GO_PATH_PREFIXES = ("tdx-api-main/",)
 GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum"}
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".sql", ".sh", ".ps1")
@@ -673,6 +679,14 @@ def _is_frontend_path(path: str) -> bool:
     return path in FRONTEND_FILES or path.startswith(FRONTEND_PATH_PREFIXES)
 
 
+def _is_dependency_path(path: str) -> bool:
+    return (
+        path in DEPENDENCY_FILES
+        or (path.startswith("requirements") and "/" not in path and path.endswith(".txt"))
+        or (path.startswith(".github/requirements/") and path.endswith(".txt"))
+    )
+
+
 def _is_go_path(path: str) -> bool:
     return path in GO_FILES or (path.startswith(GO_PATH_PREFIXES) and path.endswith(".go"))
 
@@ -972,6 +986,7 @@ def classify_changed_files(
         else "hosted_static"
     )
     active_files = [path for path in normalized if path not in deleted_file_set]
+    dependency_files = [path for path in active_files if _is_dependency_path(path)]
     codeql_languages = _codeql_languages(active_files, exclude_test_sources=False)
     codeql_pr_languages = _codeql_languages(active_files, exclude_test_sources=True)
     return {
@@ -1006,6 +1021,8 @@ def classify_changed_files(
         "plan_routing": plan_routing,
         "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
         "install_forbidden": True,
+        "dependency_validation_required": bool(dependency_files),
+        "dependency_files": dependency_files,
         "backend_plan_keys": catalog_selection["required_plans"],
         "selected_plan_keys": selected_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
@@ -1052,6 +1069,8 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"plan_routing={json.dumps(payload['plan_routing'])}",
         f"environment_fingerprint_ref={payload['environment_fingerprint_ref'] or 'not_applicable'}",
         f"install_forbidden={str(payload['install_forbidden']).lower()}",
+        f"dependency_validation_required={str(payload['dependency_validation_required']).lower()}",
+        f"dependency_files={json.dumps(payload['dependency_files'])}",
         f"frontend_required={str(payload['frontend_required']).lower()}",
         f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",

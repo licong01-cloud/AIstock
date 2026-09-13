@@ -1,16 +1,6 @@
 name: Dependency Update Validate
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/renovate.json
-      - pyproject.toml
-      - requirements*.txt
-      - .github/requirements/*.txt
-      - frontend/package.json
-      - frontend/package-lock.json
-      - .github/workflows/dependency-update-validate.yml
   workflow_dispatch: {}
 
 permissions:

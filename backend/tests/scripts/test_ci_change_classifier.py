@@ -1297,6 +1297,27 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert "backend/tests/scripts/test_validate_changed_requirements.py" in payload["workflow_test_targets"]
 
 
+def test_dependency_changes_are_selected_once_for_unified_ci() -> None:
+    payload = classifier.classify_changed_files(
+        ["requirements.txt", ".github/requirements/semgrep.txt", "frontend/package-lock.json"],
+        repo_root=Path.cwd(),
+    )
+
+    assert payload["dependency_validation_required"] is True
+    assert payload["dependency_files"] == [
+        "requirements.txt",
+        ".github/requirements/semgrep.txt",
+        "frontend/package-lock.json",
+    ]
+
+
+def test_non_dependency_change_does_not_select_dependency_validation() -> None:
+    payload = classifier.classify_changed_files(["backend/main.py"], repo_root=Path.cwd())
+
+    assert payload["dependency_validation_required"] is False
+    assert payload["dependency_files"] == []
+
+
 def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["docs/analysis/example.md", "docs/design/example.md"],

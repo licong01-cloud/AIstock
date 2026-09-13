@@ -83,6 +83,8 @@ jobs:
               echo 'plan_routing={}'
               echo 'environment_fingerprint_ref=not_required'
               echo 'install_forbidden=true'
+              echo 'dependency_validation_required=false'
+              echo 'dependency_files=[]'
               echo 'frontend_required=false'
               echo 'frontend_test_targets=[]'
               echo 'go_required=false'
@@ -140,6 +142,45 @@ jobs:
       - name: nox -s validation_catalog_integrity
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
+
+      - name: Validate changed dependency surface
+        id: dependency_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.dependency_validation_required == 'true'
+        continue-on-error: true
+        env:
+          DEPENDENCY_FILES: ${{ steps.classify.outputs.dependency_files }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/dependency_update
+          mapfile -t dependency_files < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["DEPENDENCY_FILES"])))' | tr -d '\r')
+          for file in "${dependency_files[@]}"; do
+            case "$file" in
+              requirements*.txt|.github/requirements/*.txt)
+                key=$(python -c "import hashlib; print(hashlib.sha256('$file'.encode()).hexdigest())")
+                changed="tmp/validation/dependency_update/${key}.changed.txt"
+                python scripts/validate_changed_requirements.py \
+                  --base-commit "origin/${BASE_REF}" \
+                  --head-commit "${HEAD_SHA}" \
+                  --file "$file" \
+                  --requirements-output "$changed" \
+                  --constraints-output "tmp/validation/dependency_update/${key}.constraints.txt" \
+                  --summary-output "tmp/validation/dependency_update/${key}.summary.json"
+                if [[ -s "$changed" ]]; then
+                  python -m pip check
+                fi
+                ;;
+              pyproject.toml)
+                python -m pip check
+                ;;
+              .github/renovate.json)
+                python -m json.tool "$file" > /dev/null
+                ;;
+              frontend/package.json|frontend/package-lock.json)
+                echo "Frontend dependency contract is covered by the existing lockfile-bound frontend lane: $file"
+                ;;
+            esac
+          done
 
       - name: Run PR quality enforcement
         id: pr_quality_validation
@@ -314,6 +355,8 @@ jobs:
         env:
           CLASSIFY_RESULT: ${{ steps.classify.outcome }}
           BACKEND_RESULT: ${{ steps.backend_validation.outcome }}
+          DEPENDENCY_REQUIRED: ${{ steps.classify.outputs.dependency_validation_required }}
+          DEPENDENCY_RESULT: ${{ steps.dependency_validation.outcome }}
           FRONTEND_DEPENDENCIES_RESULT: ${{ steps.frontend_dependencies.outcome }}
           FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}
           GO_RESULT: ${{ steps.go_validation.outcome }}
@@ -330,6 +373,9 @@ jobs:
           failures=()
           if [[ "${CLASSIFY_RESULT}" != "success" ]]; then
             failures+=("classify_static=${CLASSIFY_RESULT}")
+          fi
+          if [[ "${DEPENDENCY_REQUIRED}" == "true" && "${DEPENDENCY_RESULT}" != "success" ]]; then
+            failures+=("dependency_validation=${DEPENDENCY_RESULT}")
           fi
           for entry in \
             "backend:${BACKEND_RESULT}" \
