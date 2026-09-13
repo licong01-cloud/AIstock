@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1478",
-  "closed_at": null,
+  "closed_at": "2026-09-13T16:39:18.390838Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -140,8 +140,8 @@
   },
   "first_seen_at": "2026-09-12T22:44:14.494305Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "174682552d94ba674e5c7308273a0e685e9c6709",
+  "fixed_at": "2026-09-12T23:53:24Z",
   "github_issue_number": 4641,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4641",
   "last_seen_at": "2026-09-12T22:44:14.494305Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4643",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -175,9 +176,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1478\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1478",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5685f0476190b6931928ca1d4919c72da13f407880bc700fec5762880d1e700d",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "174682552d94ba674e5c7308273a0e685e9c6709",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-13T16:38:18.650385Z",
+      "mode": "read_only",
+      "observed_identity": "174682552d94ba674e5c7308273a0e685e9c6709",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5aea4b9ab033c2ec1cfabf2d7dccad3580736e859a4d0d7acd5ecf84b08aa315",
+      "receipt_sha256": "45493a964fa87a20a4f60a944057f9de63f5d57cd4e1c36011c0af9ac1efeb40",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7703edb4523149b26dab49e5f3cd339e6132e52da8f14c567e47fc4d558d7465",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -187,7 +211,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -196,6 +220,9 @@
     "fingerprint": "3b23f94208716c60e8ecd9ce",
     "source_event_id": "FE-20260912-3b23f9420871"
   },
+  "validation_evidence": [
+    "gh pr checks 4643 -> passed: CI verdict"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
