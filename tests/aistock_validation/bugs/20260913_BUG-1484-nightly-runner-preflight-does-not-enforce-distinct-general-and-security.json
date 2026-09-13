@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1484",
-  "closed_at": null,
+  "closed_at": "2026-09-13T17:41:14Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -112,8 +112,8 @@
   },
   "first_seen_at": "2026-09-13T17:33:58.555018Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "430ebb8999b0e4adc306710c02356b5ea637d8f4",
+  "fixed_at": "2026-09-13T17:41:14Z",
   "github_issue_number": 4660,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4660",
   "last_seen_at": "2026-09-13T17:33:58.555018Z",
@@ -121,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4661",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,6 +139,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -147,7 +149,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1484",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bcb75ba4b3e39fcf",
+    "recorded_at": "2026-09-13T17:42:48.994879Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ac0c37f4c88b9529883e5be0552c59519ccfb4b6",
+    "source_merge_commit": "430ebb8999b0e4adc306710c02356b5ea637d8f4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4661",
+    "validation_evidence": [
+      "validation-receipt: id=6e9c42c6234b81a0 commit=ac0c37f4c88b9529883e5be0552c59519ccfb4b6 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed (blocking=0)`",
+      "validation-receipt: id=df80514facdd4d2c commit=ac0c37f4c88b9529883e5be0552c59519ccfb4b6 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed (blocking=0; ownership 6/6)`"
+    ],
+    "validation_evidence_digest": "df047155e53460a323e8744c7035a2fc6f7b384a8c3a86773d17d87a25ca41d5"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -156,6 +180,10 @@
     "fingerprint": "14a1aa7b1f99ed73da611dba",
     "source_event_id": "FE-20260913-14a1aa7b1f99"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6e9c42c6234b81a0 commit=ac0c37f4c88b9529883e5be0552c59519ccfb4b6 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed (blocking=0)`",
+    "validation-receipt: id=df80514facdd4d2c commit=ac0c37f4c88b9529883e5be0552c59519ccfb4b6 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed (blocking=0; ownership 6/6)`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
