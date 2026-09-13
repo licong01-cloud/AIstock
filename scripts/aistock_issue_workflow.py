@@ -3542,6 +3542,38 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
     return "passed", None, {"kind": "object"}
 
 
+def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """QE dataset-profile must identify one usable active profile."""
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return "failed", "QE dataset profile must report ok=true", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("mode") != "active_profile":
+        return "failed", "QE dataset profile must contain data.mode=active_profile", {}
+    required = {}
+    for field in ("generation", "release_id", "cutoff"):
+        value = data.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return "failed", f"QE dataset profile is missing non-empty data.{field}", {}
+        required[field] = value.strip()
+    universes = data.get("universes")
+    if not isinstance(universes, list) or not universes:
+        return "failed", "QE dataset profile must contain a non-empty universes list", required
+    pool_ids: list[str] = []
+    for universe in universes:
+        if not isinstance(universe, dict):
+            return "failed", "QE dataset profile contains a malformed universe", required
+        pool_id = universe.get("pool_id")
+        gap_count = universe.get("gap_count")
+        if not isinstance(pool_id, str) or not pool_id.strip():
+            return "failed", "QE dataset profile contains a universe without pool_id", required
+        if type(gap_count) is not int or gap_count != 0:
+            return "failed", f"QE dataset profile universe {pool_id.strip()} has non-zero or invalid gap_count", required
+        pool_ids.append(pool_id.strip())
+    if len(pool_ids) != len(set(pool_ids)):
+        return "failed", "QE dataset profile contains duplicate pool_id values", required
+    return "passed", None, {**required, "universe_count": len(pool_ids)}
+
+
 def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """The OpenAPI document smoke must prove the app serves its route schema."""
     if not isinstance(payload, dict):
@@ -3821,6 +3853,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (
