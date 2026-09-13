@@ -76,8 +76,8 @@
   },
   "first_seen_at": "2026-09-13T17:11:57.533795Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4bb6da0f8831b1d8e066fca4dfd4a0af6d86f07b",
+  "fixed_at": "2026-09-13T17:51:28Z",
   "github_issue_number": 4655,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4655",
   "last_seen_at": "2026-09-13T17:11:57.533795Z",
@@ -85,6 +85,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4663",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -112,6 +113,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -123,7 +125,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1482",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "95a0ad6c0cf5e078",
+    "recorded_at": "2026-09-13T17:52:22.688532Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c8c8b271c062a5785c1780a34897a5cb936cee23",
+    "source_merge_commit": "4bb6da0f8831b1d8e066fca4dfd4a0af6d86f07b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4663",
+    "validation_evidence": [
+      "gh pr checks 4663 -> CI verdict pass (1m31s)"
+    ],
+    "validation_evidence_digest": "611f58d90c8c32635e4325e1e4888e4196ce7794668365bcab42e58552902069"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -158,6 +181,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "gh pr checks 4663 -> CI verdict pass (1m31s)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
