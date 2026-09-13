@@ -100,6 +100,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["dependency_update_pr_validation_reuses_ci_verdict"] is True
     assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
+    assert evidence["codeql_bundle_path_is_runner_independent"] is True
     assert evidence["security_workflows_fail_fast_before_runner_allocation"] is True
     assert evidence["nightly_code_intelligence_has_single_scheduled_owner"] is True
     assert evidence["nightly_preflight_requires_distinct_runner_roles"] is True
@@ -244,6 +245,22 @@ def test_codeql_security_runner_reacquisition_is_detected(tmp_path: Path) -> Non
     assert evidence["codeql_reuses_single_security_runner_allocation"] is False
 
 
+def test_codeql_bundle_path_cannot_depend_on_a_runner_workspace(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "codeql.yml":
+            text = text.replace(
+                "prebuilt\\CodeQL\\2.26.3\\x64\\codeql",
+                "aistock\\_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["codeql_bundle_path_is_runner_independent"] is False
+
+
 def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     import yaml
 
@@ -369,6 +386,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "changed_tests_reachable_from_selected_ci_plan",
         "dependency_update_pr_validation_reuses_ci_verdict",
         "codeql_reuses_single_security_runner_allocation",
+        "codeql_bundle_path_is_runner_independent",
     }
 
     assert expected <= required

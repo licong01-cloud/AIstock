@@ -401,11 +401,16 @@ def build_contract_evidence(
         "codeql_uses_hash_verified_prebuilt_bundle": (
             "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
-            and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
             and "database create" in workflow_text.get("codeql.yml", "")
             and "database analyze" in workflow_text.get("codeql.yml", "")
             and "github upload-results" in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_bundle_path_is_runner_independent": (
+            "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "aistock\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
+            and "aistock-security\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
         ),
         "codeql_remote_action_download_is_eliminated": (
             "github/codeql-action/" not in codeql_text
