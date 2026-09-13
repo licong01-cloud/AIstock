@@ -106,6 +106,15 @@ OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr"
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 PR_BODY_CODEGRAPH_TEST_LIMIT = 10
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
+RUNNER_INFRA_SIGNATURES = (
+    "self-hosted",
+    "runner-preflight",
+    "runner unavailable",
+    "runner availability",
+    "no online github actions runner",
+    "unable to query github runner health",
+    "aistock_runner_health_token",
+)
 SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
     "superseded_by_later_branch_success",
@@ -12770,16 +12779,7 @@ def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
         for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
         if item
     ).lower()
-    infra_signatures = [
-        "self-hosted",
-        "runner-preflight",
-        "runner unavailable",
-        "runner availability",
-        "no online github actions runner",
-        "unable to query github runner health",
-        "aistock_runner_health_token",
-    ]
-    if any(token in title_body or token in errors for token in infra_signatures):
+    if any(token in title_body or token in errors for token in RUNNER_INFRA_SIGNATURES):
         return "infra_blocker"
     if any(token in title_body for token in ["flaky", "timeout", "network"]):
         return "infra_flaky"
@@ -12788,6 +12788,27 @@ def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
     if summary.get("diagnostic_status") == "complete":
         return "real_regression_candidate"
     return "needs_log_triage"
+
+
+def _nightly_runner_infra_recovery_eligible(triage: dict[str, Any]) -> bool:
+    summary = triage.get("summary") if isinstance(triage.get("summary"), dict) else {}
+    workflow = str(summary.get("workflow") or "").lower()
+    if "nightly" not in workflow:
+        return False
+    issue = triage.get("github_issue") if isinstance(triage.get("github_issue"), dict) else {}
+    text_parts = [str(issue.get("title") or "")]
+    for job in summary.get("failed_jobs") or []:
+        if not isinstance(job, dict):
+            continue
+        text_parts.extend(
+            [
+                str(job.get("job_name") or ""),
+                str(job.get("error_signature") or ""),
+                *[str(item) for item in job.get("key_log_excerpt") or []],
+            ]
+        )
+    evidence = "\n".join(text_parts).lower()
+    return any(token in evidence for token in RUNNER_INFRA_SIGNATURES)
 
 
 def build_triage_ci_issue_plan(
@@ -13159,7 +13180,10 @@ def build_ci_issue_janitor_plan(
     limit: int = 50,
     skip_github_summary: bool = False,
     close_infra: bool = True,
+    runner_recovered_only: bool = False,
 ) -> dict[str, Any]:
+    if runner_recovered_only and not close_infra:
+        raise WorkflowError("runner_recovered_only cannot be combined with superseded-only cleanup")
     if issue_numbers:
         issues = [{"number": str(item)} for item in issue_numbers]
         source = "explicit_issues"
@@ -13220,6 +13244,10 @@ def build_ci_issue_janitor_plan(
                 entry["reason"] = "infra_closure_disabled"
                 evaluated.append(entry)
                 continue
+            if runner_recovered_only and not _nightly_runner_infra_recovery_eligible(triage):
+                entry["reason"] = "not_nightly_runner_recovery_scope"
+                evaluated.append(entry)
+                continue
             infra_count += 1
             entry["action"] = "close_infra"
             entry["infra_action"] = _pick(
@@ -13256,6 +13284,7 @@ def build_ci_issue_janitor_plan(
         "source": source,
         "limit": limit,
         "close_infra": close_infra,
+        "runner_recovered_only": runner_recovered_only,
         "scanned_count": len(evaluated),
         "superseded_count": superseded_count,
         "infra_count": infra_count,
@@ -13274,7 +13303,13 @@ def build_ci_issue_janitor_plan(
     if not apply and actionable_count:
         issue_args = " ".join(f"--issue {item.get('issue')}" for item in evaluated if item.get("action") in {"close_superseded", "close_infra"})
         limit_arg = "" if issue_args else f" --limit {limit}"
-        infra_arg = "" if close_infra else " --superseded-only"
+        infra_arg = (
+            " --runner-recovered-only"
+            if runner_recovered_only
+            else ""
+            if close_infra
+            else " --superseded-only"
+        )
         payload["next_command"] = (
             f"python scripts/aistock_issue_workflow.py ci-issue-janitor {issue_args}{infra_arg} --apply"
             if issue_args
@@ -21293,6 +21328,7 @@ def cmd_ci_issue_janitor(args: argparse.Namespace) -> int:
         limit=args.limit,
         skip_github_summary=args.skip_github_summary,
         close_infra=not args.superseded_only,
+        runner_recovered_only=args.runner_recovered_only,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_actionable_ci_issues"} else 2
@@ -21684,6 +21720,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--superseded-only",
         action="store_true",
         help="Only close unlinked issues superseded by later successful runs; leave infra-only issues for manual ops review.",
+    )
+    ci_janitor.add_argument(
+        "--runner-recovered-only",
+        action="store_true",
+        help="Close only unlinked Nightly runner-infrastructure issues after a successful runner preflight.",
     )
     ci_janitor.add_argument(
         "--apply",
