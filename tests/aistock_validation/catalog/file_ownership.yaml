@@ -1116,16 +1116,20 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - backend/services/adj_factor_history_reconciler.py
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - scripts/ingest_tushare_adj_factor.py
+      - backend/tests/ingestion/test_tdx_scheduler_adj_factor.py
+      - backend/tests/services/test_adj_factor_history_reconciler.py
       - backend/tests/test_tushare_sync_engine.py
       - backend/tests/test_local_data_management_facade.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
     layer: data_pipeline
     risk_level: high
-    ownership_reason: The tushare sync engine, dataset specs, sync entrypoint, and direct tests form the local_data ingestion boundary that materializes every tushare dataset (including sw_index_member takedown fidelity), and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
+    ownership_reason: The tushare sync engine, dataset specs, audited adj-factor history reconciler, sync entrypoints, and direct tests form the local_data ingestion boundary that materializes every tushare dataset (including sw_index_member takedown fidelity), and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
   - rule_id: local_data_daily_basic_operator
     priority: 96
     include:

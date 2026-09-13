@@ -5,7 +5,9 @@
     "backend/services/adj_factor_history_reconciler.py",
     "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
     "backend/tests/services/test_adj_factor_history_reconciler.py",
+    "noxfile.py",
     "scripts/ingest_tushare_adj_factor.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260913_BUG-1482-daily-adj-factor-sync-misses-upstream-historical-restatements.json"
   ],
   "assigned_agent": null,
@@ -39,7 +41,9 @@
       "backend/services/adj_factor_history_reconciler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "noxfile.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "task_scope_expansion",
     "ownership": {
@@ -55,7 +59,9 @@
       "backend/services/adj_factor_history_reconciler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "noxfile.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -63,7 +69,9 @@
       "backend/services/adj_factor_history_reconciler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "noxfile.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-09-13T17:11:57.533795Z",
