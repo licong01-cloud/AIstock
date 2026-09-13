@@ -599,6 +599,26 @@ def _comparison(
     }
 
 
+def _scenario_coverage_complete(
+    parent_count: int,
+    *,
+    expected_symbols: int,
+    evaluated_symbols: Mapping[str, set[str]],
+    feature_errors: Sequence[Mapping[str, Any]],
+    path_errors: Sequence[Mapping[str, Any]],
+    source_coverage_complete: bool,
+) -> bool:
+    return bool(
+        source_coverage_complete
+        and not feature_errors
+        and len(evaluated_symbols[str(parent_count)]) == expected_symbols
+        and not any(
+            int(item.get("parent_order_count", -1)) == parent_count
+            for item in path_errors
+        )
+    )
+
+
 def _manifest(root: Path, receipt: Mapping[str, Any]) -> Mapping[str, Any]:
     names = tuple(
         path.relative_to(root).as_posix()
@@ -883,11 +903,22 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         if not signal_frame.empty
         else {}
     )
-    coverage_complete = (
-        not feature_errors
-        and not path_errors
-        and all(len(evaluated_symbols[str(item)]) == len(symbols) for item in PARENT_COUNTS)
-        and source["factor_action_coverage_audit"]["coverage_complete"] is True
+    scenario_coverage = {
+        str(parent_count): _scenario_coverage_complete(
+            parent_count,
+            expected_symbols=len(symbols),
+            evaluated_symbols=evaluated_symbols,
+            feature_errors=feature_errors,
+            path_errors=path_errors,
+            source_coverage_complete=(
+                source["factor_action_coverage_audit"]["coverage_complete"] is True
+            ),
+        )
+        for parent_count in PARENT_COUNTS
+    }
+    primary_coverage_complete = scenario_coverage["1"]
+    diagnostic_coverage_complete = all(
+        scenario_coverage[str(parent_count)] for parent_count in (2, 3)
     )
     coverage_identity = {
         "schema_version": "position_timing_volatility_contraction_breakout_coverage_v1",
@@ -895,6 +926,11 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "evaluated_symbol_count_by_parent_order": {
             key: len(value) for key, value in evaluated_symbols.items()
         },
+        "scenario_coverage_complete": scenario_coverage,
+        "primary_coverage_complete": primary_coverage_complete,
+        "diagnostic_cost_sensitivity_coverage_complete": (
+            diagnostic_coverage_complete
+        ),
         "feature_errors": feature_errors,
         "path_errors": path_errors,
         "signal_status_counts": signal_counts,
@@ -909,7 +945,7 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "insufficient_factor_symbol_count": source[
             "factor_action_coverage_audit"
         ]["insufficient_factor_symbol_count"],
-        "coverage_complete": coverage_complete,
+        "coverage_complete": primary_coverage_complete,
     }
     coverage = {
         **coverage_identity,
@@ -924,12 +960,13 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         )
         comparisons[str(parent_count)] = _comparison(
             scenario,
-            coverage_complete=coverage_complete,
+            coverage_complete=scenario_coverage[str(parent_count)],
             seed=INFERENCE_SEED + offset,
         )
     main_evidence = comparisons["1"]["effect_evidence"]
     cost_sensitive = bool(
         main_evidence == "SUPPORTED"
+        and diagnostic_coverage_complete
         and any(
             comparisons[str(item)]["effect_evidence"] != "SUPPORTED"
             for item in (2, 3)
@@ -966,9 +1003,14 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "effect_evidence": main_evidence,
         "power_status": comparisons["1"]["power_status"],
         "cost_assumption_sensitive": cost_sensitive,
-        "evidence_reason_codes": (
-            ["COST_ASSUMPTION_SENSITIVE"] if cost_sensitive else []
-        ),
+        "evidence_reason_codes": [
+            *(["COST_ASSUMPTION_SENSITIVE"] if cost_sensitive else []),
+            *(
+                ["COST_SENSITIVITY_INCOMPLETE"]
+                if not diagnostic_coverage_complete
+                else []
+            ),
+        ],
         "selected_trial_count": 1 if main_evidence == "SUPPORTED" else 0,
         "coverage_sha256": coverage["coverage_sha256"],
         "registry_written": False,

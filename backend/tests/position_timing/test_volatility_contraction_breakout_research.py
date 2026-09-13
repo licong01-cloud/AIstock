@@ -38,6 +38,7 @@ from backend.services.position_timing.volatility_contraction_breakout_research i
     _load_request,
     _publish_bundle,
     _same_canonical_identity,
+    _scenario_coverage_complete,
     inspect_bundle,
     run_request,
 )
@@ -209,6 +210,33 @@ def test_comparison_uses_one_daily_cross_symbol_estimand_and_coverage_constraint
     assert supported["effective_trading_days"] == 10
     assert supported["effect_evidence"] == "SUPPORTED"
     assert constrained["effect_evidence"] == "INCONCLUSIVE"
+
+
+def test_diagnostic_parent_split_failure_does_not_invalidate_primary_coverage():
+    evaluated = {"1": {"A", "B"}, "2": {"A"}, "3": {"A"}}
+    errors = [
+        {
+            "parent_order_count": 2,
+            "symbol": "B",
+            "error_code": "LEGAL_PARENT_SPLIT_UNAVAILABLE",
+        },
+        {
+            "parent_order_count": 3,
+            "symbol": "B",
+            "error_code": "LEGAL_PARENT_SPLIT_UNAVAILABLE",
+        },
+    ]
+    arguments = {
+        "expected_symbols": 2,
+        "evaluated_symbols": evaluated,
+        "feature_errors": [],
+        "path_errors": errors,
+        "source_coverage_complete": True,
+    }
+
+    assert _scenario_coverage_complete(1, **arguments)
+    assert not _scenario_coverage_complete(2, **arguments)
+    assert not _scenario_coverage_complete(3, **arguments)
 
 
 def test_bundle_is_recursive_immutable_and_exact_retry_is_noop(
