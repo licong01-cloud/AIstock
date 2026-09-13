@@ -346,6 +346,14 @@ def build_contract_evidence(
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
+        "dependency_update_pr_validation_reuses_ci_verdict": (
+            "pull_request:" not in workflow_text.get("dependency-update-validate.yml", "")
+            and "workflow_dispatch:" in workflow_text.get("dependency-update-validate.yml", "")
+            and "Validate changed dependency surface" in test_text
+            and "steps.classify.outputs.dependency_validation_required == 'true'" in test_text
+            and "scripts/validate_changed_requirements.py" in test_text
+            and "DEPENDENCY_RESULT" in test_text
+        ),
         "merge_quality_contexts_are_change_scoped": (
             STABLE_MERGE_QUALITY_CONTEXTS == ("CI verdict",)
             and "pull_request:" not in codeql_text
