@@ -1649,9 +1649,14 @@ def replay_full_policy_symbol(
     template_schedule: Mapping[str, str] | None = None,
     entry_selector: Callable[..., Mapping[str, Any]] | None = None,
     exit_selector: Callable[..., Mapping[str, Any]] | None = None,
+    entry_observer: Callable[[pd.DataFrame, int], bool] | None = None,
+    supplemental_exit_enabled: bool = True,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Counter[str]]:
+    if not isinstance(supplemental_exit_enabled, bool):
+        raise ActionValueError("PATTERN_SUPPLEMENTAL_EXIT_FLAG_INVALID")
+    observe_entry = entry_observer or breakout_observed
     states = {
         "POLICY": PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
         "BUY_AND_HOLD": PositionState(0, 0, REFERENCE_CAPITAL_CNY, REFERENCE_CAPITAL_CNY),
@@ -1767,16 +1772,23 @@ def replay_full_policy_symbol(
         policy_plan: ActionPlan | None = None
         policy_authority = "WAIT" if not policy_state.quantity else "HOLD"
         if policy_state.quantity:
-            policy_plan, exit_edge_active, metadata = _policy_plan(
-                symbol=symbol,
-                state=policy_state,
-                reference=reference,
-                features=features,
-                ordinal=ordinal,
-                template_id=current_template_id,
-                exit_edge_active=exit_edge_active,
-                exit_selector=exit_selector,
-            )
+            if supplemental_exit_enabled:
+                policy_plan, exit_edge_active, metadata = _policy_plan(
+                    symbol=symbol,
+                    state=policy_state,
+                    reference=reference,
+                    features=features,
+                    ordinal=ordinal,
+                    template_id=current_template_id,
+                    exit_edge_active=exit_edge_active,
+                    exit_selector=exit_selector,
+                )
+            else:
+                policy_plan = risk_exit_plan(symbol, policy_state, reference)
+                exit_edge_active = False
+                metadata = {
+                    "authority": "FROZEN_RISK_EXIT" if policy_plan is not None else "HOLD"
+                }
             policy_authority = str(metadata["authority"])
             active_event = None
             event_reference = None
@@ -1809,7 +1821,7 @@ def replay_full_policy_symbol(
                 active_event is None
                 and policy_plan is None
                 and ordinal >= blocked_until
-                and breakout_observed(features, ordinal)
+                and observe_entry(features, ordinal)
             ):
                 candidate = _max_budgeted_buy(symbol, policy_state, reference)
                 selection = (

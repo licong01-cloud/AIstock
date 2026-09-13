@@ -698,6 +698,62 @@ def test_full_policy_preserves_state_across_suspension_and_records_fixed_l1_limi
     assert same_price_entry["incremental_gross_value_bps"] == pytest.approx(0.0, abs=1e-9)
 
 
+def test_full_policy_rule_injection_is_immediate_and_can_disable_supplemental_exit():
+    bars = _bars(45)
+    features = pattern_feature_frame(bars, symbol="000001.SZ")
+    features.loc[:, "acceleration_atr"] = 1.0
+    features.loc[:, "distance_ma10_atr"] = 3.0
+    features.loc[:, "volume_ratio"] = 3.0
+
+    rows, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=20,
+        terminal_ordinal=35,
+        entry_observer=lambda _features, ordinal: ordinal == 22,
+        entry_selector=lambda **_kwargs: {
+            "choice": "E0",
+            "authority": "VOLATILITY_CONTRACTION_BREAKOUT_OPEN",
+        },
+        supplemental_exit_enabled=False,
+    )
+
+    policy_fills = [item for item in fills if item["path_role"] == "FULL_POLICY"]
+    assert len(policy_fills) == 1
+    assert policy_fills[0]["decision_date"] == bars.index[22].date()
+    assert policy_fills[0]["target_date"] == bars.index[23].date()
+    assert counts["BREAKOUT_OBSERVED"] == 1
+    assert any(
+        row["policy_authority"] == "VOLATILITY_CONTRACTION_BREAKOUT_OPEN"
+        for row in rows
+    )
+    assert not any(row["policy_authority"] == "ACCELERATION_VOLUME_EXIT" for row in rows)
+
+
+def test_full_policy_explicit_defaults_preserve_existing_behavior():
+    bars = _bars(50)
+    features = _forced_breakout_features(bars, 25, confirm=27)
+    arguments = {
+        "symbol": "000001.SZ",
+        "bars": bars,
+        "features": features,
+        "calendar_dates": tuple(bars.index.date),
+        "corporate_actions": CorporateActionBook.empty(),
+        "start_ordinal": 20,
+        "terminal_ordinal": 40,
+    }
+    implicit = replay_full_policy_symbol(**arguments)
+    explicit = replay_full_policy_symbol(
+        **arguments,
+        entry_observer=None,
+        supplemental_exit_enabled=True,
+    )
+    assert implicit == explicit
+
+
 def test_buy_and_hold_does_not_enter_before_pit_membership():
     bars = _bars(45)
     bars.loc[bars.index[:10], "pit_active"] = False
