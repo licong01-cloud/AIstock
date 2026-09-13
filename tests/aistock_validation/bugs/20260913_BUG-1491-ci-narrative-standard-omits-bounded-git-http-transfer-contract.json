@@ -2,6 +2,7 @@
   "actual": "BUG-1490 merged workflow and YAML evidence, while the Markdown authority still only discusses queued jobs.",
   "allowed_write_scope": [
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "tests/aistock_validation/bugs/20260913_BUG-1491-ci-narrative-standard-omits-bounded-git-http-transfer-contract.json"
   ],
@@ -31,12 +32,14 @@
     "added_files": [],
     "changed_files": [
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py"
       ],
       "impacted_modules": [
@@ -67,17 +70,20 @@
       ],
       "suggested_scope": [
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py"
     ]
   },
