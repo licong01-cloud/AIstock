@@ -1395,9 +1395,23 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert '"paths":{"scanned":[]}' in run
 
 
-def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
+def test_dependency_update_validation_is_folded_into_unified_ci() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
-    assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]
+    triggers = workflow.get("on") or workflow.get(True)
+    assert triggers == {"workflow_dispatch": {}}
+
+    ci_workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    ci_steps = ci_workflow["jobs"]["ci-verdict"]["steps"]
+    dependency_step = next(step for step in ci_steps if step.get("name") == "Validate changed dependency surface")
+    dependency_run = str(dependency_step["run"])
+
+    assert "steps.classify.outputs.dependency_validation_required == 'true'" in dependency_step["if"]
+    assert dependency_step["env"]["DEPENDENCY_FILES"] == "${{ steps.classify.outputs.dependency_files }}"
+    assert ".github/requirements/*.txt" in dependency_run
+    assert "python scripts/validate_changed_requirements.py" in dependency_run
+    assert "python -m pip check" in dependency_run
+    assert "pip install" not in dependency_run
+
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 

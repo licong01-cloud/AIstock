@@ -1728,15 +1728,20 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "bug-registry-pr-body.md" in upload_step["with"]["path"]
 
 
-def test_nightly_workflow_closes_stale_failure_issues_after_recovery() -> None:
+def test_nightly_workflow_closes_only_recovered_runner_issues() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["full-summary"]["steps"]
-    step = next(step for step in steps if step.get("name") == "Close stale Nightly failure issues after recovery")
+    step = next(
+        step
+        for step in steps
+        if step.get("name") == "Close recovered Nightly runner issues and stale superseded issues"
+    )
 
-    assert step["if"] == "success()"
-    assert "ci-issue-janitor --superseded-only --apply --stdout-format compact" in step["run"]
+    assert step["if"] == "always() && needs.runner-preflight.result == 'success'"
+    assert "ci-issue-janitor --runner-recovered-only --apply --stdout-format compact" in step["run"]
+    assert "--superseded-only" not in step["run"]
 
 
 def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
