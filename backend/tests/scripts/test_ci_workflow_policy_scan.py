@@ -81,7 +81,7 @@ def test_self_hosted_workflow_must_clear_inherited_git_alternates(tmp_path: Path
     assert any("must clear inherited Git alternate object directories" in item["reason"] for item in findings)
 
 
-def test_self_hosted_workflow_must_bound_stalled_git_http_transfer(tmp_path: Path) -> None:
+def test_self_hosted_workflow_must_bound_stalled_or_unusably_slow_git_http_transfer(tmp_path: Path) -> None:
     workflow = tmp_path / "codeql.yml"
     workflow.write_text(
         "env:\n"
@@ -94,14 +94,27 @@ def test_self_hosted_workflow_must_bound_stalled_git_http_transfer(tmp_path: Pat
 
     findings = scan_environment_contracts([workflow])
 
-    assert any("must bound stalled Git HTTP transfers" in item["reason"] for item in findings)
+    assert any("must bound stalled or unusably slow Git HTTP transfers" in item["reason"] for item in findings)
 
 
 def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path) -> None:
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == "test.yml":
-            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
+
+
+def test_contract_evidence_rejects_previous_ineffective_git_http_threshold(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '1'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "  GIT_HTTP_LOW_SPEED_TIME: '60'\n", 1)
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
@@ -421,8 +434,10 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
 
     assert expected <= required
     assert "immutable CodeQL Action release" not in standard
-    assert "GIT_HTTP_LOW_SPEED_LIMIT=1" in standard
-    assert "GIT_HTTP_LOW_SPEED_TIME=60" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" in standard
+    assert "GIT_HTTP_LOW_SPEED_TIME=30" in standard
+    assert "GIT_CONFIG_KEY_0=http.version" in standard
+    assert "GIT_CONFIG_VALUE_0=HTTP/1.1" in standard
     assert "该设置不是新的 PR 门禁" in standard
     assert "禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`" in standard
     for action_ref in (
