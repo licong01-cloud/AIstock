@@ -6,10 +6,13 @@
     "backend/services/hmm_training_service.py",
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/test_hmm_daily_coefficients.py",
+    "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
     "backend/tests/scripts/test_precompute_hmm_coefficients.py",
+    "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
     "backend/tests/hmm_data_source/test_isolation_constraints.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+    "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
     "tests/aistock_validation/bugs/20260914_BUG-1510-qe-hmm-current-release-coefficients-require-forbidden-market-table-reads.json"
   ],
   "assigned_agent": null,
@@ -28,6 +31,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260914-d7dd17080f1c",
       "timestamp": "2026-09-14T19:49:50.275800Z"
+    },
+    {
+      "action": "ci_test_ownership_corrected",
+      "actor": "codex",
+      "note": "PR #4737 CI classifier found an unmapped root test and two changed tests outside every selected session. Tests were moved into the existing HMM data-source and QE sector-risk suites without changing CI policy; local classifier now passes with no unmapped or unexecuted tests.",
+      "timestamp": "2026-09-14T21:28:00Z"
     }
   ],
   "evidence_uris": [
@@ -36,17 +45,23 @@
   ],
   "expected": "Generate and validate the complete 2024-07-01 through 2026-08-28 HMM coefficient artifact from the explicitly bound frozen QE release only, with pinned sector-code mapping and no database credential or market-table access; fail closed on missing mapping or coverage.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+    ],
     "changed_files": [
       "scripts/precompute_hmm_coefficients.py",
       "scripts/score_weighted_strategy.py",
       "backend/services/hmm_training_service.py",
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "backend/tests/hmm_data_source/test_isolation_constraints.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
-      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -136,10 +151,13 @@
       "backend/services/hmm_training_service.py",
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "backend/tests/hmm_data_source/test_isolation_constraints.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
-      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -148,10 +166,13 @@
       "backend/services/hmm_training_service.py",
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "backend/tests/hmm_data_source/test_isolation_constraints.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
-      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
     ]
   },
   "first_seen_at": "2026-09-14T19:49:50.275821Z",
