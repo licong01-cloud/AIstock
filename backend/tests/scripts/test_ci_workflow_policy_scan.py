@@ -122,6 +122,34 @@ def test_contract_evidence_rejects_previous_ineffective_git_http_threshold(tmp_p
     assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
 
 
+def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v7\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    reasons = {item["reason"] for item in findings}
+    assert "self-hosted actions/checkout must have a five-minute hard step timeout" in reasons
+    assert (
+        "self-hosted checkout must reclaim interrupted Git pack fragments by literal path without blocking the PR"
+        in reasons
+    )
+
+
 def test_repository_contract_evidence_matches_machine_standard() -> None:
     paths = sorted(Path(".github/workflows").glob("*.yml"))
     evidence = build_contract_evidence(paths)
@@ -422,6 +450,8 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "merge_quality_contexts_are_change_scoped",
         "bounded_dual_runner_roles",
         "self_hosted_git_http_stalls_are_bounded",
+        "self_hosted_checkout_steps_have_hard_timeout",
+        "self_hosted_checkout_cleans_interrupted_pack_fragments",
         "runner_lifecycle_is_pinned_and_supervised",
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
@@ -438,6 +468,10 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
     assert "GIT_HTTP_LOW_SPEED_TIME=30" in standard
     assert "GIT_CONFIG_KEY_0=http.version" in standard
     assert "GIT_CONFIG_VALUE_0=HTTP/1.1" in standard
+    assert "`actions/checkout` step 必须设置 `timeout-minutes: 5`" in standard
+    assert "`tmp_pack_*`" in standard
+    assert "`continue-on-error: true`" in standard
+    assert "不得覆盖业务测试结论或新增合入门禁" in standard
     assert "该设置不是新的 PR 门禁" in standard
     assert "禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`" in standard
     for action_ref in (

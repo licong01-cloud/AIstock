@@ -36,8 +36,31 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           fetch-depth: 2
+
+      - name: Reclaim interrupted Git pack fragments
+        if: ${{ always() && !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $workspaceRoot = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar
+          )
+          $packRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot '.git\objects\pack'))
+          $workspacePrefix = $workspaceRoot + [System.IO.Path]::DirectorySeparatorChar
+          if (-not $packRoot.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Git pack root escaped runner workspace: $packRoot"
+          }
+          $fragments = @(
+            Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*' -ErrorAction SilentlyContinue
+          )
+          $removedBytes = ($fragments | Measure-Object -Property Length -Sum).Sum
+          foreach ($fragment in $fragments) {
+            Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop
+          }
+          "interrupted_git_pack_cleanup count=$($fragments.Count) bytes=$([long]$removedBytes)"
 
       - name: Fetch current PR base ref only
         if: github.event_name == 'pull_request'
