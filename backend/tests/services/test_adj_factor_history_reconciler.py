@@ -12,6 +12,7 @@ from backend.services.adj_factor_history_reconciler import (
     AdjFactorHistoryReconciler,
     AdjFactorRow,
     AdjFactorSnapshot,
+    PostgresAdjFactorHistoryRepository,
     SymbolScope,
     _snapshot,
 )
@@ -93,16 +94,27 @@ class _Repository:
 
 
 class _SequencedProvider:
-    def __init__(self, responses: dict[str, Sequence[list[dict[str, str]]]]) -> None:
+    def __init__(self, responses: dict[str, Sequence[object]]) -> None:
         self.responses = responses
         self.call_counts: defaultdict[str, int] = defaultdict(int)
 
-    def adj_factor(self, *, ts_code: str, end_date: str, fields: str) -> list[dict[str, str]]:
+    def adj_factor(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+        fields: str,
+    ) -> list[dict[str, str]]:
         assert fields == "ts_code,trade_date,adj_factor"
+        assert start_date
         index = self.call_counts[ts_code]
         self.call_counts[ts_code] += 1
         configured = self.responses[ts_code]
-        return configured[min(index, len(configured) - 1)]
+        response = configured[min(index, len(configured) - 1)]
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 class _PagedProvider:
@@ -110,8 +122,16 @@ class _PagedProvider:
         self.symbol = symbol
         self.call_count = 0
 
-    def adj_factor(self, *, ts_code: str, end_date: str, fields: str) -> list[dict[str, str]]:
+    def adj_factor(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+        fields: str,
+    ) -> list[dict[str, str]]:
         self.call_count += 1
+        assert start_date == "20260701"
         end = dt.datetime.strptime(end_date, "%Y%m%d").date()
         values = [
             (dt.date(2026, 7, 1), "1.0"),
@@ -223,10 +243,50 @@ def test_reconcile_fails_closed_when_provider_omits_a_raw_price_date() -> None:
         {symbol: frozenset({DAY_1, DAY_2, DAY_3})},
     )
 
-    with pytest.raises(AdjFactorHistoryReconcileError, match=r"factor=1, price=1"):
+    with pytest.raises(AdjFactorHistoryReconcileError, match="omits a traded local date"):
         _reconciler(
             repository,
             _SequencedProvider({symbol: [incomplete, incomplete]}),
+        ).reconcile(end_date=DAY_3)
+
+    assert repository.apply_calls == 0
+
+
+def test_reconcile_retains_only_a_bounded_nontrading_source_omission() -> None:
+    symbol = "002231.SZ"
+    local = _snapshot(
+        symbol,
+        _rows(symbol, [(DAY_1, "3.094"), (DAY_2, "3.094"), (DAY_3, "3.094")]),
+    )
+    provider_rows = _provider_rows(symbol, [(DAY_1, "3.094"), (DAY_3, "3.094")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_3})})
+
+    receipt = _reconciler(
+        repository,
+        _SequencedProvider({symbol: [provider_rows, provider_rows]}),
+    ).reconcile(end_date=DAY_3)
+
+    assert receipt["status"] == "unchanged"
+    assert receipt["retained_nontrading_row_count"] == 1
+    assert receipt["retained_nontrading_rows"] == [
+        {"symbol": symbol, "trade_date": DAY_2.isoformat(), "adj_factor": "3.094"}
+    ]
+    assert repository.apply_calls == 0
+
+
+def test_reconcile_rejects_an_unbounded_nontrading_source_omission() -> None:
+    symbol = "002231.SZ"
+    local = _snapshot(
+        symbol,
+        _rows(symbol, [(DAY_1, "3.094"), (DAY_2, "3.094"), (DAY_3, "3.094")]),
+    )
+    provider_rows = _provider_rows(symbol, [(DAY_1, "3.094"), (DAY_3, "3.095")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_3})})
+
+    with pytest.raises(AdjFactorHistoryReconcileError, match="unbounded or changed nontrading date"):
+        _reconciler(
+            repository,
+            _SequencedProvider({symbol: [provider_rows, provider_rows]}),
         ).reconcile(end_date=DAY_3)
 
     assert repository.apply_calls == 0
@@ -264,6 +324,68 @@ def test_reconcile_paginates_back_to_required_start_on_both_stability_reads() ->
     assert provider.call_count == 4
 
 
+def test_reconcile_retries_a_transient_empty_provider_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    symbol = "000040.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.0")]))
+    complete = _provider_rows(symbol, [(DAY_1, "1.0")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [[], complete, complete]})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    receipt = _reconciler(repository, provider).reconcile(end_date=DAY_1)
+
+    assert receipt["status"] == "unchanged"
+    assert receipt["provider_call_count"] == 3
+    assert provider.call_counts[symbol] == 3
+
+
+def test_reconcile_retries_a_transient_provider_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    symbol = "002117.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.0")]))
+    complete = _provider_rows(symbol, [(DAY_1, "1.0")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [TimeoutError("provider timeout"), complete, complete]})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    receipt = _reconciler(repository, provider).reconcile(end_date=DAY_1)
+
+    assert receipt["status"] == "unchanged"
+    assert receipt["provider_call_count"] == 3
+    assert provider.call_counts[symbol] == 3
+
+
+def test_reconcile_still_fails_closed_after_persistent_provider_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "002117.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.0")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [TimeoutError("provider timeout")]})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(TimeoutError, match="provider timeout"):
+        _reconciler(repository, provider).reconcile(end_date=DAY_1)
+
+    assert provider.call_counts[symbol] == 8
+    assert repository.apply_calls == 0
+
+
+def test_reconcile_still_fails_closed_after_persistent_empty_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "000005.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.0")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1})})
+    provider = _SequencedProvider({symbol: [[]]})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(AdjFactorHistoryReconcileError, match="history is empty"):
+        _reconciler(repository, provider).reconcile(end_date=DAY_1)
+
+    assert provider.call_counts[symbol] == 8
+    assert repository.apply_calls == 0
+
+
 def test_all_provider_histories_are_validated_before_any_persistent_apply() -> None:
     first_symbol = "300506.SZ"
     second_symbol = "688109.SH"
@@ -292,3 +414,79 @@ def test_all_provider_histories_are_validated_before_any_persistent_apply() -> N
         _reconciler(repository, provider).reconcile(end_date=DAY_1)
 
     assert repository.apply_calls == 0
+
+
+class _TransactionCursor:
+    def __init__(self, connection: "_TransactionConnection") -> None:
+        self.connection = connection
+        self.rowcount = 2
+
+    def __enter__(self) -> "_TransactionCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, _params: object = None) -> None:
+        self.connection.in_transaction = True
+        self.connection.sql.append(" ".join(sql.split()))
+
+
+class _TransactionConnection:
+    def __init__(self, *, autocommit: bool, in_transaction: bool) -> None:
+        self._autocommit = autocommit
+        self.in_transaction = in_transaction
+        self.autocommit_assignments: list[bool] = []
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.sql: list[str] = []
+
+    @property
+    def autocommit(self) -> bool:
+        return self._autocommit
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        if self.in_transaction:
+            raise RuntimeError("set_session cannot be used inside a transaction")
+        self.autocommit_assignments.append(value)
+        self._autocommit = value
+
+    def cursor(self) -> _TransactionCursor:
+        return _TransactionCursor(self)
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        self.in_transaction = False
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+        self.in_transaction = False
+
+
+@pytest.mark.parametrize("initial_autocommit", [False, True])
+def test_postgres_apply_staged_respects_an_active_real_transaction(initial_autocommit: bool) -> None:
+    symbol = "300506.SZ"
+    connection = _TransactionConnection(autocommit=initial_autocommit, in_transaction=True)
+    repository = PostgresAdjFactorHistoryRepository(connection)
+    current = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.0"), (DAY_2, "1.0")]))
+    repository.load_snapshot = lambda *_args, **_kwargs: current  # type: ignore[method-assign]
+
+    inserted = repository.apply_staged(
+        symbols=[symbol],
+        replace_symbols=[symbol],
+        end_date=DAY_2,
+        expected_local_sha256={symbol: current.canonical_sha256},
+        expected_row_counts={symbol: 2},
+    )
+
+    assert inserted == 2
+    assert connection.rollback_count == 0
+    assert connection.in_transaction is False
+    assert connection._autocommit is initial_autocommit
+    if initial_autocommit:
+        assert connection.commit_count == 2
+        assert connection.autocommit_assignments == [False, True]
+    else:
+        assert connection.commit_count == 1
+        assert connection.autocommit_assignments == []
