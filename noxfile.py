@@ -561,6 +561,13 @@ def hmm_evolution_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def hmm_risk_ui(session: nox.Session) -> None:
+    """Run only the HMM Risk mocked UI contracts."""
+
+    _run_mocked_frontend_target(session, "tests/hmm-risk")
+
+
+@nox.session(venv_backend="none")
 def watchlist_ui(session: nox.Session) -> None:
     """Run only the Watchlist mocked UI contract."""
 
