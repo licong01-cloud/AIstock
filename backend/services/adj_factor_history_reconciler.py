@@ -29,6 +29,7 @@ RECEIPT_SCHEMA = "adj_factor_history_reconciliation_receipt_v1"
 SOURCE_API = "tushare.adj_factor"
 DOWNSTREAM_COMPONENTS = ("daily_bin", "factor_h5_static", "minute_bin")
 _STAGE_TABLE = "aistock_adj_factor_history_stage"
+_EMPTY_PAGE_MAX_ATTEMPTS = 8
 
 
 class AdjFactorHistoryReconcileError(RuntimeError):
@@ -181,9 +182,16 @@ def _coerce_provider_rows(payload: Any, *, symbol: str, end_date: dt.date) -> tu
     return tuple(rows)
 
 
-def _call_provider(provider: Any, *, symbol: str, end_date: dt.date) -> Any:
+def _call_provider(
+    provider: Any,
+    *,
+    symbol: str,
+    expected_start: dt.date,
+    end_date: dt.date,
+) -> Any:
     return provider.adj_factor(
         ts_code=symbol,
+        start_date=expected_start.strftime("%Y%m%d"),
         end_date=end_date.strftime("%Y%m%d"),
         fields="ts_code,trade_date,adj_factor",
     )
@@ -202,10 +210,27 @@ def _fetch_complete_history(
     cursor = end_date
     calls = 0
     for _ in range(max_pages):
-        limiter.acquire()
-        calls += 1
-        raw = _call_provider(provider, symbol=symbol, end_date=cursor)
-        page = _coerce_provider_rows(raw, symbol=symbol, end_date=end_date)
+        page: tuple[AdjFactorRow, ...] = ()
+        for empty_attempt in range(_EMPTY_PAGE_MAX_ATTEMPTS):
+            limiter.acquire()
+            calls += 1
+            try:
+                raw = _call_provider(
+                    provider,
+                    symbol=symbol,
+                    expected_start=expected_start,
+                    end_date=cursor,
+                )
+            except Exception:
+                if empty_attempt + 1 >= _EMPTY_PAGE_MAX_ATTEMPTS:
+                    raise
+                time.sleep(min(2**empty_attempt, 8))
+                continue
+            page = _coerce_provider_rows(raw, symbol=symbol, end_date=end_date)
+            if page:
+                break
+            if empty_attempt + 1 < _EMPTY_PAGE_MAX_ATTEMPTS:
+                time.sleep(min(2**empty_attempt, 8))
         if not page:
             break
         for row in page:
@@ -235,6 +260,55 @@ def _first_difference(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> 
     if not changed:
         raise AdjFactorHistoryReconcileError(f"{local.symbol}: differing snapshot hashes have no differing rows")
     return changed[0], changed[-1]
+
+
+def _retain_bounded_nontrading_rows(
+    local: AdjFactorSnapshot,
+    provider: AdjFactorSnapshot,
+    *,
+    traded_price_dates: frozenset[dt.date],
+) -> tuple[AdjFactorSnapshot, tuple[AdjFactorRow, ...]]:
+    """Retain a source-omitted suspension row only when both neighbours prove it.
+
+    Tushare occasionally omits an adj-factor row for a suspended open-market
+    date even though an earlier daily pull persisted that row.  Such a row is
+    safe to retain only when it has no traded price and its value is identical
+    to the nearest current-provider values on both sides.  A traded date,
+    unbounded date, or factor transition remains fail-closed.
+    """
+
+    provider_values = {row.trade_date: row.value for row in provider.rows}
+    provider_dates = tuple(sorted(provider_values))
+    retained: list[AdjFactorRow] = []
+    for row in local.rows:
+        if row.trade_date in provider_values:
+            continue
+        if row.trade_date in traded_price_dates:
+            raise AdjFactorHistoryReconcileError(
+                f"{local.symbol}: provider history omits a traded local date {row.trade_date}"
+            )
+        before = next((day for day in reversed(provider_dates) if day < row.trade_date), None)
+        after = next((day for day in provider_dates if day > row.trade_date), None)
+        if (
+            before is None
+            or after is None
+            or provider_values[before] != row.value
+            or provider_values[after] != row.value
+        ):
+            raise AdjFactorHistoryReconcileError(
+                f"{local.symbol}: provider history omits an unbounded or changed nontrading date {row.trade_date}"
+            )
+        retained.append(row)
+    if not retained:
+        return provider, ()
+    return (
+        _snapshot(
+            local.symbol,
+            (*provider.rows, *retained),
+            provider_call_count=provider.provider_call_count,
+        ),
+        tuple(retained),
+    )
 
 
 def _strict_append_rows(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> tuple[AdjFactorRow, ...] | None:
@@ -277,10 +351,12 @@ class PostgresAdjFactorHistoryRepository:
                     SELECT upper(ts_code) AS ts_code, min(trade_date) AS first_date
                     FROM market.kline_daily_raw
                     WHERE trade_date <= %s
+                      AND (volume_hand > 0 OR amount_li > 0)
                     GROUP BY upper(ts_code)
                 ), scoped AS (
                     SELECT ts_code, min(first_date) AS expected_start
                     FROM observed
+                    WHERE ts_code ~ '^[0-9]{{6}}\\.(SZ|SH|BJ)$'
                     GROUP BY ts_code
                 )
                 SELECT ts_code, expected_start
@@ -334,6 +410,7 @@ class PostgresAdjFactorHistoryRepository:
                 SELECT trade_date
                 FROM market.kline_daily_raw
                 WHERE ts_code = %s AND trade_date <= %s
+                  AND (volume_hand > 0 OR amount_li > 0)
                 ORDER BY trade_date
                 """,
                 (symbol, end_date),
@@ -383,7 +460,15 @@ class PostgresAdjFactorHistoryRepository:
             raise AdjFactorHistoryReconcileError("replace symbols are outside staged symbol scope")
         previous_autocommit = getattr(self.conn, "autocommit", None)
         try:
-            if previous_autocommit is not None:
+            if previous_autocommit is True:
+                # ``stage_rows`` may leave a real psycopg2 session inside a
+                # transaction even when the caller normally uses autocommit.
+                # The temp table is ON COMMIT PRESERVE ROWS, so close that
+                # staging transaction before opening the atomic replacement
+                # transaction.  Assigning ``autocommit = False`` while the
+                # session is active raises ``set_session cannot be used inside
+                # a transaction``.
+                self.conn.commit()
                 self.conn.autocommit = False
             with self.conn.cursor() as cur:
                 cur.execute("LOCK TABLE market.adj_factor IN SHARE ROW EXCLUSIVE MODE")
@@ -421,8 +506,8 @@ class PostgresAdjFactorHistoryRepository:
             self.conn.rollback()
             raise
         finally:
-            if previous_autocommit is not None:
-                self.conn.autocommit = previous_autocommit
+            if previous_autocommit is True:
+                self.conn.autocommit = True
 
 
 class AdjFactorHistoryReconciler:
@@ -487,6 +572,7 @@ class AdjFactorHistoryReconciler:
         expected_local: dict[str, str] = {}
         expected_rows: dict[str, int] = {}
         provider_identities: list[dict[str, Any]] = []
+        retained_nontrading_rows: list[dict[str, str]] = []
         provider_calls = 0
 
         # Bound outstanding histories so a fast provider cannot retain the full
@@ -500,25 +586,35 @@ class AdjFactorHistoryReconciler:
                 }
                 for future in as_completed(futures):
                     scope = futures[future]
-                    provider = future.result()
-                    provider_calls += provider.provider_call_count
-                    provider_dates = {row.trade_date for row in provider.rows}
+                    source_provider = future.result()
+                    provider_calls += source_provider.provider_call_count
                     local = self.repository.load_snapshot(scope.symbol, end_date=end_date)
-                    local_dates = {row.trade_date for row in local.rows}
-                    missing_local = sorted(local_dates - provider_dates)
-                    missing_prices = sorted(
-                        self.repository.load_price_dates(scope.symbol, end_date=end_date) - provider_dates
+                    traded_price_dates = self.repository.load_price_dates(scope.symbol, end_date=end_date)
+                    provider, retained = _retain_bounded_nontrading_rows(
+                        local,
+                        source_provider,
+                        traded_price_dates=traded_price_dates,
                     )
-                    if missing_local or missing_prices:
+                    provider_dates = {row.trade_date for row in provider.rows}
+                    missing_prices = sorted(traded_price_dates - provider_dates)
+                    if missing_prices:
                         raise AdjFactorHistoryReconcileError(
-                            f"{scope.symbol}: provider history omits required local dates "
-                            f"(factor={len(missing_local)}, price={len(missing_prices)})"
+                            f"{scope.symbol}: provider history omits required traded price dates "
+                            f"(price={len(missing_prices)})"
                         )
+                    retained_nontrading_rows.extend(
+                        {
+                            "symbol": row.symbol,
+                            "trade_date": row.trade_date.isoformat(),
+                            "adj_factor": _decimal_text(row.value),
+                        }
+                        for row in retained
+                    )
                     provider_identities.append(
                         {
                             "symbol": scope.symbol,
-                            "row_count": len(provider.rows),
-                            "canonical_sha256": provider.canonical_sha256,
+                            "row_count": len(source_provider.rows),
+                            "canonical_sha256": source_provider.canonical_sha256,
                         }
                     )
                     if provider.canonical_sha256 == local.canonical_sha256:
@@ -558,6 +654,7 @@ class AdjFactorHistoryReconciler:
 
         changes.sort(key=lambda item: item["symbol"])
         provider_identities.sort(key=lambda item: item["symbol"])
+        retained_nontrading_rows.sort(key=lambda item: (item["symbol"], item["trade_date"]))
         changed_symbols = [item["symbol"] for item in changes]
         replaced_symbols = [item["symbol"] for item in changes if item["write_mode"] == "full_replace"]
         qfq_changed_symbols = [item["symbol"] for item in changes if item["qfq_changed"]]
@@ -585,6 +682,8 @@ class AdjFactorHistoryReconciler:
             "full_replace_symbol_count": len(replaced_symbols),
             "changes": changes,
             "provider_snapshot_sha256": sha256_hex(canonical_json_bytes(provider_identities)),
+            "retained_nontrading_row_count": len(retained_nontrading_rows),
+            "retained_nontrading_rows": retained_nontrading_rows,
             "database_write_performed": bool(changed_symbols and not dry_run),
             "written_row_count": written,
             "downstream_invalidation": {
