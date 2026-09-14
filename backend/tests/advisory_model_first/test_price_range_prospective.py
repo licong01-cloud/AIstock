@@ -13,6 +13,7 @@ from backend.services.advisory_model_first.prospective_price_prediction import (
     PROSPECTIVE_ROOT_NAME,
     _prospective_candidate_symbols,
     _require_next_trading_day,
+    read_prospective_prediction_artifact,
 )
 from backend.services.advisory_model_first.prospective_price_contracts import (
     build_frozen_price_prospective_request,
@@ -137,6 +138,24 @@ def test_capture_publishes_immutable_prediction_without_side_effects(tmp_path: P
     prediction = json.loads((target / "prediction.json").read_text(encoding="utf-8"))
     assert "outcome" not in prediction
     assert prediction["realized_outcome_accessed"] is False
+
+
+def test_public_artifact_reader_reuses_strict_publication_validation(tmp_path: Path) -> None:
+    request = _request()
+    service, _program = _service(
+        datetime(2026, 9, 15, 8, 5, tzinfo=timezone.utc),
+        _ShadowService(("000001.SZ", "000002.SZ")),
+    )
+    receipt = service.capture(request=request, model_root=tmp_path)
+
+    artifact = read_prospective_prediction_artifact(
+        tmp_path / PROSPECTIVE_ROOT_NAME / request.request_id
+    )
+
+    assert artifact.request == request
+    assert artifact.receipt.prediction_bundle_id == receipt.prediction_bundle_id
+    assert artifact.receipt.status == "ALREADY_MATERIALIZED"
+    assert artifact.prediction["realized_outcome_accessed"] is False
 
 
 def test_exact_retry_after_target_open_reads_existing_without_recompute(tmp_path: Path) -> None:
