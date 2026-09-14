@@ -16294,6 +16294,109 @@ def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
     assert canonical_config.exists()
 
 
+def test_worktree_ignored_artifact_profile_collapses_known_cache_roots(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["git", "ls-files", "--others"]:
+            if "--directory" in args and "--" not in args:
+                return {
+                    "ok": True,
+                    "returncode": 0,
+                    "stdout": "frontend/node_modules/\0manual-output/",
+                    "stderr": "",
+                }
+            if "--directory" in args:
+                assert args[-1] == "frontend/node_modules"
+                return {
+                    "ok": True,
+                    "returncode": 0,
+                    "stdout": "frontend/node_modules/",
+                    "stderr": "",
+                }
+            assert args[-1] == "manual-output"
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "manual-output/result.bin",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert profile["scan_status"] == "complete"
+    assert profile["inventory_mode"] == "collapsed_intrinsic_transient_roots_with_targeted_expansion"
+    assert profile["ignored_count"] == 2
+    assert profile["transient_count"] == 1
+    assert profile["transient_roots"] == ["frontend/node_modules"]
+    assert profile["collapsed_transient_root_count"] == 1
+    assert profile["expanded_ignored_directory_count"] == 1
+    assert profile["transient_manifest_mode"] == "git_collapsed_root_readback"
+    assert profile["transient_manifest_entry_count"] == 1
+    assert profile["unknown_count"] == 1
+    assert profile["unknown_samples"] == [
+        {"path": "manual-output/result.bin", "reason": "unknown_ignored_artifact"}
+    ]
+    expanded_paths = [
+        args[-1]
+        for args in calls
+        if args[:3] == ["git", "ls-files", "--others"] and "--" in args and "--directory" not in args
+    ]
+    assert expanded_paths == ["manual-output"]
+
+
+def test_worktree_collapsed_cache_root_purge_is_root_manifest_bound(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    cache_root = worktree / "frontend" / "node_modules"
+    for index in range(3):
+        target = cache_root / f"pkg-{index}" / "index.js"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("cache", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            stdout = "frontend/node_modules/" if cache_root.exists() else ""
+            return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert profile["ignored_count"] == 1
+    assert profile["transient_roots"] == ["frontend/node_modules"]
+    assert profile["transient_manifest_entry_count"] == 1
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 1
+    assert purge["ignored_count_after"] == 0
+    assert not cache_root.exists()
+
+
 def _write_pytest_factor_checkpoint_pair(
     worktree: Path,
     pytest_data_root: Path,

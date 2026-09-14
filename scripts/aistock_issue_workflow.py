@@ -14408,7 +14408,7 @@ def _worktree_ignored_artifact_profile(
 ) -> dict[str, Any]:
     protected = {_normalize_worktree_artifact_path(item) for item in (protected_paths or set()) if item}
     result = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
         cwd=worktree_path,
         timeout=120,
     )
@@ -14424,11 +14424,55 @@ def _worktree_ignored_artifact_profile(
         "protected_samples": [],
         "unknown_samples": [],
         "manifest_sha256": None,
+        "inventory_mode": "collapsed_intrinsic_transient_roots_with_targeted_expansion",
+        "collapsed_transient_root_count": 0,
+        "expanded_ignored_directory_count": 0,
     }
     if not result.get("ok"):
         profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
         return profile
-    ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    collapsed_transient_roots: dict[str, str] = {}
+    ignored_paths: set[str] = set()
+    for raw_item in str(result.get("stdout") or "").split("\0"):
+        if not raw_item:
+            continue
+        is_directory = raw_item.replace("\\", "/").endswith("/")
+        relative_path = _normalize_worktree_artifact_path(raw_item).rstrip("/")
+        if not is_directory:
+            ignored_paths.add(relative_path)
+            continue
+        probe_root, probe_reason = _worktree_transient_root(
+            f"{relative_path}/.aistock-inventory-probe",
+            worktree_path=worktree_path,
+            canonical_root=canonical_root,
+        )
+        if probe_root == relative_path:
+            ignored_paths.add(relative_path)
+            collapsed_transient_roots[relative_path] = probe_reason
+            continue
+        expanded = _run_command(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", relative_path],
+            cwd=worktree_path,
+            timeout=120,
+        )
+        if not expanded.get("ok"):
+            profile.update(
+                {
+                    "scan_status": "failed",
+                    "error": expanded.get("stderr")
+                    or expanded.get("stdout")
+                    or f"ignored artifact expansion failed: {relative_path}",
+                }
+            )
+            return profile
+        profile["expanded_ignored_directory_count"] += 1
+        ignored_paths.update(
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(expanded.get("stdout") or "").split("\0")
+            if item
+        )
+    ignored = sorted(ignored_paths)
+    profile["collapsed_transient_root_count"] = len(collapsed_transient_roots)
     qe_live_log_paths, qe_live_log_reason = _validated_qe_live_log_transient_paths(
         ignored,
         worktree_path=worktree_path,
@@ -14453,7 +14497,6 @@ def _worktree_ignored_artifact_profile(
             "sha256": pytest_factor_checkpoint_digest,
         }
     roots: list[str] = []
-    transient_entries: list[tuple[str, str]] = []
     canonical_lines: list[str] = []
     for rel in ignored:
         if rel in protected:
@@ -14462,7 +14505,10 @@ def _worktree_ignored_artifact_profile(
             if len(profile["protected_samples"]) < 20:
                 profile["protected_samples"].append(rel)
         else:
-            if rel.startswith(qe_live_log_prefix):
+            if rel in collapsed_transient_roots:
+                root = rel
+                reason = collapsed_transient_roots[rel]
+            elif rel.startswith(qe_live_log_prefix):
                 root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
                 reason = qe_live_log_reason
             elif rel.startswith(backend_log_prefix):
@@ -14476,7 +14522,6 @@ def _worktree_ignored_artifact_profile(
             if root:
                 category = "transient"
                 roots.append(root)
-                transient_entries.append((rel, root))
                 profile["transient_count"] += 1
                 if len(profile["transient_samples"]) < 20:
                     profile["transient_samples"].append(rel)
@@ -14504,13 +14549,42 @@ def _worktree_ignored_artifact_profile(
     profile["ignored_count"] = len(ignored)
     profile["transient_roots"] = minimal_roots
     profile["transient_root_count"] = len(minimal_roots)
-    retained_transient_paths = sorted(
-        rel
-        for rel, _classified_root in transient_entries
-        if any(rel == root or rel.startswith(root.rstrip("/") + "/") for root in minimal_roots)
+    transient_readback = _run_command(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            *minimal_roots,
+        ],
+        cwd=worktree_path,
+        timeout=120,
     )
+    if not transient_readback.get("ok"):
+        profile.update(
+            {
+                "scan_status": "failed",
+                "error": transient_readback.get("stderr")
+                or transient_readback.get("stdout")
+                or "transient root readback failed",
+            }
+        )
+        return profile
+    transient_readback_paths = sorted(
+        {
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(transient_readback.get("stdout") or "").split("\0")
+            if item
+        }
+    )
+    profile["transient_manifest_mode"] = "git_collapsed_root_readback"
+    profile["transient_manifest_entry_count"] = len(transient_readback_paths)
     profile["transient_manifest_sha256"] = hashlib.sha256(
-        "\n".join(retained_transient_paths).encode("utf-8")
+        "\n".join(transient_readback_paths).encode("utf-8")
     ).hexdigest()
     profile["manifest_sha256"] = hashlib.sha256("\n".join(canonical_lines).encode("utf-8")).hexdigest()
     return profile
@@ -14566,14 +14640,28 @@ def _purge_worktree_transient_artifacts(
         raise WorkflowError("ignored artifacts include protected or unknown files")
     transient_roots = [str(item) for item in expected_profile.get("transient_roots") or []]
     live = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            *transient_roots,
+        ],
         cwd=worktree_path,
         timeout=120,
     )
     if not live.get("ok"):
         raise WorkflowError(str(live.get("stderr") or live.get("stdout") or "targeted transient rescan failed"))
     live_paths = sorted(
-        {_normalize_worktree_artifact_path(item) for item in str(live.get("stdout") or "").split("\0") if item}
+        {
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(live.get("stdout") or "").split("\0")
+            if item
+        }
     )
     live_digest = hashlib.sha256("\n".join(live_paths).encode("utf-8")).hexdigest()
     if live_digest != expected_profile.get("transient_manifest_sha256"):
@@ -14583,7 +14671,10 @@ def _purge_worktree_transient_artifacts(
         if not isinstance(content_bound_manifest, dict):
             raise WorkflowError("content-bound transient manifest is invalid")
         content_bound_paths = [str(item) for item in content_bound_manifest.get("paths") or []]
-        if not content_bound_paths or not set(content_bound_paths).issubset(set(live_paths)):
+        if not content_bound_paths or not all(
+            any(path == root or path.startswith(root.rstrip("/") + "/") for root in transient_roots)
+            for path in content_bound_paths
+        ):
             raise WorkflowError("content-bound transient artifact paths changed after cleanup preflight")
         live_content_digest = _content_bound_file_manifest_sha256(worktree_path, content_bound_paths)
         if not live_content_digest or live_content_digest != content_bound_manifest.get("sha256"):
@@ -14604,7 +14695,17 @@ def _purge_worktree_transient_artifacts(
         _remove_exact_transient_root(worktree_path, relative_root, target=target)
         removed_roots.append(relative_root)
     after = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            *transient_roots,
+        ],
         cwd=worktree_path,
         timeout=120,
     )
@@ -14621,7 +14722,7 @@ def _purge_worktree_transient_artifacts(
         "removed_roots_truncated": len(removed_roots) > 50,
         "ignored_count_before": len(live_paths),
         "ignored_count_after": 0,
-        "scan_scope": "preflight_full_manifest_then_targeted_root_readback",
+        "scan_scope": "collapsed_intrinsic_transient_roots_then_targeted_root_readback",
     }
 
 
