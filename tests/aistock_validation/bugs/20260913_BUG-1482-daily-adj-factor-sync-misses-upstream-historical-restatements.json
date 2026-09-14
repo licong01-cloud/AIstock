@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1482",
-  "closed_at": null,
+  "closed_at": "2026-09-14T01:45:32.046333Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -112,10 +112,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1482/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1482",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8ff2b67a2ebdc235f9632217439f8a44b29be84cb73134c6c6529a7c093456ca",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "4bb6da0f8831b1d8e066fca4dfd4a0af6d86f07b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-14T01:45:05.497500Z",
+      "mode": "read_only",
+      "observed_identity": "f19089aca21440dfafd301eca43205a28e107a5e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8fa52e435e7bc64f558d97d2a2218c27908b590461ac5780925916d7b0883ecd",
+      "receipt_sha256": "cfe13b2b7b1ab794ac72f53d8eeff089bec99b69bc7e68134ede19325729af08",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2bfd725e1675f42801d096380793314aee645681c722644fb3699cfdf8858c22",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -146,7 +168,7 @@
     ],
     "validation_evidence_digest": "611f58d90c8c32635e4325e1e4888e4196ce7794668365bcab42e58552902069"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -182,7 +204,8 @@
     "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "gh pr checks 4663 -> CI verdict pass (1m31s)"
+    "gh pr checks 4663 -> CI verdict pass (1m31s)",
+    "post-restart-verify backend-main expected 4bb6da0f8831b1d8e066fca4dfd4a0af6d86f07b -> runtime_identity_match=true, post_restart_effective_gate=passed"
   ],
   "verification_budget": {
     "budget": "standard",
