@@ -81,6 +81,7 @@
 8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 9. cleanup 对同一目标 worktree 只生成一次完整 ignored-artifact manifest；后续分类和删除复用该 manifest，并仅对实际删除的精确 roots 做漂移读回。除 manifest 漂移、路径身份变化或删除失败外，禁止重复遍历整个 ignored tree。
 10. 同一次 merge finalizer 内，source 与 close-sync cleanup 可复用已成功完成且没有中间 main 变更的 `fetch origin --prune` receipt，以及各自前序步骤已验证的精确 PR/HEAD receipt；branch remote SHA、目标 worktree、ignored-artifact、活动进程和删除后四态仍逐目标重新验证。root-sync 因 canonical root 脏而 deferred 时，直接复用首次完整阻断 payload 生成提示并执行一次 `sync_root=false` 安全重试，禁止为生成相同提示插入第二次完整 dry-run 预检。
+11. 未合入但已被权威替代的旧分支只能通过独立 `cleanup-superseded` 合同清理，禁止用普通 `cleanup-after-merge`、手工 `git branch -D` 或放宽 merged 判定绕过。命令必须绑定精确 worktree、完整 expected HEAD、授权引用和处置原因，确认没有开放 PR，并且只接受三种权威之一：canonical BUG 的 `fixed`/`verified` 记录与另一已合入 PR/fix commit 完全一致；仓库 `OWNER`/`MEMBER`/`COLLABORATOR` 在绑定同一 branch/HEAD 的关闭未合入 PR 上明确标注 superseded/obsolete/do-not-merge；或所有非 merge commit 均与 `origin/main` patch 等价且未合入 merge commit 引入的路径也与主线一致。删除前先在 worktree 外持久化 `aistock_superseded_cleanup_receipt_v1`，随后仍执行 clean、ignored/protected/unknown artifact、活动进程、remote SHA lease、manifest 漂移和四态读回；dirty、unknown/protected artifact、HEAD 漂移、开放 PR、独有提交或权威读取失败继续 fail closed。
 
 ## 3. 风险与工作量分级
 
