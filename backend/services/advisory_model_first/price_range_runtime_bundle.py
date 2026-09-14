@@ -50,13 +50,7 @@ def price_range_binding_path(
             "price-range binding path identity is invalid",
             reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
         )
-    target = (
-        root
-        / "price_range_bindings"
-        / package_id
-        / manifest_sha256
-        / f"{style_profile_hash}.json"
-    )
+    target = root / "price_range_bindings" / package_id / manifest_sha256 / f"{style_profile_hash}.json"
     try:
         target.resolve().relative_to(root)
     except ValueError as exc:
@@ -101,9 +95,7 @@ def publish_price_range_binding(
         style_profile_hash=str(manifest["style_profile_hash"]),
     )
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
@@ -233,6 +225,86 @@ def load_exact_price_range_bundle(
                 reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
                 context={"field": field},
             )
+    return _load_price_range_bundle_models(
+        bundle_path=bundle_path,
+        bundle_id=bundle_id,
+        manifest=manifest,
+        booster_factory=booster_factory,
+    )
+
+
+def load_frozen_price_range_bundle(
+    *,
+    model_root: str | Path,
+    price_range_bundle_id: str,
+    price_range_bundle_manifest_sha256: str,
+    expected_package_id: str,
+    expected_manifest_sha256: str,
+    expected_style_profile_hash: str,
+    expected_parent_bundle_id: str,
+    expected_outcome_bundle_id: str,
+    booster_factory: Callable[[Path], Any] | None = None,
+) -> LoadedAdvisoryPriceRangeBundle:
+    """Load an explicit price bundle without reading or changing runtime bindings."""
+
+    sha_values = {
+        "price_range_bundle_id": price_range_bundle_id,
+        "price_range_bundle_manifest_sha256": price_range_bundle_manifest_sha256,
+        "expected_manifest_sha256": expected_manifest_sha256,
+        "expected_style_profile_hash": expected_style_profile_hash,
+        "expected_parent_bundle_id": expected_parent_bundle_id,
+        "expected_outcome_bundle_id": expected_outcome_bundle_id,
+    }
+    if not expected_package_id or any(not _is_sha256(value) for value in sha_values.values()):
+        raise AdvisoryModelFirstError(
+            "frozen price-range bundle target identity is invalid",
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+        )
+    root = Path(model_root).resolve()
+    bundle_path = root / "price_range_bundles" / price_range_bundle_id
+    manifest_path = bundle_path / "manifest.json"
+    if not manifest_path.is_file() or _sha256_file(manifest_path) != price_range_bundle_manifest_sha256:
+        raise AdvisoryModelFirstError(
+            "frozen price-range manifest differs from the requested identity",
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+        )
+    manifest = _read_runtime_bundle_manifest(
+        bundle_path,
+        expected_bundle_id=price_range_bundle_id,
+    )
+    _validate_runtime_manifest(manifest)
+    expected_identity = {
+        "package_id": expected_package_id,
+        "manifest_sha256": expected_manifest_sha256,
+        "style_profile_hash": expected_style_profile_hash,
+        "parent_bundle_id": expected_parent_bundle_id,
+        "outcome_bundle_id": expected_outcome_bundle_id,
+        "feature_schema_hash": FEATURE_SCHEMA_HASH,
+        "schema_version": "advisory_price_range_bundle_v4",
+        "status": "EXPERIMENTAL_SHADOW",
+    }
+    actual_identity = {key: manifest.get(key) for key in expected_identity}
+    if actual_identity != expected_identity:
+        raise AdvisoryModelFirstError(
+            "frozen price-range bundle identity differs from the prospective request",
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+            context={"actual_identity": actual_identity},
+        )
+    return _load_price_range_bundle_models(
+        bundle_path=bundle_path,
+        bundle_id=price_range_bundle_id,
+        manifest=manifest,
+        booster_factory=booster_factory,
+    )
+
+
+def _load_price_range_bundle_models(
+    *,
+    bundle_path: Path,
+    bundle_id: str,
+    manifest: dict[str, Any],
+    booster_factory: Callable[[Path], Any] | None,
+) -> LoadedAdvisoryPriceRangeBundle:
     feature_schema = _read_json(
         bundle_path / "feature_schema.json",
         missing_reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
@@ -260,8 +332,7 @@ def load_exact_price_range_bundle(
         models=models,
         calibration_spec=(
             _read_json(bundle_path / "calibration_spec.json")
-            if manifest.get("schema_version")
-            in {"advisory_price_range_bundle_v2", "advisory_price_range_bundle_v4"}
+            if manifest.get("schema_version") in {"advisory_price_range_bundle_v2", "advisory_price_range_bundle_v4"}
             else None
         ),
     )
@@ -297,24 +368,25 @@ def _validate_runtime_manifest(manifest: dict[str, Any]) -> None:
         }
     actual = {key: manifest.get(key) for key in expected}
     valid_calibration = (
-        schema_version == "advisory_price_range_bundle_v1"
-        and manifest.get("calibration_state") == "UNCALIBRATED"
-    ) or (
-        schema_version == "advisory_price_range_bundle_v2"
-        and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
-        and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
-        and manifest.get("entry_executable_calibration_state") == "UNCALIBRATED"
-    ) or (
-        schema_version == "advisory_price_range_bundle_v3"
-        and manifest.get("calibration_state") == "UNCALIBRATED"
-        and manifest.get("nominal_coverage") == 0.8
-    ) or (
-        schema_version == "advisory_price_range_bundle_v4"
-        and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
-        and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
-        and manifest.get("entry_admission_model_status")
-        == "RETIRED_NON_IDENTIFIABLE"
-        and manifest.get("nominal_coverage") == 0.8
+        (schema_version == "advisory_price_range_bundle_v1" and manifest.get("calibration_state") == "UNCALIBRATED")
+        or (
+            schema_version == "advisory_price_range_bundle_v2"
+            and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
+            and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
+            and manifest.get("entry_executable_calibration_state") == "UNCALIBRATED"
+        )
+        or (
+            schema_version == "advisory_price_range_bundle_v3"
+            and manifest.get("calibration_state") == "UNCALIBRATED"
+            and manifest.get("nominal_coverage") == 0.8
+        )
+        or (
+            schema_version == "advisory_price_range_bundle_v4"
+            and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
+            and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
+            and manifest.get("entry_admission_model_status") == "RETIRED_NON_IDENTIFIABLE"
+            and manifest.get("nominal_coverage") == 0.8
+        )
     )
     if actual != expected or not valid_calibration:
         raise AdvisoryModelFirstError(
@@ -336,17 +408,13 @@ def _read_runtime_bundle_manifest(bundle_path: Path, *, expected_bundle_id: str)
 
         return validate_calibrated_price_range_bundle(bundle_path, expected_bundle_id=expected_bundle_id)
     if schema == "advisory_price_range_bundle_v3":
-        return read_daily_price_envelope_bundle_manifest(
-            bundle_path, expected_bundle_id=expected_bundle_id
-        )
+        return read_daily_price_envelope_bundle_manifest(bundle_path, expected_bundle_id=expected_bundle_id)
     if schema == "advisory_price_range_bundle_v4":
         from backend.services.advisory_model_first.price_range_calibration_bundle import (
             validate_calibrated_daily_price_envelope_bundle,
         )
 
-        return validate_calibrated_daily_price_envelope_bundle(
-            bundle_path, expected_bundle_id=expected_bundle_id
-        )
+        return validate_calibrated_daily_price_envelope_bundle(bundle_path, expected_bundle_id=expected_bundle_id)
     raise AdvisoryModelFirstError(
         "price-range bundle schema is unsupported",
         reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
