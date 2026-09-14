@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-09-14T09:05:20.528342Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "62260e22461b5d4e8462a900f70dc2c553bf442c",
+  "fixed_at": "2026-09-14T09:16:07Z",
   "github_issue_number": 4713,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4713",
   "last_seen_at": "2026-09-14T09:05:20.528342Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4714",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,6 +129,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -139,7 +141,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1501",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "37563cbba6de8b62",
+    "recorded_at": "2026-09-14T09:17:36.903683Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fb18e9b05647f775f52d6bee912bdeae80d8597c",
+    "source_merge_commit": "62260e22461b5d4e8462a900f70dc2c553bf442c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4714",
+    "validation_evidence": [
+      "validation-receipt: id=5558a1f7c1477f28 commit=fb18e9b05647f775f52d6bee912bdeae80d8597c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`21 passed`",
+      "validation-receipt: id=5c8f5b758bf60ed4 commit=fb18e9b05647f775f52d6bee912bdeae80d8597c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed with 0 findings`"
+    ],
+    "validation_evidence_digest": "f6088829fc4d99722b047924a08a60d9bd8d818062bd9feba16dec43bacd8d35"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -148,6 +172,10 @@
     "fingerprint": "298f2e164d9e156de6e4a9e6",
     "source_event_id": "FE-20260914-298f2e164d9e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5558a1f7c1477f28 commit=fb18e9b05647f775f52d6bee912bdeae80d8597c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`21 passed`",
+    "validation-receipt: id=5c8f5b758bf60ed4 commit=fb18e9b05647f775f52d6bee912bdeae80d8597c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed with 0 findings`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
