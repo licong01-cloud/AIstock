@@ -1,0 +1,247 @@
+{
+  "actual": "The shared base_date connects the 2025 annual and 2026 Q1 distributions into one revision group and rejects their different cash amounts as a conflict.",
+  "allowed_write_scope": [
+    "backend/services/position_timing/action_value_corporate_actions.py",
+    "backend/tests/position_timing/test_action_value_corporate_actions.py",
+    "tests/aistock_validation/bugs/20260914_BUG-1495-position-timing-corporate-action-snapshot-conflates-distinct-same-day-di.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1495",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T05:10:04.965230Z",
+  "description": "The shared base_date connects the 2025 annual and 2026 Q1 distributions into one revision group and rejects their different cash amounts as a conflict.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-c80bf3f66f54",
+      "timestamp": "2026-09-14T05:10:04.965230Z"
+    }
+  ],
+  "evidence_uris": [
+    "production-readonly:market.dividend:002043.SZ:2026-06-01"
+  ],
+  "expected": "Different non-null fiscal end_date values remain distinct economic distributions and are combined at the effective-date account-action layer; base-date fallback connects revisions only when fiscal identity is unavailable.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/position_timing/action_value_corporate_actions.py",
+      "backend/tests/position_timing/test_action_value_corporate_actions.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/position_timing/action_value_corporate_actions.py",
+        "backend/tests/position_timing/test_action_value_corporate_actions.py"
+      ],
+      "impacted_modules": [
+        "position_timing",
+        "platform.api",
+        "portfolio_management",
+        "watchlist",
+        "frontend_common"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/position_timing/action_value_corporate_actions.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_action_value_corporate_actions.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/position_timing/action_value_corporate_actions.py",
+        "backend/tests/position_timing/test_action_value_corporate_actions.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/position_timing/action_value_corporate_actions.py",
+      "backend/tests/position_timing/test_action_value_corporate_actions.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/position_timing/action_value_corporate_actions.py",
+      "backend/tests/position_timing/test_action_value_corporate_actions.py"
+    ]
+  },
+  "first_seen_at": "2026-09-14T05:10:04.965230Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4693,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4693",
+  "last_seen_at": "2026-09-14T05:10:04.965230Z",
+  "module": "position_timing",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python -m pytest backend/tests/position_timing/test_action_value_corporate_actions.py -q",
+  "required_verification": [
+    "l0",
+    "position_timing_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "position_timing"
+  ],
+  "title": "position_timing corporate action snapshot conflates distinct same-day distributions",
+  "trigger_condition": {
+    "fingerprint": "c80bf3f66f542b38affb6f9b",
+    "source_event_id": "FE-20260914-c80bf3f66f54"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "position_timing"
+      ],
+      "plans": [
+        "position_timing_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "position_timing"
+        ],
+        "plans": [
+          "position_timing_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

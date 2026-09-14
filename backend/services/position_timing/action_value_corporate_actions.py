@@ -24,12 +24,14 @@ LEGACY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v1"
 SAME_DAY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v2"
 AVAILABILITY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v3"
 IDENTITY_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v4"
-SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v5"
+CONNECTED_REVISION_SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v5"
+SNAPSHOT_SCHEMA = "position_timing_corporate_action_snapshot_v6"
 SUPPORTED_SNAPSHOT_SCHEMAS = (
     LEGACY_SNAPSHOT_SCHEMA,
     SAME_DAY_SNAPSHOT_SCHEMA,
     AVAILABILITY_SNAPSHOT_SCHEMA,
     IDENTITY_SNAPSHOT_SCHEMA,
+    CONNECTED_REVISION_SNAPSHOT_SCHEMA,
     SNAPSHOT_SCHEMA,
 )
 IMPLEMENTED_DIVIDEND = "\u5b9e\u65bd"
@@ -41,7 +43,8 @@ SOURCE_QUERY_IDENTITY = {
     "reference_price_cash_component": "cash_div_tax (pre-tax per local DDL contract)",
     "stock_component": "stk_div=stk_bo_rate+stk_co_rate",
     "same_day_canonicalization": (
-        "COLLAPSE_CONNECTED_REVISIONS_WITHIN_RECORD_AND_SHARED_END_OR_BASE_"
+        "COLLAPSE_REVISIONS_WITHIN_RECORD_AND_EQUAL_NON_NULL_FISCAL_END_"
+        "OR_UNAMBIGUOUS_SHARED_BASE_WHEN_FISCAL_END_IS_MISSING_"
         "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
     ),
     "availability_policy": "EARLIEST_IMP_ANN_ELSE_RECORD_DATE_STRICTLY_BEFORE_EX_DATE",
@@ -479,36 +482,49 @@ def _economic_identity(
 def _distribution_revision_groups(
     rows: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[Mapping[str, Any], ...], ...]:
-    """Connect revisions by record date plus a shared fiscal or base date."""
+    """Group revisions by fiscal end, with an unambiguous base-date fallback."""
 
     pending = sorted(
         (dict(row) for row in rows),
         key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
     )
-    groups: list[tuple[Mapping[str, Any], ...]] = []
-    while pending:
-        connected = [pending.pop(0)]
-        changed = True
-        while changed:
-            changed = False
-            for candidate in tuple(pending):
-                if any(_same_distribution_revision(candidate, item) for item in connected):
-                    pending.remove(candidate)
-                    connected.append(candidate)
-                    changed = True
-        groups.append(tuple(connected))
-    return tuple(groups)
+    explicit: dict[tuple[str | None, str], list[Mapping[str, Any]]] = {}
+    fallback: dict[tuple[str | None, str], list[Mapping[str, Any]]] = {}
+    for row in pending:
+        record_date = row["record_date"]
+        fiscal_end = row["end_date"]
+        base_date = row["base_date"]
+        if fiscal_end is not None:
+            explicit.setdefault((record_date, fiscal_end), []).append(row)
+        elif base_date is not None:
+            fallback.setdefault((record_date, base_date), []).append(row)
+        else:
+            raise ActionValueError(
+                "CORPORATE_ACTION_DISTRIBUTION_IDENTITY_UNAVAILABLE",
+                symbol=row["symbol"],
+                effective_trade_date=row["effective_trade_date"],
+            )
 
-
-def _same_distribution_revision(
-    left: Mapping[str, Any],
-    right: Mapping[str, Any],
-) -> bool:
-    if left["record_date"] != right["record_date"]:
-        return False
-    same_end = left["end_date"] is not None and left["end_date"] == right["end_date"]
-    same_base = left["base_date"] is not None and left["base_date"] == right["base_date"]
-    return same_end or same_base
+    standalone: list[list[Mapping[str, Any]]] = []
+    for (record_date, base_date), revisions in fallback.items():
+        matches = [
+            group
+            for (group_record_date, _), group in explicit.items()
+            if group_record_date == record_date
+            and any(item["base_date"] == base_date for item in group)
+        ]
+        if len(matches) > 1:
+            raise ActionValueError(
+                "CORPORATE_ACTION_DISTRIBUTION_IDENTITY_AMBIGUOUS",
+                symbol=revisions[0]["symbol"],
+                effective_trade_date=revisions[0]["effective_trade_date"],
+                matching_fiscal_period_count=len(matches),
+            )
+        if matches:
+            matches[0].extend(revisions)
+        else:
+            standalone.append(revisions)
+    return tuple(tuple(group) for group in (*explicit.values(), *standalone))
 
 
 def _date_text(value: Any) -> str | None:
