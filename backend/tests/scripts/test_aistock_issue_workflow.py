@@ -16370,7 +16370,9 @@ def test_worktree_collapsed_cache_root_purge_is_root_manifest_bound(
 
     def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
         if args[:3] == ["git", "ls-files", "--others"]:
-            stdout = "frontend/node_modules/" if cache_root.exists() else ""
+            # Git may report an ignored parent after the exact child root is removed.
+            # Purge completion must read back the validated filesystem target instead.
+            stdout = "frontend/node_modules/" if cache_root.exists() else "frontend/"
             return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": ""}
         if args[:3] == ["git", "ls-files", "-z"]:
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}

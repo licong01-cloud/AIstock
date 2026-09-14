@@ -14694,23 +14694,12 @@ def _purge_worktree_transient_artifacts(
     for relative_root, target in validated_roots:
         _remove_exact_transient_root(worktree_path, relative_root, target=target)
         removed_roots.append(relative_root)
-    after = _run_command(
-        [
-            "git",
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-            "-z",
-            "--",
-            *transient_roots,
-        ],
-        cwd=worktree_path,
-        timeout=120,
-    )
-    after_paths = [item for item in str(after.get("stdout") or "").split("\0") if item]
-    if not after.get("ok") or after_paths:
+    remaining_roots = [
+        relative_root
+        for relative_root, target in validated_roots
+        if target.exists() or _is_reparse_or_symlink(target)
+    ]
+    if remaining_roots:
         raise WorkflowError("transient artifact purge did not leave the targeted roots empty")
     return {
         "ok": True,
