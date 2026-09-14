@@ -38,6 +38,12 @@
       "actor": "codex",
       "note": "Materialize the requested SW L2 blacklist from hash-pinned PIT membership spans into the run-scoped v3 stock-pool sidecar; direct prediction replay now intersects the frozen prediction with the executable dataset index. P00 remains unchanged and P01/P11 fail closed until the release supplies complete pinned policy inputs.",
       "timestamp": "2026-09-14T21:15:00Z"
+    },
+    {
+      "action": "source_pr_opened",
+      "actor": "codex",
+      "note": "PR #4738 opened with Refs #4733; merge and backend restart remain separately authorized.",
+      "timestamp": "2026-09-14T21:20:00Z"
     }
   ],
   "evidence_uris": [],
@@ -237,6 +243,7 @@
     "python -m ruff check changed Python files and python -m py_compile runtime entrypoints -> passed",
     "git diff --check -> passed"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
