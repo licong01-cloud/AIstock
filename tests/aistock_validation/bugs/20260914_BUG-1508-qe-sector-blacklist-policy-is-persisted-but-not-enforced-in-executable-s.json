@@ -9,7 +9,6 @@
     "backend/tests/quantevolver/test_payload_summary.py",
     "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
     "backend/tests/quantevolver/test_qe_payload_summary_services.py",
-    "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
     "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
@@ -44,14 +43,19 @@
       "actor": "codex",
       "note": "PR #4738 opened with Refs #4733; merge and backend restart remain separately authorized.",
       "timestamp": "2026-09-14T21:20:00Z"
+    },
+    {
+      "action": "ci_test_ownership_corrected",
+      "actor": "codex",
+      "note": "Consolidated the sector blacklist policy cases into the existing qe_sector_risk_overlay_direct_v2_dataset_binding suite so the owned QE test plan executes them; no classifier or CI policy was relaxed.",
+      "timestamp": "2026-09-14T21:36:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "P01/P11 must execute against a hash-pinned PIT universe with blacklisted SW L2 membership removed, direct prediction replay must obey that universe, P00 must retain existing semantics, and missing or incomplete frozen policy inputs must fail closed without database fallback.",
   "file_scope_contract": {
     "added_files": [
-      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
-      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py"
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py"
     ],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
@@ -62,7 +66,6 @@
       "backend/tests/quantevolver/test_payload_summary.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_payload_summary_services.py",
-      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
@@ -87,7 +90,6 @@
       "backend/tests/quantevolver/test_payload_summary.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_payload_summary_services.py",
-      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
@@ -103,7 +105,6 @@
       "backend/tests/quantevolver/test_payload_summary.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_payload_summary_services.py",
-      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
