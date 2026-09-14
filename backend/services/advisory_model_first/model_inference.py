@@ -36,6 +36,7 @@ from backend.services.advisory_model_first.outcome_runtime_bundle import (
     load_exact_outcome_bundle,
 )
 from backend.services.advisory_model_first.price_range_inference import (
+    available_price_range_envelope,
     score_price_range_bundle,
     unavailable_price_range_envelope,
 )
@@ -470,6 +471,7 @@ class AdvisoryModelShadowService:
                 review_policy=program.review_policy,
                 review_policy_sha256=program.review_policy_sha256,
                 program_id=program_id,
+                decision_as_of_trade_date=decision_date,
                 target_trade_date=target_trade_date,
                 resolution=resolution,
             )
@@ -530,6 +532,7 @@ class AdvisoryModelShadowService:
         review_policy: Mapping[str, Any],
         review_policy_sha256: str,
         program_id: str,
+        decision_as_of_trade_date: date,
         target_trade_date: date,
         resolution: AdvisoryModelBindingResolutionV1,
     ) -> dict[str, Any]:
@@ -590,6 +593,8 @@ class AdvisoryModelShadowService:
             return unavailable_price_range_envelope(
                 reason_code=exc.reason_code,
                 message=str(exc),
+                decision_as_of_trade_date=decision_as_of_trade_date,
+                target_trade_date=target_trade_date,
             )
         except Exception as exc:
             LOGGER.exception(
@@ -601,6 +606,8 @@ class AdvisoryModelShadowService:
             return unavailable_price_range_envelope(
                 reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
                 message=f"unexpected price-range inference failure: {type(exc).__name__}",
+                decision_as_of_trade_date=decision_as_of_trade_date,
+                target_trade_date=target_trade_date,
             )
         LOGGER.info(
             "advisory price-range shadow completed program_id=%s target_trade_date=%s "
@@ -611,18 +618,28 @@ class AdvisoryModelShadowService:
             sum(item.get("status") != "EXPERIMENTAL_SHADOW" for item in candidates),
             round((time.monotonic() - started) * 1000),
         )
-        return {
-            "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": price_bundle.manifest["calibration_state"],
-            "price_range_bundle_id": price_bundle.price_range_bundle_id,
-            "parent_bundle_id": parent_bundle.bundle_id,
-            "outcome_bundle_id": price_range_outcome_bundle_id,
-            "model_version": price_bundle.manifest["request_id"],
-            "price_basis": "UNADJUSTED_CNY_DECISION_CLOSE",
-            "candidates": candidates,
-            "reason_code": None,
-            "message": None,
-        }
+        calibration_spec = getattr(price_bundle, "calibration_spec", None)
+        nominal_coverage = (
+            float(calibration_spec.get("nominal_coverage", 0.8))
+            if calibration_spec is not None
+            else 0.8
+        )
+        return available_price_range_envelope(
+            decision_as_of_trade_date=decision_as_of_trade_date,
+            target_trade_date=target_trade_date,
+            calibration_state=str(price_bundle.manifest["calibration_state"]),
+            nominal_coverage=nominal_coverage,
+            package_id=resolution.package_id,
+            package_manifest_sha256=resolution.manifest_sha256,
+            style_profile_hash=resolution.style_profile_hash,
+            parent_bundle_id=parent_bundle.bundle_id,
+            outcome_bundle_id=price_range_outcome_bundle_id,
+            price_range_bundle_id=price_bundle.price_range_bundle_id,
+            model_version=str(price_bundle.manifest["request_id"]),
+            review_policy_sha256=review_policy_sha256,
+            source_bundle_schema_version=str(price_bundle.manifest["schema_version"]),
+            candidates=candidates,
+        )
 
     def _outcome_shadow(
         self,

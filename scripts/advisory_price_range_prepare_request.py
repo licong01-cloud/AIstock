@@ -22,6 +22,7 @@ from backend.services.advisory_model_first.outcome_contracts import (  # noqa: E
 from backend.services.advisory_model_first.prediction_source import sha256_file  # noqa: E402
 from backend.services.advisory_model_first.price_range_contracts import (  # noqa: E402
     PriceRangeInputArtifactV1,
+    build_frozen_daily_price_envelope_training_request,
     build_frozen_price_range_training_request,
 )
 
@@ -36,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repository-root-windows", required=True)
     parser.add_argument("--repository-root-wsl", required=True)
     parser.add_argument("--request-output-dir-windows", required=True)
+    parser.add_argument(
+        "--contract",
+        choices=("legacy-v1", "daily-envelope-v1"),
+        default="legacy-v1",
+        help="Frozen request contract; legacy remains the explicit compatibility default.",
+    )
     return parser.parse_args()
 
 
@@ -69,7 +76,8 @@ def main() -> int:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    request = build_frozen_price_range_training_request(
+    request_builder = _request_builder(args.contract)
+    request = request_builder(
         parent_request_id=parent_request.request_id,
         parent_request_sha256=parent_request.request_sha256,
         parent_bundle_id=str(parent_manifest["bundle_id"]),
@@ -105,6 +113,8 @@ def main() -> int:
     print(
         json.dumps(
             {
+                "contract": args.contract,
+                "schema_version": request.schema_version,
                 "request_id": request.request_id,
                 "request_sha256": request.request_sha256,
                 "path": str(output),
@@ -113,6 +123,14 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _request_builder(contract: str):
+    if contract == "daily-envelope-v1":
+        return build_frozen_daily_price_envelope_training_request
+    if contract == "legacy-v1":
+        return build_frozen_price_range_training_request
+    raise ValueError(f"unsupported price-range request contract: {contract}")
 
 
 def _artifact(path: Path) -> PriceRangeInputArtifactV1:

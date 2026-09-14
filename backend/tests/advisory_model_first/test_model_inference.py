@@ -44,6 +44,60 @@ REVIEW_POLICY = {
 }
 
 
+def _price_range_candidate(symbol: str) -> dict[str, object]:
+    return {
+        "symbol": symbol,
+        "status": "EXPERIMENTAL_SHADOW",
+        "availability_status": "AVAILABLE",
+        "projection_condition": "NEXT_TRADING_DAY_VALID_OPEN_AT_PREDICTED_ENTRY_MID",
+        "decision_reference_price": 10.0,
+        "decision_price_trade_date": "2026-07-20",
+        "target_raw_price_multiplier": 1.0,
+        "entry_price_range": {
+            "condition": "NEXT_TRADING_DAY_VALID_OPEN",
+            "low": 9.9,
+            "mid": 10.0,
+            "high": 10.1,
+        },
+        "calibrated_entry_price_range": None,
+        "entry_gap_calibration": {
+            "state": "UNCALIBRATED",
+            "method": None,
+            "delta": None,
+            "nominal_coverage": 0.8,
+        },
+        "take_profit_price": {"low": 11.0, "high": 12.0, "horizon_trade_days": 5},
+        "protective_price": {
+            "status": "NOT_APPLICABLE",
+            "policy_activation_price": None,
+            "model_peak_low": None,
+            "model_peak_high": None,
+            "floor_low": None,
+            "floor_high": None,
+        },
+        "stop_loss_price": {
+            "status": "AVAILABLE",
+            "low": 9.2,
+            "high": 9.5,
+            "hard_stop_price": 9.2,
+        },
+        "tick_size": 0.01,
+        "regulatory_price_range": {
+            "status": "LIMITED",
+            "low": 9.0,
+            "high": 11.0,
+            "rule_id": "MAIN_10PCT_V1",
+            "source": "DECISION_TIME_BOARD_ST_RULE",
+        },
+        "review_policy": {
+            "review_policy_sha256": REVIEW_POLICY_HASH,
+            **REVIEW_POLICY,
+        },
+        "reason_code": None,
+        "message": None,
+    }
+
+
 class _ProgramService:
     def __init__(self, *, target_count: int = 2) -> None:
         self.program = SimpleNamespace(
@@ -543,19 +597,15 @@ def test_model_shadow_attaches_exact_price_range_without_changing_m2_order() -> 
         price_loads.append(kwargs)
         return SimpleNamespace(
             price_range_bundle_id="price-1",
-            manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
+            manifest={
+                "request_id": "advprreq-runtime",
+                "calibration_state": "UNCALIBRATED",
+                "schema_version": "advisory_price_range_bundle_v1",
+            },
         )
 
     def price_scorer(_bundle, features, **_kwargs):
-        return [
-            {
-                "symbol": str(symbol),
-                "status": "EXPERIMENTAL_SHADOW",
-                "reason_code": None,
-                "message": None,
-            }
-            for symbol in features["instrument"]
-        ]
+        return [_price_range_candidate(str(symbol)) for symbol in features["instrument"]]
 
     service = _shadow_service(
         program_service=_ProgramService(),
@@ -617,17 +667,15 @@ def test_calibrated_outcome_keeps_price_range_bound_to_parent_m3_bundle() -> Non
             price_loads.append(kwargs)
             or SimpleNamespace(
                 price_range_bundle_id="price-v1-m3",
-                manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
+                manifest={
+                    "request_id": "advprreq-runtime",
+                    "calibration_state": "UNCALIBRATED",
+                    "schema_version": "advisory_price_range_bundle_v1",
+                },
             )
         ),
         price_range_scorer=lambda _bundle, features, **_kwargs: [
-            {
-                "symbol": str(symbol),
-                "status": "EXPERIMENTAL_SHADOW",
-                "reason_code": None,
-                "message": None,
-            }
-            for symbol in features["instrument"]
+            _price_range_candidate(str(symbol)) for symbol in features["instrument"]
         ],
     )
 
