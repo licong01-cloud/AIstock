@@ -1660,11 +1660,29 @@ def replay_full_policy_symbol(
     entry_observer: Callable[[pd.DataFrame, int], bool] | None = None,
     supplemental_exit_enabled: bool = True,
     risk_managed_open_baseline_enabled: bool = False,
+    terminal_liquidation_enabled: bool = False,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Counter[str]]:
-    if not isinstance(supplemental_exit_enabled, bool) or not isinstance(
-        risk_managed_open_baseline_enabled, bool
+    if (
+        isinstance(parent_count, bool)
+        or not isinstance(parent_count, int)
+        or parent_count < 1
+    ):
+        raise ActionValueError("PATTERN_PARENT_ORDER_COUNT_INVALID")
+    if (
+        not isinstance(additional_friction_bps, Decimal)
+        or not additional_friction_bps.is_finite()
+        or additional_friction_bps < 0
+    ):
+        raise ActionValueError("PATTERN_ADDITIONAL_FRICTION_INVALID")
+    if not all(
+        isinstance(value, bool)
+        for value in (
+            supplemental_exit_enabled,
+            risk_managed_open_baseline_enabled,
+            terminal_liquidation_enabled,
+        )
     ):
         raise ActionValueError("PATTERN_OPTION_FLAG_INVALID")
     observe_entry = entry_observer or breakout_observed
@@ -1837,6 +1855,7 @@ def replay_full_policy_symbol(
                 active_event is None
                 and policy_plan is None
                 and ordinal >= blocked_until
+                and bool(bars.iloc[ordinal].get("pit_active"))
                 and observe_entry(features, ordinal)
             ):
                 candidate = _max_budgeted_buy(symbol, policy_state, reference)
@@ -1961,6 +1980,210 @@ def replay_full_policy_symbol(
                     "template_id": current_template_id,
                 }
             )
+    if terminal_liquidation_enabled:
+        if terminal_ordinal + TERMINAL_MAX_DEFER >= len(bars):
+            raise ActionValueError(
+                "PATTERN_TERMINAL_LIQUIDATION_RANGE_INVALID",
+                symbol=symbol,
+            )
+        if not any(state.quantity for state in states.values()):
+            counts["TERMINAL_LIQUIDATION_NOT_REQUIRED"] += 1
+        else:
+            liquidated = False
+            for target_ordinal in range(
+                terminal_ordinal + 1,
+                terminal_ordinal + TERMINAL_MAX_DEFER + 1,
+            ):
+                decision_ordinal = target_ordinal - 1
+                target_action = corporate_actions.on(
+                    symbol, calendar_dates[target_ordinal]
+                )
+                target_price = _inventory_raw_close(bars.iloc[target_ordinal])
+                attempt_roles = tuple(
+                    role for role, state in states.items() if state.quantity
+                )
+                attempt_fills: dict[str, Fill] = {}
+                for role in tuple(states):
+                    state = _roll_state_to_decision(states[role])
+                    state = _carry_to_target(
+                        state,
+                        symbol=symbol,
+                        decision_ordinal=decision_ordinal,
+                        calendar_dates=calendar_dates,
+                        corporate_actions=corporate_actions,
+                    )
+                    if not state.quantity:
+                        states[role] = state
+                        continue
+                    reference = last_prices[role] or target_price
+                    if reference is None:
+                        raise ActionValueError(
+                            "PATTERN_TERMINAL_REFERENCE_UNAVAILABLE",
+                            symbol=symbol,
+                            path_role=role,
+                        )
+                    plan = ActionPlan(
+                        symbol,
+                        -state.quantity,
+                        reference,
+                        risk_exit=True,
+                    )
+                    fill = daily_fill(
+                        plan,
+                        bars.iloc[target_ordinal],
+                        sellable=state.sellable,
+                        parent_count=parent_count,
+                        full_exit=True,
+                        slippage_bps=Decimal(0),
+                    )
+                    if fill.status == "FILLED" and additional_friction_bps:
+                        fill = Fill(
+                            "FILLED",
+                            fill.delta,
+                            fill.price,
+                            fill.fee
+                            + Decimal(abs(fill.delta))
+                            * fill.price
+                            * additional_friction_bps
+                            / Decimal(10000),
+                            "ADDITIONAL_FRICTION_SCENARIO",
+                        )
+                    if fill.status == "UNKNOWN":
+                        raise ActionValueError(
+                            "PATH_VALUATION_UNKNOWN",
+                            symbol=symbol,
+                            path_role=f"FULL_{role}_TERMINAL",
+                            reason=fill.reason,
+                            target_trade_date=calendar_dates[
+                                target_ordinal
+                            ].isoformat(),
+                        )
+                    states[role] = apply_fill(state, fill)
+                    attempt_fills[role] = fill
+                    cumulative_fees[role] += fill.fee
+                    fills.append(
+                        _fill_record(
+                            symbol=symbol,
+                            path_role=f"FULL_{role}_TERMINAL",
+                            decision_ordinal=decision_ordinal,
+                            calendar_dates=calendar_dates,
+                            plan=plan,
+                            fill=fill,
+                            anchor_ordinal=terminal_ordinal,
+                        )
+                    )
+                    counts[f"{role}_TERMINAL_{fill.status}"] += 1
+
+                filled_roles = {
+                    role
+                    for role, fill in attempt_fills.items()
+                    if fill.status == "FILLED"
+                }
+                if filled_roles and filled_roles != set(attempt_roles):
+                    raise ActionValueError(
+                        "PATTERN_TERMINAL_LIQUIDATION_ASYMMETRIC",
+                        symbol=symbol,
+                        target_trade_date=calendar_dates[target_ordinal].isoformat(),
+                    )
+                for role in states:
+                    if target_price is not None:
+                        last_prices[role] = target_price
+                    elif states[role].quantity:
+                        last_prices[role] = _mapped_reference_to_target(
+                            last_prices[role],
+                            bars=bars,
+                            decision_ordinal=decision_ordinal,
+                            action=target_action,
+                        )
+                    if last_prices[role] is None and states[role].quantity:
+                        raise ActionValueError(
+                            "PATTERN_VALUATION_PRICE_UNAVAILABLE",
+                            symbol=symbol,
+                        )
+                wealth = {
+                    role: (
+                        _mark_to_market(state, symbol, last_prices[role])
+                        if state.quantity
+                        else state.cash
+                    )
+                    for role, state in states.items()
+                }
+                gross_wealth = {
+                    role: (
+                        state.cash
+                        + cumulative_fees[role]
+                        + Decimal(state.quantity)
+                        * (last_prices[role] or Decimal(0))
+                    )
+                    for role, state in states.items()
+                }
+                terminal_authority = (
+                    "TERMINAL_LIQUIDATED"
+                    if not any(state.quantity for state in states.values())
+                    else "TERMINAL_DEFERRED_NO_FILL"
+                )
+                for baseline in ("BUY_AND_HOLD", l1_baseline):
+                    difference = wealth["POLICY"] - wealth[baseline]
+                    increment = difference - previous_difference[baseline]
+                    previous_difference[baseline] = difference
+                    gross_difference = (
+                        gross_wealth["POLICY"] - gross_wealth[baseline]
+                    )
+                    gross_increment = (
+                        gross_difference - previous_gross_difference[baseline]
+                    )
+                    previous_gross_difference[baseline] = gross_difference
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "valuation_date": calendar_dates[target_ordinal],
+                            "decision_as_of": cutoff_on(
+                                calendar_dates[decision_ordinal]
+                            ),
+                            "feature_available_at": cutoff_on(
+                                calendar_dates[decision_ordinal]
+                            ),
+                            "comparison": f"P_MINUS_{baseline}",
+                            "incremental_net_value_bps": float(
+                                increment
+                                / REFERENCE_CAPITAL_CNY
+                                * Decimal(10000)
+                            ),
+                            "incremental_gross_value_bps": float(
+                                gross_increment
+                                / REFERENCE_CAPITAL_CNY
+                                * Decimal(10000)
+                            ),
+                            "policy_wealth_cny": float(wealth["POLICY"]),
+                            "baseline_wealth_cny": float(wealth[baseline]),
+                            "policy_quantity": states["POLICY"].quantity,
+                            "baseline_quantity": states[baseline].quantity,
+                            "policy_exposure": float(
+                                Decimal(states["POLICY"].quantity)
+                                * (last_prices["POLICY"] or Decimal(0))
+                                / wealth["POLICY"]
+                            ),
+                            "policy_authority": terminal_authority,
+                            "template_id": template_id,
+                        }
+                    )
+                if terminal_authority == "TERMINAL_LIQUIDATED":
+                    counts["TERMINAL_LIQUIDATED"] += 1
+                    counts["TERMINAL_DEFERRED_TRADING_DAYS"] += (
+                        target_ordinal - terminal_ordinal - 1
+                    )
+                    liquidated = True
+                    break
+            if not liquidated:
+                raise ActionValueError(
+                    "PATTERN_TERMINAL_LIQUIDATION_UNAVAILABLE",
+                    symbol=symbol,
+                    nominal_terminal_date=calendar_dates[
+                        terminal_ordinal
+                    ].isoformat(),
+                    max_defer_trading_days=TERMINAL_MAX_DEFER,
+                )
+
     counts[
         "ALWAYS_OPEN_RISK_MANAGED_BASELINE_ENABLED"
         if risk_managed_open_baseline_enabled
