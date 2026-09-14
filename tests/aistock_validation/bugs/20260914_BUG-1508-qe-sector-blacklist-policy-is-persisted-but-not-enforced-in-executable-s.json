@@ -106,8 +106,8 @@
   },
   "first_seen_at": "2026-09-14T19:33:20.480710Z",
   "fix_branch": "bug/BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-20260914",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0a5be1c14",
+  "fixed_at": "2026-09-14T21:17:00Z",
   "github_issue_number": 4733,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4733",
   "last_seen_at": "2026-09-14T19:33:20.480710Z",
@@ -151,7 +151,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -229,6 +229,14 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 75 passed",
+    "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/quantevolver/test_qe_universe_comparison.py backend/tests/unified_engine/test_qe_config_truth.py -> 196 passed, 38 skipped",
+    "python -m nox -s qe_sector_risk_overlay_backend qe_read_backend validation_module_registry_l0 -> 676 passed, 1 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m ruff check changed Python files and python -m py_compile runtime entrypoints -> passed",
+    "git diff --check -> passed"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
