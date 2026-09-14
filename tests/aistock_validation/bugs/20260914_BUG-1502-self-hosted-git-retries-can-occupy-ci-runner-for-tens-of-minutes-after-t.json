@@ -37,21 +37,36 @@
   ],
   "expected": "Self-hosted Git transfers abort genuinely stalled or unusably slow attempts within a short bounded interval, retry finitely, and preserve runner capacity without changing business test selection.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      ".github/workflows/test.yml",
-      ".github/workflows/pr-quality.yml",
-      ".github/workflows/semgrep.yml",
+    "actual_changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
       ".github/workflows/dependency-update-validate.yml",
       ".github/workflows/nightly.yml",
-      ".github/workflows/codeql.yml",
-      ".github/workflows/code-intelligence-refresh.yml",
-      "scripts/ci_workflow_policy_scan.py",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1502-self-hosted-git-retries-can-occupy-ci-runner-for-tens-of-minutes-after-t.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1502-self-hosted-git-retries-can-occupy-ci-runner-for-tens-of-minutes-after-t.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
@@ -257,10 +272,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
