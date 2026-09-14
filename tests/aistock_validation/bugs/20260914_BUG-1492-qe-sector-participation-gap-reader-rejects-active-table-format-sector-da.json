@@ -1,0 +1,214 @@
+{
+  "actual": "The file-only m_sector_participation_gap_v2 candidate cannot read the active 20260911-v6 factor snapshot because its sector_data reader only accepts pandas fixed-format nodes, while the authoritative sector_data.h5 is valid table-format under /data/table. This blocks MA-E21 P11 before quickscreen despite complete dataset identity. Preserve zero-database behavior, explicit release binding and fail-closed validation; add exact support for both approved pandas fixed and table layouts without changing factor semantics or dataset files.",
+  "allowed_write_scope": [
+    "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+    "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+    "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1492",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T01:57:19.882230Z",
+  "description": "The file-only m_sector_participation_gap_v2 candidate cannot read the active 20260911-v6 factor snapshot because its sector_data reader only accepts pandas fixed-format nodes, while the authoritative sector_data.h5 is valid table-format under /data/table. This blocks MA-E21 P11 before quickscreen despite complete dataset identity. Preserve zero-database behavior, explicit release binding and fail-closed validation; add exact support for both approved pandas fixed and table layouts without changing factor semantics or dataset files.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-7fc89b7901fe",
+      "timestamp": "2026-09-14T01:57:19.882212Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "Add the exact file-only factor reader and its focused QE regression tests; no dataset, runtime, or Qlib source changes.",
+      "timestamp": "2026-09-14T02:08:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "file:///F:/Dev/AIstock_state/qe_factor_candidates/MA-E21-P11-20260914/m_sector_participation_gap_v2.h5",
+    "http://127.0.0.1:9000/api/v1/qe_workspace/dataset-identity?node_id=wsl2-5080"
+  ],
+  "expected": "The file-only candidate reader accepts both approved pandas fixed and table HDF layouts, preserves the exact 19-trading-day rolling warmup, and keeps all existing schema, ordering, and zero-database fail-closed checks.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json",
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json",
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
+    ]
+  },
+  "first_seen_at": "2026-09-14T01:57:19.882230Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4688,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4688",
+  "last_seen_at": "2026-09-14T01:57:19.882230Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py --data-dir <active-factor-root> --output-path <repo-external-output> --start-date 2018-08-01 --end-date 2026-08-31",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE sector participation gap reader rejects active table-format sector_data HDF",
+  "trigger_condition": {
+    "fingerprint": "7fc89b7901fe90613af67b7a",
+    "source_event_id": "FE-20260914-7fc89b7901fe"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
