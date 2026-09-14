@@ -1883,10 +1883,12 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
     assert roots[0] != roots[1]
 
 
-@pytest.mark.parametrize("deterministic_v16", [False, True])
+@pytest.mark.parametrize("contract_kind", ["rotation_v13", "rotation_v16", "risk_v1"])
 def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deterministic_v16: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract_kind: str
 ) -> None:
+    deterministic_v16 = contract_kind == "rotation_v16"
+    risk_v1 = contract_kind == "risk_v1"
     calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
     trade_day = calendar[-1]
     as_of = calendar[-2]
@@ -1981,9 +1983,13 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         work_parent=tmp_path / "work",
         trade_date=trade_day,
         as_of_date=as_of,
-        market_start=None if deterministic_v16 else market_start,
+        market_start=None if deterministic_v16 or risk_v1 else market_start,
         model_contract_version=(
-            "hmm_risk_rotation_l1_g2a_v1_6" if deterministic_v16 else "hmm_risk_rotation_l1_g2a_v1_3"
+            "hmm_risk_rotation_l1_g2a_v1_6"
+            if deterministic_v16
+            else "hmm_risk_risk_l1_g2b_v1"
+            if risk_v1
+            else "hmm_risk_rotation_l1_g2a_v1_3"
         ),
     )
 
@@ -2010,7 +2016,11 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         assert result["source_receipt"]["market_context_used_for_score"] is False
         assert result["source_receipt"]["sector_close_used_for_score"] is False
     else:
-        assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v1"
+        assert result["schema_version"] == (
+            "hmm_risk_risk_l1_single_date_source_v1" if risk_v1 else "hmm_risk_rotation_l1_single_date_source_v1"
+        )
+        if risk_v1:
+            assert result["model_contract_version"] == "hmm_risk_risk_l1_g2b_v1"
         assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
         assert all(day <= as_of for day, _code in result["sector_close"])
         assert len(result["sector_close"]) == 61 * 31

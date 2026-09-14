@@ -272,16 +272,18 @@ DDL、DEV/生产 DML、runtime receipt 和用户重启分别授权；源码/测�
 | F-005 | G2B-RL1-D5 | 一张风险表、两个 read API、现有页面同级视图、单日零 fit | APPROVED_BY_USER_20260914 |
 | F-006 | G2B-RL1-D6 | 一个完整 Feature 任务、最多三轮审核、失败不自动开新方向 | APPROVED_BY_USER_20260914 |
 
-## 5. Design Acceptance Matrix
+## 5. Design Acceptance Matrix（源码实现验收）
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | proposed new HMM-owned risk target helper | planned `backend/tests/hmm_risk/test_risk_l1_prediction.py` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
-| F-002 | reuse `rotation_l1_gbdt.py` primitives without changing rotation behavior | planned `backend/tests/hmm_risk/test_risk_l1_model.py` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
-| F-003 | proposed risk executor/CLI | planned `backend/tests/hmm_risk/test_run_risk_l1_g2b.py` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
-| F-004 | proposed risk metric/state helpers | artifact: `F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_4_20260823_15e041f_postbug1153/p2_4_holdout_acceptance.json` only as non-authoritative baseline; planned `backend/tests/hmm_risk/test_risk_l1_model.py` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
-| F-005 | proposed table/repository/router/current page extension | planned `backend/tests/hmm_risk/test_risk_l1_prediction.py`; planned `frontend/tests/hmm-risk/risk-l1.spec.ts` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
-| F-006 | this document | validation-receipt: F2 validator and `git diff --check` | APPROVED_BY_USER_20260914_PENDING_IMPLEMENTATION | 无 |
+| F-001 | `backend/services/hmm_risk/rotation_l1_gbdt.py::build_materialised_panel(include_risk_target=True)` | `backend/tests/hmm_risk/test_risk_l1_g2b.py` | verified | - |
+| F-002 | `backend/services/hmm_risk/risk_l1_g2b.py::lightgbm_profile/_fit_one/run_process` | `backend/tests/hmm_risk/test_risk_l1_g2b.py` | verified | - |
+| F-003 | `scripts/hmm_risk/run_risk_l1_g2b.py` | `backend/tests/hmm_risk/test_risk_l1_g2b.py` | verified | - |
+| F-004 | `backend/services/hmm_risk/risk_l1_g2b.py::project_risk_levels/risk_metrics/close_processes` | `backend/tests/hmm_risk/test_risk_l1_g2b.py` | verified | - |
+| F-005 | `backend/services/hmm_risk/risk_l1_prediction.py`; `backend/routers/hmm_risk.py`; `frontend/src/components/hmm-risk/RiskL1Panel.tsx`; `backend/db/migrations/create_hmm_risk_risk_l1_prediction_20260914.sql` | `backend/tests/hmm_risk/test_risk_l1_prediction.py`; `backend/tests/hmm_risk/test_risk_l1_product.py`; `backend/tests/hmm_risk/test_rotation_l1_api.py`; `backend/tests/hmm_risk/test_schema.py`; `frontend/tests/hmm-risk/risk-l1.spec.ts` | verified | - |
+| F-006 | 本文与本次完整 Feature 分支 | `python -m nox -s hmm_risk_pr_slice`; `python -m nox -s hmm_risk_backend`; `python -m nox -s validation_module_registry_l0`; `python -m nox -s l0`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_l1_g2b_detailed_design_20260914.md --tier F2`; `git diff --check` | verified | - |
+
+本矩阵只声明源码与可离线验证的合同已经实现，不把尚未执行的运行阶段伪装为完成。独立阶段状态为：源码 PR 尚未合入；正式双 fresh-process 12-fit 尚未执行；DEV DDL/DML、repository/API/UI 真实 readback 尚未授权或执行；production DDL/DML、runtime activation 与服务重启均保持 pending/noop。上述后续阶段不能反向降低本矩阵对源码完整性的要求，也不能由源码测试推导成功。
 
 ## 6. Implementation Plan（实施方案）
 

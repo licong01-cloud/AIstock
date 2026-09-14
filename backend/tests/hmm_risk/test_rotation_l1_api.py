@@ -5,6 +5,12 @@ from fastapi.testclient import TestClient
 
 from backend.routers import hmm_risk
 from backend.services.hmm_risk.rotation_l1_prediction import REASON_NOT_FOUND, RotationL1PredictionError
+from backend.services.hmm_risk.risk_l1_prediction import (
+    REASON_MODEL_AMBIGUOUS as RISK_REASON_MODEL_AMBIGUOUS,
+    REASON_NOT_FOUND as RISK_REASON_NOT_FOUND,
+    REASON_READBACK as RISK_REASON_READBACK,
+    RiskL1PredictionError,
+)
 
 
 class _Repository:
@@ -17,10 +23,25 @@ class _Repository:
         return {"model_hash": model_hash or "a" * 64, "trade_date": trade_date.isoformat(), "rows": [{}] * 31}
 
 
+class _RiskRepository:
+    def overview(self, *, model_hash=None):
+        return {"model_hash": model_hash or "b" * 64, "sector_count": 31, "high_warning_count": 7}
+
+    def read_date(self, trade_date: date, *, model_hash=None):
+        if trade_date == date(2026, 1, 1):
+            raise RiskL1PredictionError(RISK_REASON_NOT_FOUND, "missing risk date")
+        if trade_date == date(2026, 1, 3):
+            raise RiskL1PredictionError(RISK_REASON_MODEL_AMBIGUOUS, "ambiguous risk model")
+        if trade_date == date(2026, 1, 4):
+            raise RiskL1PredictionError(RISK_REASON_READBACK, "risk readback differs")
+        return {"model_hash": model_hash or "b" * 64, "trade_date": trade_date.isoformat(), "rows": [{}] * 31}
+
+
 def _client():
     app = FastAPI()
     app.include_router(hmm_risk.router, prefix="/api/v1")
     app.dependency_overrides[hmm_risk.get_rotation_l1_repository] = _Repository
+    app.dependency_overrides[hmm_risk.get_risk_l1_repository] = _RiskRepository
     return TestClient(app)
 
 
@@ -52,3 +73,31 @@ def test_main_app_registers_both_hmm_risk_read_routes() -> None:
 
     assert "/api/v1/hmm-risk/overview" in paths
     assert "/api/v1/hmm-risk/rotation-l1" in paths
+    assert "/api/v1/hmm-risk/risk-l1/overview" in paths
+    assert "/api/v1/hmm-risk/risk-l1" in paths
+
+
+def test_hmm_risk_risk_l1_apis_return_31_rows_and_typed_404() -> None:
+    client = _client()
+    overview = client.get("/api/v1/hmm-risk/risk-l1/overview", params={"model_hash": "b" * 64})
+    detail = client.get(
+        "/api/v1/hmm-risk/risk-l1", params={"trade_date": "2026-01-02", "model_hash": "b" * 64}
+    )
+    missing = client.get("/api/v1/hmm-risk/risk-l1", params={"trade_date": "2026-01-01"})
+
+    assert overview.status_code == 200
+    assert overview.json()["data"]["high_warning_count"] == 7
+    assert len(detail.json()["data"]["rows"]) == 31
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["reason_code"] == RISK_REASON_NOT_FOUND
+
+
+def test_hmm_risk_risk_l1_api_preserves_conflict_and_readback_statuses() -> None:
+    client = _client()
+    conflict = client.get("/api/v1/hmm-risk/risk-l1", params={"trade_date": "2026-01-03"})
+    failure = client.get("/api/v1/hmm-risk/risk-l1", params={"trade_date": "2026-01-04"})
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["reason_code"] == RISK_REASON_MODEL_AMBIGUOUS
+    assert failure.status_code == 500
+    assert failure.json()["detail"]["reason_code"] == RISK_REASON_READBACK
