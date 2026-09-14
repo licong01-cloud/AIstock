@@ -2,7 +2,7 @@
 
 > 日期：2026-09-15
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.60
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.61
 > 当前阶段：`MODEL_RUN_COMPLETE_FRESH_CONFIRMATION_REQUIRED_NOT_ACTIVATED`
 > 业务归属：Selection Center / Advisory
 > 运行边界：日频 PIT 价格预测；不研发分钟择时或交易执行
