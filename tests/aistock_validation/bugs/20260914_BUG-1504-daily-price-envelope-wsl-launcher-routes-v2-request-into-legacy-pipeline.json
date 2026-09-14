@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1504",
-  "closed_at": null,
+  "closed_at": "2026-09-14T18:03:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -55,8 +55,8 @@
   },
   "first_seen_at": "2026-09-14T17:43:44.190397Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5dab9561420c0491d1a8f2acbef5847705ff58e2",
+  "fixed_at": "2026-09-14T18:03:11Z",
   "github_issue_number": 4720,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4720",
   "last_seen_at": "2026-09-14T17:43:44.190397Z",
@@ -64,6 +64,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4722",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,6 +81,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -89,7 +91,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1504",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a0e1661e3ba32272",
+    "recorded_at": "2026-09-14T18:04:22.849571Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "729130ca7e7b1db15680e1c99faaa83da33cb873",
+    "source_merge_commit": "5dab9561420c0491d1a8f2acbef5847705ff58e2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4722",
+    "validation_evidence": [
+      "validation-receipt: id=745e19c6c4b340f8 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed`",
+      "validation-receipt: id=5582c0a951e0bbfa commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_price_range_request_contracts.py -q` result=`9 passed`",
+      "validation-receipt: id=e250e71223535f65 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=ruff plan=direct status=passed command=`python -m ruff check changed-files` result=`passed`",
+      "validation-receipt: id=220a9aca7f8e580b commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=compile plan=direct status=passed command=`python -m compileall changed-launchers` result=`passed`",
+      "validation-receipt: id=b5824077ae1fdb76 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "dd82372e0682e5055c072c7a0c20756abc6ea66ce3ca6c2bddf23d9fa355b63d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -98,6 +125,13 @@
     "fingerprint": "5d842f488ce1a097f9196f86",
     "source_event_id": "FE-20260914-5d842f488ce1"
   },
+  "validation_evidence": [
+    "validation-receipt: id=745e19c6c4b340f8 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed`",
+    "validation-receipt: id=5582c0a951e0bbfa commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_price_range_request_contracts.py -q` result=`9 passed`",
+    "validation-receipt: id=e250e71223535f65 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=ruff plan=direct status=passed command=`python -m ruff check changed-files` result=`passed`",
+    "validation-receipt: id=220a9aca7f8e580b commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=compile plan=direct status=passed command=`python -m compileall changed-launchers` result=`passed`",
+    "validation-receipt: id=b5824077ae1fdb76 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
