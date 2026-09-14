@@ -73,11 +73,19 @@ function priceRangeCandidate(symbol: string) {
   return {
     symbol,
     status: "EXPERIMENTAL_SHADOW",
-    projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
-    entry_executable_probability: 0.62,
+    availability_status: "AVAILABLE",
+    projection_condition: "NEXT_TRADING_DAY_VALID_OPEN_AT_PREDICTED_ENTRY_MID",
     decision_reference_price: 10,
+    decision_price_trade_date: "2026-08-12",
     target_raw_price_multiplier: 1,
-    entry_price: { condition: "ENTRY_EXECUTABLE", low: 9.9, mid: 10, high: 10.1 },
+    entry_price_range: { condition: "NEXT_TRADING_DAY_VALID_OPEN", low: 9.9, mid: 10, high: 10.1 },
+    calibrated_entry_price_range: null,
+    entry_gap_calibration: {
+      state: "UNCALIBRATED",
+      method: null,
+      delta: null,
+      nominal_coverage: 0.8,
+    },
     take_profit_price: { low: 11.1, high: 12.1, horizon_trade_days: 5 },
     protective_price: {
       status: "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION",
@@ -111,16 +119,18 @@ function priceRangeCandidate(symbol: string) {
 function calibratedPriceRangeCandidate(symbol: string) {
   return {
     ...priceRangeCandidate(symbol),
-    calibrated_entry_price: {
-      condition: "ENTRY_EXECUTABLE",
+    calibrated_entry_price_range: {
+      condition: "NEXT_TRADING_DAY_VALID_OPEN",
       low: 9.8,
       mid: 10,
       high: 10.2,
     },
-    entry_gap_calibration_state: "CALIBRATED",
-    entry_gap_calibration_method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
-    entry_gap_calibration_delta: 0.01,
-    entry_executable_calibration_state: "UNCALIBRATED",
+    entry_gap_calibration: {
+      state: "CALIBRATED",
+      method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+      delta: 0.01,
+      nominal_coverage: 0.8,
+    },
   };
 }
 
@@ -158,13 +168,25 @@ function forwardPredictionPayload(): JsonObject {
       message: null,
     },
     price_range: {
+      schema_version: "advisory_daily_price_envelope_v1",
+      objective_contract: "RISK_MANAGED_ADVISORY",
       status: "EXPERIMENTAL_SHADOW",
+      availability_status: "AVAILABLE",
+      decision_as_of_trade_date: "2026-08-12",
+      target_trade_date: "2026-08-13",
       calibration_state: "UNCALIBRATED",
+      nominal_coverage: 0.8,
+      package_id: "pkg_codex_smoke",
+      package_manifest_sha256: "a".repeat(64),
+      style_profile_hash: "b".repeat(64),
       price_range_bundle_id: "price_forward",
       parent_bundle_id: "bundle_forward",
       outcome_bundle_id: "outcome_forward",
       model_version: "advprreq_forward",
       price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+      review_policy_sha256: "c".repeat(64),
+      source_bundle_schema_version: "advisory_price_range_bundle_v1",
+      entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE",
       candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
       reason_code: null,
       message: null,
@@ -906,13 +928,25 @@ async function mockAdvisoryApis(page: Page, options: {
           message: null,
         },
         price_range: {
+          schema_version: "advisory_daily_price_envelope_v1",
+          objective_contract: "RISK_MANAGED_ADVISORY",
           status: "EXPERIMENTAL_SHADOW",
+          availability_status: "AVAILABLE",
+          decision_as_of_trade_date: "2026-06-04",
+          target_trade_date: url.searchParams.get("target_trade_date"),
           calibration_state: "UNCALIBRATED",
+          nominal_coverage: 0.8,
+          package_id: "pkg_codex_smoke",
+          package_manifest_sha256: "a".repeat(64),
+          style_profile_hash: "b".repeat(64),
           price_range_bundle_id: "price_range_bundle_ui",
           parent_bundle_id: "bundle_ui",
           outcome_bundle_id: "outcome_bundle_ui",
           model_version: "advprreq_ui",
           price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          review_policy_sha256: "c".repeat(64),
+          source_bundle_schema_version: "advisory_price_range_bundle_v1",
+          entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE",
           candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
           reason_code: null,
           message: null,
@@ -1163,7 +1197,11 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await page.getByTestId("advisory-outcome-horizon-20").click();
   await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("2.0%");
   await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("日级价格区间");
   await expect(page.getByTestId("advisory-price-range-basis")).toContainText("未复权 CNY");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("目标日 2026-06-05");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("不表示最佳分钟");
+  await expect(page.getByTestId("advisory-price-range-table")).not.toContainText("可执行概率");
   await expect(page.getByTestId("advisory-price-range-source")).toContainText("price_range_bu...");
   await expect(page.getByTestId("advisory-price-range-source")).toContainText("outcome_bundle...");
   await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr")).toHaveCount(2);
@@ -1410,7 +1448,7 @@ test("Advisory calibrated outcome shows calibrated and raw values without hiding
 });
 
 
-test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalibrated", async ({ page }) => {
+test("Advisory calibrated daily entry interval keeps the raw interval visible", async ({ page }) => {
   await mockShellApis(page);
   await mockAdvisoryApis(page, {
     modelShadowByProgramId: {
@@ -1460,7 +1498,8 @@ test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalib
   );
   await expect(row).toContainText("9.80 - 10.20");
   await expect(row).toContainText("9.90 - 10.10");
-  await expect(row).toContainText("UNCALIBRATED");
+  await expect(row).toContainText("AVAILABLE");
+  await expect(row).not.toContainText("可执行概率");
 });
 
 

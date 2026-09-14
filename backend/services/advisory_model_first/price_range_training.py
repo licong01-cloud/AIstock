@@ -13,8 +13,10 @@ from backend.services.advisory_model_first.feature_schema_v1 import (
     MODEL_FEATURE_COLUMNS,
 )
 from backend.services.advisory_model_first.price_range_contracts import (
+    DAILY_PRICE_ENVELOPE_ENTRY_GAP_CONDITION,
     ENTRY_GAP_CONDITION,
     PRICE_RANGE_MODEL_NAMES,
+    PRICE_RANGE_QUANTILE_MODEL_NAMES,
     PRICE_RANGE_QUANTILES,
 )
 
@@ -228,6 +230,184 @@ def train_price_range_models(
     )
 
 
+def train_daily_price_envelope_models(
+    *,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    seed: int,
+) -> PriceRangeTrainingResult:
+    """Train the v3 three-quantile price envelope without a binary head."""
+
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    if features.duplicated(keys).any() or labels.duplicated(keys).any():
+        raise AdvisoryModelFirstError(
+            "daily price envelope features or labels contain duplicate identities",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+    merged = features.merge(labels, on=keys, how="left", validate="one_to_one", indicator=True)
+    if not merged["_merge"].eq("both").all():
+        raise AdvisoryModelFirstError(
+            "daily price envelope feature row has no candidate label",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"missing_label_rows": int(merged["_merge"].ne("both").sum())},
+        )
+    merged = merged.drop(columns="_merge")
+    missing_feature_rows = labels.merge(
+        features.loc[:, keys], on=keys, how="left", validate="one_to_one", indicator=True
+    )
+    missing_feature_rows = missing_feature_rows.loc[
+        missing_feature_rows["_merge"].eq("left_only")
+    ]
+    allowed_splits = {"train", "validation", "test", "purged"}
+    observed_splits = set(labels["split"].astype(str).unique())
+    if not observed_splits.issubset(allowed_splits):
+        raise AdvisoryModelFirstError(
+            "daily price envelope labels contain an unknown split",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"splits": sorted(observed_splits)},
+        )
+    missing_by_split = {
+        name: int(missing_feature_rows["split"].eq(name).sum())
+        for name in ("train", "validation", "test", "purged")
+    }
+    if missing_by_split["test"]:
+        raise AdvisoryModelFirstError(
+            "daily price envelope test candidate is missing its frozen feature row",
+            reason_code="ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT",
+            context={"missing_feature_rows_by_split": missing_by_split},
+        )
+    feature_names = tuple(MODEL_FEATURE_COLUMNS)
+    missing_features = sorted(set(feature_names) - set(merged.columns))
+    if missing_features:
+        raise AdvisoryModelFirstError(
+            "daily price envelope matrix is missing frozen model features",
+            reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
+            context={"missing_features": missing_features},
+        )
+    _validate_daily_price_envelope_label_contract(merged)
+    matrix, vocabulary = _prepare_matrix(merged, feature_names=feature_names)
+    all_test_mask = merged["split"].eq("test")
+    if not all_test_mask.any():
+        raise AdvisoryModelFirstError(
+            "daily price envelope matrix has no test candidates",
+            reason_code="ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT",
+        )
+    test_positions = all_test_mask[all_test_mask].index
+    test_rows = merged.loc[all_test_mask].copy()
+    gap_eligible = merged["gap_modelable"].astype(bool)
+    gap_masks = _split_masks(merged, gap_eligible, head="entry_gap")
+    gap_target = pd.to_numeric(merged["entry_gap_return"], errors="coerce")
+    models: dict[str, Any] = {}
+    histories: dict[str, Any] = {}
+    metrics: dict[str, Any] = {"heads": {}}
+    raw_gap_predictions: dict[float, np.ndarray] = {}
+    gap_locations = np.flatnonzero(gap_masks[2].loc[test_positions].to_numpy())
+    gap_actual = gap_target.loc[gap_masks[2]].to_numpy(dtype=float)
+    for quantile in PRICE_RANGE_QUANTILES:
+        name = f"entry_gap_q{int(quantile * 100):02d}"
+        model, history = _train_booster(
+            matrix=matrix,
+            target=gap_target,
+            train_mask=gap_masks[0],
+            validation_mask=gap_masks[1],
+            objective="quantile",
+            seed=seed,
+            alpha=quantile,
+            head=name,
+        )
+        raw = _predict_finite(model, matrix.loc[all_test_mask], head=name)
+        raw_gap_predictions[quantile] = raw
+        models[name] = model
+        histories[name] = history
+        metrics["heads"][name] = {
+            "pinball_loss": float(
+                mean_pinball_loss(gap_actual, raw[gap_locations], alpha=quantile)
+            ),
+            "row_count": int(gap_masks[2].sum()),
+            "best_iteration": int(model.best_iteration),
+            "condition": DAILY_PRICE_ENVELOPE_ENTRY_GAP_CONDITION,
+        }
+    raw_stack = np.column_stack(
+        [raw_gap_predictions[quantile] for quantile in PRICE_RANGE_QUANTILES]
+    )
+    crossing = (raw_stack[:, 0] > raw_stack[:, 1]) | (
+        raw_stack[:, 1] > raw_stack[:, 2]
+    )
+    monotonic = np.sort(raw_stack, axis=1)
+    for position, quantile in enumerate(PRICE_RANGE_QUANTILES):
+        test_rows.loc[
+            test_positions, f"entry_gap_q{int(quantile * 100):02d}"
+        ] = monotonic[:, position]
+    metrics["entry_gap_distribution"] = {
+        "condition": DAILY_PRICE_ENVELOPE_ENTRY_GAP_CONDITION,
+        "quantile_crossing_count": int(crossing.sum()),
+        "quantile_crossing_rate": float(crossing.mean()),
+        "q10_q90_empirical_coverage": float(
+            (
+                (gap_actual >= monotonic[gap_locations, 0])
+                & (gap_actual <= monotonic[gap_locations, 2])
+            ).mean()
+        ),
+        "mean_interval_width": float(
+            np.mean(monotonic[gap_locations, 2] - monotonic[gap_locations, 0])
+        ),
+        "median_interval_width": float(
+            np.median(monotonic[gap_locations, 2] - monotonic[gap_locations, 0])
+        ),
+        "lower_miss_rate": float((gap_actual < monotonic[gap_locations, 0]).mean()),
+        "upper_miss_rate": float((gap_actual > monotonic[gap_locations, 2]).mean()),
+    }
+    if tuple(sorted(models)) != tuple(sorted(PRICE_RANGE_QUANTILE_MODEL_NAMES)):
+        raise AdvisoryModelFirstError(
+            "daily price envelope trainer did not produce the exact three-head contract",
+            reason_code="ADVISORY_PRICE_RANGE_TRAINING_FAILED",
+            context={"model_names": sorted(models)},
+        )
+    test_status = test_rows["entry_gap_label_status"].astype(str)
+    metrics.update(
+        {
+            "model_count": len(models),
+            "test_row_count": len(test_rows),
+            "test_date_count": int(test_rows["decision_as_of_trade_date"].nunique()),
+            "entry_gap_test_row_count": int(gap_masks[2].sum()),
+            "test_available_row_count": int(test_status.eq("AVAILABLE").sum()),
+            "test_not_applicable_row_count": int(
+                test_status.eq("NOT_APPLICABLE").sum()
+            ),
+            "test_unavailable_row_count": int(test_status.eq("UNAVAILABLE").sum()),
+            "feature_available_row_count": len(merged),
+            "feature_unavailable_row_count": len(missing_feature_rows),
+            "feature_unavailable_date_count": int(
+                missing_feature_rows["decision_as_of_trade_date"].nunique()
+            ),
+            "feature_unavailable_rows_by_split": missing_by_split,
+            "status": "EXPERIMENTAL_SHADOW",
+            "calibration_state": "UNCALIBRATED",
+        }
+    )
+    output_columns = [
+        *keys,
+        "selection_effective_rank",
+        "parent_combined_score",
+        "entry_gap_label_status",
+        "entry_gap_label_reason",
+        "entry_gap_return",
+        *PRICE_RANGE_QUANTILE_MODEL_NAMES,
+    ]
+    test_rows["entry_gap_condition"] = DAILY_PRICE_ENVELOPE_ENTRY_GAP_CONDITION
+    output_columns.append("entry_gap_condition")
+    return PriceRangeTrainingResult(
+        models=models,
+        feature_names=feature_names,
+        categorical_vocabulary=vocabulary,
+        metrics=metrics,
+        test_predictions=test_rows.loc[:, output_columns]
+        .sort_values(keys)
+        .reset_index(drop=True),
+        training_log={"evaluation_history": histories},
+    )
+
+
 def _prepare_matrix(
     merged: pd.DataFrame,
     *,
@@ -328,6 +508,54 @@ def _validate_label_contract(merged: pd.DataFrame) -> None:
     ):
         raise AdvisoryModelFirstError(
             "price-range modelable masks differ from label and split semantics",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+
+
+def _validate_daily_price_envelope_label_contract(merged: pd.DataFrame) -> None:
+    required = {
+        "split",
+        "entry_gap_label_status",
+        "entry_gap_label_reason",
+        "entry_gap_return",
+        "gap_modelable",
+    }
+    missing = sorted(required - set(merged.columns))
+    if missing:
+        raise AdvisoryModelFirstError(
+            "daily price envelope labels omit required training columns",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"missing_columns": missing},
+        )
+    status = merged["entry_gap_label_status"].astype(str)
+    if not set(status.unique()).issubset(
+        {"AVAILABLE", "NOT_APPLICABLE", "UNAVAILABLE"}
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope labels contain an unknown availability status",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"statuses": sorted(status.unique().tolist())},
+        )
+    gap = pd.to_numeric(merged["entry_gap_return"], errors="coerce")
+    available = status.eq("AVAILABLE")
+    if (
+        gap.loc[available].isna().any()
+        or not np.isfinite(gap.loc[available].to_numpy(dtype=float)).all()
+        or gap.loc[~available].notna().any()
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope gap label violates availability semantics",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+    active = merged["split"].isin(["train", "validation", "test"])
+    expected_gap = active & available
+    actual_gap = merged["gap_modelable"]
+    if (
+        actual_gap.isna().any()
+        or not actual_gap.astype(bool).equals(expected_gap)
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope modelable mask differs from label and split semantics",
             reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
         )
 

@@ -154,3 +154,121 @@ def apply_price_range_split(
     result["binary_modelable"] = active & available
     result["gap_modelable"] = result["binary_modelable"] & result["entry_executable"].eq(1)
     return result
+
+
+def build_daily_price_envelope_labels(
+    *,
+    candidates: pd.DataFrame,
+    daily: pd.DataFrame,
+    suspend_rows: pd.DataFrame,
+    trading_calendar: Sequence[pd.Timestamp],
+) -> PriceRangeLabelBuildResult:
+    """Build v2 open-gap labels without manufacturing an executability target."""
+
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    missing = sorted(set(keys) - set(candidates.columns))
+    if missing or candidates.duplicated(keys).any():
+        raise AdvisoryModelFirstError(
+            "daily price envelope candidates have invalid identities",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"missing_columns": missing},
+        )
+    calendar = (
+        pd.DatetimeIndex(pd.to_datetime(list(trading_calendar)))
+        .normalize()
+        .sort_values()
+        .unique()
+    )
+    calendar_position = {value: position for position, value in enumerate(calendar)}
+    market = daily.sort_index()
+    suspended = {
+        (pd.Timestamp(item.trade_date).normalize(), str(item.instrument).upper())
+        for item in suspend_rows.itertuples(index=False)
+    }
+    rows: list[dict[str, object]] = []
+    for candidate in candidates.itertuples(index=False):
+        decision = pd.Timestamp(candidate.decision_as_of_trade_date).normalize()
+        target = pd.Timestamp(candidate.target_trade_date).normalize()
+        symbol = str(candidate.instrument).upper()
+        row: dict[str, object] = {
+            "decision_as_of_trade_date": decision,
+            "target_trade_date": target,
+            "instrument": symbol,
+            "entry_gap_label_status": "UNAVAILABLE",
+            "entry_gap_label_reason": None,
+            "entry_gap_return": np.nan,
+        }
+        if decision not in calendar_position or target not in calendar_position:
+            row["entry_gap_label_reason"] = "calendar_date_missing"
+            rows.append(row)
+            continue
+        if calendar_position[target] != calendar_position[decision] + 1:
+            raise AdvisoryModelFirstError(
+                "daily price envelope target date is not the next trading day",
+                reason_code="ADVISORY_MODEL_DECISION_CLOCK_MISMATCH",
+                context={
+                    "decision_date": decision.date().isoformat(),
+                    "target_date": target.date().isoformat(),
+                },
+            )
+        if (target, symbol) in suspended:
+            row.update(
+                entry_gap_label_status="NOT_APPLICABLE",
+                entry_gap_label_reason="target_authoritatively_suspended",
+            )
+            rows.append(row)
+            continue
+        target_row = _market_row(market, target, symbol)
+        if target_row is None:
+            row["entry_gap_label_reason"] = "target_market_row_missing_unexplained"
+            rows.append(row)
+            continue
+        decision_row = _market_row(market, decision, symbol)
+        target_open = _finite(target_row.get("open"))
+        decision_close = _finite(decision_row.get("close")) if decision_row is not None else None
+        if (
+            target_open is None
+            or target_open <= 0
+            or decision_close is None
+            or decision_close <= 0
+        ):
+            row["entry_gap_label_reason"] = "target_or_decision_price_invalid"
+            rows.append(row)
+            continue
+        row.update(
+            entry_gap_label_status="AVAILABLE",
+            entry_gap_label_reason="target_open_observed",
+            entry_gap_return=target_open / decision_close - 1.0,
+        )
+        rows.append(row)
+    labels = pd.DataFrame(rows).sort_values(keys).reset_index(drop=True)
+    coverage_rows: list[dict[str, object]] = []
+    for decision, group in labels.groupby("decision_as_of_trade_date", sort=True):
+        status = group["entry_gap_label_status"]
+        coverage_rows.append(
+            {
+                "decision_as_of_trade_date": decision,
+                "candidate_count": len(group),
+                "available_count": int(status.eq("AVAILABLE").sum()),
+                "not_applicable_count": int(status.eq("NOT_APPLICABLE").sum()),
+                "unavailable_count": int(status.eq("UNAVAILABLE").sum()),
+            }
+        )
+    return PriceRangeLabelBuildResult(
+        labels=labels,
+        coverage=pd.DataFrame(coverage_rows),
+    )
+
+
+def apply_daily_price_envelope_split(
+    labels: pd.DataFrame,
+    split: OutcomeDateSplit,
+) -> pd.DataFrame:
+    result = labels.copy()
+    decisions = pd.to_datetime(result["decision_as_of_trade_date"]).dt.normalize()
+    result["split"] = "purged"
+    for name in ("train", "validation", "test"):
+        result.loc[decisions.isin(getattr(split, name)), "split"] = name
+    active = result["split"].isin(["train", "validation", "test"])
+    result["gap_modelable"] = active & result["entry_gap_label_status"].eq("AVAILABLE")
+    return result

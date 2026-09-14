@@ -12,10 +12,12 @@ from typing import Any, Callable
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHEMA_HASH
 from backend.services.advisory_model_first.price_range_bundle import (
+    read_daily_price_envelope_bundle_manifest,
     read_price_range_bundle_manifest,
 )
 from backend.services.advisory_model_first.price_range_contracts import (
     PRICE_RANGE_MODEL_NAMES,
+    PRICE_RANGE_QUANTILE_MODEL_NAMES,
     canonical_json_sha256,
 )
 
@@ -237,7 +239,8 @@ def load_exact_price_range_bundle(
     )
     factory = booster_factory or _load_lightgbm_booster
     models: dict[str, Any] = {}
-    for name in PRICE_RANGE_MODEL_NAMES:
+    model_names = tuple(str(name) for name in manifest.get("model_names") or ())
+    for name in model_names:
         path = bundle_path / "models" / f"{name}.txt"
         try:
             models[name] = factory(path)
@@ -257,7 +260,8 @@ def load_exact_price_range_bundle(
         models=models,
         calibration_spec=(
             _read_json(bundle_path / "calibration_spec.json")
-            if manifest.get("schema_version") == "advisory_price_range_bundle_v2"
+            if manifest.get("schema_version")
+            in {"advisory_price_range_bundle_v2", "advisory_price_range_bundle_v4"}
             else None
         ),
     )
@@ -265,15 +269,32 @@ def load_exact_price_range_bundle(
 
 def _validate_runtime_manifest(manifest: dict[str, Any]) -> None:
     schema_version = manifest.get("schema_version")
-    expected = {
+    common_expected = {
         "status": "EXPERIMENTAL_SHADOW",
         "feature_schema_version": "advisory_feature_schema_v1",
         "feature_schema_hash": FEATURE_SCHEMA_HASH,
-        "label_policy_version": "advisory_price_range_label_policy_v1",
-        "entry_gap_condition": "ENTRY_EXECUTABLE",
-        "model_names": list(PRICE_RANGE_MODEL_NAMES),
-        "model_count": len(PRICE_RANGE_MODEL_NAMES),
     }
+    if schema_version in {
+        "advisory_price_range_bundle_v3",
+        "advisory_price_range_bundle_v4",
+    }:
+        expected = {
+            **common_expected,
+            "label_policy_version": "advisory_price_range_label_policy_v2",
+            "entry_gap_condition": "NEXT_TRADING_DAY_VALID_OPEN",
+            "model_names": list(PRICE_RANGE_QUANTILE_MODEL_NAMES),
+            "model_count": len(PRICE_RANGE_QUANTILE_MODEL_NAMES),
+            "output_schema_version": "advisory_daily_price_envelope_v1",
+            "objective_contract": "RISK_MANAGED_ADVISORY",
+        }
+    else:
+        expected = {
+            **common_expected,
+            "label_policy_version": "advisory_price_range_label_policy_v1",
+            "entry_gap_condition": "ENTRY_EXECUTABLE",
+            "model_names": list(PRICE_RANGE_MODEL_NAMES),
+            "model_count": len(PRICE_RANGE_MODEL_NAMES),
+        }
     actual = {key: manifest.get(key) for key in expected}
     valid_calibration = (
         schema_version == "advisory_price_range_bundle_v1"
@@ -283,6 +304,17 @@ def _validate_runtime_manifest(manifest: dict[str, Any]) -> None:
         and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
         and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
         and manifest.get("entry_executable_calibration_state") == "UNCALIBRATED"
+    ) or (
+        schema_version == "advisory_price_range_bundle_v3"
+        and manifest.get("calibration_state") == "UNCALIBRATED"
+        and manifest.get("nominal_coverage") == 0.8
+    ) or (
+        schema_version == "advisory_price_range_bundle_v4"
+        and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
+        and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
+        and manifest.get("entry_admission_model_status")
+        == "RETIRED_NON_IDENTIFIABLE"
+        and manifest.get("nominal_coverage") == 0.8
     )
     if actual != expected or not valid_calibration:
         raise AdvisoryModelFirstError(
@@ -303,6 +335,18 @@ def _read_runtime_bundle_manifest(bundle_path: Path, *, expected_bundle_id: str)
         )
 
         return validate_calibrated_price_range_bundle(bundle_path, expected_bundle_id=expected_bundle_id)
+    if schema == "advisory_price_range_bundle_v3":
+        return read_daily_price_envelope_bundle_manifest(
+            bundle_path, expected_bundle_id=expected_bundle_id
+        )
+    if schema == "advisory_price_range_bundle_v4":
+        from backend.services.advisory_model_first.price_range_calibration_bundle import (
+            validate_calibrated_daily_price_envelope_bundle,
+        )
+
+        return validate_calibrated_daily_price_envelope_bundle(
+            bundle_path, expected_bundle_id=expected_bundle_id
+        )
     raise AdvisoryModelFirstError(
         "price-range bundle schema is unsupported",
         reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",

@@ -72,6 +72,25 @@ def _calibrated_bundle() -> LoadedAdvisoryPriceRangeBundle:
     )
 
 
+def _v3_bundle() -> LoadedAdvisoryPriceRangeBundle:
+    legacy = _bundle()
+    return LoadedAdvisoryPriceRangeBundle(
+        **{
+            **legacy.__dict__,
+            "manifest": {
+                "request_id": "advprreq_v3_runtime",
+                "schema_version": "advisory_price_range_bundle_v3",
+                "calibration_state": "UNCALIBRATED",
+            },
+            "models": {
+                name: model
+                for name, model in legacy.models.items()
+                if name != "entry_executable_probability"
+            },
+        }
+    )
+
+
 def _context(symbol: str, *, board_type: str = "MAIN", target_is_st: bool = False):
     return PriceRangeRealtimeContext(
         symbol=symbol,
@@ -129,8 +148,10 @@ def test_price_range_projects_real_heads_m3_paths_and_hard_stop() -> None:
 
     first = result[0]
     assert first["status"] == "EXPERIMENTAL_SHADOW"
-    assert first["entry_price"] == {
-        "condition": "ENTRY_EXECUTABLE",
+    assert first["availability_status"] == "AVAILABLE"
+    assert first["decision_price_trade_date"] == "2026-07-20"
+    assert first["entry_price_range"] == {
+        "condition": "NEXT_TRADING_DAY_VALID_OPEN",
         "low": 9.9,
         "mid": 10.0,
         "high": 10.1,
@@ -140,8 +161,30 @@ def test_price_range_projects_real_heads_m3_paths_and_hard_stop() -> None:
     assert first["stop_loss_price"]["low"] >= 9.2
     assert first["protective_price"]["status"] == "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION"
     assert first["regulatory_price_range"]["rule_id"] == "MAIN_10PCT_V1"
-    assert first["calibrated_entry_price"] is None
-    assert first["entry_gap_calibration_state"] == "UNCALIBRATED"
+    assert first["calibrated_entry_price_range"] is None
+    assert first["entry_gap_calibration"]["state"] == "UNCALIBRATED"
+    assert "entry_executable_probability" not in first
+
+
+def test_v3_three_head_bundle_scores_without_binary_compatibility_model() -> None:
+    result = score_price_range_bundle(
+        _v3_bundle(),
+        _features(),
+        contexts={symbol: _context(symbol) for symbol in ("000001.SZ", "000002.SZ")},
+        context_unavailable=(),
+        outcome_candidates=[_outcome("000001.SZ"), _outcome("000002.SZ")],
+        review_policy={
+            "stop_loss_bps": 800,
+            "take_profit_bps": 1800,
+            "trailing_stop_bps": 700,
+            "take_profit_mode": "trailing",
+        },
+        review_policy_sha256="a" * 64,
+        target_trade_date=date(2026, 7, 21),
+    )
+
+    assert [item["availability_status"] for item in result] == ["AVAILABLE", "AVAILABLE"]
+    assert all("entry_executable_probability" not in item for item in result)
 
 
 def test_m5c_calibrated_entry_band_is_additive_and_keeps_raw_risk_anchor() -> None:
@@ -157,10 +200,11 @@ def test_m5c_calibrated_entry_band_is_additive_and_keeps_raw_risk_anchor() -> No
     )
 
     first = result[0]
-    assert first["entry_price"] == {"condition": "ENTRY_EXECUTABLE", "low": 9.9, "mid": 10.0, "high": 10.1}
-    assert first["calibrated_entry_price"] == {"condition": "ENTRY_EXECUTABLE", "low": 9.8, "mid": 10.0, "high": 10.2}
-    assert first["entry_gap_calibration_state"] == "CALIBRATED"
-    assert first["entry_executable_calibration_state"] == "UNCALIBRATED"
+    assert first["entry_price_range"] == {"condition": "NEXT_TRADING_DAY_VALID_OPEN", "low": 9.9, "mid": 10.0, "high": 10.1}
+    assert first["calibrated_entry_price_range"] == {"condition": "NEXT_TRADING_DAY_VALID_OPEN", "low": 9.8, "mid": 10.0, "high": 10.2}
+    assert first["entry_gap_calibration"]["state"] == "CALIBRATED"
+    assert first["entry_gap_calibration"]["method"] == "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION"
+    assert "entry_executable_calibration_state" not in first
     assert first["stop_loss_price"]["hard_stop_price"] == 9.2
 
 

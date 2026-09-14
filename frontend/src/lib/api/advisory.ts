@@ -424,16 +424,19 @@ export type AdvisoryPriceBand = {
 export type AdvisoryPriceRangeCandidate = {
   symbol: string;
   status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
-  projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID";
-  entry_executable_probability: number | null;
+  availability_status: "AVAILABLE" | "UNAVAILABLE";
+  projection_condition: "NEXT_TRADING_DAY_VALID_OPEN_AT_PREDICTED_ENTRY_MID";
   decision_reference_price: number | null;
+  decision_price_trade_date: string | null;
   target_raw_price_multiplier: number | null;
-  entry_price: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
-  calibrated_entry_price?: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
-  entry_gap_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
-  entry_gap_calibration_method?: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION" | null;
-  entry_gap_calibration_delta?: number | null;
-  entry_executable_calibration_state?: "UNCALIBRATED";
+  entry_price_range: ({ condition: "NEXT_TRADING_DAY_VALID_OPEN"; mid: number } & AdvisoryPriceBand) | null;
+  calibrated_entry_price_range: ({ condition: "NEXT_TRADING_DAY_VALID_OPEN"; mid: number } & AdvisoryPriceBand) | null;
+  entry_gap_calibration: {
+    state: "CALIBRATED" | "UNCALIBRATED";
+    method: string | null;
+    delta: number | null;
+    nominal_coverage: number;
+  } | null;
   take_profit_price: (AdvisoryPriceBand & { horizon_trade_days: 1 | 3 | 5 | 10 | 20 }) | null;
   protective_price: {
     status: "NOT_APPLICABLE" | "MODEL_BELOW_POLICY_ACTIVATION" | "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION";
@@ -464,13 +467,25 @@ export type AdvisoryPriceRangeCandidate = {
 };
 
 export type AdvisoryPriceRangeShadow = {
+  schema_version: "advisory_daily_price_envelope_v1";
+  objective_contract: "RISK_MANAGED_ADVISORY";
   status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  availability_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string | null;
   calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
+  nominal_coverage: number | null;
+  package_id: string | null;
+  package_manifest_sha256: string | null;
+  style_profile_hash: string | null;
   price_range_bundle_id: string | null;
   parent_bundle_id: string | null;
   outcome_bundle_id: string | null;
   model_version: string | null;
   price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  review_policy_sha256: string | null;
+  source_bundle_schema_version: string | null;
+  entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE";
   candidates: AdvisoryPriceRangeCandidate[];
   reason_code: string | null;
   message: string | null;
