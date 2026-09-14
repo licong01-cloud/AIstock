@@ -353,6 +353,42 @@ def test_hmm_coefficients_read_local_artifact_without_legacy_wsl_fallback(monkey
     assert payload["daily_coefficients"]["2024-07-01"]["801010.SI"] == 1.0
 
 
+def test_hmm_coefficients_validator_accepts_complete_pit_membership() -> None:
+    ConfigComposer._validate_hmm_coefficients_json(
+        json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "801010.SI"},
+                },
+                "stock_sector_membership_spans": {
+                    "000001.SZ": [
+                        {
+                            "start_date": "2026-07-16",
+                            "end_date": "2026-07-16",
+                            "sector_code": "801010.SI",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+
+def test_hmm_coefficients_validator_rejects_missing_pit_membership_date() -> None:
+    with pytest.raises(RuntimeError, match="missing coefficient dates"):
+        ConfigComposer._validate_hmm_coefficients_json(
+            json.dumps(
+                {
+                    "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                    "stock_sector_map_by_date": {
+                        "2026-07-15": {"000001.SZ": "801010.SI"},
+                    },
+                }
+            )
+        )
+
+
 def test_hmm_linux_worker_model_path_is_not_converted_to_windows(monkeypatch):
     from unittest.mock import patch
 

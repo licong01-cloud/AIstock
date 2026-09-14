@@ -2,9 +2,14 @@
   "actual": "Only stale coefficient windows exist and the generation path requires PostgreSQL market tables, so P10/P11 cannot run without violating the QE file-only data-plane contract.",
   "allowed_write_scope": [
     "scripts/precompute_hmm_coefficients.py",
+    "scripts/score_weighted_strategy.py",
     "backend/services/hmm_training_service.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/test_hmm_daily_coefficients.py",
     "backend/tests/scripts/test_precompute_hmm_coefficients.py",
     "backend/tests/hmm_data_source/test_isolation_constraints.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
     "tests/aistock_validation/bugs/20260914_BUG-1510-qe-hmm-current-release-coefficients-require-forbidden-market-table-reads.json"
   ],
   "assigned_agent": null,
@@ -34,17 +39,27 @@
     "added_files": [],
     "changed_files": [
       "scripts/precompute_hmm_coefficients.py",
+      "scripts/score_weighted_strategy.py",
       "backend/services/hmm_training_service.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
-      "backend/tests/hmm_data_source/test_isolation_constraints.py"
+      "backend/tests/hmm_data_source/test_isolation_constraints.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "scripts/precompute_hmm_coefficients.py",
+        "scripts/score_weighted_strategy.py",
         "backend/services/hmm_training_service.py",
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/test_hmm_daily_coefficients.py",
         "backend/tests/scripts/test_precompute_hmm_coefficients.py",
-        "backend/tests/hmm_data_source/test_isolation_constraints.py"
+        "backend/tests/hmm_data_source/test_isolation_constraints.py",
+        "backend/tests/unified_engine/test_qe_config_truth.py",
+        "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
       ],
       "impacted_modules": [
         "selection_center",
@@ -104,24 +119,39 @@
       ],
       "suggested_scope": [
         "scripts/precompute_hmm_coefficients.py",
+        "scripts/score_weighted_strategy.py",
         "backend/services/hmm_training_service.py",
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/test_hmm_daily_coefficients.py",
         "backend/tests/scripts/test_precompute_hmm_coefficients.py",
-        "backend/tests/hmm_data_source/test_isolation_constraints.py"
+        "backend/tests/hmm_data_source/test_isolation_constraints.py",
+        "backend/tests/unified_engine/test_qe_config_truth.py",
+        "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/precompute_hmm_coefficients.py",
+      "scripts/score_weighted_strategy.py",
       "backend/services/hmm_training_service.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
-      "backend/tests/hmm_data_source/test_isolation_constraints.py"
+      "backend/tests/hmm_data_source/test_isolation_constraints.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/precompute_hmm_coefficients.py",
+      "scripts/score_weighted_strategy.py",
       "backend/services/hmm_training_service.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/test_hmm_daily_coefficients.py",
       "backend/tests/scripts/test_precompute_hmm_coefficients.py",
-      "backend/tests/hmm_data_source/test_isolation_constraints.py"
+      "backend/tests/hmm_data_source/test_isolation_constraints.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
     ]
   },
   "first_seen_at": "2026-09-14T19:49:50.275821Z",
