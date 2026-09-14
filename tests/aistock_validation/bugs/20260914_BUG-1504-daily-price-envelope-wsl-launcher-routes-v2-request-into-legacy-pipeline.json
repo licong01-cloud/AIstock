@@ -1,0 +1,234 @@
+{
+  "actual": "The request preparer produces a v2 daily-envelope request, but the Windows-to-WSL training and calibration launchers do not expose or forward --contract. The WSL entrypoints therefore retain their legacy-v1 default and route the v2 request into the v1 pipeline. Formal training fails before data projection with schema_version, label_policy_version, and entry_gap_condition validation errors; calibration would fail by the same missing-forwarding path.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260914_BUG-1504-daily-price-envelope-wsl-launcher-routes-v2-request-into-legacy-pipeline.json",
+    "scripts/advisory_price_range_train_wsl.py",
+    "scripts/advisory_price_range_calibration_train_wsl.py",
+    "backend/tests/advisory_model_first/test_price_range_request_contracts.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1504",
+  "closed_at": "2026-09-14T18:03:11Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T17:43:44.190397Z",
+  "description": "After PR #4704, both Windows-to-WSL price-range launchers omit the explicit contract selector already supported by their WSL entrypoints. Add a backward-compatible --contract option to each launcher, forward it unchanged, and cover both paths with direct tests. Do not change QE public code or experiment semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-5d842f488ce1",
+      "timestamp": "2026-09-14T17:43:44.190381Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Selecting daily-envelope-v1 at the Windows launcher must forward that exact contract to the WSL entrypoint, while omission must preserve the legacy-v1 compatibility default.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/advisory_model_first/test_price_range_request_contracts.py",
+      "scripts/advisory_price_range_calibration_train_wsl.py",
+      "scripts/advisory_price_range_train_wsl.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1504-daily-price-envelope-wsl-launcher-routes-v2-request-into-legacy-pipeline.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/advisory_model_first/test_price_range_request_contracts.py",
+      "scripts/advisory_price_range_calibration_train_wsl.py",
+      "scripts/advisory_price_range_train_wsl.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1504-daily-price-envelope-wsl-launcher-routes-v2-request-into-legacy-pipeline.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-14T17:43:44.190397Z",
+  "fix_branch": null,
+  "fix_commit": "5dab9561420c0491d1a8f2acbef5847705ff58e2",
+  "fixed_at": "2026-09-14T18:03:11Z",
+  "github_issue_number": 4720,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4720",
+  "last_seen_at": "2026-09-14T17:43:44.190397Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4722",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/advisory_price_range_train_wsl.py --request-windows <daily-envelope-v2-request-windows> --request-wsl <daily-envelope-v2-request-wsl> --repository-root-wsl <repository-root-wsl>",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1504",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a0e1661e3ba32272",
+    "recorded_at": "2026-09-14T18:04:22.849571Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "729130ca7e7b1db15680e1c99faaa83da33cb873",
+    "source_merge_commit": "5dab9561420c0491d1a8f2acbef5847705ff58e2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4722",
+    "validation_evidence": [
+      "validation-receipt: id=745e19c6c4b340f8 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed`",
+      "validation-receipt: id=5582c0a951e0bbfa commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_price_range_request_contracts.py -q` result=`9 passed`",
+      "validation-receipt: id=e250e71223535f65 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=ruff plan=direct status=passed command=`python -m ruff check changed-files` result=`passed`",
+      "validation-receipt: id=220a9aca7f8e580b commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=compile plan=direct status=passed command=`python -m compileall changed-launchers` result=`passed`",
+      "validation-receipt: id=b5824077ae1fdb76 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "dd82372e0682e5055c072c7a0c20756abc6ea66ce3ca6c2bddf23d9fa355b63d"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Daily price envelope WSL launcher routes v2 request into legacy pipeline",
+  "trigger_condition": {
+    "fingerprint": "5d842f488ce1a097f9196f86",
+    "source_event_id": "FE-20260914-5d842f488ce1"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=745e19c6c4b340f8 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed`",
+    "validation-receipt: id=5582c0a951e0bbfa commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_price_range_request_contracts.py -q` result=`9 passed`",
+    "validation-receipt: id=e250e71223535f65 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=ruff plan=direct status=passed command=`python -m ruff check changed-files` result=`passed`",
+    "validation-receipt: id=220a9aca7f8e580b commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=compile plan=direct status=passed command=`python -m compileall changed-launchers` result=`passed`",
+    "validation-receipt: id=b5824077ae1fdb76 commit=729130ca7e7b1db15680e1c99faaa83da33cb873 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

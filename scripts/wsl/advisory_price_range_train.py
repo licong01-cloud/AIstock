@@ -8,9 +8,15 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Advisory M4A price-range training inside WSL."
+        description="Run Advisory daily price-range training inside WSL."
     )
     parser.add_argument("--request", required=True)
+    parser.add_argument(
+        "--contract",
+        choices=("legacy-v1", "daily-envelope-v1"),
+        default="legacy-v1",
+        help="Select the frozen training request and output bundle contract.",
+    )
     return parser.parse_args()
 
 
@@ -21,11 +27,17 @@ def main() -> int:
         sys.path.insert(0, str(repository_root))
     from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
     from backend.services.advisory_model_first.price_range_pipeline import (
+        run_daily_price_envelope_training_pipeline,
         run_price_range_training_pipeline,
     )
 
     try:
-        receipt = run_price_range_training_pipeline(args.request)
+        runner = (
+            run_daily_price_envelope_training_pipeline
+            if args.contract == "daily-envelope-v1"
+            else run_price_range_training_pipeline
+        )
+        receipt = runner(args.request)
     except AdvisoryModelFirstError as exc:
         print(
             json.dumps(exc.as_dict(), ensure_ascii=True, sort_keys=True),

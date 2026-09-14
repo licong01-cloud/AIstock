@@ -6,7 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from backend.services.advisory_model_first.price_range_contracts import canonical_json_sha256
+from backend.services.advisory_model_first.price_range_contracts import (
+    DAILY_PRICE_ENVELOPE_LABEL_POLICY_VERSION,
+    canonical_json_sha256,
+)
 
 CALIBRATION_POLICY_VERSION = "advisory_price_range_calibration_policy_v1"
 CALIBRATION_METHOD = "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION"
@@ -108,6 +111,40 @@ def build_frozen_price_range_calibration_request(
     )
     digest = canonical_json_sha256(seed.functional_payload())
     return FrozenAdvisoryPriceRangeCalibrationRequestV1(
+        request_id=f"advprcal_{digest[:24]}",
+        request_sha256=digest,
+        created_at=created_at,
+        **values,
+    )
+
+
+class FrozenAdvisoryPriceRangeCalibrationRequestV2(
+    FrozenAdvisoryPriceRangeCalibrationRequestV1
+):
+    schema_version: Literal["frozen_advisory_price_range_calibration_request_v2"] = (
+        "frozen_advisory_price_range_calibration_request_v2"
+    )
+    label_policy_version: Literal["advisory_price_range_label_policy_v2"] = (
+        DAILY_PRICE_ENVELOPE_LABEL_POLICY_VERSION
+    )
+
+
+def build_frozen_daily_price_envelope_calibration_request(
+    **values: Any,
+) -> FrozenAdvisoryPriceRangeCalibrationRequestV2:
+    created_at = str(values.pop("created_at", datetime.now(timezone.utc).isoformat()))
+    for name in ("features_artifact", "price_range_labels_artifact"):
+        values[name] = PriceRangeCalibrationArtifactV1.model_validate(values[name])
+    seed = FrozenAdvisoryPriceRangeCalibrationRequestV2.model_construct(
+        schema_version="frozen_advisory_price_range_calibration_request_v2",
+        request_id="pending",
+        request_sha256="0" * 64,
+        created_at=created_at,
+        **values,
+    )
+    digest = canonical_json_sha256(seed.functional_payload())
+    return FrozenAdvisoryPriceRangeCalibrationRequestV2(
+        schema_version="frozen_advisory_price_range_calibration_request_v2",
         request_id=f"advprcal_{digest[:24]}",
         request_sha256=digest,
         created_at=created_at,

@@ -22,8 +22,11 @@ defaults:
 
 env:
   GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
-  GIT_HTTP_LOW_SPEED_LIMIT: '1'
-  GIT_HTTP_LOW_SPEED_TIME: '60'
+  GIT_HTTP_LOW_SPEED_LIMIT: '524288'
+  GIT_HTTP_LOW_SPEED_TIME: '30'
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: http.version
+  GIT_CONFIG_VALUE_0: HTTP/1.1
 
 jobs:
   pr-quality:
@@ -33,8 +36,31 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           fetch-depth: 2
+
+      - name: Reclaim interrupted Git pack fragments
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $workspaceRoot = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar
+          )
+          $packRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot '.git\objects\pack'))
+          $workspacePrefix = $workspaceRoot + [System.IO.Path]::DirectorySeparatorChar
+          if (-not $packRoot.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Git pack root escaped runner workspace: $packRoot"
+          }
+          $fragments = @(
+            Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*' -ErrorAction SilentlyContinue
+          )
+          $removedBytes = ($fragments | Measure-Object -Property Length -Sum).Sum
+          foreach ($fragment in $fragments) {
+            Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop
+          }
+          "interrupted_git_pack_cleanup count=$($fragments.Count) bytes=$([long]$removedBytes)"
 
       - name: Verify prebuilt AIstock-CI tooling
         shell: powershell

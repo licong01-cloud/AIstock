@@ -7,6 +7,12 @@ import numpy as np
 import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+from backend.services.advisory_model_first.daily_price_envelope_contracts import (
+    AdvisoryDailyPriceEnvelopeV1,
+    AdvisoryDailyPriceEnvelopeCandidateV1,
+    DAILY_ENTRY_CONDITION,
+    DAILY_PROJECTION_CONDITION,
+)
 from backend.services.advisory_model_first.feature_schema_v1 import (
     CATEGORICAL_FEATURE_COLUMNS,
     MODEL_FEATURE_COLUMNS,
@@ -14,6 +20,7 @@ from backend.services.advisory_model_first.feature_schema_v1 import (
 from backend.services.advisory_model_first.labels import CLOSE_COST, OPEN_COST
 from backend.services.advisory_model_first.price_range_contracts import (
     PRICE_RANGE_MODEL_NAMES,
+    PRICE_RANGE_QUANTILE_MODEL_NAMES,
 )
 from backend.services.advisory_model_first.price_range_regulatory import (
     resolve_regulatory_price_range,
@@ -37,15 +44,20 @@ def score_price_range_bundle(
     review_policy_sha256: str,
     target_trade_date,
 ) -> list[dict[str, Any]]:
-    if set(bundle.models) != set(PRICE_RANGE_MODEL_NAMES):
+    model_names = set(bundle.models)
+    supported_model_sets = {
+        frozenset(PRICE_RANGE_MODEL_NAMES),
+        frozenset(PRICE_RANGE_QUANTILE_MODEL_NAMES),
+    }
+    if frozenset(model_names) not in supported_model_sets:
         raise AdvisoryModelFirstError(
-            "price-range inference bundle does not contain the exact model set",
+            "price-range inference bundle does not contain a supported exact model set",
             reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
         )
     matrix = _prepare_matrix(bundle, features)
     predictions = {
-        name: _predict_head(model, matrix, head=name)
-        for name, model in bundle.models.items()
+        name: _predict_head(bundle.models[name], matrix, head=name)
+        for name in PRICE_RANGE_QUANTILE_MODEL_NAMES
     }
     calibration_spec = bundle.calibration_spec
     calibrated_predictions: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
@@ -103,9 +115,6 @@ def score_price_range_bundle(
                 _project_candidate(
                     symbol=symbol,
                     context=context,
-                    executable_probability=float(
-                        predictions["entry_executable_probability"][row_index]
-                    ),
                     entry_gaps=tuple(
                         float(predictions[name][row_index])
                         for name in ("entry_gap_q10", "entry_gap_q50", "entry_gap_q90")
@@ -133,48 +142,88 @@ def score_price_range_bundle(
     return output
 
 
-def unavailable_price_range_envelope(*, reason_code: str, message: str) -> dict[str, Any]:
-    return {
-        "status": "PRICE_RANGE_UNAVAILABLE",
-        "calibration_state": "UNCALIBRATED",
-        "price_range_bundle_id": None,
-        "parent_bundle_id": None,
-        "outcome_bundle_id": None,
-        "model_version": None,
-        "price_basis": "UNADJUSTED_CNY_DECISION_CLOSE",
-        "candidates": [],
-        "reason_code": reason_code,
-        "message": message,
-    }
+def unavailable_price_range_envelope(
+    *,
+    reason_code: str,
+    message: str,
+    decision_as_of_trade_date=None,
+    target_trade_date=None,
+) -> dict[str, Any]:
+    return AdvisoryDailyPriceEnvelopeV1(
+        status="PRICE_RANGE_UNAVAILABLE",
+        availability_status="UNAVAILABLE",
+        decision_as_of_trade_date=decision_as_of_trade_date,
+        target_trade_date=target_trade_date,
+        calibration_state="UNCALIBRATED",
+        reason_code=reason_code,
+        message=message,
+    ).as_payload()
+
+
+def available_price_range_envelope(
+    *,
+    decision_as_of_trade_date,
+    target_trade_date,
+    calibration_state: str,
+    nominal_coverage: float,
+    package_id: str,
+    package_manifest_sha256: str,
+    style_profile_hash: str,
+    parent_bundle_id: str,
+    outcome_bundle_id: str,
+    price_range_bundle_id: str,
+    model_version: str,
+    review_policy_sha256: str,
+    source_bundle_schema_version: str,
+    candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    available_count = sum(
+        item.get("availability_status") == "AVAILABLE" for item in candidates
+    )
+    availability_status = (
+        "AVAILABLE"
+        if available_count == len(candidates)
+        else "UNAVAILABLE"
+        if available_count == 0
+        else "PARTIAL"
+    )
+    return AdvisoryDailyPriceEnvelopeV1(
+        status="EXPERIMENTAL_SHADOW",
+        availability_status=availability_status,
+        decision_as_of_trade_date=decision_as_of_trade_date,
+        target_trade_date=target_trade_date,
+        calibration_state=calibration_state,
+        nominal_coverage=nominal_coverage,
+        package_id=package_id,
+        package_manifest_sha256=package_manifest_sha256,
+        style_profile_hash=style_profile_hash,
+        parent_bundle_id=parent_bundle_id,
+        outcome_bundle_id=outcome_bundle_id,
+        price_range_bundle_id=price_range_bundle_id,
+        model_version=model_version,
+        review_policy_sha256=review_policy_sha256,
+        source_bundle_schema_version=source_bundle_schema_version,
+        candidates=tuple(candidates),
+    ).as_payload()
 
 
 def unavailable_price_range_candidate(
     *, symbol: str, reason_code: str, message: str
 ) -> dict[str, Any]:
-    return {
-        "symbol": symbol,
-        "status": "PRICE_RANGE_UNAVAILABLE",
-        "projection_condition": "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
-        "entry_executable_probability": None,
-        "decision_reference_price": None,
-        "target_raw_price_multiplier": None,
-        "entry_price": None,
-        "take_profit_price": None,
-        "protective_price": None,
-        "stop_loss_price": None,
-        "tick_size": None,
-        "regulatory_price_range": None,
-        "review_policy": None,
-        "reason_code": reason_code,
-        "message": message,
-    }
+    return AdvisoryDailyPriceEnvelopeCandidateV1(
+        symbol=symbol,
+        status="PRICE_RANGE_UNAVAILABLE",
+        availability_status="UNAVAILABLE",
+        projection_condition=DAILY_PROJECTION_CONDITION,
+        reason_code=reason_code,
+        message=message,
+    ).model_dump(mode="json")
 
 
 def _project_candidate(
     *,
     symbol: str,
     context: PriceRangeRealtimeContext,
-    executable_probability: float,
     entry_gaps: tuple[float, float, float],
     calibrated_entry_gaps: tuple[float, float, float] | None,
     calibration_spec: Mapping[str, Any] | None,
@@ -183,12 +232,6 @@ def _project_candidate(
     review_policy_sha256: str,
     target_trade_date,
 ) -> dict[str, Any]:
-    if not np.isfinite(executable_probability) or not 0 <= executable_probability <= 1:
-        raise AdvisoryModelFirstError(
-            "entry-executable probability is invalid",
-            reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
-            context={"symbol": symbol},
-        )
     regulatory = resolve_regulatory_price_range(
         context,
         target_trade_date=target_trade_date,
@@ -205,7 +248,7 @@ def _project_candidate(
             entry_gaps=calibrated_entry_gaps,
         )
         calibrated_entry_price = {
-            "condition": "ENTRY_EXECUTABLE",
+            "condition": DAILY_ENTRY_CONDITION,
             "low": calibrated_low,
             "mid": calibrated_mid,
             "high": calibrated_high,
@@ -321,30 +364,31 @@ def _project_candidate(
         trailing_stop_bps=trailing_stop_bps,
         take_profit_mode=take_profit_mode,
     )
-    return {
+    payload = {
         "symbol": symbol,
         "status": "EXPERIMENTAL_SHADOW",
-        "projection_condition": "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
-        "entry_executable_probability": executable_probability,
+        "availability_status": "AVAILABLE",
+        "projection_condition": DAILY_PROJECTION_CONDITION,
         "decision_reference_price": context.decision_raw_close,
+        "decision_price_trade_date": context.decision_price_trade_date,
         "target_raw_price_multiplier": context.target_raw_price_multiplier,
-        "entry_price": {
-            "condition": "ENTRY_EXECUTABLE",
+        "entry_price_range": {
+            "condition": DAILY_ENTRY_CONDITION,
             "low": entry_low,
             "mid": entry_mid,
             "high": entry_high,
         },
-        "calibrated_entry_price": calibrated_entry_price,
-        "entry_gap_calibration_state": (
-            "CALIBRATED" if calibration_spec is not None else "UNCALIBRATED"
-        ),
-        "entry_gap_calibration_method": (
-            calibration_spec.get("method") if calibration_spec is not None else None
-        ),
-        "entry_gap_calibration_delta": (
-            calibration_spec.get("delta") if calibration_spec is not None else None
-        ),
-        "entry_executable_calibration_state": "UNCALIBRATED",
+        "calibrated_entry_price_range": calibrated_entry_price,
+        "entry_gap_calibration": {
+            "state": "CALIBRATED" if calibration_spec is not None else "UNCALIBRATED",
+            "method": calibration_spec.get("method") if calibration_spec is not None else None,
+            "delta": calibration_spec.get("delta") if calibration_spec is not None else None,
+            "nominal_coverage": (
+                float(calibration_spec.get("nominal_coverage", 0.8))
+                if calibration_spec is not None
+                else 0.8
+            ),
+        },
         "take_profit_price": {
             "low": take_profit_low,
             "high": take_profit_high,
@@ -369,6 +413,7 @@ def _project_candidate(
         "reason_code": None,
         "message": None,
     }
+    return AdvisoryDailyPriceEnvelopeCandidateV1(**payload).model_dump(mode="json")
 
 
 def _entry_band(*, symbol: str, context, regulatory, entry_gaps) -> tuple[float, float, float]:

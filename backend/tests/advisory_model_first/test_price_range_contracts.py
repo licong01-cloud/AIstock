@@ -4,6 +4,7 @@ import pytest
 
 from backend.services.advisory_model_first.price_range_contracts import (
     PriceRangeInputArtifactV1,
+    build_frozen_daily_price_envelope_training_request,
     build_frozen_price_range_training_request,
 )
 
@@ -74,3 +75,14 @@ def test_price_range_request_rejects_resource_limit_above_eight_gibibytes() -> N
             resource_max_rss_bytes=8 * 1024**3 + 1,
             created_at="2026-08-10T00:00:00Z",
         )
+
+
+def test_daily_price_envelope_request_freezes_three_head_label_semantics() -> None:
+    request = build_frozen_daily_price_envelope_training_request(
+        **_values(), output_root="/out", created_at="2026-09-14T00:00:00Z"
+    )
+
+    assert request.schema_version == "frozen_advisory_price_range_training_request_v2"
+    assert request.label_policy_version == "advisory_price_range_label_policy_v2"
+    assert request.entry_gap_condition == "NEXT_TRADING_DAY_VALID_OPEN"
+    assert request.request_id.startswith("advprreq_")

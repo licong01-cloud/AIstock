@@ -14,15 +14,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.services.advisory_model_first.prediction_source import sha256_file  # noqa: E402
 from backend.services.advisory_model_first.price_range_bundle import (  # noqa: E402
+    read_daily_price_envelope_bundle_manifest,
     read_price_range_bundle_manifest,
 )
 from backend.services.advisory_model_first.price_range_calibration_contracts import (  # noqa: E402
     PriceRangeCalibrationArtifactV1,
+    build_frozen_daily_price_envelope_calibration_request,
     build_frozen_price_range_calibration_request,
 )
 
 
-def main() -> int:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare a frozen Advisory M5C calibration request.")
     parser.add_argument("--parent-bundle-windows", required=True)
     parser.add_argument("--parent-bundle-wsl", required=True)
@@ -34,15 +36,30 @@ def main() -> int:
     parser.add_argument("--repository-root-windows", required=True)
     parser.add_argument("--repository-root-wsl", required=True)
     parser.add_argument("--request-output", required=True)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--contract",
+        choices=("legacy-v1", "daily-envelope-v1"),
+        default="legacy-v1",
+        help="Frozen request contract; legacy remains the explicit compatibility default.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
 
     parent_root = Path(args.parent_bundle_windows).resolve()
     parent_id = parent_root.name
-    manifest = read_price_range_bundle_manifest(parent_root, expected_bundle_id=parent_id)
-    if manifest.get("schema_version") != "advisory_price_range_bundle_v1":
-        raise ValueError("M5C parent must be an uncalibrated M4 v1 price-range bundle")
+    manifest_reader, request_builder, expected_schema = _calibration_contract(
+        args.contract
+    )
+    manifest = manifest_reader(parent_root, expected_bundle_id=parent_id)
+    if manifest.get("schema_version") != expected_schema:
+        raise ValueError(
+            f"price-range calibration parent must use {expected_schema}"
+        )
     parent_request = json.loads((parent_root / "training_request.json").read_text(encoding="utf-8"))
-    request = build_frozen_price_range_calibration_request(
+    request = request_builder(
         output_root=args.output_root_wsl,
         parent_price_range_request_id=str(manifest["request_id"]),
         parent_price_range_request_sha256=str(manifest["request_sha256"]),
@@ -75,12 +92,29 @@ def main() -> int:
         raise ValueError("M5C features differ from parent M4 frozen request")
     request.write_json(args.request_output)
     print(json.dumps({
-        "status": "ready", "request_id": request.request_id,
+        "status": "ready", "contract": args.contract,
+        "schema_version": request.schema_version, "request_id": request.request_id,
         "request_sha256": request.request_sha256,
         "parent_price_range_bundle_id": request.parent_price_range_bundle_id,
         "request_output": str(Path(args.request_output).resolve()),
     }, ensure_ascii=True, sort_keys=True))
     return 0
+
+
+def _calibration_contract(contract: str):
+    if contract == "daily-envelope-v1":
+        return (
+            read_daily_price_envelope_bundle_manifest,
+            build_frozen_daily_price_envelope_calibration_request,
+            "advisory_price_range_bundle_v3",
+        )
+    if contract == "legacy-v1":
+        return (
+            read_price_range_bundle_manifest,
+            build_frozen_price_range_calibration_request,
+            "advisory_price_range_bundle_v1",
+        )
+    raise ValueError(f"unsupported price-range calibration contract: {contract}")
 
 
 def _descriptor(windows_path: str, request_path: str) -> PriceRangeCalibrationArtifactV1:

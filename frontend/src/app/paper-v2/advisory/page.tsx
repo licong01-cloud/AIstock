@@ -2183,7 +2183,7 @@ function AdvisoryPageContent() {
                               <td><strong>{candidate.symbol}</strong></td>
                               <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
                               <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
-                              <td>{fmtPriceBand(price?.calibrated_entry_price ?? price?.entry_price)}</td>
+                              <td>{fmtPriceBand(price?.calibrated_entry_price_range ?? price?.entry_price_range)}</td>
                               <td>{fmtPriceBand(price?.take_profit_price)}</td>
                               <td>{fmtPriceBand(price?.stop_loss_price)}</td>
                             </tr>
@@ -2377,8 +2377,8 @@ function AdvisoryPageContent() {
               <div style={{ marginTop: 16 }} data-testid="advisory-price-range-shadow">
                 <div className="pv2-card-head">
                   <div>
-                    <div className="pv2-kicker">价格范围（实验影子）</div>
-                    <h3>买入、止盈、保护与止损参考</h3>
+                    <div className="pv2-kicker">日级价格区间（实验影子）</div>
+                    <h3>次交易日进场、止盈、保护与止损参考</h3>
                   </div>
                   <div className="pv2-row-actions">
                     <span className={`pv2-badge ${modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
@@ -2390,7 +2390,7 @@ function AdvisoryPageContent() {
                   </div>
                 </div>
                 <div className="pv2-muted" data-testid="advisory-price-range-basis">
-                  未复权 CNY；仅供学术研究。买入范围条件于下一交易日可执行，止盈、保护和止损进一步条件于按预测中位价建仓。
+                  未复权 CNY；决策日 {modelShadow.price_range?.decision_as_of_trade_date || "-"}，目标日 {modelShadow.price_range?.target_trade_date || "-"}。仅为日级价格预测，不表示最佳分钟、成交保证或交易指令；止盈、保护和止损条件于按预测进场中位价建仓。
                 </div>
                 <div className="pv2-muted" data-testid="advisory-price-range-source">
                   M4 {short(modelShadow.price_range?.price_range_bundle_id, 14)} · M2 {short(modelShadow.price_range?.parent_bundle_id, 14)} · M3 {short(modelShadow.price_range?.outcome_bundle_id, 14)} · {modelShadow.price_range?.price_basis || "UNADJUSTED_CNY_DECISION_CLOSE"}
@@ -2405,20 +2405,20 @@ function AdvisoryPageContent() {
                   <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
                     <table className="pv2-table" data-testid="advisory-price-range-table">
                       <thead>
-                        <tr><th>股票</th><th>可执行概率</th><th>决策参考价</th><th>条件买入范围</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                        <tr><th>股票</th><th>目标交易日</th><th>决策参考价</th><th>次日开盘区间</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
                       </thead>
                       <tbody>
                         {modelShadow.price_range.candidates.map((candidate) => (
                           <tr key={candidate.symbol} data-testid="advisory-price-range-row">
                             <td>{candidate.symbol}</td>
-                            <td>{fmtPct(candidate.entry_executable_probability)}</td>
+                            <td>{modelShadow.price_range?.target_trade_date || "-"}</td>
                             <td>{fmtPrice(candidate.decision_reference_price)}</td>
-                            <td>{candidate.calibrated_entry_price ? <>{fmtPriceBand(candidate.calibrated_entry_price)}（中位 {fmtPrice(candidate.calibrated_entry_price.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price ? fmtPriceBand(candidate.entry_price) : "-"}</span></> : candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
+                            <td>{candidate.calibrated_entry_price_range ? <>{fmtPriceBand(candidate.calibrated_entry_price_range)}（中位 {fmtPrice(candidate.calibrated_entry_price_range.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price_range ? fmtPriceBand(candidate.entry_price_range) : "-"}</span></> : candidate.entry_price_range ? `${fmtPriceBand(candidate.entry_price_range)}（中位 ${fmtPrice(candidate.entry_price_range.mid)}）` : "-"}</td>
                             <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
                             <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
                             <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
                             <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
-                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration_state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">可执行概率 {candidate.entry_executable_calibration_state || "UNCALIBRATED"}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration?.state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">{candidate.availability_status}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
                           </tr>
                         ))}
                       </tbody>
