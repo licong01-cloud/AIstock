@@ -134,9 +134,12 @@ def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
         "jobs:\n"
         "  ci:\n"
-        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    runs-on:\n"
+        "      - self-hosted\n"
+        "      - Windows\n"
+        "      - aistock-ci\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v7\n",
+        "      - uses: actions/checkout@v8\n",
         encoding="utf-8",
     )
 
@@ -144,6 +147,66 @@ def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp
 
     reasons = {item["reason"] for item in findings}
     assert "self-hosted actions/checkout must have a five-minute hard step timeout" in reasons
+    assert (
+        "self-hosted checkout must reclaim interrupted Git pack fragments by literal path without blocking the PR"
+        in reasons
+    )
+
+
+def test_contract_evidence_rejects_vacuous_checkout_discovery(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8").replace("actions/checkout@v7", "local/checkout@v7")
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_checkout_steps_have_hard_timeout"] is False
+    assert evidence["self_hosted_checkout_cleans_interrupted_pack_fragments"] is False
+
+
+def test_contract_evidence_accepts_a_checkout_action_version_upgrade(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8").replace("actions/checkout@v7", "actions/checkout@v8")
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_checkout_steps_have_hard_timeout"] is True
+    assert evidence["self_hosted_checkout_cleans_interrupted_pack_fragments"] is True
+
+
+def test_checkout_and_cleanup_contracts_are_bound_to_each_exact_step(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v8\n"
+        "        timeout-minutes: 5\n"
+        "      - uses: actions/checkout@v9\n"
+        "      - name: Unrelated tolerated diagnostic\n"
+        "        continue-on-error: true\n"
+        "        run: echo diagnostic\n"
+        "      - name: Reclaim interrupted Git pack fragments\n"
+        "        shell: powershell\n"
+        "        run: |\n"
+        "          Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*'\n"
+        "          Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+    reasons = [item["reason"] for item in findings]
+
+    assert reasons.count("self-hosted actions/checkout must have a five-minute hard step timeout") == 1
     assert (
         "self-hosted checkout must reclaim interrupted Git pack fragments by literal path without blocking the PR"
         in reasons
