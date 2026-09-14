@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1506",
-  "closed_at": null,
+  "closed_at": "2026-09-14T18:20:26Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -84,8 +84,8 @@
   },
   "first_seen_at": "2026-09-14T18:13:18.264183Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1bf457bafba9d450927b00fba8134173913846bd",
+  "fixed_at": "2026-09-14T18:20:26Z",
   "github_issue_number": 4726,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4726",
   "last_seen_at": "2026-09-14T18:13:18.264183Z",
@@ -93,6 +93,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4727",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -109,6 +110,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -118,7 +120,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1506",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8fe60a7e6c1691c9",
+    "recorded_at": "2026-09-14T18:21:57.301870Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fcc1b90befd43ae7a3e8d1fe915feec0b4fb0a6a",
+    "source_merge_commit": "1bf457bafba9d450927b00fba8134173913846bd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4727",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/tests/scripts/test_ci_workflow_policy_scan.py scripts/ci_workflow_policy_scan.py tests/aistock_validation/bugs/20260914_BUG-1506-ci-checkout-policy-scanner-can-vacuously-pass-unrecognized-action-versio.json -> passed",
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 30 passed"
+    ],
+    "validation_evidence_digest": "61b171a3e9b7897d687298ac4153ced446bb67cad7ea313f4b1793ffffa877bd"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -127,6 +151,10 @@
     "fingerprint": "a473c8ac24a5e84039e81c3f",
     "source_event_id": "FE-20260914-a473c8ac24a5"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/tests/scripts/test_ci_workflow_policy_scan.py scripts/ci_workflow_policy_scan.py tests/aistock_validation/bugs/20260914_BUG-1506-ci-checkout-policy-scanner-can-vacuously-pass-unrecognized-action-versio.json -> passed",
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 30 passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
