@@ -1,6 +1,8 @@
 {
   "actual": "The file-only m_sector_participation_gap_v2 candidate cannot read the active 20260911-v6 factor snapshot because its sector_data reader only accepts pandas fixed-format nodes, while the authoritative sector_data.h5 is valid table-format under /data/table. This blocks MA-E21 P11 before quickscreen despite complete dataset identity. Preserve zero-database behavior, explicit release binding and fail-closed validation; add exact support for both approved pandas fixed and table layouts without changing factor semantics or dataset files.",
   "allowed_write_scope": [
+    "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+    "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
     "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
   ],
   "assigned_agent": null,
@@ -19,10 +21,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260914-7fc89b7901fe",
       "timestamp": "2026-09-14T01:57:19.882212Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "Add the exact file-only factor reader and its focused QE regression tests; no dataset, runtime, or Qlib source changes.",
+      "timestamp": "2026-09-14T02:08:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "file:///F:/Dev/AIstock_state/qe_factor_candidates/MA-E21-P11-20260914/m_sector_participation_gap_v2.h5",
+    "http://127.0.0.1:9000/api/v1/qe_workspace/dataset-identity?node_id=wsl2-5080"
+  ],
+  "expected": "The file-only candidate reader accepts both approved pandas fixed and table HDF layouts, preserves the exact 19-trading-day rolling warmup, and keeps all existing schema, ordering, and zero-database fail-closed checks.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +46,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+      "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1492-qe-sector-participation-gap-reader-rejects-active-table-format-sector-da.json"
+    ]
   },
   "first_seen_at": "2026-09-14T01:57:19.882230Z",
   "fix_branch": null,
@@ -54,7 +73,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py --data-dir <active-factor-root> --output-path <repo-external-output> --start-date 2018-08-01 --end-date 2026-08-31",
   "required_verification": [
     "l0"
   ],
