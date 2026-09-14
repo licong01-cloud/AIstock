@@ -22,6 +22,9 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QE_DIRECT_V2_INDEX_CODES,
     QEDirectV2DatasetBinding,
 )
+from backend.services.quantevolver.qe_sector_blacklist_policy import (
+    SECTOR_BLACKLIST_POLICY_PARAM,
+)
 from scripts.qe_build_frozen_suspend_filter import build_suspend_filter_payload
 from backend.services.quantevolver.qe_validate_direct_v2_dataset import (
     DirectV2DatasetValidationError,
@@ -463,7 +466,7 @@ def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
         validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
 
 
-def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
+def test_direct_v2_v3_composer_builds_blacklist_filtered_stock_universe_overlay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -471,12 +474,28 @@ def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
     sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
     receipt = _v3_receipt()
     raw = _v3_binding(raw, sidecar=sidecar, receipt=receipt)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2|sector-blacklist:test",
+        }
+    )
     params = _custom_params(raw)
     params.update(
         {
-            "stock_pool": "index_pool__csi300",
+            "stock_pool": "stock_universe",
             QE_RUN_STOCK_POOL_CONTENT_PARAM: sidecar,
             QE_RUN_COVERAGE_RECEIPT_PARAM: receipt,
+            SECTOR_BLACKLIST_POLICY_PARAM: {
+                "schema_version": "qe_sector_blacklist_policy_v1",
+                "requested": True,
+                "enabled": True,
+                "effective": True,
+                "blacklist_excluded_count": 11,
+            },
         }
     )
     composer = ConfigComposer()
@@ -524,16 +543,17 @@ def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
     )
 
     files = result["experiment_files"]
-    assert files["index_pool__csi300.txt"] == sidecar
+    assert files["stock_universe.txt"] == sidecar
     assert files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] == receipt
     conf = yaml.safe_load(files["conf.yaml"])
     assert conf["qlib_init"]["provider_uri"]["day"] == "/tmp/qe_workspace/direct-v3-test/qe_provider_day"
     assert conf["qlib_init"]["provider_uri"]["1min"] == raw["provider_uri_1min"]
-    assert conf["market"] == "index_pool__csi300"
+    assert conf["market"] == "stock_universe"
+    assert SECTOR_BLACKLIST_POLICY_PARAM not in files["conf.yaml"]
     command = result["wsl_command_core"]
     assert "ln -sfn" in command
-    assert "cp -f index_pool__csi300.txt" in command
+    assert "cp -f stock_universe.txt" in command
     assert raw["provider_uri_day"] in command
     risk_spec = json.loads(files["qe_frozen_build_spec.json"])
     assert risk_spec["provider_uri_day"].endswith("/qe_provider_day")
-    assert risk_spec["pins"]["instruments_file"] == "index_pool__csi300.txt"
+    assert risk_spec["pins"]["instruments_file"] == "stock_universe.txt"

@@ -70,6 +70,7 @@ from .qe_active_dataset_profile import (
     QE_RUN_STOCK_POOL_CONTENT_PARAM,
     load_active_qe_profile,
 )
+from .qe_sector_blacklist_policy import SECTOR_BLACKLIST_POLICY_PARAM
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 from .qe_run_registry import (
@@ -1542,17 +1543,11 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
-        direct_selection_mode = (
-            str(direct_binding.selection_pins.get("mode") or "stock_universe")
-            if direct_binding is not None
-            else "stock_universe"
-        )
         if (
             direct_binding is not None
             and provider_uri_day != direct_binding.provider_uri_day
             and not (
                 direct_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
-                and direct_selection_mode != "stock_universe"
                 and provider_uri_day.endswith("/qe_provider_day")
             )
         ):
@@ -2322,14 +2317,15 @@ class ConfigComposer:
             qlib_minute_path = direct_v2_dataset_binding.provider_uri_1min
             factor_data_dir = direct_v2_dataset_binding.factor_data_dir
         day_provider_prepare_command: str | None = None
+        run_stock_pool_content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
         if (
             direct_v2_dataset_binding is not None
             and direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
-            and direct_v2_dataset_binding.selection_pins["mode"] != "stock_universe"
+            and run_stock_pool_content is not None
         ):
             selection = dict(direct_v2_dataset_binding.selection_pins)
             filename = str(selection["instruments_file"])
-            content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
+            content = run_stock_pool_content
             if not isinstance(content, str) or hashlib.sha256(content.encode("utf-8")).hexdigest() != selection["instruments_sha256"]:
                 raise ValueError(
                     "reason_code=qe_universe_sidecar_hash_mismatch: "
@@ -4088,6 +4084,7 @@ class ConfigComposer:
             QE_RUN_COVERAGE_RECEIPT_PARAM,
             QE_ACTIVE_PROFILE_SUMMARY_PARAM,
             QE_RUN_REGISTRATION_PARAM,
+            SECTOR_BLACKLIST_POLICY_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.

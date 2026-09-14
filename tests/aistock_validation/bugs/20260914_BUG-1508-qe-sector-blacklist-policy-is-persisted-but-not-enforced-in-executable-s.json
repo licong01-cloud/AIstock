@@ -1,6 +1,19 @@
 {
   "actual": "MA-E23 preflight proved CustomEvoLoopConfig.sector_blacklist is persisted and displayed, but config_composer classifies it as non-strategy metadata and no QE execution path materializes the blacklist into the run-scoped PIT stock pool. P01/P11 therefore execute identically to P00 while UI may report blacklist enabled. Preserve frozen direct-v2/PIT data-plane rules, apply the submitted blacklist to the run-scoped executable universe before prediction/backtest, keep P00 byte-equivalent, fail closed on missing PIT industry mapping, and report requested/effective/excluded counts without database fallback.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/services/quantevolver/qe_active_dataset_profile.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+    "backend/tests/quantevolver/test_payload_summary.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+    "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "scripts/qrun_limit_minute.py",
     "tests/aistock_validation/bugs/20260914_BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-enforced-in-executable-s.json"
   ],
   "assigned_agent": null,
@@ -19,14 +32,38 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260914-f5bd7992e663",
       "timestamp": "2026-09-14T19:33:20.480692Z"
+    },
+    {
+      "action": "root_cause_and_fix_validated",
+      "actor": "codex",
+      "note": "Materialize the requested SW L2 blacklist from hash-pinned PIT membership spans into the run-scoped v3 stock-pool sidecar; direct prediction replay now intersects the frozen prediction with the executable dataset index. P00 remains unchanged and P01/P11 fail closed until the release supplies complete pinned policy inputs.",
+      "timestamp": "2026-09-14T21:15:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "P01/P11 must execute against a hash-pinned PIT universe with blacklisted SW L2 membership removed, direct prediction replay must obey that universe, P00 must retain existing semantics, and missing or incomplete frozen policy inputs must fail closed without database fallback.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py"
+    ],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-enforced-in-executable-s.json"
+    ],
+    "changed_files_source": "root_cause_analysis",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,12 +72,40 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py"
+    ]
   },
   "first_seen_at": "2026-09-14T19:33:20.480710Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-20260914",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 4733,
@@ -54,26 +119,39 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh_process_pytest_sector_blacklist_profile_composer_and_pred_replay=75_passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "quantevolver"
   ],
