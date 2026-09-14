@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -52,6 +53,15 @@ from backend.services.selection_center.service import SelectionCenterService
 
 
 PROSPECTIVE_ROOT_NAME = "price_range_prospective_predictions"
+
+
+@dataclass(frozen=True)
+class AdvisoryPriceProspectivePredictionArtifact:
+    path: Path
+    request: FrozenAdvisoryPriceProspectiveRequestV1
+    prediction: dict[str, Any]
+    manifest: dict[str, Any]
+    receipt: AdvisoryPriceProspectivePredictionReceiptV1
 
 
 class _FrozenProspectiveResolver:
@@ -553,8 +563,8 @@ class AdvisoryPriceProspectivePredictionService:
         finally:
             _remove_fixed_temporary_directory(temporary)
 
+    @staticmethod
     def _read_existing(
-        self,
         target: Path,
         *,
         request: FrozenAdvisoryPriceProspectiveRequestV1,
@@ -668,6 +678,29 @@ def read_prospective_request(path: str | Path) -> FrozenAdvisoryPriceProspective
             "ADVISORY_PRICE_PROSPECTIVE_INPUT_IDENTITY_MISMATCH",
             context={"error_type": type(exc).__name__},
         ) from exc
+
+
+def read_prospective_prediction_artifact(
+    path: str | Path,
+) -> AdvisoryPriceProspectivePredictionArtifact:
+    """Read one immutable prospective artifact through the publication validator."""
+
+    target = Path(path).resolve()
+    request = read_prospective_request(target / "request.json")
+    receipt = AdvisoryPriceProspectivePredictionService._read_existing(
+        target,
+        request=request,
+        status="ALREADY_MATERIALIZED",
+    )
+    prediction = _read_json(target / "prediction.json")
+    manifest = _read_json(target / "manifest.json")
+    return AdvisoryPriceProspectivePredictionArtifact(
+        path=target,
+        request=request,
+        prediction=prediction,
+        manifest=manifest,
+        receipt=receipt,
+    )
 
 
 def _candidate_symbols(rows: Sequence[Any]) -> tuple[str, ...]:
