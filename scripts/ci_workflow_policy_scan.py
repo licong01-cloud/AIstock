@@ -50,8 +50,11 @@ STABLE_MERGE_QUALITY_CONTEXTS = (
 )
 GIT_ALTERNATE_CLEAR_MARKER = "\n  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
 GIT_HTTP_LOW_SPEED_MARKERS = (
-    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1'\n",
-    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '30'\n",
+    "\n  GIT_CONFIG_COUNT: '1'\n",
+    "\n  GIT_CONFIG_KEY_0: http.version\n",
+    "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
 )
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
@@ -149,8 +152,8 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
                 {
                     "path": path.as_posix(),
                     "line": "1",
-                    "reason": "self-hosted workflow must bound stalled Git HTTP transfers",
-                    "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME",
+                    "reason": "self-hosted workflow must bound stalled or unusably slow Git HTTP transfers",
+                    "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME/http.version",
                 }
             )
         if path.name not in WINDOWS_CI_WORKFLOWS:
