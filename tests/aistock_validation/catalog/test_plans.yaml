@@ -694,7 +694,7 @@ plans:
     command_key: nox_hmm_risk_ui
     nox_session: hmm_risk_ui
     ci_lane: frontend
-    frontend_test_path: tests/hmm-risk
+    frontend_test_path: tests/hmm-risk/risk-l1.spec.ts
     enabled: true
     requires_backend: false
     requires_frontend: true
