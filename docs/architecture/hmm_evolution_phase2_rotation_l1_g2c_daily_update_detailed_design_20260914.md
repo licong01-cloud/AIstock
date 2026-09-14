@@ -1,10 +1,10 @@
 # HMM Evolution Phase 2 G2-C 受控日更新详细设计
 
-> **版本**：v0.2
+> **版本**：v0.3
 > **日期**：2026-09-14
 > **设计层级**：F2
-> **状态**：DESIGN_APPROVED_EXISTING_ATOMIC_ACTION_VERIFIED
-> **批准记录**：2026-09-14 用户批准 G2C-D1～D6 及文档提交；DEV/生产 DML、r4 candidate 兼容、外部触发、runtime activation 与进程控制仍未授权。
+> **状态**：DESIGN_APPROVED_DEV_WRITE_READBACK_VERIFIED
+> **批准记录**：2026-09-14 用户批准 G2C-D1～D6、文档提交及指定 `aistock_dev` 受控测试数据写入；生产 DML、r4 candidate 兼容、外部触发、runtime activation 与进程控制仍未授权。
 > **父蓝图**：`hmm_evolution_and_risk_management_system_design_20260716.md`
 > **终极目标**：让已经真实激活的 G2-A v1.6 L1 板块轮动预测，对正式 candidate 已覆盖的每个交易日可靠生成；不重新训练模型，不建设通用调度平台。当前月度 candidate 不能据此被描述为“每日收盘即有新数据”。
 
@@ -19,6 +19,13 @@ G2-A v1.6 已完成正式零 fit development、生产写入、单日 `2026-08-31
 - `advisory_status=NOT_AVAILABLE`。
 
 当前正式单日入口已经具备零 fit、无 target、显式 release、显式 `trade_date/as_of_date`、31-sector denominator、typed failure、数据库 target 校验、幂等 writer 和 receipt。G2-C 不复制这些能力，只把它们组织成一个可重复执行的日更新动作。
+
+2026-09-14 在指定 DEV 数据库 `aistock_dev` 的受控验证已完成：
+
+- `2026-08-27/as-of 2026-08-26` 与 `2026-08-28/as-of 2026-08-27` 各写入并回读 31 行、31 sectors、revision 1；
+- 两日 canonical row SHA-256 分别为 `f1b27a0a39285b376b1e40bf2190ed6301601a77d95c7ef1be3bfc190c595930` 与 `bec60ac96ef203d6512fc5e5de8f17c40550cf2f7b9f0db4bf5912e972b4316a`；
+- 对 `2026-08-27` 使用相同不可变请求重放后，row count、revision、receipt SHA 与 canonical row SHA 均保持不变，`idempotency_verified=true`；
+- 三次执行均为零 fit、无 target、无 tail、无 runtime action；未发现需要新增 HMM 源码 BUG。
 
 2026-09-14 只读连续性预检还确认：
 
@@ -66,7 +73,7 @@ G2-C 不新增第二个 runner，也不得实现预测公式、数据 reader 或
 
 本文的“`--once`”描述的是 one-process/one-date/one-receipt 的执行语义，不要求也不授权新增一个字面上的 `--once` CLI 参数。
 
-## 3. Contracts（合同）：Proposed D1～D6
+## 3. Contracts（合同）：Approved D1～D6
 
 ### G2C-D1：显式 release 与共同水位
 
@@ -204,15 +211,15 @@ NOT_STARTED -> INPUT_READY -> GENERATED -> WRITTEN -> READBACK_VERIFIED
 |---|---|---|---|---|
 | F-001 | `backend/services/hmm_risk/rotation_l1_input_bundle.py`现有显式reader | artifact: `F:/Dev/AIstock_validation_clean/hmm_g2a_v16_continuity_380a8f24_20260914/.2026-03-30.receipt.json.failure.d0f163dbd1b54c118430c1f5cf1edd7f.json`；`backend/tests/hmm_risk/test_rotation_l1_input_bundle.py` | VERIFIED_EXISTING_BEHAVIOR | 无 |
 | F-002 | `scripts/hmm_risk/run_rotation_l1_product.py`、`backend/services/hmm_risk/rotation_l1_prediction.py` | artifact: `F:/Dev/AIstock_validation_clean/hmm_g2a_v16_continuity_380a8f24_20260914`；`backend/tests/hmm_risk/test_run_rotation_l1_product.py` | VERIFIED_EXISTING_BEHAVIOR | 无 |
-| F-003 | `backend/services/hmm_risk/rotation_l1_prediction.py`唯一repository | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`；artifact: `F:/Dev/AIstock_validation_clean/hmm_rotation_g2a_v16_product_validation_20260914/surface_validation_receipt.json` | VERIFIED_EXISTING_BEHAVIOR | 无 |
+| F-003 | `backend/services/hmm_risk/rotation_l1_prediction.py`唯一repository | `backend/tests/hmm_risk/test_rotation_l1_prediction.py`；artifact: `F:/Dev/AIstock_validation_clean/hmm_g2c_dev_write_fc3853f3_20260914/2026-08-27.write.receipt.json`、`2026-08-27.replay.receipt.json`、`2026-08-28.write.receipt.json` | VERIFIED_DEV_WRITE_READBACK_IDEMPOTENCY | 无 |
 | F-004 | `scripts/hmm_risk/run_rotation_l1_product.py`现有单日期CLI | `backend/tests/hmm_risk/test_run_rotation_l1_product.py`；无startup/scheduler静态检查 | VERIFIED_EXISTING_BEHAVIOR | 无 |
 | F-005 | 既有typed executor/failure receipt | `backend/tests/hmm_risk/test_run_rotation_l1_product.py`；artifact: `F:/Dev/AIstock_validation_clean/hmm_g2a_v16_continuity_380a8f24_20260914/.2026-03-30.receipt.json.failure.d0f163dbd1b54c118430c1f5cf1edd7f.json` | VERIFIED_EXISTING_BEHAVIOR | 无 |
-| F-006 | 本设计§5 | artifact: `F:/Dev/AIstock_validation_clean/hmm_g2a_v16_continuity_380a8f24_20260914`；`backend/tests/hmm_risk/test_rotation_l1_prediction.py` | VERIFIED_DIAGNOSTIC | 无 |
+| F-006 | 本设计§5 | artifact: `F:/Dev/AIstock_validation_clean/hmm_g2a_v16_continuity_380a8f24_20260914`、`F:/Dev/AIstock_validation_clean/hmm_g2c_dev_write_fc3853f3_20260914`；`backend/tests/hmm_risk/test_rotation_l1_prediction.py` | VERIFIED_DIAGNOSTIC_AND_DEV_BUSINESS_READBACK | 无 |
 
 ## 9. Rollout / Rollback（发布与回滚）
 
 - 源码合入不自动启用日更新；runtime默认保持当前v1.6单日产品状态。
-- 首次DEV运行只处理一个显式日期；通过幂等/readback后再验证连续日期。
+- DEV 已完成两个相邻显式日期和其中一日的幂等重放；不得把该结果扩大为生产已写入或真正T+1数据已就绪。
 - 生产首次运行、外部调度接入和后端重启分别授权；未授权时保持inactive。
 - 回滚停用外部触发并恢复上一份已验证runtime receipt，不删除历史预测、不改写模型或candidate。
 - forward FAILED时沿用G2-A合同停止新增预测；不由G2-C覆盖该状态。
@@ -222,7 +229,8 @@ NOT_STARTED -> INPUT_READY -> GENERATED -> WRITTEN -> READBACK_VERIFIED
 | gate | 本次状态 |
 |---|---|
 | production_ddl_gate | noop；复用既有表 |
-| production_dml_gate | noop；连续性验证仅dry-run |
+| dev_dml_gate | executed under explicit authorization；仅上述两个日期与同请求重放 |
+| production_dml_gate | noop；未操作生产数据库 |
 | production_backend_dependency_gate | noop |
 | production_frontend_dependency_gate | noop |
 | runtime_activation_gate | pending future authorization |
@@ -239,4 +247,4 @@ NOT_STARTED -> INPUT_READY -> GENERATED -> WRITTEN -> READBACK_VERIFIED
 
 ## 12. 当前任务停止位置
 
-本次长任务已完成连续日只读诊断、蓝图现状同步和本设计的正式审核；现有 HMM 源码已经满足批准的原子执行合同，因此不新增包装 runner。文档提交、推送和创建 PR 已于 2026-09-14 获授权；PR 合入、DEV/生产数据库写入、r4 合同变化、tail、外部触发、runtime activation、cleanup 与进程控制仍须分别授权。
+本次长任务已完成连续日只读诊断及 `aistock_dev` 双日期真实 write/readback/幂等重放；现有 HMM 源码满足批准的原子执行合同，因此没有登记或新增包装 runner。真正T+1日更仍等待数据owner提供正式日频release；生产DML、r4合同变化、tail、外部触发、runtime activation、cleanup与进程控制仍须分别授权。
