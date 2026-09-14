@@ -261,7 +261,7 @@ modules:
     ui_routes: [/hmm-risk]
     api_routes: [/api/v1/hmm-risk/*]
     test_plans:
-      required_on_change: [l0, hmm_risk_pr_slice, hmm_risk_backend]
+      required_on_change: [l0, hmm_risk_pr_slice, hmm_risk_backend, hmm_risk_ui]
   - module_id: factor_library
     display_name: Factor library
     module_type: product_feature

@@ -64,6 +64,9 @@ def _valid_contract(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_function() -> None:
     ddl = "\n".join(schema.iter_ddl()).lower()
+    rotation_ddl = ddl.split("create table if not exists hmm_risk.rotation_l1_prediction", 1)[1].split(
+        "create table if not exists hmm_risk.risk_l1_prediction", 1
+    )[0]
 
     for table in schema.EXPECTED_COLUMNS:
         assert f"create table if not exists hmm_risk.{table}" in ddl
@@ -89,7 +92,9 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "development_oof_rank_ic_hac_lower is not null" in ddl
     assert "development_oof_rank_ic_hac_upper is not null" in ddl
     assert "jsonb_array_length(feature_contributions) in (10,11)" in ddl
-    assert "jsonb_array_length(feature_contributions)=10" not in ddl
+    assert "jsonb_array_length(feature_contributions)=10" not in rotation_ddl
+    assert "create table if not exists hmm_risk.risk_l1_prediction" in ddl
+    assert "jsonb_array_length(feature_contributions)=10" in ddl
     assert "select *" not in ddl
 
 
@@ -250,6 +255,68 @@ def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejec
         schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(contribution_drift=True))
 
 
+class _RiskSchemaCursor:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = []
+            for name in schema.RISK_L1_PREDICTION_COLUMNS:
+                sql_type, not_null, default = schema.RISK_L1_PREDICTION_COLUMN_CONTRACT[name]
+                comment = f"risk_l1_prediction.{name} exact hmm_risk_risk_l1_prediction_v1 contract"
+                rows.append((name, sql_type, not_null, default, comment))
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            return [
+                (
+                    name,
+                    " ".join(schema.RISK_L1_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_risk_l1_prediction_v1",
+                )
+                for name in sorted(schema.RISK_L1_PREDICTION_CONSTRAINTS)
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return ("Append-only G2-B L1 risk warning revisions; scores are uncalibrated research outputs.",)
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_risk_l1_lookup ON hmm_risk.risk_l1_prediction "
+                "USING btree (trade_date, sector_code, revision DESC)",
+                "Date and sector L1 risk revision lookup; model identity remains explicit.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RiskSchemaConnection:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.drift = drift
+
+    def cursor(self):
+        return _RiskSchemaCursor(drift=self.drift)
+
+
+def test_risk_l1_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_risk_l1_prediction_schema(_RiskSchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_risk_l1_prediction_schema(_RiskSchemaConnection(drift=True))
+
+
 def test_rotation_l1_prediction_contribution_migration_is_guarded_and_reversible() -> None:
     migration_root = Path(schema.__file__).parent / "migrations"
     apply_sql = (
@@ -271,3 +338,20 @@ def test_rotation_l1_prediction_contribution_migration_is_guarded_and_reversible
     assert "unexpected contribution dimensions" in rollback_sql
     assert "non-v1.3 contribution dimensions exist" in rollback_sql
     assert "jsonb_array_length(feature_contributions)=10" in rollback_sql
+
+
+def test_risk_l1_prediction_migration_is_guarded_and_rollback_refuses_data_loss() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (migration_root / "create_hmm_risk_risk_l1_prediction_20260914.sql").read_text(
+        encoding="utf-8"
+    ).lower()
+    rollback_sql = (
+        migration_root / "create_hmm_risk_risk_l1_prediction_20260914.rollback.sql"
+    ).read_text(encoding="utf-8").lower()
+
+    assert "pg_advisory_xact_lock" in apply_sql
+    assert "create table if not exists hmm_risk.risk_l1_prediction" in apply_sql
+    assert "jsonb_array_length(feature_contributions)=10" in apply_sql
+    assert "advisory_status='not_available' and not tail_accessed" in apply_sql
+    assert "refusing to drop non-empty hmm_risk.risk_l1_prediction" in rollback_sql
+    assert "exists (select 1 from hmm_risk.risk_l1_prediction limit 1)" in rollback_sql

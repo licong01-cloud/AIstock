@@ -1734,7 +1734,7 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     *,
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
-    data_window_end: date = SOURCE_END,
+    data_window_end: date | None = SOURCE_END,
 ) -> dict[str, Any]:
     """Bind the G2-A v1.2 source; legacy v2 candidates are not eligible."""
 
@@ -2843,6 +2843,7 @@ def build_rotation_l1_inputs_from_assets(
     forbidden_roots: Sequence[Path],
     work_parent: Path,
     g2a_contract: bool = False,
+    risk_l1_contract: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Build the existing RW1 in-memory input interface from frozen assets only."""
 
@@ -2853,13 +2854,19 @@ def build_rotation_l1_inputs_from_assets(
         if security_identity_manifest is None or provider_absence_manifest is None:
             raise _fail(REASON_MANIFEST_INVALID, "direct-v2 source requires explicit security/provider authority")
         loader = (
-            load_rotation_l1_g2a_direct_v2_source_assets if g2a_contract else load_rotation_l1_direct_v2_source_assets
+            load_rotation_l1_g2a_direct_v2_source_assets
+            if g2a_contract or risk_l1_contract
+            else load_rotation_l1_direct_v2_source_assets
         )
         assets = loader(
             direct_v2_candidate_root,
             security_identity_manifest=security_identity_manifest,
             provider_absence_manifest=provider_absence_manifest,
-            **({"data_window_end": SOURCE_END} if g2a_contract else {}),
+            **(
+                {"data_window_end": None if risk_l1_contract else SOURCE_END}
+                if g2a_contract or risk_l1_contract
+                else {}
+            ),
         )
     else:
         if security_identity_manifest is not None or provider_absence_manifest is not None:
@@ -2913,7 +2920,7 @@ def build_rotation_l1_inputs_from_assets(
     )
     work_parent = Path(work_parent).resolve()
     work_parent.mkdir(parents=True, exist_ok=True)
-    g2a_l1_daily: list[dict[str, Any]] | None = [] if g2a_contract else None
+    g2a_l1_daily: list[dict[str, Any]] | None = [] if g2a_contract or risk_l1_contract else None
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-source-", dir=work_parent) as raw_temporary:
         month_paths = _spool_qlib_months(
             qlib_root,
@@ -3059,7 +3066,7 @@ def build_rotation_l1_inputs_from_assets(
         },
         "source_build_resource_receipts": resource_receipts,
     }
-    if g2a_contract:
+    if g2a_contract or risk_l1_contract:
         if (
             g2a_l1_daily is None
             or assets.get("sector_index_close") is None
@@ -3083,13 +3090,17 @@ def build_rotation_l1_inputs_from_assets(
             sector_close=published_sector_close,
             benchmark_close=assets["benchmark_close"],
             stock_daily_inputs=g2a_l1_daily,
+            include_targets=not risk_l1_contract,
+            include_risk_target=risk_l1_contract,
+            outcome_calendar=calendar_all if risk_l1_contract else None,
         )
         feature_contract = {
-            "contract_version": "hmm_risk_rotation_l1_g2a_v1_4",
+            "contract_version": (
+                "hmm_risk_risk_l1_g2b_v1" if risk_l1_contract else "hmm_risk_rotation_l1_g2a_v1_4"
+            ),
             "feature_names": list(CONTINUOUS_FEATURES),
             "source_end": SOURCE_END.isoformat(),
             "as_of_policy": "decision_t_reads_through_t_minus_1",
-            "target_horizons": [5, 10],
             "stock_feature_coverage": "count>=5 and 10*valid>=9*expected_non_suspended",
             "moneyflow_intensity_delta_5d": {
                 "formula": "m20(t)-m20(t-5 canonical open days)",
@@ -3107,7 +3118,7 @@ def build_rotation_l1_inputs_from_assets(
             ]
             for horizon in (5, 10)
         }
-        inputs["g2a_bundle"] = {
+        model_input_bundle = {
             "schema_version": INPUT_SCHEMA_VERSION,
             "panel": g2a_panel,
             "benchmark_close": {day: float(assets["benchmark_close"][day]) for day in calendar},
@@ -3123,6 +3134,30 @@ def build_rotation_l1_inputs_from_assets(
                 ),
             },
         }
+        if not risk_l1_contract:
+            feature_contract["target_horizons"] = [5, 10]
+        if g2a_contract:
+            inputs["g2a_bundle"] = model_input_bundle
+        if risk_l1_contract:
+            risk_identity = {
+                "contract_version": "hmm_risk_risk_l1_g2b_v1",
+                "source_sha256": model_input_bundle["identity"]["source_sha256"],
+                "mapping_sha256": model_input_bundle["identity"]["mapping_sha256"],
+                "feature_contract_sha256": model_input_bundle["identity"]["feature_contract_sha256"],
+                "target_contract_sha256": canonical_sha256(
+                    {
+                        "horizon": 10,
+                        "threshold": -0.05,
+                        "formula": "min_k(sector_cum_return_t_plus_1_to_k-csi300_cum_return_t_plus_1_to_k)",
+                        "decision_feature_boundary": "t_minus_1",
+                    }
+                ),
+            }
+            inputs["risk_l1_bundle"] = {
+                "schema_version": "hmm_risk_risk_l1_g2b_input_bundle_v1",
+                "panel": g2a_panel,
+                "identity": risk_identity,
+            }
     inputs["source_build_resource_receipts"].append(
         _resource_checkpoint(
             started,
@@ -3157,14 +3192,16 @@ def build_rotation_l1_single_date_source_from_assets(
     supported_contracts = {
         "hmm_risk_rotation_l1_g2a_v1_3",
         "hmm_risk_rotation_l1_g2a_v1_6",
+        "hmm_risk_risk_l1_g2b_v1",
     }
     deterministic_v16 = model_contract_version == "hmm_risk_rotation_l1_g2a_v1_6"
+    risk_l1_contract = model_contract_version == "hmm_risk_risk_l1_g2b_v1"
     if (
         not isinstance(trade_date, date)
         or not isinstance(as_of_date, date)
         or model_contract_version not in supported_contracts
-        or (deterministic_v16 and market_start is not None)
-        or (not deterministic_v16 and not isinstance(market_start, date))
+        or ((deterministic_v16 or risk_l1_contract) and market_start is not None)
+        or (not deterministic_v16 and not risk_l1_contract and not isinstance(market_start, date))
     ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "single-date source dates are invalid")
     assets = load_rotation_l1_g2a_direct_v2_source_assets(
@@ -3187,6 +3224,7 @@ def build_rotation_l1_single_date_source_from_assets(
         or assets["data_window_end"] != as_of_date
         or (
             not deterministic_v16
+            and not risk_l1_contract
             and (market_start not in calendar_all or market_start is None or market_start > as_of_date)
         )
     ):
@@ -3199,6 +3237,8 @@ def build_rotation_l1_single_date_source_from_assets(
     market_calendar = (
         (trade_date,)
         if deterministic_v16
+        else feature_calendar
+        if risk_l1_contract
         else tuple(calendar_all[calendar_all.index(market_start) : trade_position + 1])
     )
     stock_history_calendar = tuple(calendar_all[trade_position - stock_history_lookback : trade_position])
@@ -3310,9 +3350,12 @@ def build_rotation_l1_single_date_source_from_assets(
         )
         feature_source_dates = frozenset(feature_calendar[:-1])
         sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
-        assert market_start is not None
+        effective_market_start = feature_calendar[0] if risk_l1_contract else market_start
+        assert effective_market_start is not None
         benchmark_close = {
-            day: float(value) for day, value in assets["benchmark_close"].items() if market_start <= day <= as_of_date
+            day: float(value)
+            for day, value in assets["benchmark_close"].items()
+            if effective_market_start <= day <= as_of_date
         }
         if (
             len(sector_close) != 61 * 31
@@ -3344,6 +3387,8 @@ def build_rotation_l1_single_date_source_from_assets(
     source_schema_version = (
         "hmm_risk_rotation_l1_single_date_source_v2"
         if deterministic_v16
+        else "hmm_risk_risk_l1_single_date_source_v1"
+        if risk_l1_contract
         else "hmm_risk_rotation_l1_single_date_source_v1"
     )
     source_body = {
@@ -3367,10 +3412,12 @@ def build_rotation_l1_single_date_source_from_assets(
             }
         )
     else:
-        assert market_start is not None
+        effective_market_start = feature_calendar[0] if risk_l1_contract else market_start
+        assert effective_market_start is not None
         source_body.update(
             {
-                "market_start": market_start.isoformat(),
+                "model_contract_version": model_contract_version,
+                "market_start": effective_market_start.isoformat(),
                 "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
                 "sector_close_sha256": canonical_sha256(
                     [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
@@ -3394,7 +3441,7 @@ def build_rotation_l1_single_date_source_from_assets(
         "mapping_snapshot_hash": source_body["mapping_snapshot_sha256"],
         "source_receipt": _receipt_from_body(source_body),
     }
-    if deterministic_v16:
+    if deterministic_v16 or risk_l1_contract:
         result["model_contract_version"] = model_contract_version
     return result
 

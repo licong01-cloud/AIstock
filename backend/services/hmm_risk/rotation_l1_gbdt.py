@@ -333,6 +333,8 @@ def build_materialised_panel(
     benchmark_close: Mapping[date, float],
     stock_daily_inputs: Sequence[Mapping[str, Any]],
     include_targets: bool = True,
+    include_risk_target: bool = False,
+    outcome_calendar: Sequence[date] | None = None,
 ) -> pd.DataFrame:
     """Build the exact ten-column v1.4 model panel from bound components.
 
@@ -343,6 +345,13 @@ def build_materialised_panel(
     ordered = tuple(calendar)
     if ordered != tuple(sorted(set(ordered))) or not ordered:
         raise _fail(REASON_INPUT, "G2-A materialisation calendar differs", stage="materialisation")
+    target_ordered = tuple(ordered if outcome_calendar is None else outcome_calendar)
+    if (
+        target_ordered != tuple(sorted(set(target_ordered)))
+        or not target_ordered
+        or any(day not in target_ordered for day in ordered)
+    ):
+        raise _fail(REASON_INPUT, "materialisation outcome calendar differs", stage="materialisation")
     sectors = tuple(sorted({str(code) for _day, code in sector_close}))
     if len(sectors) != CANONICAL_SECTOR_COUNT:
         raise _fail(REASON_INPUT, "G2-A materialisation sector denominator differs", stage="materialisation")
@@ -353,6 +362,7 @@ def build_materialised_panel(
             raise _fail(REASON_INPUT, "G2-A stock-derived input keys differ", stage="materialisation")
         stock_by_key[key] = raw
     position = {day: index for index, day in enumerate(ordered)}
+    target_position = {day: index for index, day in enumerate(target_ordered)}
 
     def finite_close(day: date, sector: str | None = None) -> float | None:
         raw = benchmark_close.get(day) if sector is None else sector_close.get((day, sector))
@@ -401,10 +411,11 @@ def build_materialised_panel(
         raw_targets: dict[int, dict[str, float]] = {item: {} for item in HORIZONS}
         if include_targets:
             for horizon in HORIZONS:
-                future_index = decision_index + horizon
-                if future_index >= len(ordered):
+                target_index = target_position[decision_day]
+                future_index = target_index + horizon
+                if future_index >= len(target_ordered):
                     continue
-                future_day = ordered[future_index]
+                future_day = target_ordered[future_index]
                 market_now, market_future = finite_close(decision_day), finite_close(future_day)
                 if market_now is None or market_future is None:
                     continue
@@ -488,6 +499,37 @@ def build_materialised_panel(
                 for horizon in HORIZONS:
                     row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
                     row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
+            if include_risk_target:
+                target_index = target_position[decision_day]
+                adverse_values: list[float] = []
+                sector_start = finite_close(decision_day, sector)
+                market_start = finite_close(decision_day)
+                if (
+                    sector_start is not None
+                    and market_start is not None
+                    and target_index + FIXED_HORIZON < len(target_ordered)
+                ):
+                    for offset in range(1, FIXED_HORIZON + 1):
+                        outcome_day = target_ordered[target_index + offset]
+                        sector_outcome = finite_close(outcome_day, sector)
+                        market_outcome = finite_close(outcome_day)
+                        if sector_outcome is None or market_outcome is None:
+                            adverse_values.clear()
+                            break
+                        adverse_values.append(
+                            sector_outcome / sector_start - market_outcome / market_start
+                        )
+                adverse = min(adverse_values) if len(adverse_values) == FIXED_HORIZON else math.nan
+                row["relative_adverse_excursion_10d"] = adverse
+                row["risk_event_10d"] = (
+                    float(adverse <= -0.05) if math.isfinite(adverse) else math.nan
+                )
+                row["risk_event_10d_mature"] = math.isfinite(adverse)
+                row["reason__risk_event_10d"] = (
+                    None
+                    if math.isfinite(adverse)
+                    else "hmm_risk_risk_l1_target_unavailable"
+                )
             for feature in V14_CONTINUOUS_FEATURES:
                 value = float(row[feature])
                 if math.isfinite(value):
@@ -530,6 +572,7 @@ def build_label_free_feature_panel(
         benchmark_close=benchmark_close,
         stock_daily_inputs=stock_daily_inputs,
         include_targets=False,
+        include_risk_target=False,
     )
 
 
