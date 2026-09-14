@@ -56,6 +56,13 @@ GIT_HTTP_LOW_SPEED_MARKERS = (
     "\n  GIT_CONFIG_KEY_0: http.version\n",
     "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
 )
+SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER = "      - uses: actions/checkout@v7\n        timeout-minutes: 5\n"
+INTERRUPTED_PACK_CLEANUP_MARKERS = (
+    "      - name: Reclaim interrupted Git pack fragments\n",
+    "        continue-on-error: true\n",
+    "Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*'",
+    "Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop",
+)
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -68,6 +75,42 @@ _DB_CREATE_RE = re.compile(
     r"\b(?:postgres|timescale)\b",
     re.IGNORECASE,
 )
+
+
+def _workflow_job_blocks(text: str) -> list[str]:
+    """Return individual top-level GitHub Actions job blocks without a YAML dependency."""
+
+    lines = text.splitlines(keepends=True)
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == "jobs:" and not line.startswith(" ")),
+        None,
+    )
+    if jobs_index is None:
+        return []
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.startswith(" "):
+            break
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return blocks
+
+
+def _self_hosted_checkout_job_blocks(text: str) -> list[str]:
+    return [
+        block
+        for block in _workflow_job_blocks(text)
+        if re.search(r"(?m)^    runs-on:.*self-hosted", block) and "actions/checkout@v7" in block
+    ]
+
+
 _SETUP_ACTION_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*actions/setup-(?:python|node|go|miniconda)@", re.IGNORECASE)
 _SERVICES_RE = re.compile(r"^\s*(?:-\s*)?services\s*:", re.IGNORECASE)
 _DB_IMAGE_RE = re.compile(r"^\s*image:\s*[^#\n]*(?:postgres|timescale)", re.IGNORECASE)
@@ -156,6 +199,28 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
                     "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME/http.version",
                 }
             )
+        for checkout_job in _self_hosted_checkout_job_blocks(text):
+            if SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER not in checkout_job:
+                findings.append(
+                    {
+                        "path": path.as_posix(),
+                        "line": "1",
+                        "reason": "self-hosted actions/checkout must have a five-minute hard step timeout",
+                        "text": "actions/checkout@v7 timeout-minutes: 5",
+                    }
+                )
+            if not all(marker in checkout_job for marker in INTERRUPTED_PACK_CLEANUP_MARKERS):
+                findings.append(
+                    {
+                        "path": path.as_posix(),
+                        "line": "1",
+                        "reason": (
+                            "self-hosted checkout must reclaim interrupted Git pack fragments by literal path "
+                            "without blocking the PR"
+                        ),
+                        "text": "Reclaim interrupted Git pack fragments",
+                    }
+                )
         if path.name not in WINDOWS_CI_WORKFLOWS:
             continue
         expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[path.name]
@@ -337,6 +402,16 @@ def build_contract_evidence(
             "self-hosted" not in text
             or all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS)
             for text in workflow_text.values()
+        ),
+        "self_hosted_checkout_steps_have_hard_timeout": all(
+            SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER in block
+            for text in workflow_text.values()
+            for block in _self_hosted_checkout_job_blocks(text)
+        ),
+        "self_hosted_checkout_cleans_interrupted_pack_fragments": all(
+            all(marker in block for marker in INTERRUPTED_PACK_CLEANUP_MARKERS)
+            for text in workflow_text.values()
+            for block in _self_hosted_checkout_job_blocks(text)
         ),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
