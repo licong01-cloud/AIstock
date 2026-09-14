@@ -1,9 +1,9 @@
-# AdvisoryPriceProspectivePredictionV1 F2 详细设计 v1.1
+# AdvisoryPriceProspectivePredictionV1 F2 详细设计 v1.2
 
 > 日期：2026-09-15
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.61
-> 当前阶段：`SOURCE_IMPLEMENTED_LOCAL_VERIFIED_FORMAL_CAPTURE_PENDING`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.62
+> 当前阶段：`FORMAL_PROSPECTIVE_CAPTURE_PUBLISHED_AWAITING_MATURITY`
 > 业务归属：Selection Center / Advisory
 > 运行边界：日频自然前向预测收集；不绑定生产 descriptor，不读取目标日结果，不研发分钟执行
 
@@ -13,9 +13,13 @@
 
 2026-09-15 的无落盘可产性 spike 使用冻结 M1 父 bundle `9cf14e80...`、M3 outcome bundle `17ce7ceb...` 与 v4 price bundle `508fedfe...`，对最新已发布 Program `advp_3126...` 的 target `2026-09-14` 完成 20/20 预测。该日期早于正式前向起点，只证明当前 Program 候选、103特征和三个 bundle 的技术兼容，不构成自然前向证据。
 
-源码实现后的第二次无落盘预检在 `2026-09-15 09:30 Asia/Shanghai` 前解析到 target `2026-09-15` 的已发布列表 `advlv_536a...`、SelectionRun `sel_1586...` 与唯一 20 只模型候选。该预检只验证请求可产性，未写 request/prediction artifact；正式 capture 必须使用已合入源码并再次确认无 QE 实验并行。
+源码由 PR #4732 合入 `main@3be76e742...` 后，在确认无 QE 实验运行且尚未到 `2026-09-15 09:30 Asia/Shanghai` 时完成首次正式自然前向捕获。不可变 request `advprpros_405d704a7dbe866eb0b6ae0e` 绑定 D=`2026-09-14`、T=`2026-09-15`、列表 `advlv_536a...`、SelectionRun `sel_1586...`、冻结 M1/M3/v4 和唯一 20 只模型候选；request SHA-256 为 `405d704a7dbe866eb0b6ae0efb73aa6bd11ee699d263b4446246a1e09a706e24`。
 
-缺口是一个独立于生产 binding 的预测收集通道：模型冻结后，每个真实未来交易日只根据 D 时点可见的已发布荐股输入生成 T 日价格信封，写入不可变 artifact；在预测阶段不得读取 T 日行情、标签、收益、coverage 或任何 outcome evaluation。
+正式 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 于 `2026-09-15 03:27:30.861704 Asia/Shanghai` 发布，20/20 候选可用、耗时 `19.671s`；prediction/manifest/receipt SHA-256 分别为 `6d6b4ece56835472b6c1cebb7fed8ed6194a0e96bafe65876a356f2aaeff83af`、`3e49b4aa6e78d9699670f7dd9ede1bfd59bd0bfb136e43c6dc57fd51aaced6d6`、`06e133a9355f3499eec05336ecc0de0b127d089bf801f7f9b8fafe3949513293`。第二次 capture 返回 `ALREADY_MATERIALIZED` 且 hashes 完全一致。receipt 严格声明零目标结果访问、零 binding 激活、零数据库写入、零 sealed holdout 消费。
+
+上述正式 artifact 只证明真实 Program 输入、103 特征、冻结 bundle、盘前时钟与不可变发布通道可以闭环；T 日结果尚未在本切片读取，不能据此报告 coverage、收益、命中率或激活建议。
+
+本切片已填补独立于生产 binding 的预测收集通道缺口：模型冻结后，每个真实未来交易日只根据 D 时点可见的已发布荐股输入生成 T 日价格信封，写入不可变 artifact；在预测阶段不得读取 T 日行情、标签、收益、coverage 或任何 outcome evaluation。当前剩余的是自然样本积累和独立成熟评价，不是继续改动冻结模型。
 
 ## 2. Scope / 目标
 
@@ -123,20 +127,20 @@ receipt 报告 `receipt_sha256`、候选数、available/unavailable 数、D/T、
 
 不得将身份错误、数据库查询失败、bundle损坏或模型失败转换为 `NO_ELIGIBLE_RECOMMENDATION`。
 
-## 11. Verification Plan / 测试与真实 spike
+## 11. Verification Plan / 测试与真实 artifact
 
 - 合同：hash、D/T、T开盘前、模型冻结前、禁止 outcome 字段、extra forbid。
 - loader：不读取 binding、identity/hash/member损坏拒绝、v4三头/校准严格读回。
 - service：冻结身份一致成功；当前 P0-D descriptor 不被读取；目标行情 poison 不影响预测；已开盘/回填/列表漂移拒绝；候选级正常缺失保留。
 - artifact：原子写、exact retry、冲突不覆盖、receipt 禁止结果字段。
 - CLI：prepare/capture 参数与退出码。
-- 实际正式前向只能选择 v4 冻结后且执行时尚未开盘的真实 T；若当前没有这样的已发布列表，源码交付后状态为 `WAITING_NEXT_PUBLISHED_TARGET`，不得回填。
+- 首次正式前向已选择 v4 冻结后且执行时尚未开盘的真实 T=`2026-09-15`，并完成 20/20 不可变发布与 exact retry；后续日期仍必须逐日满足同一时钟，不得回填。
 
 ## 12. Rollout / Rollback
 
-源码合入本身不要求重启，因为 CLI 是离线入口且不挂接 FastAPI/scheduler。首次正式 capture 前需再次确认无 QE 实验并行。回滚仅停止运行 CLI；不删除已发布 request/prediction，不改变任何 runtime binding、Program、数据库或推荐结果。
+源码合入本身不要求重启，因为 CLI 是离线入口且不挂接 FastAPI/scheduler。每次正式 capture 前均需确认无 QE 实验并行。回滚仅停止运行 CLI；不删除已发布 request/prediction，不改变任何 runtime binding、Program、数据库或推荐结果。
 
-本切片完成条件：F-374～F-388 全部实现并验证；F2 validator、定向测试、lint/compile、CI通过；至少完成无落盘历史可产性 spike。若没有尚未开盘的新 T 日列表，允许以 `WAITING_NEXT_PUBLISHED_TARGET` 结束，不把等待自然日期视为源码缺口。
+本切片完成条件已满足：F-374～F-388 全部实现；F2 validator、定向测试、lint/compile与CI通过；源码由PR #4732合入；历史spike与首个真实T日盘前artifact均完成。后续等待自然成熟及评价属于独立confirmation阶段，不是本源码切片缺口。
 
 ## 13. Risks / 风险与处置
 
@@ -156,7 +160,7 @@ receipt 报告 `receipt_sha256`、候选数、available/unavailable 数、D/T、
 - 后端重启：`noop`；新增CLI不挂接FastAPI或scheduler。
 - runtime binding/descriptor：`noop`。
 - 模型训练：`noop`；只消费已冻结M1/M3/v4。
-- 首次正式预测artifact：源码合入后、存在尚未开盘的真实T日列表且无QE实验运行时执行。
+- 首次正式预测artifact：已在无QE实验运行且T日开盘前完成，request `advprpros_405d704a7dbe866eb0b6ae0e`、prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c`，20/20可用并通过exact retry。
 - 未来confirmation、binding、运行时激活和用户重启均为独立后续门禁。
 
 ## 15. Design Acceptance Index
@@ -177,27 +181,27 @@ receipt 报告 `receipt_sha256`、候选数、available/unavailable 数、D/T、
 | F-385 | artifact原子不可变、exact retry、冲突拒绝 |
 | F-386 | receipt声明零outcome/零binding/零DB/零holdout消费 |
 | F-387 | CLI prepare/capture不控制进程且不触碰QE |
-| F-388 | 历史spike不冒充正式自然前向；无新T时WAITING |
+| F-388 | 历史spike不冒充正式自然前向；正式T日盘前artifact独立发布，成熟前不读取或评价结果 |
 
 ## 16. Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-374 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-375 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-376 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-377 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-378 | `backend/services/advisory_model_first/model_bundle.py` | `backend/tests/advisory_model_first/test_model_bundle.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-379 | `backend/services/advisory_model_first/outcome_runtime_bundle.py` | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-380 | `backend/services/advisory_model_first/price_range_runtime_bundle.py` | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-381 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；2026-09-15目标日无写入请求预检 | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-382 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-383 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-384 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-385 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-386 | `backend/services/advisory_model_first/prospective_price_contracts.py`；`backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py`；`backend/tests/advisory_model_first/test_price_range_prospective.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-387 | `backend/services/advisory_model_first/prospective_price_cli.py` | `backend/tests/advisory_model_first/test_price_range_prospective_cli.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-388 | §1、§4、§11～§12 | `backend/tests/advisory_model_first/test_price_range_prospective.py`；历史20/20可产性spike；2026-09-15未来目标无写入请求预检 | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-374 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-375 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-376 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-377 | `backend/services/advisory_model_first/prospective_price_contracts.py` | `backend/tests/advisory_model_first/test_price_range_prospective_contracts.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-378 | `backend/services/advisory_model_first/model_bundle.py` | `backend/tests/advisory_model_first/test_model_bundle.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-379 | `backend/services/advisory_model_first/outcome_runtime_bundle.py` | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-380 | `backend/services/advisory_model_first/price_range_runtime_bundle.py` | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | IMPLEMENTED_MERGED_VERIFIED | none |
+| F-381 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；正式request/prediction/receipt读回 | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-382 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；当前P0-D descriptor零读取验证 | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-383 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；正式artifact禁止outcome字段读回 | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-384 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；正式20/20 available | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-385 | `backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；第二次capture=`ALREADY_MATERIALIZED`且hash一致 | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-386 | `backend/services/advisory_model_first/prospective_price_contracts.py`；`backend/services/advisory_model_first/prospective_price_prediction.py` | `backend/tests/advisory_model_first/test_price_range_prospective.py`；artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_prospective_predictions/advprpros_405d704a7dbe866eb0b6ae0e/receipt.json`（SHA-256 `06e133a...`）声明零outcome/零binding/零DB/零holdout | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-387 | `backend/services/advisory_model_first/prospective_price_cli.py` | `backend/tests/advisory_model_first/test_price_range_prospective_cli.py`；正式CLI运行未控制进程或调用QE | IMPLEMENTED_ARTIFACT_VERIFIED | none |
+| F-388 | §1、§4、§11～§12 | `backend/tests/advisory_model_first/test_price_range_prospective.py`；artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_prospective_predictions/advprpros_405d704a7dbe866eb0b6ae0e/manifest.json`绑定正式T=`2026-09-15` bundle `631d501...`；与历史20/20 spike分离且目标结果未读 | IMPLEMENTED_ARTIFACT_VERIFIED_AWAITING_MATURITY | none |
 
 ## 17. DESIGN-COMPLIANCE-001 交付检查
 
