@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 6ee9e367f7d8fd70d536a53faf237e50068146b512a02f0d3a00a036a8b4c41e
+source_sha256: 4985821d1ec427f2133770f9de81ed84c663956ffd91c1f77ea06231836f0bd0
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-09-11"
+updated_at: "2026-09-14"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -688,8 +688,11 @@ rules:
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
+        - superseded_cleanup_requires_exact_head_no_open_pr_and_verified_authority
+        - superseded_cleanup_receipt_persisted_outside_target_before_deletion
+        - dirty_unknown_protected_active_or_unique_unmerged_work_still_blocks
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts. For an unmerged branch that was authoritatively replaced, use cleanup-superseded with exact expected HEAD, no open PR, one verified replacement/comment/patch-equivalence authority and a repo-external pre-delete receipt; never use it to discard dirty, unknown, protected, active, drifted or unique unmerged work.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001

@@ -78,6 +78,12 @@ TERMINAL_WORKFLOW_STATES = {"merged", "close_synced", "cleanup_done", "complete"
 CLEANUP_BATCH_MANIFEST_SCHEMA = "aistock_cleanup_after_merge_batch_manifest_v1"
 CLEANUP_BATCH_RESULT_SCHEMA = "aistock_cleanup_after_merge_batch_v1"
 CLEANUP_BATCH_MAX_TARGETS = 200
+SUPERSEDED_CLEANUP_RECEIPT_SCHEMA = "aistock_superseded_cleanup_receipt_v1"
+SUPERSEDED_CLEANUP_MODES = (
+    "canonical_bug_replacement",
+    "owner_comment",
+    "patch_equivalent",
+)
 CLEANUP_BATCH_TARGET_KEYS = {
     "branch",
     "bug_id",
@@ -15970,6 +15976,284 @@ def _cleanup_merge_verification(
     return payload
 
 
+def _superseded_cleanup_receipt_path(branch: str, expected_head: str) -> Path:
+    override = os.environ.get("AISTOCK_CLEANUP_RECEIPT_ROOT")
+    root = Path(override) if override else _default_worktree_root() / ".cleanup-receipts" / "superseded"
+    identity = hashlib.sha256(f"{branch}\n{expected_head.lower()}".encode()).hexdigest()[:20]
+    return root / f"{_slug(branch)}-{identity}.json"
+
+
+def _persist_superseded_cleanup_receipt(
+    verification: dict[str, Any],
+    *,
+    status: str,
+    cleanup_verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    branch = str(verification.get("branch") or "")
+    expected_head = str(verification.get("expected_head") or "").lower()
+    if not branch or not _FULL_GIT_COMMIT_RE.fullmatch(expected_head):
+        raise WorkflowError("superseded cleanup receipt identity is incomplete")
+    path = _superseded_cleanup_receipt_path(branch, expected_head)
+    if path.exists() and _is_reparse_or_symlink(path):
+        raise WorkflowError(f"superseded cleanup receipt must not be a symlink or reparse point: {path}")
+    if path.parent.exists() and _is_reparse_or_symlink(path.parent):
+        raise WorkflowError(f"superseded cleanup receipt root must not be a symlink or reparse point: {path.parent}")
+    receipt = {
+        "schema_version": SUPERSEDED_CLEANUP_RECEIPT_SCHEMA,
+        "status": status,
+        "branch": branch,
+        "expected_head": expected_head,
+        "mode": verification.get("mode"),
+        "authority_ref": verification.get("authority_ref"),
+        "reason": verification.get("reason"),
+        "authority_digest": verification.get("authority_digest"),
+        "recorded_at": _utc_now(),
+    }
+    if cleanup_verification is not None:
+        receipt["cleanup_verification"] = cleanup_verification
+    _write_json(path, receipt)
+    return {
+        "schema_version": SUPERSEDED_CLEANUP_RECEIPT_SCHEMA,
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "status": status,
+    }
+
+
+def _git_patch_equivalence_profile(branch: str, *, root: Path) -> dict[str, Any]:
+    cherry = _run_command(["git", "cherry", "origin/main", branch], cwd=root, timeout=30)
+    if not cherry.get("ok"):
+        return {
+            "verified": False,
+            "reason": "git_cherry_failed",
+            "error": cherry.get("stderr") or cherry.get("stdout"),
+        }
+    entries = [line.strip() for line in str(cherry.get("stdout") or "").splitlines() if line.strip()]
+    positive = [line for line in entries if line.startswith("+")]
+    equivalent = [line for line in entries if line.startswith("-")]
+    merge_result = _run_command(
+        ["git", "rev-list", "--merges", f"origin/main..{branch}"],
+        cwd=root,
+        timeout=30,
+    )
+    if not merge_result.get("ok"):
+        return {
+            "verified": False,
+            "reason": "merge_commit_inventory_failed",
+            "error": merge_result.get("stderr") or merge_result.get("stdout"),
+        }
+    merge_commits = [
+        line.strip()
+        for line in str(merge_result.get("stdout") or "").splitlines()
+        if line.strip()
+    ]
+    unmatched_merges: list[dict[str, Any]] = []
+    for commit in merge_commits:
+        changed_paths = _git_changed_files(f"{commit}^1", commit, cwd=root)
+        if changed_paths and not _git_paths_equivalent(commit, "origin/main", changed_paths, cwd=root):
+            unmatched_merges.append(
+                {
+                    "commit": commit,
+                    "changed_path_count": len(changed_paths),
+                    "changed_paths_digest": hashlib.sha256(
+                        "\n".join(sorted(changed_paths)).encode()
+                    ).hexdigest(),
+                }
+            )
+    verified = bool((equivalent or merge_commits) and not positive and not unmatched_merges)
+    return {
+        "verified": verified,
+        "reason": "all_branch_changes_present_in_origin_main" if verified else "unique_branch_changes_remain",
+        "positive_commit_count": len(positive),
+        "equivalent_commit_count": len(equivalent),
+        "merge_commit_count": len(merge_commits),
+        "unmatched_merge_count": len(unmatched_merges),
+        "positive_commits": [line.split(maxsplit=1)[-1] for line in positive],
+        "unmatched_merges": unmatched_merges,
+    }
+
+
+def _owner_supersession_comment_profile(
+    comment_url: str,
+    *,
+    branch: str,
+    expected_head: str,
+    root: Path,
+) -> dict[str, Any]:
+    pattern = re.compile(
+        rf"https://github\.com/{re.escape(GITHUB_REPO)}/pull/(\d+)#issuecomment-(\d+)",
+        re.IGNORECASE,
+    )
+    match = pattern.fullmatch(comment_url.strip().rstrip("/"))
+    if not match:
+        return {"verified": False, "reason": "invalid_supersession_comment_url"}
+    pr_number, comment_id = match.groups()
+    comment_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/issues/comments/{comment_id}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    pr_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/pulls/{pr_number}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not comment_result.get("ok") or not pr_result.get("ok"):
+        return {
+            "verified": False,
+            "reason": "supersession_github_read_failed",
+            "error": (
+                comment_result.get("stderr")
+                or comment_result.get("stdout")
+                or pr_result.get("stderr")
+                or pr_result.get("stdout")
+            ),
+        }
+    try:
+        comment = json.loads(str(comment_result.get("stdout") or "{}"))
+        pr = json.loads(str(pr_result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        return {"verified": False, "reason": "supersession_github_json_invalid", "error": str(exc)}
+    head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+    body = str(comment.get("body") or "")
+    association = str(comment.get("author_association") or "").upper()
+    directive_present = bool(re.search(r"(?i)\b(supersed\w*|obsolete|do not merge|do not cherry-pick)\b", body))
+    verified = bool(
+        str(comment.get("html_url") or "").rstrip("/") == comment_url.strip().rstrip("/")
+        and association in {"OWNER", "MEMBER", "COLLABORATOR"}
+        and directive_present
+        and str(pr.get("state") or "").lower() == "closed"
+        and not pr.get("merged_at")
+        and str(head.get("ref") or "") == branch
+        and str(head.get("sha") or "").lower() == expected_head
+    )
+    return {
+        "verified": verified,
+        "reason": "trusted_owner_supersession_comment" if verified else "supersession_comment_contract_mismatch",
+        "comment_url": comment_url,
+        "comment_author_association": association or None,
+        "comment_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "original_pr_url": str(pr.get("html_url") or "") or None,
+        "original_pr_state": pr.get("state"),
+        "original_pr_merged": bool(pr.get("merged_at")),
+        "original_pr_head": str(head.get("sha") or "") or None,
+    }
+
+
+def _cleanup_supersession_verification(
+    *,
+    branch: str,
+    bug_id: str | None,
+    expected_head: str,
+    mode: str,
+    authority_ref: str,
+    reason: str,
+    replacement_pr_url: str | None,
+    supersession_comment_url: str | None,
+    remote_ref: str,
+    root: Path,
+) -> dict[str, Any]:
+    normalized_head = expected_head.strip().lower()
+    blocking: list[str] = []
+    if not _FULL_GIT_COMMIT_RE.fullmatch(normalized_head):
+        blocking.append("expected superseded branch HEAD must be a full Git commit")
+    local_head = _git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"],
+        cwd=root,
+        check=False,
+    ).strip().lower()
+    if local_head != normalized_head:
+        blocking.append(
+            f"superseded branch HEAD mismatch: expected {normalized_head or 'missing'}, observed {local_head or 'missing'}"
+        )
+    remote_head = str(remote_ref or "").strip().split(maxsplit=1)[0].lower() if remote_ref.strip() else None
+    if remote_head and remote_head != normalized_head:
+        blocking.append(
+            f"superseded remote branch HEAD mismatch: expected {normalized_head}, observed {remote_head}"
+        )
+    if mode not in SUPERSEDED_CLEANUP_MODES:
+        blocking.append(f"unsupported superseded cleanup mode: {mode}")
+    elif mode == "canonical_bug_replacement" and supersession_comment_url:
+        blocking.append("canonical BUG replacement mode does not accept --supersession-comment-url")
+    elif mode == "owner_comment" and replacement_pr_url:
+        blocking.append("owner comment mode does not accept --replacement-pr-url")
+    elif mode == "patch_equivalent" and (replacement_pr_url or supersession_comment_url):
+        blocking.append("patch-equivalent mode does not accept PR or comment authority arguments")
+    if len(reason.strip()) < 12:
+        blocking.append("superseded cleanup reason must contain at least 12 characters")
+    if not authority_ref.strip():
+        blocking.append("superseded cleanup requires an explicit authorization reference")
+    open_pr: dict[str, Any] | None = None
+    try:
+        open_pr = _rest_open_pr_for_branch(branch, root=root)
+    except WorkflowError as exc:
+        blocking.append(str(exc))
+    if open_pr:
+        blocking.append(f"superseded branch still has an open PR: {open_pr.get('url')}")
+
+    authority: dict[str, Any] = {"verified": False, "reason": "authority_not_checked"}
+    if not blocking and mode == "canonical_bug_replacement":
+        if not bug_id or not replacement_pr_url:
+            blocking.append("canonical BUG replacement mode requires --bug-id and --replacement-pr-url")
+        else:
+            try:
+                replacement = _verify_pr_merged(replacement_pr_url)
+            except WorkflowError as exc:
+                replacement = {"checked": False, "merged": False, "error": str(exc)}
+            merge_commit = _merge_commit_from_pr_check(replacement)
+            snapshot = _canonical_bug_record_snapshot(bug_id.upper(), root)
+            authority = {
+                "verified": bool(
+                    replacement.get("merged")
+                    and merge_commit
+                    and _git_commit_is_ancestor(merge_commit, "origin/main", root=root)
+                    and snapshot.get("persisted")
+                    and snapshot.get("status") in {"fixed", "verified"}
+                    and str(snapshot.get("pr_url") or "").rstrip("/") == replacement_pr_url.rstrip("/")
+                    and str(snapshot.get("fix_commit") or "").lower() == str(merge_commit).lower()
+                ),
+                "reason": "canonical_bug_replacement" if replacement.get("merged") else "replacement_pr_not_merged",
+                "replacement_pr_url": replacement_pr_url,
+                "replacement_merge_commit": merge_commit,
+                "canonical_bug_record": snapshot,
+            }
+    elif not blocking and mode == "owner_comment":
+        if not supersession_comment_url:
+            blocking.append("owner comment mode requires --supersession-comment-url")
+        else:
+            authority = _owner_supersession_comment_profile(
+                supersession_comment_url,
+                branch=branch,
+                expected_head=normalized_head,
+                root=root,
+            )
+    elif not blocking and mode == "patch_equivalent":
+        authority = _git_patch_equivalence_profile(branch, root=root)
+    if not authority.get("verified"):
+        blocking.append(f"supersession authority is not verified: {authority.get('reason') or 'unknown'}")
+    authority_digest = hashlib.sha256(
+        json.dumps(authority, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "schema_version": "aistock_cleanup_supersession_verification_v1",
+        "verified": not blocking,
+        "branch": branch,
+        "bug_id": bug_id.upper() if bug_id else None,
+        "expected_head": normalized_head,
+        "observed_local_head": local_head or None,
+        "observed_remote_head": remote_head,
+        "mode": mode,
+        "authority_ref": authority_ref.strip(),
+        "reason": reason.strip(),
+        "authority": authority,
+        "authority_digest": authority_digest,
+        "open_pr": open_pr,
+        "blocking": blocking,
+    }
+
+
 def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
     if not apply:
         return {"status": "skipped", "reason": "dry_run"}
@@ -16016,7 +16300,11 @@ def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dic
     if not bugs_root.exists():
         payload["reason"] = "bugs_root_missing"
         return payload
+    target_number = _bug_id_number(bug_id)
     for path in _bug_files(bugs_root):
+        filename_number = _bug_id_number_from_filename(path.name)
+        if filename_number not in {target_number, None}:
+            continue
         try:
             record = _load_json(path)
         except WorkflowError:
@@ -16030,6 +16318,8 @@ def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dic
                 "status": record.get("status"),
                 "github_issue_number": record.get("github_issue_number"),
                 "github_issue_url": record.get("github_issue_url"),
+                "pr_url": record.get("pr_url"),
+                "fix_commit": record.get("fix_commit"),
             }
         )
         return payload
@@ -20242,6 +20532,7 @@ def build_cleanup_after_merge_plan(
     source_receipt_path: str | None = None,
     verified_pr_check: dict[str, Any] | None = None,
     preflight_fetch: dict[str, Any] | None = None,
+    supersession: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
     branch_bug_match = BUG_ID_RE.search(branch)
@@ -20271,6 +20562,42 @@ def build_cleanup_after_merge_plan(
         cwd=root,
         verified_pr_check=verified_pr_check,
     )
+    supersession_verification: dict[str, Any] | None = None
+    if supersession is not None:
+        supersession_verification = _cleanup_supersession_verification(
+            branch=branch,
+            bug_id=evidence_bug_id,
+            expected_head=str(supersession.get("expected_head") or ""),
+            mode=str(supersession.get("mode") or ""),
+            authority_ref=str(supersession.get("authority_ref") or ""),
+            reason=str(supersession.get("reason") or ""),
+            replacement_pr_url=(
+                str(supersession.get("replacement_pr_url"))
+                if supersession.get("replacement_pr_url")
+                else None
+            ),
+            supersession_comment_url=(
+                str(supersession.get("supersession_comment_url"))
+                if supersession.get("supersession_comment_url")
+                else None
+            ),
+            remote_ref=remote_ref,
+            root=root,
+        )
+        if supersession_verification.get("verified"):
+            merge_verification = {
+                "method": f"superseded_{supersession_verification.get('mode')}",
+                "verified": True,
+                "squash_merge_verified": False,
+                "tree_equivalent_to_origin_main": (
+                    supersession_verification.get("mode") == "patch_equivalent"
+                ),
+                "tree_equivalence_ref": branch,
+                "pr_check": None,
+                "path_equivalence": supersession_verification.get("authority"),
+                "merge_commit_path_equivalence": None,
+                "origin_path_equivalence": None,
+            }
     squash_merge_verified = bool(merge_verification["squash_merge_verified"])
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
@@ -20501,6 +20828,11 @@ def build_cleanup_after_merge_plan(
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
         blocking.append(f"branch is not merged into origin/main: {branch}")
+    if supersession_verification and supersession_verification.get("blocking"):
+        blocking.extend(
+            f"superseded cleanup: {item}"
+            for item in supersession_verification.get("blocking") or []
+        )
     if worktree_path and worktree_exists and worktree_is_current_cwd and apply and not root.exists():
         blocking.append(f"refusing to remove the current working directory because canonical root is unavailable: {worktree_path}")
     if (
@@ -20532,6 +20864,7 @@ def build_cleanup_after_merge_plan(
         worktree_ignored_artifacts
         and worktree_ignored_artifacts.get("transient_count")
         and not evidence_finalization.get("durable_receipt_present")
+        and not (supersession_verification or {}).get("verified")
     ):
         blocking.append(
             "transient evidence cannot be purged before compact durable receipt finalization: "
@@ -20602,6 +20935,7 @@ def build_cleanup_after_merge_plan(
         "sync_root": sync_root,
         "merged_into_origin_main": merged,
         "merge_verification": merge_verification,
+        "supersession_verification": supersession_verification,
         "squash_merge_verified": squash_merge_verified,
         "tree_equivalent_to_origin_main": tree_equivalent,
         "pr_check": pr_check,
@@ -20681,6 +21015,17 @@ def build_cleanup_after_merge_plan(
                 )
             else:
                 applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+        if supersession_verification:
+            payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
+                supersession_verification,
+                status="authorized_pre_cleanup",
+            )
+            payload["evidence_finalization"] = {
+                **evidence_finalization,
+                "status": "finalized_superseded_cleanup_receipt",
+                "durable_receipt_present": True,
+                "superseded_cleanup_receipt": payload["superseded_cleanup_receipt"],
+            }
         if worktree_path and worktree_path.exists() and worktree_is_current_cwd:
             os.chdir(root)
             applied.append(
@@ -20762,6 +21107,12 @@ def build_cleanup_after_merge_plan(
             if deferred_only:
                 return payload
             raise WorkflowError(f"post-cleanup verification failed: {cleanup_verification}")
+        if supersession_verification:
+            payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
+                supersession_verification,
+                status="cleanup_done",
+                cleanup_verification=cleanup_verification,
+            )
         if bug_id:
             registry_cleanup = build_registry_intake_cleanup_plan(
                 bug_id=bug_id,
@@ -21577,6 +21928,27 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
 
+def cmd_cleanup_superseded(args: argparse.Namespace) -> int:
+    payload = build_cleanup_after_merge_plan(
+        branch=args.branch,
+        bug_id=args.bug_id,
+        worktree=args.worktree,
+        apply=args.apply,
+        sync_root=args.sync_root,
+        canonical_root=args.canonical_root,
+        supersession={
+            "expected_head": args.expected_head,
+            "mode": args.mode,
+            "authority_ref": args.authorization_ref,
+            "reason": args.reason,
+            "replacement_pr_url": args.replacement_pr_url,
+            "supersession_comment_url": args.supersession_comment_url,
+        },
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
+
+
 def cmd_cleanup_after_merge_batch(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_batch_plan(
         manifest_path=args.manifest,
@@ -22069,6 +22441,25 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--apply", action="store_true")
     add_output_options(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
+
+    superseded_cleanup = sub.add_parser(
+        "cleanup-superseded",
+        help="Safely clean an exact unmerged branch with verified supersession authority.",
+    )
+    superseded_cleanup.add_argument("--branch", required=True)
+    superseded_cleanup.add_argument("--bug-id")
+    superseded_cleanup.add_argument("--worktree", required=True)
+    superseded_cleanup.add_argument("--expected-head", required=True)
+    superseded_cleanup.add_argument("--mode", required=True, choices=SUPERSEDED_CLEANUP_MODES)
+    superseded_cleanup.add_argument("--authorization-ref", required=True)
+    superseded_cleanup.add_argument("--reason", required=True)
+    superseded_cleanup.add_argument("--replacement-pr-url")
+    superseded_cleanup.add_argument("--supersession-comment-url")
+    superseded_cleanup.add_argument("--sync-root", action="store_true")
+    superseded_cleanup.add_argument("--canonical-root")
+    superseded_cleanup.add_argument("--apply", action="store_true")
+    add_output_options(superseded_cleanup)
+    superseded_cleanup.set_defaults(func=cmd_cleanup_superseded)
 
     cleanup_batch = sub.add_parser(
         "cleanup-after-merge-batch",

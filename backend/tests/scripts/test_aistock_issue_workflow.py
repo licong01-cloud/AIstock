@@ -15809,6 +15809,407 @@ def test_cleanup_after_merge_blocks_unmerged_branch(
     assert "not merged" in payload["blocking"][0]
 
 
+def test_cleanup_supersession_accepts_canonical_bug_replacement(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/registry-validation-smoke"
+    expected_head = "a" * 40
+    merge_commit = "b" * 40
+    replacement_pr = "https://github.example/pull/200"
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, **kwargs: expected_head if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda _url: {"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": merge_commit}}},
+    )
+    monkeypatch.setattr(workflow, "_git_commit_is_ancestor", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        workflow,
+        "_canonical_bug_record_snapshot",
+        lambda bug_id, root: {
+            "bug_id": bug_id,
+            "persisted": True,
+            "status": "fixed",
+            "pr_url": replacement_pr,
+            "fix_commit": merge_commit,
+        },
+    )
+
+    payload = workflow._cleanup_supersession_verification(
+        branch=branch,
+        bug_id="BUG-199",
+        expected_head=expected_head,
+        mode="canonical_bug_replacement",
+        authority_ref="https://github.example/issues/199",
+        reason="The intake branch was replaced by the canonical fix PR.",
+        replacement_pr_url=replacement_pr,
+        supersession_comment_url=None,
+        remote_ref=f"{expected_head}\trefs/heads/{branch}",
+        root=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is True
+    assert payload["blocking"] == []
+    assert payload["authority"]["replacement_merge_commit"] == merge_commit
+
+
+def test_cleanup_supersession_rejects_expected_head_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/registry-validation-smoke"
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, **kwargs: "b" * 40 if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *args, **kwargs: None)
+
+    payload = workflow._cleanup_supersession_verification(
+        branch=branch,
+        bug_id=None,
+        expected_head="a" * 40,
+        mode="patch_equivalent",
+        authority_ref="https://github.example/issues/199",
+        reason="The old validation branch is patch-equivalent to main.",
+        replacement_pr_url=None,
+        supersession_comment_url=None,
+        remote_ref="",
+        root=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is False
+    assert any("HEAD mismatch" in item for item in payload["blocking"])
+
+
+def test_cleanup_supersession_rejects_mixed_authority_modes(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_head = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, **kwargs: expected_head if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(workflow, "_rest_open_pr_for_branch", lambda *args, **kwargs: None)
+
+    payload = workflow._cleanup_supersession_verification(
+        branch="bug/BUG-199-old",
+        bug_id="BUG-199",
+        expected_head=expected_head,
+        mode="patch_equivalent",
+        authority_ref="https://github.example/issues/199",
+        reason="The old branch changes are present in main.",
+        replacement_pr_url="https://github.example/pull/200",
+        supersession_comment_url=None,
+        remote_ref="",
+        root=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is False
+    assert any("does not accept" in item for item in payload["blocking"])
+
+
+def test_git_patch_equivalence_requires_no_unique_commits(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "cherry"]:
+            return {"ok": True, "returncode": 0, "stdout": "- aaaaa\n", "stderr": ""}
+        if args[:3] == ["git", "rev-list", "--merges"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    accepted = workflow._git_patch_equivalence_profile("codex/old-validation", root=isolated_workflow_root)
+    assert accepted["verified"] is True
+
+    def unique_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "cherry"]:
+            return {"ok": True, "returncode": 0, "stdout": "+ bbbbb\n", "stderr": ""}
+        if args[:3] == ["git", "rev-list", "--merges"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", unique_run)
+    rejected = workflow._git_patch_equivalence_profile("codex/unique-validation", root=isolated_workflow_root)
+    assert rejected["verified"] is False
+    assert rejected["positive_commit_count"] == 1
+
+
+def test_canonical_bug_snapshot_does_not_open_unrelated_numbered_json(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs = isolated_workflow_root / "tests" / "aistock_validation" / "bugs"
+    target = bugs / "20260914_BUG-199-target.json"
+    unrelated = bugs / "20260914_BUG-200-unrelated.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{}", encoding="utf-8")
+    unrelated.write_text("{}", encoding="utf-8")
+    loaded: list[Path] = []
+
+    def fake_load(path: Path) -> dict[str, Any]:
+        loaded.append(path)
+        return {
+            "bug_id": "BUG-199",
+            "status": "fixed",
+            "pr_url": "https://github.example/pull/199",
+            "fix_commit": "a" * 40,
+        }
+
+    monkeypatch.setattr(workflow, "_load_json", fake_load)
+    payload = workflow._canonical_bug_record_snapshot("BUG-199", isolated_workflow_root)
+
+    assert payload["persisted"] is True
+    assert loaded == [target]
+
+
+def test_owner_supersession_comment_is_bound_to_closed_pr_head(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_head = "a" * 40
+    comment_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/2910#issuecomment-5479385417"
+
+    def fake_read(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if "issues/comments/5479385417" in args[-1]:
+            payload = {
+                "html_url": comment_url,
+                "author_association": "OWNER",
+                "body": "Superseded by current main. Do not merge this stale PR.",
+            }
+        elif "pulls/2910" in args[-1]:
+            payload = {
+                "html_url": f"https://github.com/{workflow.GITHUB_REPO}/pull/2910",
+                "state": "closed",
+                "merged_at": None,
+                "head": {"ref": "bug/BUG-918-old", "sha": expected_head},
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_transport_read_with_retry", fake_read)
+    payload = workflow._owner_supersession_comment_profile(
+        comment_url,
+        branch="bug/BUG-918-old",
+        expected_head=expected_head,
+        root=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is True
+    assert payload["comment_author_association"] == "OWNER"
+    assert "body" not in payload
+
+
+def test_cleanup_plan_uses_verified_supersession_without_weakening_default_gate(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/registry-validation-smoke"
+    expected_head = "a" * 40
+
+    def fake_git(args: list[str], **_kwargs: Any) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_supersession_verification",
+        lambda **kwargs: {
+            "schema_version": "aistock_cleanup_supersession_verification_v1",
+            "verified": True,
+            "branch": branch,
+            "expected_head": expected_head,
+            "mode": "patch_equivalent",
+            "authority_ref": "https://github.example/issues/199",
+            "reason": "The branch is already present in main.",
+            "authority": {"verified": True},
+            "authority_digest": "b" * 64,
+            "blocking": [],
+        },
+    )
+
+    ordinary = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        canonical_root=str(isolated_workflow_root),
+    )
+    superseded = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        canonical_root=str(isolated_workflow_root),
+        supersession={
+            "expected_head": expected_head,
+            "mode": "patch_equivalent",
+            "authority_ref": "https://github.example/issues/199",
+            "reason": "The branch is already present in main.",
+        },
+    )
+
+    assert ordinary["workflow_gate"] == "blocked"
+    assert superseded["workflow_gate"] == "ready_for_cleanup"
+    assert superseded["merge_verification"]["method"] == "superseded_patch_equivalent"
+
+
+def test_verified_supersession_receipt_allows_transient_purge_plan(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-old"
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-old"
+    artifact = worktree / ".pytest_cache" / "CACHEDIR.TAG"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("Signature: 8a477f597d28d172789f06886806bc55", encoding="utf-8")
+
+    def fake_git(args: list[str], **_kwargs: Any) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        return ""
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "status"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {"ok": True, "returncode": 0, "stdout": ".pytest_cache/CACHEDIR.TAG", "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_evidence_finalization",
+        lambda bug_id: {"status": "bug_record_unavailable", "durable_receipt_present": False},
+    )
+    monkeypatch.setattr(workflow, "_cleanup_protected_receipt_paths", lambda bug_id: set())
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_supersession_verification",
+        lambda **kwargs: {
+            "verified": True,
+            "branch": branch,
+            "expected_head": "a" * 40,
+            "mode": "owner_comment",
+            "authority_ref": "https://github.example/comment/1",
+            "reason": "Repository owner superseded the branch.",
+            "authority": {"verified": True},
+            "authority_digest": "b" * 64,
+            "blocking": [],
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        bug_id="BUG-199",
+        worktree=str(worktree),
+        canonical_root=str(isolated_workflow_root),
+        supersession={
+            "expected_head": "a" * 40,
+            "mode": "owner_comment",
+            "authority_ref": "https://github.example/comment/1",
+            "reason": "Repository owner superseded the branch.",
+        },
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert not any("transient evidence" in item for item in payload["blocking"])
+    purge = next(item for item in payload["actions"] if item["action"] == "purge_transient_worktree_artifacts")
+    assert purge["safe"] is True
+
+
+def test_superseded_cleanup_receipt_is_persisted_outside_target_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt_root = tmp_path / "durable-cleanup-receipts"
+    monkeypatch.setenv("AISTOCK_CLEANUP_RECEIPT_ROOT", str(receipt_root))
+    verification = {
+        "branch": "bug/BUG-199-old",
+        "expected_head": "a" * 40,
+        "mode": "patch_equivalent",
+        "authority_ref": "https://github.example/issues/199",
+        "reason": "The old branch changes are present in main.",
+        "authority_digest": "b" * 64,
+    }
+
+    receipt = workflow._persist_superseded_cleanup_receipt(
+        verification,
+        status="authorized_pre_cleanup",
+    )
+
+    path = Path(receipt["path"])
+    assert path.parent == receipt_root
+    assert path.is_file()
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "authorized_pre_cleanup"
+    assert receipt["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_cleanup_superseded_parser_requires_explicit_identity_and_authority() -> None:
+    args = workflow.build_parser().parse_args(
+        [
+            "cleanup-superseded",
+            "--branch",
+            "bug/BUG-199-old",
+            "--worktree",
+            "F:/Dev/AIstock_worktrees/BUG-199-old",
+            "--expected-head",
+            "a" * 40,
+            "--mode",
+            "patch_equivalent",
+            "--authorization-ref",
+            "https://github.example/issues/199",
+            "--reason",
+            "The old branch is patch-equivalent to origin/main.",
+        ]
+    )
+
+    assert args.func is workflow.cmd_cleanup_superseded
+    assert args.expected_head == "a" * 40
+    assert args.apply is False
+
+
 def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
