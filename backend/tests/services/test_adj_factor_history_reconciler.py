@@ -144,6 +144,38 @@ class _PagedProvider:
         return _provider_rows(ts_code, eligible[-3:])
 
 
+class _ListingProvider:
+    def __init__(self, symbol: str, *, listing_date: dt.date) -> None:
+        self.symbol = symbol
+        self.listing_date = listing_date
+
+    def adj_factor(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+        fields: str,
+    ) -> list[dict[str, str]]:
+        assert ts_code == self.symbol
+        start = dt.datetime.strptime(start_date, "%Y%m%d").date()
+        end = dt.datetime.strptime(end_date, "%Y%m%d").date()
+        values = [(DAY_2, "1.0"), (DAY_3, "1.0")]
+        return _provider_rows(ts_code, [item for item in values if start <= item[0] <= end])
+
+    def stock_basic(
+        self,
+        *,
+        ts_code: str,
+        list_status: str,
+        fields: str,
+    ) -> list[dict[str, str]]:
+        assert ts_code == self.symbol
+        assert list_status == "L"
+        assert fields == "ts_code,list_date"
+        return [{"ts_code": ts_code, "list_date": self.listing_date.strftime("%Y%m%d")}]
+
+
 def _reconciler(repository: _Repository, provider: Any) -> AdjFactorHistoryReconciler:
     return AdjFactorHistoryReconciler(
         repository=repository,
@@ -322,6 +354,45 @@ def test_reconcile_paginates_back_to_required_start_on_both_stability_reads() ->
     assert receipt["status"] == "unchanged"
     assert receipt["provider_call_count"] == 4
     assert provider.call_count == 4
+
+
+def test_reconcile_receipts_pre_authority_predecessor_price_dates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "600018.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_2, "1.0"), (DAY_3, "1.0")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_2, DAY_3})})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    receipt = _reconciler(repository, _ListingProvider(symbol, listing_date=DAY_2)).reconcile(end_date=DAY_3)
+
+    assert receipt["status"] == "unchanged"
+    assert receipt["pre_authority_price_exclusion_count"] == 1
+    assert receipt["pre_authority_price_exclusions"] == [
+        {
+            "symbol": symbol,
+            "reason": "traded_price_precedes_official_listing_adj_factor_authority",
+            "authority_start": DAY_2.isoformat(),
+            "excluded_start": DAY_1.isoformat(),
+            "excluded_end": DAY_1.isoformat(),
+            "excluded_date_count": 1,
+        }
+    ]
+    assert repository.apply_calls == 0
+
+
+def test_reconcile_rejects_a_history_start_that_differs_from_official_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    symbol = "600018.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_2, "1.0"), (DAY_3, "1.0")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_2, DAY_3})})
+    monkeypatch.setattr("backend.services.adj_factor_history_reconciler.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(AdjFactorHistoryReconcileError, match="official listing start"):
+        _reconciler(repository, _ListingProvider(symbol, listing_date=DAY_3)).reconcile(end_date=DAY_3)
+
+    assert repository.apply_calls == 0
 
 
 def test_reconcile_retries_a_transient_empty_provider_page(monkeypatch: pytest.MonkeyPatch) -> None:

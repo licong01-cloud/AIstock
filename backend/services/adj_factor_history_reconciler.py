@@ -52,6 +52,7 @@ class AdjFactorSnapshot:
     first_date: dt.date
     last_date: dt.date
     provider_call_count: int = 0
+    provider_listing_start: dt.date | None = None
 
 
 @dataclass(frozen=True)
@@ -247,10 +248,73 @@ def _fetch_complete_history(
         cursor = next_cursor
     snapshot = _snapshot(symbol, values.values(), provider_call_count=calls)
     if snapshot.first_date > expected_start:
-        raise AdjFactorHistoryReconcileError(
-            f"{symbol}: provider history begins {snapshot.first_date} after required {expected_start}"
+        listing_start, listing_calls = _fetch_provider_listing_start(
+            provider,
+            symbol=symbol,
+            limiter=limiter,
+        )
+        calls += listing_calls
+        if listing_start != snapshot.first_date:
+            raise AdjFactorHistoryReconcileError(
+                f"{symbol}: provider history begins {snapshot.first_date} after required {expected_start}; "
+                f"official listing start is {listing_start}"
+            )
+        snapshot = AdjFactorSnapshot(
+            symbol=snapshot.symbol,
+            rows=snapshot.rows,
+            canonical_sha256=snapshot.canonical_sha256,
+            qfq_sha256=snapshot.qfq_sha256,
+            first_date=snapshot.first_date,
+            last_date=snapshot.last_date,
+            provider_call_count=calls,
+            provider_listing_start=listing_start,
         )
     return snapshot
+
+
+def _fetch_provider_listing_start(
+    provider: Any,
+    *,
+    symbol: str,
+    limiter: _RateLimiter,
+) -> tuple[dt.date, int]:
+    calls = 0
+    for attempt in range(_EMPTY_PAGE_MAX_ATTEMPTS):
+        rows: list[Mapping[str, Any]] = []
+        for list_status in ("L", "D", "P"):
+            limiter.acquire()
+            calls += 1
+            try:
+                payload = provider.stock_basic(
+                    ts_code=symbol,
+                    list_status=list_status,
+                    fields="ts_code,list_date",
+                )
+            except Exception:
+                if attempt + 1 >= _EMPTY_PAGE_MAX_ATTEMPTS:
+                    raise
+                rows = []
+                break
+            if hasattr(payload, "to_dict"):
+                candidates = payload.to_dict("records")
+            elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+                candidates = payload
+            else:
+                raise AdjFactorHistoryReconcileError(f"{symbol}: stock-basic payload is not tabular")
+            rows.extend(row for row in candidates if isinstance(row, Mapping))
+            if rows:
+                break
+        if rows:
+            if len(rows) != 1 or str(rows[0].get("ts_code") or "").strip().upper() != symbol:
+                raise AdjFactorHistoryReconcileError(f"{symbol}: stock-basic listing identity is ambiguous")
+            raw_date = str(rows[0].get("list_date") or "").strip().replace("-", "")
+            try:
+                return dt.datetime.strptime(raw_date, "%Y%m%d").date(), calls
+            except ValueError as exc:
+                raise AdjFactorHistoryReconcileError(f"{symbol}: stock-basic list_date is invalid") from exc
+        if attempt + 1 < _EMPTY_PAGE_MAX_ATTEMPTS:
+            time.sleep(min(2**attempt, 8))
+    raise AdjFactorHistoryReconcileError(f"{symbol}: stock-basic listing identity is empty")
 
 
 def _first_difference(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> tuple[dt.date, dt.date]:
@@ -548,7 +612,10 @@ class AdjFactorHistoryReconciler:
             limiter=self.limiter,
             max_pages=self.max_pages,
         )
-        if first.canonical_sha256 != second.canonical_sha256:
+        if (
+            first.canonical_sha256 != second.canonical_sha256
+            or first.provider_listing_start != second.provider_listing_start
+        ):
             raise AdjFactorHistoryReconcileError(f"{scope.symbol}: provider history changed between stability reads")
         return AdjFactorSnapshot(
             **{
@@ -572,6 +639,7 @@ class AdjFactorHistoryReconciler:
         expected_local: dict[str, str] = {}
         expected_rows: dict[str, int] = {}
         provider_identities: list[dict[str, Any]] = []
+        pre_authority_price_exclusions: list[dict[str, Any]] = []
         retained_nontrading_rows: list[dict[str, str]] = []
         provider_calls = 0
 
@@ -589,7 +657,25 @@ class AdjFactorHistoryReconciler:
                     source_provider = future.result()
                     provider_calls += source_provider.provider_call_count
                     local = self.repository.load_snapshot(scope.symbol, end_date=end_date)
-                    traded_price_dates = self.repository.load_price_dates(scope.symbol, end_date=end_date)
+                    all_traded_price_dates = self.repository.load_price_dates(scope.symbol, end_date=end_date)
+                    predecessor_dates = sorted(
+                        day
+                        for day in all_traded_price_dates
+                        if source_provider.provider_listing_start is not None
+                        and day < source_provider.provider_listing_start
+                    )
+                    if predecessor_dates:
+                        pre_authority_price_exclusions.append(
+                            {
+                                "symbol": scope.symbol,
+                                "reason": "traded_price_precedes_official_listing_adj_factor_authority",
+                                "authority_start": source_provider.provider_listing_start.isoformat(),
+                                "excluded_start": predecessor_dates[0].isoformat(),
+                                "excluded_end": predecessor_dates[-1].isoformat(),
+                                "excluded_date_count": len(predecessor_dates),
+                            }
+                        )
+                    traded_price_dates = frozenset(set(all_traded_price_dates) - set(predecessor_dates))
                     provider, retained = _retain_bounded_nontrading_rows(
                         local,
                         source_provider,
@@ -615,6 +701,11 @@ class AdjFactorHistoryReconciler:
                             "symbol": scope.symbol,
                             "row_count": len(source_provider.rows),
                             "canonical_sha256": source_provider.canonical_sha256,
+                            "provider_listing_start": (
+                                source_provider.provider_listing_start.isoformat()
+                                if source_provider.provider_listing_start is not None
+                                else None
+                            ),
                         }
                     )
                     if provider.canonical_sha256 == local.canonical_sha256:
@@ -654,6 +745,7 @@ class AdjFactorHistoryReconciler:
 
         changes.sort(key=lambda item: item["symbol"])
         provider_identities.sort(key=lambda item: item["symbol"])
+        pre_authority_price_exclusions.sort(key=lambda item: item["symbol"])
         retained_nontrading_rows.sort(key=lambda item: (item["symbol"], item["trade_date"]))
         changed_symbols = [item["symbol"] for item in changes]
         replaced_symbols = [item["symbol"] for item in changes if item["write_mode"] == "full_replace"]
@@ -682,6 +774,10 @@ class AdjFactorHistoryReconciler:
             "full_replace_symbol_count": len(replaced_symbols),
             "changes": changes,
             "provider_snapshot_sha256": sha256_hex(canonical_json_bytes(provider_identities)),
+            "pre_authority_price_exclusion_count": sum(
+                int(item["excluded_date_count"]) for item in pre_authority_price_exclusions
+            ),
+            "pre_authority_price_exclusions": pre_authority_price_exclusions,
             "retained_nontrading_row_count": len(retained_nontrading_rows),
             "retained_nontrading_rows": retained_nontrading_rows,
             "database_write_performed": bool(changed_symbols and not dry_run),
