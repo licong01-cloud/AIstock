@@ -1,9 +1,9 @@
-# AdvisoryDailyPriceEnvelopeV1 日级价格区间 F2 详细设计 v1.1
+# AdvisoryDailyPriceEnvelopeV1 日级价格区间 F2 详细设计 v1.2
 
-> 日期：2026-09-14
+> 日期：2026-09-15
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.59
-> 当前阶段：`SOURCE_IMPLEMENTED_LOCAL_VALIDATED_MODEL_RUN_PENDING`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.60
+> 当前阶段：`MODEL_RUN_COMPLETE_FRESH_CONFIRMATION_REQUIRED_NOT_ACTIVATED`
 > 业务归属：Selection Center / Advisory
 > 运行边界：日频 PIT 价格预测；不研发分钟择时或交易执行
 
@@ -16,6 +16,8 @@
 - M4 v1 已有一个 `entry_executable_probability` 和三个 `entry_gap_q10/q50/q90` LightGBM 头；M4 v2 已有中央 80% CQR 区间校准。
 - v1 test 共 1600 行，`entry_executable` 正例率为 `0.999375`，即 1599 个正例、1 个权威负例；该二分类头不具备足够反例，不能承担买入准入或可执行概率职责。
 - v2 在 validation 的区间覆盖率为 `0.810638`，在已消费 80 日 test 的覆盖率为 `0.727955`，名义覆盖率为 `0.8`，且 `activation_recommended=false`。
+- 2026-09-15 正式 v3 request `advprreq_e788810c50b59802ec2344c3` 生成三头 bundle `30e8a75b4b321a0be31ea6b8530c5bbc0afd2f81d28c2977e74e57226ddf1081`：406 个决策日、8120 个候选、1600 行/80 日 test，耗时 `12.564s`、峰值 RSS `479895552` bytes；三分位数零 crossing，test 覆盖率 `0.733125`。
+- validation-only v4 request `advprcal_9a82e951973c7e58a2bc738f` 生成校准 bundle `508fedfeb48a168792d6650b06cb197556b72f54c48d97a7fa9f6b2075de437f`；validation 940 行/47 日覆盖率 `0.811702`、test 1600 行/80 日覆盖率 `0.733125`，校准扩张量为 0，不能修复 validation→test 漂移。强制结论为 `FRESH_CONFIRMATION_REQUIRED`、`activation_recommended=false`、零 binding/零 runtime activation。
 - 当前磁盘 binding 仍指向未校准 v1 bundle；当前 P0-D descriptor 没有组合 M4，因此生产响应保持 typed unavailable。源码存在、artifact 存在、binding 存在和当前 descriptor 激活是四个不同状态。
 
 由此冻结两个决定：
@@ -251,14 +253,14 @@ entry_gap_q90: LightGBM quantile alpha=0.90
 | F-367 | §8.3；`backend/services/advisory_model_first/price_range_calibration_pipeline.py` | `backend/tests/advisory_model_first/test_price_range_calibration_pipeline.py`；`test_price_range_calibration_bundle.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-368 | §10；`frontend/src/app/paper-v2/advisory/page.tsx` | `node node_modules/typescript/bin/tsc --noEmit`；`frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts`定向 Playwright | IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-369 | §3、§13；`backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_model_inference.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-370 | §8.3、§13；训练/校准 pipeline metrics contract | `backend/tests/advisory_model_first/test_price_range_training.py`；`test_price_range_calibration_pipeline.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-371 | §9、§12；v3/v4 bundle 与 runtime strict validator | `backend/tests/advisory_model_first/test_price_range_bundle.py`；`test_price_range_calibration_bundle.py`；`test_price_range_runtime_bundle.py` | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-370 | §8.3、§13；训练/校准 pipeline metrics contract | `backend/tests/advisory_model_first/test_price_range_training.py`、`backend/tests/advisory_model_first/test_price_range_calibration_pipeline.py`；正式 v3 receipt `F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_e788810c50b59802ec2344c3/daily_price_envelope_training_receipt.json`；正式 v4 receipt `F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_calibration_runs/advprcal_9a82e951973c7e58a2bc738f/daily_price_envelope_calibration_receipt.json` | FORMAL_ARTIFACT_VERIFIED_NOT_ACTIVATED | none |
+| F-371 | §9、§12；v3/v4 bundle 与 runtime strict validator | `backend/tests/advisory_model_first/test_price_range_bundle.py`、`backend/tests/advisory_model_first/test_price_range_calibration_bundle.py`；严格 reader 读回 v3 `30e8a75b...` 与 v4 `508fedfe...` | FORMAL_ARTIFACT_VERIFIED_NOT_ACTIVATED | none |
 | F-372 | §3、§11 | `backend/tests/advisory_model_first/test_daily_price_envelope_boundaries.py`；`git diff --name-only` ownership scan | IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-373 | §1～§18 | `python -m pytest backend/tests/advisory_model_first/test_daily_price_envelope_contract.py`等78项及`backend/tests/advisory_model_first/test_price_range_request_contracts.py` 5项；完整`advisory_modeling_backend`回归989项通过/16项跳过；`python -m ruff check`；TypeScript；`frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` Playwright 2项；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_daily_price_envelope_v1_f2_design_20260914.md --tier F2` | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-373 | §1～§18 | `python -m pytest backend/tests/advisory_model_first/test_daily_price_envelope_contract.py`等78项及`backend/tests/advisory_model_first/test_price_range_request_contracts.py` 9项；PR #4704/#4722 的完整`advisory_modeling_backend` CI、`python -m ruff check`、TypeScript、`frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` Playwright 2项及 F2 validator 通过 | IMPLEMENTED_AND_CI_VERIFIED | none |
 
 ## 16. Rollout / Rollback 与终止条件
 
-本次源码切片完成条件：F-360～F-373 的源码合同无未批准 gap；详细设计与源码重复审核通过；定向验证和 F2 validator 通过；PR CI 通过并合入。F-370 只验收评价指标实现，F-371 只验收严格读取与拒绝逻辑；真实 v3/v4 模型数值、binding、用户重启和运行时 readback 继续作为后续独立状态显式 pending，不得用源码测试冒充完成。
+源码切片已由 PR #4704 合入，BUG-1504 的启动器合同转发修复由 PR #4722 合入。F-360～F-373 无未批准源码 gap；v3/v4 真实模型、校准 receipt 和严格 manifest 读回已完成。因已消费 test 仅有 `0.733125` 覆盖率且低于名义 0.8，当前终止在 `FRESH_CONFIRMATION_REQUIRED_NOT_ACTIVATED`：不发布 binding、不要求重启、不做生产 readback。后续唯一合法证据是新鲜一次性 holdout 或自然前向，不得调已消费 test。
 
 模型终止条件：若三分位数模型在预注册评价中未达到校准与经济解释要求，则不调已消费 test、不恢复 executable binary、不输出规则替代品；保留源码能力并返回 `EXPERIMENTAL_SHADOW/UNCALIBRATED` 或 typed unavailable，等待新信息集或自然前向。
 
