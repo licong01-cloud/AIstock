@@ -1,6 +1,6 @@
-# AdvisoryAdaptivePriceCalibrationV1 F2 详细设计 v1.1
+# AdvisoryAdaptivePriceCalibrationV1 F2 详细设计 v1.2
 
-> 状态：源码本地验证完成；已消费窗口正式运行待 QE 并发门禁释放
+> 状态：源码与正式历史导航审计完成；`selected=0`，lineage终止且不激活
 >
 > 业务归属：Selection Center / Advisory
 >
@@ -269,3 +269,13 @@ python -m backend.services.advisory_model_first.adaptive_price_calibration_cli r
 ## 19. DESIGN-COMPLIANCE-001
 
 交付前逐项核对 F-408～F-420。设计通过只代表允许实现；源码通过只代表离线研究能力可用；已消费窗口的真实结果仍只允许导航。独立 confirmation、binding、merge、backend restart和runtime readback必须分别报告。
+
+## 20. 正式结果与路由（2026-09-16）
+
+- 自然前向基线：T=`2026-09-15` settlement `advprsett_14c46af1fa2bdb92088b425c` 已完成20/20市场及模型读回，business coverage为`0.70`；仅一日，状态保持`ACCUMULATING`，不参与本历史lineage选点。
+- 源码：PR #4785 已以 merge commit `8021790ab4fbbb1758d0bdc5a0904dc22686ce29` 进入 `main`；CI verdict、27项直接测试、1022项Advisory全模块测试、Ruff、L0和F2 validator均通过。
+- 正式artifact：`adaptive_price_calibration_runs/advpradapt_8c81ea2bd2f70d75e1683fe9`，result SHA256为`490fdb606a0d95c3853b7858e6ac76fdfae27aff09d1045c9867f2e2a62ec433`；exact retry返回`ALREADY_MATERIALIZED`且registry为duplicate no-op。
+- 支持：已消费80日/1600行；adaptive active为75日/1500行。未读取sealed holdout，数据库、binding和runtime写入均为0。
+- 指标：active model coverage从`0.731333`变为`0.782667`，business coverage从`0.810000`变为`0.847333`；model/business width ratio为`1.149768/1.130019`，tick rescue/harm为`56/0`。
+- 终止门：按交易日聚类bootstrap的coverage-error改善point为`0.012667`，95%区间`[-0.003333,0.030000]`，lower-bound gate失败；其余support、coverage point、width、miss、business和identity门均通过。
+- 结论：`selected_trial_count=0`。保持static v4，不回选窗口、不放宽门、不派生同窗口变体，不进入independent confirmation或`ENTRY_PRICE` binding；未来只允许自然前向证据成熟或新信息集假设建立新lineage。
