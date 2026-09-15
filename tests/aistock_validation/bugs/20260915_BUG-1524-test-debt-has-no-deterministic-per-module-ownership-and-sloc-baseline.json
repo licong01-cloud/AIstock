@@ -3,8 +3,8 @@
   "allowed_write_scope": [
     "noxfile.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
-    "scripts/aistock_test_debt_audit.py",
-    "backend/tests/scripts/test_aistock_test_debt_audit.py",
+    "scripts/aistock_validation_budget.py",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
     "tests/aistock_validation/bugs/20260915_BUG-1524-test-debt-has-no-deterministic-per-module-ownership-and-sloc-baseline.json"
   ],
   "assigned_agent": null,
@@ -29,8 +29,8 @@
   "expected": "A deterministic tracked-file audit assigns each executable source/test file to one primary module, reports honest effective SLOC ratios and test-only buckets, and can enforce explicit budgets without path or denominator gaming.",
   "file_scope_contract": {
     "added_files": [
-      "scripts/aistock_test_debt_audit.py",
-      "backend/tests/scripts/test_aistock_test_debt_audit.py"
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ],
     "changed_files": [
       "noxfile.py",
@@ -41,8 +41,8 @@
       "changed_files": [
         "noxfile.py",
         "tests/aistock_validation/catalog/file_ownership.yaml",
-        "scripts/aistock_test_debt_audit.py",
-        "backend/tests/scripts/test_aistock_test_debt_audit.py"
+        "scripts/aistock_validation_budget.py",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "impacted_modules": [
         "validation.runner",
@@ -79,14 +79,14 @@
           "rule_id": "validation_catalog_module_quality"
         },
         {
-          "file": "scripts/aistock_test_debt_audit.py",
+          "file": "scripts/aistock_validation_budget.py",
           "impact_modules": [],
           "primary_module": "scripts",
           "risk_level": "medium",
           "rule_id": "scripts_default"
         },
         {
-          "file": "backend/tests/scripts/test_aistock_test_debt_audit.py",
+          "file": "backend/tests/scripts/test_aistock_validation_budget.py",
           "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
@@ -100,23 +100,23 @@
       "suggested_scope": [
         "noxfile.py",
         "tests/aistock_validation/catalog/file_ownership.yaml",
-        "scripts/aistock_test_debt_audit.py",
-        "backend/tests/scripts/test_aistock_test_debt_audit.py"
+        "scripts/aistock_validation_budget.py",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml",
-      "scripts/aistock_test_debt_audit.py",
-      "backend/tests/scripts/test_aistock_test_debt_audit.py"
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml",
-      "scripts/aistock_test_debt_audit.py",
-      "backend/tests/scripts/test_aistock_test_debt_audit.py"
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ]
   },
   "first_seen_at": "2026-09-15T16:13:45.623268Z",
@@ -134,7 +134,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/scripts/test_aistock_test_debt_audit.py -q",
+  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/scripts/test_aistock_validation_budget.py -q",
   "required_verification": [
     "l0",
     "validation_module_registry_l0",
