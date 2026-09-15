@@ -1844,6 +1844,11 @@ def test_main_c010_a5_preflight_writes_compact_readonly_receipt(monkeypatch, tmp
     assert receipt["database_write_performed"] is False
 
 
+def test_legacy_fixed_seed_ready_writer_is_disabled() -> None:
+    with pytest.raises(StateModelSetError, match="legacy fixed-seed preparation is disabled"):
+        subject.prepare({}, artifact_root=None, output_root=None, db_prefix="TDX_DB_DEV_")
+
+
 def test_formal_producer_identity_rejects_dirty_worktree(monkeypatch) -> None:
     monkeypatch.setattr(subject, "_git_commit", lambda: "d" * 40)
     monkeypatch.setattr(

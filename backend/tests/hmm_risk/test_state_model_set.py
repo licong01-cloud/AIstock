@@ -226,6 +226,17 @@ def _training_series(feature_count: int = 7) -> dict[str, subject.L1TrainingSeri
     return output
 
 
+def test_legacy_fixed_seed_training_is_disabled_before_any_partial_or_semantic_path() -> None:
+    with pytest.raises(subject.StateModelSetError, match="legacy fixed-seed L1 training is disabled"):
+        subject.train_l1_models(
+            _training_series(),
+            feature_names=subject.BASE_FEATURES,
+            preprocess_family="identity",
+            random_seed=42,
+            observation_version="hmm_risk_l1_stock_fact_observation_v1",
+        )
+
+
 def test_c008_seed_diagnostic_records_all_seeds_without_selection(monkeypatch) -> None:
     series = _training_series()
 
@@ -717,3 +728,8 @@ def test_c008_diagnostic_report_is_immutable_and_content_hashed(tmp_path) -> Non
         preparation._write_diagnostic_report(path, {**report, "status": "different"})
 
 
+def test_legacy_fixed_seed_build_and_ready_writer_are_disabled(tmp_path) -> None:
+    with pytest.raises(subject.StateModelSetError, match="legacy state-model-set READY construction is disabled"):
+        subject.build_state_model_set(spec=None, l1_artifact={}, l2_artifact={})
+    with pytest.raises(subject.StateModelSetError, match="legacy state-model-set READY writing is disabled"):
+        subject.write_state_model_set(tmp_path, manifest={}, l1_bytes=b"{}", l2_bytes=b"{}")

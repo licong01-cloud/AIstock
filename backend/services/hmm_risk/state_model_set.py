@@ -2560,6 +2560,21 @@ def diagnose_l1_seed_grid_b3_diag04(
     }
 
 
+def train_l1_models(
+    series: Mapping[str, L1TrainingSeries],
+    *,
+    feature_names: Sequence[str],
+    preprocess_family: str,
+    random_seed: int,
+    observation_version: str,
+) -> dict[str, Any]:
+    """Train all 31 independent direct L1 models or fail the whole family."""
+
+    raise StateModelSetError(
+        "legacy fixed-seed L1 training is disabled because it cannot satisfy the approved B3 D3-D6 contracts"
+    )
+
+
 @dataclass(frozen=True)
 class StateModelSetSpec:
     family: str
@@ -2608,6 +2623,19 @@ class StateModelSetSpec:
         _require_sha256(self.source_l2_artifact_sha256, "source_l2_artifact_sha256")
 
 
+def build_state_model_set(
+    *,
+    spec: StateModelSetSpec,
+    l1_artifact: Mapping[str, Any],
+    l2_artifact: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes, bytes]:
+    """Build a READY manifest only after both complete direct layers validate."""
+
+    raise StateModelSetError(
+        "legacy state-model-set READY construction is disabled; use the formal B3 four-layer writer"
+    )
+
+
 def _write_immutable(path: Path, payload: bytes) -> None:
     if path.exists():
         if path.read_bytes() != payload:
@@ -2629,3 +2657,13 @@ def _write_immutable(path: Path, payload: bytes) -> None:
         raise
 
 
+def write_state_model_set(
+    output_root: str | Path,
+    *,
+    manifest: Mapping[str, Any],
+    l1_bytes: bytes,
+    l2_bytes: bytes,
+) -> Path:
+    """Atomically write a complete content-addressed set; never write partial READY."""
+
+    raise StateModelSetError("legacy state-model-set READY writing is disabled; use the formal B3 four-layer writer")
