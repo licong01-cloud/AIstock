@@ -495,6 +495,9 @@ rules:
       - backend/tests/scripts/test_ci_changed_files.py
       - scripts/ci_change_classifier.py
       - backend/tests/scripts/test_ci_change_classifier.py
+      - scripts/ci_workflow_policy_scan.py
+      - scripts/maintain_aistock_git_mirror.ps1
+      - backend/tests/scripts/test_ci_workflow_policy_scan.py
       - scripts/validate_changed_requirements.py
       - .pre-commit-config.yaml
       - .semgrep.yml
