@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1510",
-  "closed_at": null,
+  "closed_at": "2026-09-15T05:00:31.007855Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -211,10 +211,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1510\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1510",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8ff2b67a2ebdc235f9632217439f8a44b29be84cb73134c6c6529a7c093456ca",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "5072d75b49d47e331e3636265eb2bd806e8c33ab",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-15T04:59:47.632417Z",
+      "mode": "read_only",
+      "observed_identity": "5072d75b49d47e331e3636265eb2bd806e8c33ab",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b8725d8bf8b5c0714651051dfeb82ebf97ec58bfb813c12293fda09b24fa9d70",
+      "receipt_sha256": "9d8aeda923ad0b5d24e774b74c96ba5f39adba41d44e2f2c9999280c8029f2bc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5b9d1dbc21676e61231f88081492f9f0ce747baa18a3771c84a20f165213a497",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -245,7 +267,7 @@
     ],
     "validation_evidence_digest": "41a488c4ed8771a6011c850336a74ae7d6476553e469f959179b1204b3c80ab9"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
