@@ -1275,7 +1275,7 @@ def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
     assert payload["backend_sessions"] == ["hmm_data_source_backend"]
 
 
-def test_hmm_local_change_uses_pr_slice_and_cross_contract_change_escalates(tmp_path: Path) -> None:
+def test_hmm_local_and_cross_contract_changes_use_pr_slice(tmp_path: Path) -> None:
     local = classifier.classify_changed_files(
         [
             "backend/services/hmm_risk/rotation_l1_prediction.py",
@@ -1292,10 +1292,10 @@ def test_hmm_local_change_uses_pr_slice_and_cross_contract_change_escalates(tmp_
     assert local["backend_sessions"] == ["hmm_risk_pr_slice"]
     assert local["unexecuted_test_files"] == []
     assert critical["workflow_gate"] == "passed"
-    assert critical["backend_sessions"] == ["hmm_risk_backend"]
+    assert critical["backend_sessions"] == ["hmm_risk_pr_slice"]
 
 
-def test_hmm_full_plan_subsumes_pr_slice_for_mixed_cross_contract_change() -> None:
+def test_hmm_mixed_cross_contract_change_stays_on_pr_slice() -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/services/hmm_risk/state_model_set.py",
@@ -1306,11 +1306,11 @@ def test_hmm_full_plan_subsumes_pr_slice_for_mixed_cross_contract_change() -> No
     )
 
     assert payload["workflow_gate"] == "passed"
-    assert payload["backend_sessions"] == ["hmm_risk_backend"]
-    assert payload["suppressed_plan_keys"] == {"hmm_risk_pr_slice": "hmm_risk_backend"}
-    assert "hmm_risk_pr_slice" not in payload["selected_plan_keys"]
+    assert payload["backend_sessions"] == ["hmm_risk_pr_slice"]
+    assert payload["suppressed_plan_keys"] == {}
+    assert "hmm_risk_pr_slice" in payload["selected_plan_keys"]
     assert payload["changed_test_plan_coverage"]["coverage"] == {
-        "backend/tests/hmm_risk/test_rotation_l1_prediction.py": ["hmm_risk_backend"]
+        "backend/tests/hmm_risk/test_rotation_l1_prediction.py": ["hmm_risk_pr_slice"]
     }
 
 

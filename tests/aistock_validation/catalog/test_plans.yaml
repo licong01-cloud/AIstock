@@ -646,17 +646,12 @@ plans:
     evidence_kinds: [pytest, compileall]
     change_applicability:
       include:
+        - backend/db/init_hmm_risk_schema.py
+        - backend/routers/hmm_risk.py
         - backend/services/hmm_risk/**
         - backend/tests/hmm_risk/**
         - scripts/hmm_risk/**
-      exclude:
-        - backend/services/hmm_risk/__init__.py
-        - backend/services/hmm_risk/canonical_stock_fact_source.py
-        - backend/services/hmm_risk/observation_eligibility.py
-        - backend/services/hmm_risk/security_identity.py
-        - backend/services/hmm_risk/state_model_set.py
-        - backend/services/hmm_risk/stock_fact_repository.py
-      no_match_reason: hmm_risk_change_requires_full_cross_contract_validation_or_is_not_a_backend_slice
+      no_match_reason: change_does_not_affect_hmm_risk_python_contracts
   - plan_key: hmm_risk_backend
     title: HMM Risk full package coverage for cross-contract changes and Nightly
     module: hmm.risk
@@ -673,21 +668,11 @@ plans:
     writes_artifacts: true
     writes_business_state: false
     runner_enabled: true
+    execution_scope: nightly
     max_duration_seconds: 1800
     evidence_kinds: [pytest, coverage, junit]
     coverage_required: true
     subsumes: [hmm_risk_pr_slice]
-    change_applicability:
-      include:
-        - backend/db/init_hmm_risk_schema.py
-        - backend/routers/hmm_risk.py
-        - backend/services/hmm_risk/__init__.py
-        - backend/services/hmm_risk/canonical_stock_fact_source.py
-        - backend/services/hmm_risk/observation_eligibility.py
-        - backend/services/hmm_risk/security_identity.py
-        - backend/services/hmm_risk/state_model_set.py
-        - backend/services/hmm_risk/stock_fact_repository.py
-      no_match_reason: hmm_risk_change_is_local_and_uses_the_pr_slice
   - plan_key: hmm_risk_ui
     title: HMM Risk mocked UI contracts
     module: hmm.risk
