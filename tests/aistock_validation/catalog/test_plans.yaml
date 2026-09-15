@@ -676,6 +676,7 @@ plans:
     max_duration_seconds: 1800
     evidence_kinds: [pytest, coverage, junit]
     coverage_required: true
+    subsumes: [hmm_risk_pr_slice]
     change_applicability:
       include:
         - backend/db/init_hmm_risk_schema.py
