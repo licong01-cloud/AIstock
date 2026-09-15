@@ -425,6 +425,7 @@ rules:
       - scripts/aistock_validate.py
       - scripts/aistock_guardrail_scan.py
       - scripts/aistock_module_ownership_scan.py
+      - scripts/aistock_validation_budget.py
       - scripts/aistock_issue_workflow.py
       - scripts/aistock_feature_workflow.py
       - scripts/issue_flow.py
@@ -440,6 +441,16 @@ rules:
     layer: script
     risk_level: high
     ownership_reason: Validation and guardrail scripts are execution entry points for the local pipeline.
+  - rule_id: validation_test_debt_audit
+    priority: 110
+    include:
+      - scripts/aistock_validation_budget.py
+      - backend/tests/scripts/test_aistock_validation_budget.py
+    primary_module: validation.runner
+    impact_modules: [validation.guardrails, validation.module_quality]
+    layer: dev_quality_tooling
+    risk_level: high
+    ownership_reason: Test-debt measurement must use the validation ownership authority and must not fall into the generic tests.backend bucket.
   - rule_id: code_intelligence_catalog
     priority: 100
     include:
