@@ -18,6 +18,7 @@ from backend.services.quantevolver.qe_active_dataset_profile import (
     resolve_active_qe_dataset,
 )
 from backend.services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_INDEX_CODES
+from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.quantevolver.experiment_config import ExperimentConfig
 from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
@@ -119,7 +120,12 @@ def test_experiment_config_is_final_star50_top20_consumer_guard() -> None:
         )
 
 
-def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
+def _fixture_profile(
+    tmp_path: Path,
+    *,
+    with_gap: bool = False,
+    with_sector_policy: bool = False,
+) -> Path:
     candidate = tmp_path / "candidate"
     pool_root = tmp_path / "pools"
     day = candidate / "components" / "daily_bin_candidate"
@@ -208,6 +214,42 @@ def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
         candidate / "components" / "factor_h5_static_candidate_v2" / "meta.json",
         _canonical(factor_meta),
     )
+    sector_policy_pins = None
+    if with_sector_policy:
+        import pandas as pd
+
+        factor_root = candidate / "components" / "factor_h5_static_candidate_v2"
+        code_map = {
+            "schema_version": "qe_sw_l2_code_map_v1",
+            "ordered_codes": ["801010.SI", "801020.SI"],
+        }
+        code_map["code_map_digest"] = digest_named_fields(
+            "dataset_release_sw_l2_code_map_v1",
+            {"ordered_codes": code_map["ordered_codes"]},
+        )
+        code_map_sha = _write(
+            factor_root / "sector_code_map.json",
+            _canonical(code_map),
+        )
+        membership_path = factor_root / "sector_membership_spans.parquet"
+        membership_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {"instrument": "000001.SZ", "start_date": "2018-08-01", "end_date": "2026-08-31", "l2_code_id": 0},
+                {"instrument": "000002.SZ", "start_date": "2018-08-01", "end_date": "2026-08-31", "l2_code_id": 1},
+                {"instrument": "000003.SZ", "start_date": "2018-08-01", "end_date": "2026-08-31", "l2_code_id": 1},
+            ]
+        ).to_parquet(membership_path, index=False)
+        sector_policy_pins = {
+            "schema_version": "qe_sector_policy_input_v1",
+            "membership_file": membership_path.name,
+            "membership_sha256": _sha(membership_path.read_bytes()),
+            "code_map_file": "sector_code_map.json",
+            "code_map_sha256": code_map_sha,
+            "start": "2018-08-01",
+            "end": "2026-08-31",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
     index_sha = _write(
         candidate / "components" / "index_context" / "index_daily.h5",
         b"index-fixture",
@@ -230,8 +272,43 @@ def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
         candidate / "components" / "suspend_d_daily_candidate_v2" / "suspend_d.parquet",
         b"suspend-parquet",
     )
+    components = {
+        "factor_meta": factor_meta,
+        "factor_meta_sha256": factor_meta_sha,
+        "day_pins": {
+            "snapshot_id": "daily_bin_candidate",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+            "rule_version": "pit-v2",
+            "instruments_sha256": day_all_sha,
+            "calendar_sha256": calendar_sha,
+            "meta_export_sha256": day_meta_sha,
+        },
+        "minute_pins": {
+            "snapshot_id": "minute_bin_candidate",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+            "rule_version": "pit-v2",
+            "instruments_sha256": minute_all_sha,
+            "calendar_sha256": minute_calendar_sha,
+            "meta_export_sha256": minute_meta_sha,
+        },
+        "benchmark_instruments_sha256": benchmark_sha,
+        "index_pins": {"sha256": index_sha, "max_date": "2026-08-31", "codes": list(QE_DIRECT_V2_INDEX_CODES)},
+        "suspend_pins": {
+            "dataset_id": "suspend_d_daily_candidate_v2",
+            "schema_version": "qe_direct_suspend_d_v1",
+            "source_contract": "market.suspend_d",
+            "metadata_sha256": suspend_meta_sha,
+            "parquet_sha256": suspend_parquet_sha,
+        },
+    }
+    if sector_policy_pins is not None:
+        components["sector_policy_pins"] = sector_policy_pins
     profile = {
-        "schema_version": "aistock_active_dataset_profile_v1",
+        "schema_version": (
+            "aistock_active_dataset_profile_v2"
+            if with_sector_policy
+            else "aistock_active_dataset_profile_v1"
+        ),
         "generation": "20260906-v1",
         "release_id": "qe-hmm-v2-20260831",
         "cutoff": "2026-08-31",
@@ -240,35 +317,7 @@ def _fixture_profile(tmp_path: Path, *, with_gap: bool = False) -> Path:
             "stock_pool_root": str(pool_root),
             "coverage_receipt_path": str(receipt_path),
         },
-        "components": {
-            "factor_meta": factor_meta,
-            "factor_meta_sha256": factor_meta_sha,
-            "day_pins": {
-                "snapshot_id": "daily_bin_candidate",
-                "universe_key": "aistock_equity_pit_canonical_v2",
-                "rule_version": "pit-v2",
-                "instruments_sha256": day_all_sha,
-                "calendar_sha256": calendar_sha,
-                "meta_export_sha256": day_meta_sha,
-            },
-            "minute_pins": {
-                "snapshot_id": "minute_bin_candidate",
-                "universe_key": "aistock_equity_pit_canonical_v2",
-                "rule_version": "pit-v2",
-                "instruments_sha256": minute_all_sha,
-                "calendar_sha256": minute_calendar_sha,
-                "meta_export_sha256": minute_meta_sha,
-            },
-            "benchmark_instruments_sha256": benchmark_sha,
-            "index_pins": {"sha256": index_sha, "max_date": "2026-08-31", "codes": list(QE_DIRECT_V2_INDEX_CODES)},
-            "suspend_pins": {
-                "dataset_id": "suspend_d_daily_candidate_v2",
-                "schema_version": "qe_direct_suspend_d_v1",
-                "source_contract": "market.suspend_d",
-                "metadata_sha256": suspend_meta_sha,
-                "parquet_sha256": suspend_parquet_sha,
-            },
-        },
+        "components": components,
         "node_bindings": {
             "wsl2-5080": {"candidate_root": "/mnt/x/candidate"},
             "rdagent-node1": {"candidate_root": "/home/lc999/candidate"},
@@ -373,6 +422,56 @@ def test_single_and_union_sidecars_are_deterministic(tmp_path: Path, monkeypatch
     assert union_a.stock_pool_content == union_b.stock_pool_content
     assert union_a.binding.selection_pins == union_b.binding.selection_pins
     assert union_a.stock_pool_content.count("000002.SZ") == 1
+
+
+def test_sector_blacklist_materializes_run_scoped_pool_without_changing_p00(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_policy=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+
+    baseline = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        universe_selection={"mode": "single_index", "pool_ids": ["csi300"]},
+        profile=profile,
+    )
+    filtered = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        universe_selection={"mode": "single_index", "pool_ids": ["csi300"]},
+        custom_params={"sector_blacklist": ["801010.SI"]},
+        profile=profile,
+    )
+
+    assert baseline is not None and filtered is not None
+    assert baseline.stock_pool_content == (
+        "000001.SZ\t2024-07-01\t2026-08-31\n"
+        "000002.SZ\t2024-07-01\t2026-08-31\n"
+    )
+    assert filtered.stock_pool_content == "000002.SZ\t2024-07-01\t2026-08-31\n"
+    assert filtered.binding.selection_pins["instrument_name"] == "index_pool__csi300"
+    assert filtered.binding.selection_pins["instruments_sha256"] != baseline.binding.selection_pins["instruments_sha256"]
+    applied = filtered.apply({"sector_blacklist": ["801010.SI"]})
+    assert applied["_qe_sector_blacklist_policy"]["blacklist_excluded_count"] == 1
+    assert applied["_qe_run_stock_pool_content"] == filtered.stock_pool_content
+
+
+def test_sector_blacklist_requires_v2_frozen_policy_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+
+    with pytest.raises(QEActiveDatasetProfileError, match="qe_sector_blacklist_frozen_mapping_missing"):
+        resolve_active_qe_dataset(
+            node_id="wsl2-5080",
+            custom_params={"sector_blacklist": ["801010.SI"]},
+            profile=profile,
+        )
 
 
 def test_profile_enabled_failures_do_not_fall_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

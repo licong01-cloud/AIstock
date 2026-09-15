@@ -48,10 +48,23 @@ PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
 )
-GIT_ALTERNATE_CLEAR_MARKER = "\n  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
+GIT_MIRROR_STEP_MARKERS = (
+    "name: Prepare verified local Git object mirror",
+    "id: git_mirror",
+    "$env:GIT_ALTERNATE_OBJECT_DIRECTORIES = ''",
+    "aistock_git_object_mirror_v1",
+    "$workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\\HEAD'",
+    "Test-Path -LiteralPath $workspaceHead -PathType Leaf",
+    "fallback=bounded_remote",
+    '"GIT_ALTERNATE_OBJECT_DIRECTORIES=$objects" >> $env:GITHUB_ENV',
+    "exit 0",
+)
+GIT_MIRROR_CHECKOUT_MARKER = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}"
+)
 GIT_HTTP_LOW_SPEED_MARKERS = (
-    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n",
-    "\n  GIT_HTTP_LOW_SPEED_TIME: '30'\n",
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
     "\n  GIT_CONFIG_COUNT: '1'\n",
     "\n  GIT_CONFIG_KEY_0: http.version\n",
     "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
@@ -145,6 +158,18 @@ def _pack_cleanup_step_blocks(job_block: str) -> list[str]:
     ]
 
 
+def _checkout_has_verified_mirror_predecessor(job_block: str, checkout_step: str) -> bool:
+    steps = _workflow_step_blocks(job_block)
+    checkout_index = steps.index(checkout_step)
+    return (
+        GIT_MIRROR_CHECKOUT_MARKER in checkout_step
+        and any(
+            all(marker in step for marker in GIT_MIRROR_STEP_MARKERS)
+            for step in steps[:checkout_index]
+        )
+    )
+
+
 def _self_hosted_checkout_job_blocks(text: str) -> list[str]:
     return [
         block
@@ -223,15 +248,6 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     for path in paths:
         text = path.read_text(encoding="utf-8")
-        if "self-hosted" in text and GIT_ALTERNATE_CLEAR_MARKER not in text:
-            findings.append(
-                {
-                    "path": path.as_posix(),
-                    "line": "1",
-                    "reason": "self-hosted workflow must clear inherited Git alternate object directories",
-                    "text": "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                }
-            )
         if "self-hosted" in text and not all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS):
             findings.append(
                 {
@@ -243,6 +259,18 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
             )
         for checkout_job in _self_hosted_checkout_job_blocks(text):
             for checkout_step in _checkout_step_blocks(checkout_job):
+                if not _checkout_has_verified_mirror_predecessor(checkout_job, checkout_step):
+                    findings.append(
+                        {
+                            "path": path.as_posix(),
+                            "line": "1",
+                            "reason": (
+                                "self-hosted checkout must use a verified local Git object mirror "
+                                "with bounded remote fallback"
+                            ),
+                            "text": "Prepare verified local Git object mirror",
+                        }
+                    )
                 if SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER not in checkout_step:
                     findings.append(
                         {
@@ -321,6 +349,8 @@ def build_contract_evidence(
     runner_start_path: Path = Path("scripts/start_aistock_github_runner.ps1"),
     runner_supervisor_path: Path = Path("scripts/supervise_aistock_github_runner.ps1"),
     runner_health_path: Path = Path("scripts/aistock_runner_health.py"),
+    git_mirror_maintenance_path: Path = Path("scripts/maintain_aistock_git_mirror.ps1"),
+    test_plans_path: Path = Path("tests/aistock_validation/catalog/test_plans.yaml"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -358,6 +388,12 @@ def build_contract_evidence(
         nightly_session_runner_path.read_text(encoding="utf-8") if nightly_session_runner_path.exists() else ""
     )
     runner_configure_text = runner_configure_path.read_text(encoding="utf-8") if runner_configure_path.exists() else ""
+    git_mirror_maintenance_text = (
+        git_mirror_maintenance_path.read_text(encoding="utf-8")
+        if git_mirror_maintenance_path.exists()
+        else ""
+    )
+    test_plans_text = test_plans_path.read_text(encoding="utf-8") if test_plans_path.exists() else ""
     runner_start_text = runner_start_path.read_text(encoding="utf-8") if runner_start_path.exists() else ""
     runner_supervisor_text = (
         runner_supervisor_path.read_text(encoding="utf-8") if runner_supervisor_path.exists() else ""
@@ -446,9 +482,22 @@ def build_contract_evidence(
         and all("aistock-ci" in text.casefold() for text in ci_texts),
         "environment_fingerprint_match": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
         and all("ci_environment_verify.py" in text for text in ci_texts),
-        "self_hosted_workflows_clear_git_alternate_objects": all(
-            "self-hosted" not in text or GIT_ALTERNATE_CLEAR_MARKER in text
-            for text in workflow_text.values()
+        "self_hosted_workflows_use_verified_git_object_mirror": bool(self_hosted_checkout_jobs)
+        and all(
+            _checkout_has_verified_mirror_predecessor(job_block, checkout_step)
+            for job_block in self_hosted_checkout_jobs
+            for checkout_step in _checkout_step_blocks(job_block)
+        ),
+        "git_object_mirror_maintenance_is_bounded_and_offline": all(
+            marker in git_mirror_maintenance_text
+            for marker in (
+                "Resolve-BoundedPath",
+                "refs/heads/main:refs/heads/main",
+                "fsck', '--connectivity-only', '--no-dangling",
+                "network_accessed = $false",
+                "process_control_performed = $false",
+                "Timed out waiting for Git mirror maintenance lock",
+            )
         ),
         "self_hosted_git_http_stalls_are_bounded": all(
             "self-hosted" not in text
@@ -673,6 +722,26 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites": (
+            "id: prerequisite_gate" in ci_verdict_text
+            and "heavy_lanes_allowed=false" in ci_verdict_text
+            and "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'" in ci_verdict_text
+            and ci_verdict_text.count(
+                "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'"
+            )
+            >= 7
+            and "PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}" in ci_verdict_text
+            and "L0_RESULT: ${{ steps.l0_validation.outcome }}" in ci_verdict_text
+            and "CATALOG_INTEGRITY_RESULT: ${{ steps.catalog_integrity_validation.outcome }}"
+            in ci_verdict_text
+        ),
+        "selected_validation_plans_are_subsumed_once": (
+            "def _apply_plan_subsumption(" in classifier_text
+            and 'plan.get("subsumes")' in classifier_text
+            and '"suppressed_plan_keys"' in classifier_text
+            and "redundant validation plans were subsumed" in classifier_text
+            and "subsumes: [hmm_risk_pr_slice]" in test_plans_text
+        ),
         "changed_tests_reachable_from_selected_ci_plan": (
             "def _changed_test_plan_coverage(" in classifier_text
             and "def _selected_nox_test_targets(" in classifier_text

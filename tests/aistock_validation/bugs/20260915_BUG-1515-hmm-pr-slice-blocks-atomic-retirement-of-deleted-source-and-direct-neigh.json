@@ -1,0 +1,250 @@
+{
+  "actual": "The HMM PR-slice selector requires a mapped direct-neighbor test to exist even when the changed HMM source and that test are intentionally deleted together. This blocks safe atomic retirement of terminal HMM contracts. Preserve fail-closed behavior for added or modified source, but allow deleted source whose mapped test is also absent while retaining the stable smoke slice.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1515",
+  "closed_at": "2026-09-15T05:58:33Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T05:45:13.602038Z",
+  "description": "The HMM PR-slice selector requires a mapped direct-neighbor test to exist even when the changed HMM source and that test are intentionally deleted together. This blocks safe atomic retirement of terminal HMM contracts. Preserve fail-closed behavior for added or modified source, but allow deleted source whose mapped test is also absent while retaining the stable smoke slice.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-dd810fa04c69",
+      "timestamp": "2026-09-15T05:45:13.602010Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
+    ]
+  },
+  "first_seen_at": "2026-09-15T05:45:13.602038Z",
+  "fix_branch": null,
+  "fix_commit": "1d446409615f0fd6b4a046d8a67a34080dde8ac6",
+  "fixed_at": "2026-09-15T05:58:33Z",
+  "github_issue_number": 4756,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4756",
+  "last_seen_at": "2026-09-15T05:45:13.602038Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4757",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1515",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "38344ab482a1eccc",
+    "recorded_at": "2026-09-15T05:59:42.533564Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "55c0585979d034d95bb8bb1a0d20d42e3c2284b6",
+    "source_merge_commit": "1d446409615f0fd6b4a046d8a67a34080dde8ac6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4757",
+    "validation_evidence": [
+      "validation-receipt: id=785dea2ec19bffcb commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_noxfile_validation_env.py -q` result=`28 passed`",
+      "validation-receipt: id=0c9807bf679304ac commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=ruff plan=direct status=passed command=`rtk ruff check noxfile.py backend/tests/test_noxfile_validation_env.py` result=`passed`",
+      "validation-receipt: id=cbc1bc29d45f47c2 commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`7 passed, findings=0`",
+      "validation-receipt: id=ea419f7a558537ca commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=nox plan=l0 status=passed command=`rtk nox -s l0 -- --changed-only` result=`passed, blocking=0`",
+      "validation-receipt: id=de5e48948a3a15d3 commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b40e23ec1acb437baec20c0672dddc1de31a0062a154e82bbc675ff4de4a8592"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "HMM PR slice blocks atomic retirement of deleted source and direct-neighbor tests",
+  "trigger_condition": {
+    "fingerprint": "dd810fa04c69bb5f45cd4b35",
+    "source_event_id": "FE-20260915-dd810fa04c69"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=785dea2ec19bffcb commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_noxfile_validation_env.py -q` result=`28 passed`",
+    "validation-receipt: id=0c9807bf679304ac commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=ruff plan=direct status=passed command=`rtk ruff check noxfile.py backend/tests/test_noxfile_validation_env.py` result=`passed`",
+    "validation-receipt: id=cbc1bc29d45f47c2 commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`7 passed, findings=0`",
+    "validation-receipt: id=ea419f7a558537ca commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=nox plan=l0 status=passed command=`rtk nox -s l0 -- --changed-only` result=`passed, blocking=0`",
+    "validation-receipt: id=de5e48948a3a15d3 commit=55c0585979d034d95bb8bb1a0d20d42e3c2284b6 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

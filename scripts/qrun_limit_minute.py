@@ -1859,7 +1859,6 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_PREDICTION_WINDOW_EMPTY: "
             f"no prediction rows cover {start.date()}..{end.date()}"
         )
-
     indicators = recorder.load_object("portfolio_analysis/indicators_normal_1day.pkl")
     if not isinstance(indicators, pd.DataFrame) or indicators.empty:
         raise RuntimeError("QE_MINUTE_EXECUTION_INDICATORS_MISSING: daily execution indicators are empty")
@@ -1876,6 +1875,62 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_BACKTEST_ZERO_TRADES: "
             f"prediction_rows={prediction_rows} count={float(count)} deal_amount={float(deal_amount)}"
         )
+
+
+def _filter_pred_backtest_to_dataset(pred_df: pd.DataFrame, raw_label: pd.DataFrame) -> pd.DataFrame:
+    """Restrict replayed predictions to the run-scoped dataset universe.
+
+    ``--pred-backtest`` bypasses ``SignalRecord`` and injects an existing
+    prediction directly.  Intersecting with the freshly constructed dataset
+    label is therefore the final enforcement point for PIT stock pools and
+    derived sector-blacklist universes.
+    """
+
+    if not isinstance(raw_label.index, pd.MultiIndex):
+        raise RuntimeError("QE_PRED_BACKTEST_LABEL_INDEX_INVALID: label index must be MultiIndex")
+    mask = pred_df.index.isin(raw_label.index)
+    filtered = pred_df.loc[mask].copy()
+    if filtered.empty:
+        raise RuntimeError(
+            "QE_PRED_BACKTEST_UNIVERSE_EMPTY: prediction has no rows in the run-scoped dataset universe"
+        )
+    return filtered
+
+
+def _prediction_panel_sha256(pred_df: pd.DataFrame) -> str:
+    """Hash ordered executable prediction content independently of pickle bytes."""
+
+    metadata = json.dumps(
+        {
+            "index_names": [str(value) for value in pred_df.index.names],
+            "columns": [str(value) for value in pred_df.columns],
+            "dtypes": [str(value) for value in pred_df.dtypes],
+            "rows": len(pred_df),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    values = pd.util.hash_pandas_object(pred_df, index=True, categorize=True).values.tobytes()
+    return hashlib.sha256(metadata + b"\n" + values).hexdigest()
+
+
+def _load_prediction_replay_source_ref(pred_path: Path) -> dict[str, Any] | None:
+    ref_path = Path.cwd() / "qe_prediction_replay_source_ref.json"
+    if not ref_path.exists():
+        return None
+    try:
+        source_ref = json.loads(ref_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("QE_PREDICTION_REPLAY_SOURCE_REF_INVALID") from exc
+    if not isinstance(source_ref, dict) or source_ref.get("schema_version") != "qe_prediction_replay_source_ref_v1":
+        raise RuntimeError("QE_PREDICTION_REPLAY_SOURCE_REF_INVALID")
+    observed_size = pred_path.stat().st_size
+    observed_sha256 = hashlib.sha256(pred_path.read_bytes()).hexdigest()
+    if source_ref.get("size_bytes") != observed_size:
+        raise RuntimeError("QE_PREDICTION_REPLAY_STAGED_SIZE_MISMATCH")
+    if source_ref.get("sha256") != observed_sha256:
+        raise RuntimeError("QE_PREDICTION_REPLAY_STAGED_SHA256_MISMATCH")
+    return source_ref
 
 
 def main():
@@ -2036,6 +2091,8 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     from qlib.workflow import R
     from qlib.data.dataset import Dataset
 
+    replay_source_ref = _load_prediction_replay_source_ref(pred_path)
+
     # 1. 加载 prediction
     pred_df = _load_pickle_with_size_bound(
         pred_path,
@@ -2084,6 +2141,26 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             "SigAnaRecord 需要 label 来计算 IC/ICIR。"
             "请检查 conf.yaml 的 dataset 配置和数据路径。"
         )
+    original_prediction_rows = len(pred_df)
+    pred_df = _filter_pred_backtest_to_dataset(pred_df, raw_label)
+    if replay_source_ref is not None:
+        replay_result = {
+            "schema_version": "qe_prediction_replay_result_v1",
+            "source_prediction_sha256": replay_source_ref["sha256"],
+            "executable_prediction_panel_sha256": _prediction_panel_sha256(pred_df),
+            "source_prediction_rows": original_prediction_rows,
+            "executable_prediction_rows": len(pred_df),
+            "excluded_prediction_rows": original_prediction_rows - len(pred_df),
+        }
+        (Path.cwd() / "qe_prediction_replay_result.json").write_text(
+            json.dumps(replay_result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    print(
+        "[INFO] Enforced run-scoped prediction universe: "
+        f"input_rows={original_prediction_rows} executable_rows={len(pred_df)} "
+        f"excluded_rows={original_prediction_rows - len(pred_df)}"
+    )
     print(f"[INFO] Extracted label from dataset: {len(raw_label)} rows")
 
     # 3. 构建 records 列表：跳过 SignalRecord（不需要模型预测），保留 SigAnaRecord + PortAnaRecord

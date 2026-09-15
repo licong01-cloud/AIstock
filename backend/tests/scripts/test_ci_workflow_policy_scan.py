@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -69,23 +72,33 @@ def test_repository_runner_contract_is_explicit() -> None:
     assert findings == []
 
 
-def test_self_hosted_workflow_must_clear_inherited_git_alternates(tmp_path: Path) -> None:
-    workflow = tmp_path / "codeql.yml"
+def test_self_hosted_checkout_requires_verified_git_mirror_with_bounded_fallback(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
     workflow.write_text(
-        "jobs:\n  scan:\n    runs-on: [self-hosted, Windows, aistock-ci-security]\n",
+        "env:\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  scan:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v8\n"
+        "        timeout-minutes: 5\n",
         encoding="utf-8",
     )
 
     findings = scan_environment_contracts([workflow])
 
-    assert any("must clear inherited Git alternate object directories" in item["reason"] for item in findings)
+    assert any("must use a verified local Git object mirror" in item["reason"] for item in findings)
 
 
 def test_self_hosted_workflow_must_bound_stalled_or_unusably_slow_git_http_transfer(tmp_path: Path) -> None:
     workflow = tmp_path / "codeql.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
         "jobs:\n"
         "  scan:\n"
         "    runs-on: [self-hosted, Windows, aistock-ci-security]\n",
@@ -101,7 +114,7 @@ def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == "test.yml":
-            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "", 1)
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
@@ -109,12 +122,12 @@ def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path
     assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
 
 
-def test_contract_evidence_rejects_previous_ineffective_git_http_threshold(tmp_path: Path) -> None:
+def test_contract_evidence_rejects_aggressive_git_http_bandwidth_sla(tmp_path: Path) -> None:
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == "test.yml":
-            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '1'\n", 1)
-            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "  GIT_HTTP_LOW_SPEED_TIME: '60'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "  GIT_HTTP_LOW_SPEED_TIME: '30'\n", 1)
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
@@ -126,9 +139,8 @@ def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp
     workflow = tmp_path / "test.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
-        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
-        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
         "  GIT_CONFIG_COUNT: '1'\n"
         "  GIT_CONFIG_KEY_0: http.version\n"
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
@@ -179,9 +191,8 @@ def test_checkout_and_cleanup_contracts_are_bound_to_each_exact_step(tmp_path: P
     workflow = tmp_path / "test.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''\n"
-        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
-        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
         "  GIT_CONFIG_COUNT: '1'\n"
         "  GIT_CONFIG_KEY_0: http.version\n"
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
@@ -246,8 +257,11 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
-    assert evidence["self_hosted_workflows_clear_git_alternate_objects"] is True
+    assert evidence["self_hosted_workflows_use_verified_git_object_mirror"] is True
+    assert evidence["git_object_mirror_maintenance_is_bounded_and_offline"] is True
     assert evidence["self_hosted_git_http_stalls_are_bounded"] is True
+    assert evidence["pr_ci_heavy_lanes_short_circuit_after_prerequisites"] is True
+    assert evidence["selected_validation_plans_are_subsumed_once"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
 
@@ -261,6 +275,103 @@ def test_runner_lifecycle_contract_rejects_missing_supervisor(tmp_path: Path) ->
     )
 
     assert evidence["runner_lifecycle_is_pinned_and_supervised"] is False
+
+
+def test_git_object_mirror_contract_rejects_missing_maintenance_helper(tmp_path: Path) -> None:
+    evidence = build_contract_evidence(
+        sorted(Path(".github/workflows").glob("*.yml")),
+        git_mirror_maintenance_path=tmp_path / "missing-mirror-helper.ps1",
+    )
+
+    assert evidence["git_object_mirror_maintenance_is_bounded_and_offline"] is False
+
+
+def test_git_object_mirror_preflight_does_not_probe_an_empty_workspace_with_git(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                "$workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\\HEAD'",
+                "& git -C $env:GITHUB_WORKSPACE rev-parse --verify 'HEAD^{commit}'",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_workflows_use_verified_git_object_mirror"] is False
+
+
+def test_git_object_mirror_helper_builds_from_aligned_local_main_without_network(tmp_path: Path) -> None:
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell helper is Windows-only")
+    source = tmp_path / "source"
+    allowed = tmp_path / "prebuilt"
+    mirror = allowed / "git" / "AIstock.git"
+    source.mkdir()
+
+    def git(*args: str, cwd: Path = source) -> str:
+        completed = subprocess.run(
+            ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        )
+        return completed.stdout.strip()
+
+    git("init", "--initial-branch=main")
+    git("config", "user.email", "ci@example.invalid")
+    git("config", "user.name", "CI")
+    git("remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    (source / "tracked.txt").write_text("mirror seed\n", encoding="utf-8")
+    git("add", "tracked.txt")
+    git("commit", "-m", "seed")
+    main_sha = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", main_sha)
+
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/maintain_aistock_git_mirror.ps1",
+            "-SourceRoot",
+            str(source),
+            "-MirrorRoot",
+            str(mirror),
+            "-AllowedRoot",
+            str(allowed),
+            "-Apply",
+            "-Json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads(Path(payload["manifest_path"]).read_text(encoding="utf-8-sig"))
+    assert payload["status"] == "ready"
+    assert payload["main_sha"] == main_sha
+    assert payload["network_accessed"] is False
+    assert payload["process_control_performed"] is False
+    assert manifest["repository"] == "licong01-cloud/AIstock"
+    assert git("-C", str(mirror), "rev-parse", "refs/heads/main") == main_sha
+
+
+def test_heavy_lane_short_circuit_contract_rejects_direct_backend_execution(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'",
+                "steps.classify.outcome == 'success'",
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["pr_ci_heavy_lanes_short_circuit_after_prerequisites"] is False
 
 
 def test_pr_ci_frontend_dependency_attach_cannot_be_removed(tmp_path: Path) -> None:
@@ -527,8 +638,9 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
 
     assert expected <= required
     assert "immutable CodeQL Action release" not in standard
-    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" in standard
-    assert "GIT_HTTP_LOW_SPEED_TIME=30" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=1024" in standard
+    assert "GIT_HTTP_LOW_SPEED_TIME=60" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" not in standard
     assert "GIT_CONFIG_KEY_0=http.version" in standard
     assert "GIT_CONFIG_VALUE_0=HTTP/1.1" in standard
     assert "`actions/checkout` step 必须设置 `timeout-minutes: 5`" in standard

@@ -11,9 +11,8 @@ defaults:
     shell: bash
 
 env:
-  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
-  GIT_HTTP_LOW_SPEED_LIMIT: '524288'
-  GIT_HTTP_LOW_SPEED_TIME: '30'
+  GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+  GIT_HTTP_LOW_SPEED_TIME: '60'
   GIT_CONFIG_COUNT: '1'
   GIT_CONFIG_KEY_0: http.version
   GIT_CONFIG_VALUE_0: HTTP/1.1
@@ -35,8 +34,50 @@ jobs:
     runs-on: ${{ startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-') && 'ubuntu-latest' || fromJSON('["self-hosted","Windows","aistock-ci"]') }}
     timeout-minutes: 120
     steps:
+      - name: Prepare verified local Git object mirror
+        id: git_mirror
+        if: ${{ !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
+        shell: powershell
+        run: |
+          $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = ''
+          $mirrorRoot = 'F:\Dev\github-actions-runner\prebuilt\git\AIstock.git'
+          $manifestPath = $mirrorRoot + '.aistock-mirror.json'
+          $objects = ''
+          try {
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            if ($manifest.schema_version -ne 'aistock_git_object_mirror_v1') { throw 'unsupported mirror manifest' }
+            if ($manifest.repository -ne $env:GITHUB_REPOSITORY) { throw 'mirror repository mismatch' }
+            if ((& git -C $mirrorRoot rev-parse --is-bare-repository) -ne 'true') { throw 'mirror is not bare' }
+            $mirrorSha = (& git -C $mirrorRoot rev-parse --verify 'refs/heads/main^{commit}').Trim()
+            if ($LASTEXITCODE -ne 0 -or $mirrorSha -ne $manifest.main_sha) { throw 'mirror main identity mismatch' }
+            $objects = [System.IO.Path]::GetFullPath((Join-Path $mirrorRoot 'objects'))
+            $workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\HEAD'
+            if (-not (Test-Path -LiteralPath $workspaceHead -PathType Leaf)) {
+              & git -C $env:GITHUB_WORKSPACE init --quiet | Out-Null
+              & git -C $env:GITHUB_WORKSPACE remote get-url origin 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                & git -C $env:GITHUB_WORKSPACE remote set-url origin "https://github.com/$env:GITHUB_REPOSITORY"
+              } else {
+                & git -C $env:GITHUB_WORKSPACE remote add origin "https://github.com/$env:GITHUB_REPOSITORY"
+              }
+              & git -C $env:GITHUB_WORKSPACE fetch --quiet --force --no-tags --no-write-fetch-head $mirrorRoot 'refs/heads/main:refs/remotes/aistock-mirror/main' | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw 'local mirror seed fetch failed' }
+              & git -C $env:GITHUB_WORKSPACE checkout --quiet --force --detach refs/remotes/aistock-mirror/main | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw 'local mirror seed checkout failed' }
+            }
+            "git_object_mirror status=ready main_sha=$mirrorSha"
+          } catch {
+            Write-Warning "git_object_mirror status=unavailable fallback=bounded_remote reason=$($_.Exception.Message)"
+            $objects = ''
+          }
+          "objects=$objects" >> $env:GITHUB_OUTPUT
+          "GIT_ALTERNATE_OBJECT_DIRECTORIES=$objects" >> $env:GITHUB_ENV
+          exit 0
+
       - uses: actions/checkout@v7
         timeout-minutes: 5
+        env:
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}
         with:
           fetch-depth: 2
 
@@ -149,6 +190,7 @@ jobs:
           cat tmp/validation/guardrails/docs-lite-version-record.md
 
       - name: nox -s l0 -- changed files
+        id: l0_validation
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true'
         run: |
           mapfile -t classified_files < tmp/validation/ci_change_classifier/changed_files.txt
@@ -165,10 +207,12 @@ jobs:
           python -m nox -s l0 -- "${changed_files[@]}"
 
       - name: nox -s validation_module_registry_l0
+        id: module_registry_validation
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_module_registry_l0
 
       - name: nox -s validation_catalog_integrity
+        id: catalog_integrity_validation
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
@@ -269,9 +313,51 @@ jobs:
             printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/semgrep/semgrep.json
           fi
 
+      - name: Evaluate lightweight prerequisites before heavy lanes
+        id: prerequisite_gate
+        if: always()
+        shell: bash
+        env:
+          CLASSIFY_RESULT: ${{ steps.classify.outcome }}
+          STATIC_REQUIRED: ${{ steps.classify.outputs.static_gate_required }}
+          CLOSE_SYNC_ONLY: ${{ steps.classify.outputs.close_sync_metadata_only }}
+          L0_RESULT: ${{ steps.l0_validation.outcome }}
+          CATALOG_REQUIRED: ${{ steps.classify.outputs.catalog_validation_required }}
+          MODULE_REGISTRY_RESULT: ${{ steps.module_registry_validation.outcome }}
+          CATALOG_INTEGRITY_RESULT: ${{ steps.catalog_integrity_validation.outcome }}
+          DEPENDENCY_REQUIRED: ${{ steps.classify.outputs.dependency_validation_required }}
+          DEPENDENCY_RESULT: ${{ steps.dependency_validation.outcome }}
+          DOCS_LITE_REQUIRED: ${{ steps.classify.outputs.docs_lite_required }}
+          PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}
+          SEMGREP_RESULT: ${{ steps.semgrep_validation.outcome }}
+        run: |
+          blockers=()
+          [[ "${CLASSIFY_RESULT}" == "success" ]] || blockers+=("classify=${CLASSIFY_RESULT}")
+          if [[ "${STATIC_REQUIRED}" != "false" && "${CLOSE_SYNC_ONLY}" != "true" ]]; then
+            [[ "${L0_RESULT}" == "success" ]] || blockers+=("l0=${L0_RESULT}")
+          fi
+          if [[ "${CATALOG_REQUIRED}" == "true" && "${CLOSE_SYNC_ONLY}" != "true" ]]; then
+            [[ "${MODULE_REGISTRY_RESULT}" == "success" ]] || blockers+=("module_registry=${MODULE_REGISTRY_RESULT}")
+            [[ "${CATALOG_INTEGRITY_RESULT}" == "success" ]] || blockers+=("catalog_integrity=${CATALOG_INTEGRITY_RESULT}")
+          fi
+          if [[ "${DEPENDENCY_REQUIRED}" == "true" ]]; then
+            [[ "${DEPENDENCY_RESULT}" == "success" ]] || blockers+=("dependency=${DEPENDENCY_RESULT}")
+          fi
+          if [[ "${DOCS_LITE_REQUIRED}" != "true" && "${CLOSE_SYNC_ONLY}" != "true" ]]; then
+            [[ "${PR_QUALITY_RESULT}" == "success" ]] || blockers+=("pr_quality=${PR_QUALITY_RESULT}")
+            [[ "${SEMGREP_RESULT}" == "success" ]] || blockers+=("semgrep=${SEMGREP_RESULT}")
+          fi
+          if (( ${#blockers[@]} > 0 )); then
+            echo "heavy_lanes_allowed=false" >> "${GITHUB_OUTPUT}"
+            printf 'Heavy CI lanes skipped because a lightweight prerequisite failed: %s\n' "${blockers[@]}"
+          else
+            echo "heavy_lanes_allowed=true" >> "${GITHUB_OUTPUT}"
+            echo "All lightweight prerequisites passed; selected heavy lanes may run."
+          fi
+
       - name: Run selected backend sessions
         id: backend_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.backend_required != 'false'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.backend_required != 'false'
         continue-on-error: true
         env:
           BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
@@ -301,7 +387,7 @@ jobs:
 
       - name: Attach lockfile-matched prebuilt frontend dependencies
         id: frontend_dependencies
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true'
         continue-on-error: true
         shell: powershell
         run: |
@@ -316,7 +402,7 @@ jobs:
 
       - name: Run selected frontend quality
         id: frontend_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success'
         continue-on-error: true
         working-directory: frontend
         env:
@@ -333,7 +419,7 @@ jobs:
 
       - name: Run selected TDX Go tests
         id: go_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.go_required == 'true'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.go_required == 'true'
         continue-on-error: true
         working-directory: tdx-api-main
         env:
@@ -342,7 +428,7 @@ jobs:
 
       - name: Run selected prompt evaluation
         id: prompt_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.prompt_evaluation_required == 'true'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.prompt_evaluation_required == 'true'
         continue-on-error: true
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
@@ -359,7 +445,7 @@ jobs:
 
       - name: Run focused workflow validation tests
         id: workflow_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
         continue-on-error: true
         env:
           WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
@@ -372,7 +458,7 @@ jobs:
 
       - name: Enforce CI workflow policy
         id: workflow_policy
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
         continue-on-error: true
         run: |
           mkdir -p tmp/validation/ci_workflow_policy
@@ -383,6 +469,12 @@ jobs:
         if: always()
         env:
           CLASSIFY_RESULT: ${{ steps.classify.outcome }}
+          STATIC_REQUIRED: ${{ steps.classify.outputs.static_gate_required }}
+          CLOSE_SYNC_ONLY: ${{ steps.classify.outputs.close_sync_metadata_only }}
+          L0_RESULT: ${{ steps.l0_validation.outcome }}
+          CATALOG_REQUIRED: ${{ steps.classify.outputs.catalog_validation_required }}
+          MODULE_REGISTRY_RESULT: ${{ steps.module_registry_validation.outcome }}
+          CATALOG_INTEGRITY_RESULT: ${{ steps.catalog_integrity_validation.outcome }}
           BACKEND_RESULT: ${{ steps.backend_validation.outcome }}
           DEPENDENCY_REQUIRED: ${{ steps.classify.outputs.dependency_validation_required }}
           DEPENDENCY_RESULT: ${{ steps.dependency_validation.outcome }}
@@ -402,6 +494,13 @@ jobs:
           failures=()
           if [[ "${CLASSIFY_RESULT}" != "success" ]]; then
             failures+=("classify_static=${CLASSIFY_RESULT}")
+          fi
+          if [[ "${STATIC_REQUIRED}" != "false" && "${CLOSE_SYNC_ONLY}" != "true" && "${L0_RESULT}" != "success" ]]; then
+            failures+=("l0=${L0_RESULT}")
+          fi
+          if [[ "${CATALOG_REQUIRED}" == "true" && "${CLOSE_SYNC_ONLY}" != "true" ]]; then
+            [[ "${MODULE_REGISTRY_RESULT}" == "success" ]] || failures+=("module_registry=${MODULE_REGISTRY_RESULT}")
+            [[ "${CATALOG_INTEGRITY_RESULT}" == "success" ]] || failures+=("catalog_integrity=${CATALOG_INTEGRITY_RESULT}")
           fi
           if [[ "${DEPENDENCY_REQUIRED}" == "true" && "${DEPENDENCY_RESULT}" != "success" ]]; then
             failures+=("dependency_validation=${DEPENDENCY_RESULT}")

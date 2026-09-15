@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from backend.mcp.common import sanitize_tail
+from backend.services.quantevolver.experiment_config import (
+    normalize_prediction_replay_contract,
+)
 
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
@@ -96,7 +99,7 @@ def _require_positive_loop_index(loop_index: int) -> int:
 def _ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str) -> None:
     """Fail fast before scheduling trainable custom-evo loops without a seed."""
 
-    if bool(loop.get("backtest_only")):
+    if bool(loop.get("backtest_only")) or bool(loop.get("prediction_replay")):
         return
     runtime_flags = dict(loop.get("runtime_flags") or {})
     seed_keys = ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed")
@@ -252,6 +255,15 @@ def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> No
             context=f"custom_evo.loops[{idx}].label_horizon",
             errors=errors,
         )
+        try:
+            loop.update(
+                normalize_prediction_replay_contract(
+                    loop,
+                    context=f"custom_evo.loops[{idx}]",
+                )
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
         if bool(loop.get("backtest_only")):
             _require_non_empty_string(
                 loop.get("model_source_task_id"),
@@ -266,7 +278,7 @@ def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> No
                         errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be >= 1")
                 except (TypeError, ValueError):
                     errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be an integer")
-        else:
+        elif not bool(loop.get("prediction_replay")):
             try:
                 _ensure_loop_fixed_seed(loop, context=f"custom_evo.loops[{idx}]")
             except ValueError as exc:

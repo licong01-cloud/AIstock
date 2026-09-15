@@ -23,10 +23,22 @@ from .qe_dataset_contract import (
     QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3,
     QEDirectV2DatasetBinding,
 )
+from .qe_sector_blacklist_policy import (
+    SECTOR_BLACKLIST_POLICY_PARAM,
+    QESectorBlacklistPolicyError,
+    materialize_sector_blacklist_universe,
+    requested_sector_codes,
+    require_pinned_sector_policy_files,
+    validate_sector_policy_pins,
+)
 
 
 ACTIVE_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
-ACTIVE_PROFILE_SCHEMA = "aistock_active_dataset_profile_v1"
+ACTIVE_PROFILE_SCHEMA_V1 = "aistock_active_dataset_profile_v1"
+ACTIVE_PROFILE_SCHEMA_V2 = "aistock_active_dataset_profile_v2"
+# Compatibility export for existing profile producers.  New profiles which
+# enable sector-policy materialization must use V2.
+ACTIVE_PROFILE_SCHEMA = ACTIVE_PROFILE_SCHEMA_V1
 UNIVERSE_COVERAGE_SCHEMA = "qe_index_pool_coverage_receipt_v1"
 QE_RUN_STOCK_POOL_CONTENT_PARAM = "_qe_run_stock_pool_content"
 QE_RUN_COVERAGE_RECEIPT_PARAM = "_qe_universe_coverage_receipt"
@@ -37,6 +49,7 @@ QE_INTERNAL_DATASET_PARAMS = frozenset(
         QE_RUN_STOCK_POOL_CONTENT_PARAM,
         QE_RUN_COVERAGE_RECEIPT_PARAM,
         QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+        SECTOR_BLACKLIST_POLICY_PARAM,
     }
 )
 
@@ -321,6 +334,7 @@ class ResolvedQEDataset:
     stock_pool_content: str | None
     coverage_receipt_content: str
     outcome_observable_end: str
+    sector_blacklist_policy: Mapping[str, Any] | None = None
 
     def apply(self, custom_params: Mapping[str, Any] | None) -> dict[str, Any]:
         params = dict(custom_params or {})
@@ -329,13 +343,17 @@ class ResolvedQEDataset:
         params[QE_RUN_COVERAGE_RECEIPT_PARAM] = self.coverage_receipt_content
         if self.stock_pool_content is not None:
             params[QE_RUN_STOCK_POOL_CONTENT_PARAM] = self.stock_pool_content
+        if self.sector_blacklist_policy is not None:
+            params[SECTOR_BLACKLIST_POLICY_PARAM] = dict(self.sector_blacklist_policy)
+            params["sector_blacklist_enabled"] = True
         params["stock_pool"] = self.binding.selection_pins["instrument_name"]
         return params
 
 
 def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -> QEActiveDatasetProfile:
     root = _require_exact_mapping(value, fields=_TOP_LEVEL_FIELDS, field="profile")
-    if root["schema_version"] != ACTIVE_PROFILE_SCHEMA:
+    profile_schema = str(root["schema_version"] or "")
+    if profile_schema not in {ACTIVE_PROFILE_SCHEMA_V1, ACTIVE_PROFILE_SCHEMA_V2}:
         raise _fail("qe_active_dataset_profile_invalid", "schema_version differs")
     generation = str(root["generation"] or "")
     release_id = str(root["release_id"] or "")
@@ -357,9 +375,20 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
     _require_external_directory(stock_pool_root, field="controller_paths.stock_pool_root")
     _require_external_regular_file(receipt_path, field="controller_paths.coverage_receipt_path")
 
+    component_fields = {
+        "factor_meta",
+        "factor_meta_sha256",
+        "day_pins",
+        "minute_pins",
+        "index_pins",
+        "suspend_pins",
+        "benchmark_instruments_sha256",
+    }
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V2:
+        component_fields.add("sector_policy_pins")
     components = _require_exact_mapping(
         root["components"],
-        fields={"factor_meta", "factor_meta_sha256", "day_pins", "minute_pins", "index_pins", "suspend_pins", "benchmark_instruments_sha256"},
+        fields=component_fields,
         field="components",
     )
     for field in ("factor_meta_sha256",):
@@ -368,6 +397,18 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         components["benchmark_instruments_sha256"],
         field="components.benchmark_instruments_sha256",
     )
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V2:
+        try:
+            sector_pins = validate_sector_policy_pins(components["sector_policy_pins"])
+        except QESectorBlacklistPolicyError as exc:
+            raise _fail(exc.reason_code, str(exc)) from exc
+        if (
+            sector_pins["start"] != str(components["factor_meta"].get("start") or "")
+            or sector_pins["end"] != cutoff.isoformat()
+            or sector_pins["universe_key"]
+            != str(components["factor_meta"].get("universe_key") or "")
+        ):
+            raise _fail("qe_active_dataset_profile_invalid", "sector policy identity differs from factor metadata")
 
     node_bindings = root["node_bindings"]
     if not isinstance(node_bindings, Mapping) or not node_bindings:
@@ -654,6 +695,11 @@ def validate_controller_snapshot(profile: QEActiveDatasetProfile) -> None:
         factor / "meta.json",
         str(components["factor_meta_sha256"]),
     )
+    if "sector_policy_pins" in components:
+        try:
+            require_pinned_sector_policy_files(factor, components["sector_policy_pins"])
+        except QESectorBlacklistPolicyError as exc:
+            raise _fail(exc.reason_code, str(exc), **exc.context) from exc
     _require_pinned_file(
         index / "index_daily.h5",
         str(components["index_pins"]["sha256"]),
@@ -785,6 +831,7 @@ def resolve_active_qe_dataset(
     node_id: str,
     data_split: Mapping[str, Any] | None = None,
     universe_selection: Mapping[str, Any] | None = None,
+    custom_params: Mapping[str, Any] | None = None,
     label_horizon: int = 1,
     profile: QEActiveDatasetProfile | None = None,
 ) -> ResolvedQEDataset | None:
@@ -806,6 +853,10 @@ def resolve_active_qe_dataset(
     window_start = _date(split["train_start"], field="train_start")
     window_end = _date(split["backtest_end"], field="backtest_end")
     _require_window_coverage(selected_profile, selection, window_start, window_end)
+    try:
+        blacklist_codes = requested_sector_codes(custom_params)
+    except QESectorBlacklistPolicyError as exc:
+        raise _fail(exc.reason_code, str(exc), **exc.context) from exc
 
     universe_rows = selected_profile.universes
     stock_pool_content: str | None = None
@@ -815,6 +866,16 @@ def resolve_active_qe_dataset(
         instruments_file = "stock_universe.txt"
         instruments_sha256 = str(selected["sha256"])
         membership_revision = str(selected["membership_revision"])
+        if blacklist_codes:
+            stock_pool_content = _read_pinned_text(
+                selected_profile.controller_candidate_root
+                / "components"
+                / "daily_bin_candidate"
+                / "instruments"
+                / instruments_file,
+                instruments_sha256,
+                reason_code="qe_universe_sidecar_not_deployed",
+            )
     else:
         contents: list[str] = []
         revisions: list[str] = []
@@ -843,6 +904,35 @@ def resolve_active_qe_dataset(
             membership_revision = "union:" + ",".join(revisions)
         _parse_intervals(stock_pool_content, source=instruments_file)
         instruments_sha256 = _sha256_bytes(stock_pool_content.encode("utf-8"))
+
+    calendar = _calendar_dates(selected_profile)
+    sector_blacklist_policy: Mapping[str, Any] | None = None
+    if blacklist_codes:
+        if stock_pool_content is None:  # pragma: no cover - guarded by branches above
+            raise _fail("qe_sector_blacklist_membership_incomplete", "base universe content is unavailable")
+        try:
+            result = materialize_sector_blacklist_universe(
+                base_intervals=_parse_intervals(stock_pool_content, source=instruments_file),
+                calendar=calendar,
+                window_start=window_start,
+                window_end=_date(split["test_end"], field="test_end"),
+                factor_root=(
+                    selected_profile.controller_candidate_root
+                    / "components"
+                    / "factor_h5_static_candidate_v2"
+                ),
+                pins=selected_profile.raw["components"].get("sector_policy_pins"),
+                blacklist_codes=blacklist_codes,
+            )
+        except QESectorBlacklistPolicyError as exc:
+            raise _fail(exc.reason_code, str(exc), **exc.context) from exc
+        stock_pool_content = result.instruments_content
+        instruments_sha256 = _sha256_bytes(stock_pool_content.encode("utf-8"))
+        policy_digest = hashlib.sha256(
+            json.dumps(result.diagnostics, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        membership_revision = f"{membership_revision}|sector_blacklist:{policy_digest}"
+        sector_blacklist_policy = dict(result.diagnostics)
 
     candidate_root = _require_posix_root(node_raw["candidate_root"], field=f"node_bindings.{node_key}.candidate_root")
     components = selected_profile.raw["components"]
@@ -875,7 +965,6 @@ def resolve_active_qe_dataset(
         schema_version=QE_DIRECT_V2_DATASET_BINDING_SCHEMA_V3,
     ).validated()
 
-    calendar = _calendar_dates(selected_profile)
     test_end = _date(split["test_end"], field="test_end")
     try:
         test_index = calendar.index(test_end)
@@ -904,6 +993,7 @@ def resolve_active_qe_dataset(
         stock_pool_content=stock_pool_content,
         coverage_receipt_content=selected_profile.coverage_receipt_bytes.decode("utf-8"),
         outcome_observable_end=calendar[observable_index].isoformat(),
+        sector_blacklist_policy=sector_blacklist_policy,
     )
 
 
@@ -928,12 +1018,13 @@ def resolve_and_apply_active_qe_dataset(
         node_id=node_id,
         data_split=data_split,
         universe_selection=universe_selection,
+        custom_params=params,
         label_horizon=label_horizon,
         profile=profile,
     )
     if resolved is None:
         return (dict(data_split) if data_split else None), params, None
-    return dict(resolved.data_split), resolved.apply(params), {
+    summary = {
         **dict(resolved.profile_summary),
         "resolved_dates": dict(resolved.data_split),
         "resolved_universe": {
@@ -944,3 +1035,10 @@ def resolve_and_apply_active_qe_dataset(
         "node_id": str(node_id),
         "outcome_observable_end": resolved.outcome_observable_end,
     }
+    if resolved.sector_blacklist_policy is not None:
+        summary["sector_blacklist"] = {
+            key: value
+            for key, value in resolved.sector_blacklist_policy.items()
+            if not key.endswith("sha256") and key != "code_map_digest"
+        }
+    return dict(resolved.data_split), resolved.apply(params), summary
