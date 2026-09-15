@@ -446,8 +446,8 @@ rules:
     include:
       - scripts/aistock_validation_budget.py
       - backend/tests/scripts/test_aistock_validation_budget.py
-    primary_module: validation.guardrails
-    impact_modules: [validation.runner, validation.module_quality]
+    primary_module: validation.runner
+    impact_modules: [validation.guardrails, validation.module_quality]
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Test-debt measurement must use the validation ownership authority and must not fall into the generic tests.backend bucket.
