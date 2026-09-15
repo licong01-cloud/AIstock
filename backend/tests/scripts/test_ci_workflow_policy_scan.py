@@ -76,8 +76,8 @@ def test_self_hosted_checkout_requires_verified_git_mirror_with_bounded_fallback
     workflow = tmp_path / "test.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
-        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
         "  GIT_CONFIG_COUNT: '1'\n"
         "  GIT_CONFIG_KEY_0: http.version\n"
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
@@ -114,7 +114,7 @@ def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == "test.yml":
-            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "", 1)
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
@@ -122,12 +122,12 @@ def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path
     assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
 
 
-def test_contract_evidence_rejects_previous_ineffective_git_http_threshold(tmp_path: Path) -> None:
+def test_contract_evidence_rejects_aggressive_git_http_bandwidth_sla(tmp_path: Path) -> None:
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == "test.yml":
-            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '1'\n", 1)
-            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '30'\n", "  GIT_HTTP_LOW_SPEED_TIME: '60'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "  GIT_HTTP_LOW_SPEED_TIME: '30'\n", 1)
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
@@ -139,8 +139,8 @@ def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp
     workflow = tmp_path / "test.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
-        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
         "  GIT_CONFIG_COUNT: '1'\n"
         "  GIT_CONFIG_KEY_0: http.version\n"
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
@@ -191,8 +191,8 @@ def test_checkout_and_cleanup_contracts_are_bound_to_each_exact_step(tmp_path: P
     workflow = tmp_path / "test.yml"
     workflow.write_text(
         "env:\n"
-        "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n"
-        "  GIT_HTTP_LOW_SPEED_TIME: '30'\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
         "  GIT_CONFIG_COUNT: '1'\n"
         "  GIT_CONFIG_KEY_0: http.version\n"
         "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
@@ -638,8 +638,9 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
 
     assert expected <= required
     assert "immutable CodeQL Action release" not in standard
-    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" in standard
-    assert "GIT_HTTP_LOW_SPEED_TIME=30" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=1024" in standard
+    assert "GIT_HTTP_LOW_SPEED_TIME=60" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" not in standard
     assert "GIT_CONFIG_KEY_0=http.version" in standard
     assert "GIT_CONFIG_VALUE_0=HTTP/1.1" in standard
     assert "`actions/checkout` step 必须设置 `timeout-minutes: 5`" in standard
