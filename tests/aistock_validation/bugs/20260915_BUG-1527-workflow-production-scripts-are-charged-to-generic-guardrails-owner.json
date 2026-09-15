@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Workflow automation production entry points and their tests share one honest primary owner; guardrail and runner production remain separately owned.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1527-workflow-production-scripts-are-charged-to-generic-guardrails-owner.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/scripts/test_aistock_validation_budget.py"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1527-workflow-production-scripts-are-charged-to-generic-guardrails-owner.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -109,10 +115,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
