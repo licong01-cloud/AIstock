@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 2484ccc0ebb1570a10921b2d802e5dee5f6bb69c511771f174c6a82129d79d93
+source_sha256: a195588d3d199a24539f73454805ae6935b50de30df93b638d85bfb8dcd2251b
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-09-14"
+updated_at: "2026-09-15"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -750,7 +750,8 @@ rules:
         - bounded_dual_runner_roles
         - nightly_preflight_requires_distinct_runner_roles
         - runner_lifecycle_is_pinned_and_supervised
-        - self_hosted_workflows_clear_git_alternate_objects
+        - self_hosted_workflows_use_verified_git_object_mirror
+        - git_object_mirror_maintenance_is_bounded_and_offline
         - self_hosted_git_http_stalls_are_bounded
         - self_hosted_checkout_steps_have_hard_timeout
         - self_hosted_checkout_cleans_interrupted_pack_fragments
@@ -784,6 +785,8 @@ rules:
         - pr_ci_no_external_artifact_action_dependency
         - pr_ci_static_gate_reuses_classifier_checkout
         - pr_ci_selected_lanes_reuse_ci_verdict_runner
+        - pr_ci_heavy_lanes_short_circuit_after_prerequisites
+        - selected_validation_plans_are_subsumed_once
         - changed_tests_reachable_from_selected_ci_plan
         - dependency_update_pr_validation_reuses_ci_verdict
         - pr_workflows_no_external_report_action_dependency
@@ -795,7 +798,7 @@ rules:
         - nightly_retries_failed_or_missing_sessions_plus_new_impact
         - nightly_change_scoped_l0_uses_explicit_receipt_paths
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and make CI verdict the only merge-quality context consumed by branch protection and the automatic merger. PR Quality, Semgrep, secret leakage, and dangerous workflow checks execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Use native GitHub closing keywords plus issue workflow/finalizer verification instead of a per-PR auto-link comment workflow; keep PR CI failures on CI verdict and route Nightly failures through the full-summary deduplicated candidate chain instead of a per-completion workflow_run listener. Do not trigger or require CodeQL for pull_request or push events and do not classify high-risk PRs. Run one daily scheduled full scan of the latest main plus explicit workflow_dispatch, analyze Python and JavaScript/TypeScript sequentially in one security-runner allocation, upload SARIF, and keep Nightly failures visible without blocking completed or unrelated PRs. Give each scheduled security or code-intelligence task one authoritative workflow owner and use a GitHub-hosted role preflight so an offline security runner fails quickly instead of queuing indefinitely. Register each Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata CI verdict. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, require every self-hosted Git transfer to use HTTP/1.1 plus a 512 KiB/s for 30 seconds fail-fast floor, cap each self-hosted actions/checkout step at five minutes, and reclaim only literal-path interrupted tmp_pack fragments inside the disposable workspace as a visible nonblocking diagnostic. Reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in any CI or Nightly job.
+    remediation: Require PR-based main updates and make CI verdict the only merge-quality context consumed by branch protection and the automatic merger. PR Quality, Semgrep, secret leakage, and dangerous workflow checks execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Use native GitHub closing keywords plus issue workflow/finalizer verification instead of a per-PR auto-link comment workflow; keep PR CI failures on CI verdict and route Nightly failures through the full-summary deduplicated candidate chain instead of a per-completion workflow_run listener. Do not trigger or require CodeQL for pull_request or push events and do not classify high-risk PRs. Run one daily scheduled full scan of the latest main plus explicit workflow_dispatch, analyze Python and JavaScript/TypeScript sequentially in one security-runner allocation, upload SARIF, and keep Nightly failures visible without blocking completed or unrelated PRs. Give each scheduled security or code-intelligence task one authoritative workflow owner and use a GitHub-hosted role preflight so an offline security runner fails quickly instead of queuing indefinitely. Register each Windows runner with --disableupdate, use a pinned hash-verified package, run it through a bounded single-instance supervisor or Windows service, detect online-but-not-accepting queued work, and update one role at a time with an online canary receipt. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata CI verdict. Provision the versioned Windows AIstock-CI runner with Git Bash, a hash-verified local CodeQL bundle, and a manifest-verified read-only Git object mirror maintained offline from clean aligned canonical main under a bounded mutex. Seed empty checkout workspaces from the mirror, bind every self-hosted checkout to its object directory, and fall back to the existing bounded remote path without making mirror availability a new merge gate. Require every self-hosted Git transfer to use HTTP/1.1 plus a 512 KiB/s for 30 seconds fail-fast floor, cap each self-hosted actions/checkout step at five minutes, and reclaim only literal-path interrupted tmp_pack fragments inside the disposable workspace as a visible nonblocking diagnostic. Reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict. Skip heavy lanes after any required lightweight prerequisite fails, and apply only explicit catalog plan subsumption so a selected full plan runs once instead of repeating its covered slice. Require every changed Python test that remains in the merge tree to be statically reachable from at least one of its own selected executable nox plans and present in the actual pytest collection receipt instead of accepting ownership-only filename matches, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in any CI or Nightly job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
