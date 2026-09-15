@@ -156,7 +156,7 @@ intersection, missing minute execution configuration, or no executed trades.
 | F-006 | runner output/readback contract | `backend/tests/unified_engine/test_qe_prediction_replay.py` | verified | - |
 | F-007 | reservation metadata, SQL cohort proof and executor context | `python -m pytest -q backend/tests/multi_alpha/test_qe_submission_coordinator.py` | verified | - |
 | F-008 | unchanged default modes | `python -m pytest -q backend/tests/quantevolver/test_qe_registered_submission.py` | verified | - |
-| F-009 | focused and related QE regression suite; existing `qe_read_backend` plan collects the replay contract | final-head `qe_read_backend`: 602 passed, 1 pre-existing optional-import skip; focused replay contract: 25 passed | verified | - |
+| F-009 | focused and related QE regression suite; existing `qe_read_backend` plan collects the replay contract | `python -m nox -s qe_read_backend`: 602 passed, 1 pre-existing optional-import skip; `python -m pytest -q backend/tests/unified_engine/test_qe_prediction_replay.py`: 25 passed | verified | - |
 | F-010 | production gates and runtime boundary | `backend/tests/unified_engine/test_qe_prediction_replay.py`: DDL, DML, dependency installation, candidate writes, process control and experiment submission all noop | verified | - |
 
 ## 11. MA-E23 activation use
