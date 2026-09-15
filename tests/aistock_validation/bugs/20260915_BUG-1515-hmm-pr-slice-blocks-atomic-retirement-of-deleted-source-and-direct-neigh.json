@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -74,10 +80,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
