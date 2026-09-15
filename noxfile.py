@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+from fnmatch import fnmatchcase
 import json
 import os
 import socket
@@ -595,12 +596,85 @@ def watchlist_backend(session: nox.Session) -> None:
     )
 
 
+def _ci_classifier_changed_files() -> list[str] | None:
+    summary_value = os.environ.get("AISTOCK_CI_CLASSIFIER_SUMMARY", "").strip()
+    if not summary_value:
+        return None
+    summary_path = Path(summary_value)
+    if not summary_path.is_absolute():
+        summary_path = ROOT / summary_path
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid CI classifier summary {summary_path}: {exc}") from exc
+    changed_files = payload.get("changed_files") if isinstance(payload, dict) else None
+    if not isinstance(changed_files, list) or not all(isinstance(item, str) for item in changed_files):
+        raise ValueError("CI classifier summary changed_files must be a string list")
+    return [item.replace("\\", "/") for item in changed_files]
+
+
+def _direct_neighbor_pr_targets(
+    *,
+    smoke_tests: tuple[str, ...],
+    source_test_roots: tuple[tuple[str, str], ...],
+    test_globs: tuple[str, ...],
+    overrides: dict[str, str] | None = None,
+) -> list[str] | None:
+    """Return a bounded CI slice, or None to preserve the existing full plan.
+
+    A changed test always executes itself. A changed source uses an exact
+    same-stem neighbor or an explicit override. Any relevant path without a
+    live neighbor falls back to the prior complete session instead of adding
+    a new fail-closed blocker.
+    """
+
+    changed_files = _ci_classifier_changed_files()
+    if changed_files is None:
+        return None
+    targets = list(smoke_tests)
+    relevant = False
+    override_map = overrides or {}
+    for path in changed_files:
+        if any(fnmatchcase(path, pattern) for pattern in test_globs):
+            relevant = True
+            if not (ROOT / path).is_file():
+                return None
+            targets.append(path)
+            continue
+        override = override_map.get(path)
+        if override is not None:
+            relevant = True
+            if not (ROOT / override).is_file():
+                return None
+            targets.append(override)
+            continue
+        for source_root, test_root in source_test_roots:
+            if not path.startswith(source_root) or not path.endswith(".py"):
+                continue
+            relevant = True
+            if not (ROOT / path).is_file() or Path(path).name == "__init__.py":
+                return None
+            relative = path.removeprefix(source_root)
+            relative_path = Path(relative)
+            candidate = (
+                Path(test_root)
+                / relative_path.parent
+                / f"test_{relative_path.stem}.py"
+            ).as_posix()
+            if not (ROOT / candidate).is_file():
+                return None
+            targets.append(candidate)
+            break
+    if not relevant:
+        return None
+    return list(dict.fromkeys(targets))
+
+
 @nox.session(venv_backend="none")
 def qlib_data_backend(session: nox.Session) -> None:
     """Run Qlib exporter and PIT-universe regressions only."""
 
-    _run_pytest(
-        session,
+    full_targets = [
         "backend/tests/qlib_exporter",
         "backend/tests/test_qlib_export_stock_universe_filters.py",
         "backend/tests/core_index_membership",
@@ -609,6 +683,30 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+    ]
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(
+            "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
+            "backend/tests/dataset_release/test_index_pool_sidecar.py",
+        ),
+        source_test_roots=(
+            ("backend/qlib_exporter/", "backend/tests/qlib_exporter/"),
+            ("backend/services/dataset_release/", "backend/tests/dataset_release/"),
+        ),
+        test_globs=(
+            "backend/tests/qlib_exporter/test_*.py",
+            "backend/tests/dataset_release/test_*.py",
+            "backend/tests/core_index_membership/test_*.py",
+            "backend/tests/scripts/test_*qlib*.py",
+            "backend/tests/scripts/test_*backtest_dataset*.py",
+        ),
+        overrides={
+            "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        },
+    )
+    _run_pytest(
+        session,
+        *(pr_targets or full_targets),
         "-q",
         "-p",
         "no:cacheprovider",
@@ -700,11 +798,24 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
-    _run_pytest(
-        session,
+    full_targets = [
         "backend/tests/advisory_phase0b",
         "backend/tests/advisory_historical_range/test_r4_summary_service.py",
         "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
+    ]
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
+        source_test_roots=(
+            ("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),
+        ),
+        test_globs=("backend/tests/advisory_phase0b/test_*.py",),
+        overrides={
+            "scripts/advisory_phase0b_candidate_quality_audit.py": "backend/tests/advisory_phase0b/test_cli.py",
+        },
+    )
+    _run_pytest(
+        session,
+        *(pr_targets or full_targets),
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1305,9 +1416,29 @@ def qe_read_backend(session: nox.Session) -> None:
     dynamic_relation_test = ROOT / "backend" / "tests" / "quantevolver" / "test_dynamic_residual_flow_relation_v1.py"
     if dynamic_relation_test.exists():
         targets.append("backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py")
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(
+            "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+            "backend/tests/unified_engine/test_qe_config_truth.py::test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog",
+        ),
+        source_test_roots=(
+            ("backend/services/multi_alpha/", "backend/tests/multi_alpha/"),
+            ("backend/services/quantevolver/", "backend/tests/quantevolver/"),
+            ("backend/services/unified_engine/", "backend/tests/unified_engine/"),
+        ),
+        test_globs=(
+            "backend/tests/multi_alpha/test_*.py",
+            "backend/tests/quantevolver/test_*.py",
+            "backend/tests/unified_engine/test_*.py",
+            "backend/tests/test_multi_alpha*.py",
+        ),
+        overrides={
+            "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
+        },
+    )
     _run_pytest(
         session,
-        *targets,
+        *(pr_targets or targets),
         "-q",
         "-p",
         "no:cacheprovider",
@@ -2531,9 +2662,22 @@ def position_timing_backend(session: nox.Session) -> None:
         "backend/routers/position_timing.py",
         external=True,
     )
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(
+            "backend/tests/position_timing/test_isolation.py",
+            "backend/tests/position_timing/test_api.py",
+        ),
+        source_test_roots=(
+            ("backend/services/position_timing/", "backend/tests/position_timing/"),
+        ),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+        overrides={
+            "backend/routers/position_timing.py": "backend/tests/position_timing/test_api.py",
+        },
+    )
     _run_pytest(
         session,
-        "backend/tests/position_timing",
+        *(pr_targets or ["backend/tests/position_timing"]),
         "-q",
         "-p",
         "no:cacheprovider",
@@ -2654,14 +2798,31 @@ def validation_coverage_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def factor_research_backend(session: nox.Session) -> None:
     """Collect all research tests with DEV writes explicitly disabled, even if inherited."""
-    session.run(
-        "python", "-m", "pytest",
+    full_targets = [
         "backend/tests/factor_research/test_contracts.py",
         "backend/tests/factor_research/test_comparison.py",
         "backend/tests/factor_research/test_recovery.py",
         "backend/tests/factor_research/test_full_evaluation.py",
         "backend/tests/factor_research/test_quality.py",
-        "backend/tests/factor_research/test_repository_dev.py", "-q",
+        "backend/tests/factor_research/test_repository_dev.py",
+    ]
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(
+            "backend/tests/factor_research/test_contracts.py",
+            "backend/tests/factor_research/test_repository_dev.py",
+        ),
+        source_test_roots=(
+            ("backend/services/factor_research/", "backend/tests/factor_research/"),
+        ),
+        test_globs=("backend/tests/factor_research/test_*.py",),
+        overrides={
+            "scripts/factor_research.py": "backend/tests/factor_research/test_full_evaluation.py",
+            "backend/services/factor_research/repository.py": "backend/tests/factor_research/test_repository_dev.py",
+        },
+    )
+    session.run(
+        "python", "-m", "pytest",
+        *(pr_targets or full_targets), "-q",
         env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
     )
     session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
@@ -3401,23 +3562,12 @@ def _hmm_risk_live_sources_for_test(test_path: str) -> list[str]:
 
 
 def _hmm_risk_pr_test_targets() -> list[str]:
-    summary_value = os.environ.get("AISTOCK_CI_CLASSIFIER_SUMMARY", "").strip()
-    if not summary_value:
+    changed_files = _ci_classifier_changed_files()
+    if changed_files is None:
         return list(HMM_RISK_PR_SMOKE_TESTS)
-    summary_path = Path(summary_value)
-    if not summary_path.is_absolute():
-        summary_path = ROOT / summary_path
-    try:
-        payload = json.loads(summary_path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid HMM PR classifier summary {summary_path}: {exc}") from exc
-    changed_files = payload.get("changed_files") if isinstance(payload, dict) else None
-    if not isinstance(changed_files, list) or not all(isinstance(item, str) for item in changed_files):
-        raise ValueError("HMM PR classifier summary changed_files must be a string list")
 
     targets = list(HMM_RISK_PR_SMOKE_TESTS)
-    for raw_path in changed_files:
-        path = raw_path.replace("\\", "/")
+    for path in changed_files:
         changed_path_exists = (ROOT / path).is_file()
         if path.startswith("backend/tests/hmm_risk/") and path.endswith(".py") and "/test_" in path:
             if not changed_path_exists:
