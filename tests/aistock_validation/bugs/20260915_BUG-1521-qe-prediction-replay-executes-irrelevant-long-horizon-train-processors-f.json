@@ -110,8 +110,8 @@
   },
   "first_seen_at": "2026-09-15T08:47:18.441930Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d28e42ca7d970de1da5bdd630e623ae897d1390f",
+  "fixed_at": "2026-09-15T15:20:10Z",
   "github_issue_number": 4769,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4769",
   "last_seen_at": "2026-09-15T08:47:18.441930Z",
@@ -119,6 +119,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4771",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -146,6 +147,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -157,7 +159,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1521",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "762b901fb0e380fb",
+    "recorded_at": "2026-09-15T15:21:35.741986Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "412778cb08780598e1a744f4ecdc9819abf9fa56",
+    "source_merge_commit": "d28e42ca7d970de1da5bdd630e623ae897d1390f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4771",
+    "validation_evidence": [
+      "pytest backend/tests/unified_engine/test_qe_prediction_replay.py -q -> 29 passed",
+      "python -m nox -s l0 --no-error-on-missing-interpreters -> passed"
+    ],
+    "validation_evidence_digest": "dcee7adbb80d96aa0889dc084a9f5cf53741cae20c6cdc603e70b946ed3d6ca6"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -166,6 +190,10 @@
     "fingerprint": "ee91afd524ba2134028e7805",
     "source_event_id": "FE-20260915-ee91afd524ba"
   },
+  "validation_evidence": [
+    "pytest backend/tests/unified_engine/test_qe_prediction_replay.py -q -> 29 passed",
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
