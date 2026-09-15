@@ -1979,6 +1979,73 @@ def test_bug_1233_p0k_offline_pipeline_is_exact_and_neighbor_stays_backend(
     assert neighboring_backend["target_ids"] == ["backend-main"]
 
 
+def test_position_timing_offline_research_bug_sets_are_non_runtime_and_service_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_file_groups = [
+        [
+            "backend/services/position_timing/pattern_universe_benchmark.py",
+            "backend/tests/position_timing/test_pattern_universe_benchmark.py",
+            "docs/architecture/position_timing_universe_benchmark_validation_f1_20260914.md",
+            "tests/aistock_validation/bugs/20260914_BUG-1493-position-timing-pattern-replay-omits-terminal-liquidation-costs.json",
+        ],
+        [
+            "backend/services/position_timing/pattern_research.py",
+            "backend/tests/position_timing/test_pattern_research.py",
+            "docs/architecture/position_timing_advice_f2_redesign_20260903.md",
+            "tests/aistock_validation/bugs/20260914_BUG-1494-position-timing-pattern-policy-can-plan-entry-outside-pit-while-comparat.json",
+        ],
+        [
+            "backend/services/position_timing/action_value_corporate_actions.py",
+            "backend/tests/position_timing/test_action_value_corporate_actions.py",
+            "tests/aistock_validation/bugs/20260914_BUG-1495-position-timing-corporate-action-snapshot-conflates-distinct-same-day-di.json",
+        ],
+    ]
+
+    for changed_files in changed_file_groups:
+        for changed_file in changed_files:
+            assert workflow._classify_runtime_impact(
+                [changed_file],
+                root=isolated_workflow_root,
+            ) == {
+                "runtime_impact": "none",
+                "observed_impacts": ["none"],
+                "runtime_files": [],
+                "target_ids": [],
+            }
+
+        inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+        contract = workflow.build_runtime_contract(
+            record=_bug(
+                allowed_write_scope=changed_files,
+                runtime_contract={
+                    "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                    "runtime_impact": "none",
+                },
+            ),
+            changed_files=changed_files,
+            root=isolated_workflow_root,
+        )
+
+        assert inference["runtime_impact"] == "none"
+        assert inference["runtime_files"] == []
+        assert inference["target_ids"] == []
+        assert contract["runtime_impact"] == "none"
+        assert contract["target_ids"] == []
+        assert contract["backend_restart_required"] is False
+        assert contract["pre_pr_ready"] is True
+        assert contract["blocking"] == []
+
+    online_service = workflow._classify_runtime_impact(
+        ["backend/services/position_timing/service.py"],
+        root=isolated_workflow_root,
+    )
+    assert online_service["runtime_impact"] == "backend"
+    assert online_service["runtime_files"] == ["backend/services/position_timing/service.py"]
+    assert online_service["target_ids"] == ["backend-main"]
+
+
 def test_p0l_offline_training_source_is_non_runtime_and_neighbor_stays_backend(
     isolated_workflow_root: Path,
 ) -> None:
