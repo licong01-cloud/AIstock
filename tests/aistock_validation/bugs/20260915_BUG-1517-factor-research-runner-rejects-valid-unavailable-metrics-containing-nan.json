@@ -1,6 +1,8 @@
 {
   "actual": "The r5 full-evaluation engine can return IEEE NaN for scientifically unavailable metrics such as zero-variance or insufficient-observation statistics. The research JSON contract correctly forbids non-finite values, but runner output writes encode() directly, leaving a zero-byte metrics.json and marking an otherwise computed candidate failed. Preserve strict non-finite input rejection; normalize computed unavailable metrics to JSON null with explicit existing status/reason semantics, never zero or silent row removal. Reproduced on task 1a14a0bc-0d9a-4290-ab15-f000e07f12d1 attempt f83c1bcd-c859-4d4d-887c-8b8f621a0e20.",
   "allowed_write_scope": [
+    "backend/services/factor_research/runner.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
     "tests/aistock_validation/bugs/20260915_BUG-1517-factor-research-runner-rejects-valid-unavailable-metrics-containing-nan.json"
   ],
   "assigned_agent": null,
@@ -62,15 +64,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "factor_research_backend fresh_process_smoke and research runner candidate execution",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "factor_research_backend fresh_process_smoke=2_passed",
+      "WSL rdagent-gpu industry-residual candidate rerun=completed revision_11"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
