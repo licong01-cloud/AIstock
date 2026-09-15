@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.41
+> 版本：v2.42
 > 日期：2026-09-15
 > Feature tier：F2
-> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_020_R5_UNIVERSE_BENCHMARK_IN_PROGRESS`
+> 状态：`FIRST_RELEASE_RUNTIME_VERIFIED_PT_NEXT_020_R5_SOURCE_PREFLIGHT_BLOCKED`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -18,7 +18,7 @@ active r5 交付完整股票历史的复权因子重述authority后，`PT-NEXT-0
 
 `PT-NEXT-019` 按既有队列冻结一个更小且机制不同的日频OPEN问题：T-1的ATR14/价格位于此前252日30%低分位、前5日可比量低于前20日、T日收盘突破此前20日最高价时，T+1才尝试买入。最终同退出语义request `c2a9598ada5eee9cb691d191454be61d64ca223c8eb3f66c1bc20e90184ce494` 绑定源码 `52217df3b4d86b5c9c4b82ee6ed8a072ec383412`、原r4的64只评价股、364/364 source coverage、三条配股统一不认购政策与唯一正式比较；候选和`ALWAYS_OPEN_RISK_MANAGED`共享同一风险退出，唯一差异是现金时是否等待信号。主路径64/64，341个市场匹配、185个现金态可行动；成本后日均增量为`-4.2788 bps`、95%区间`[-11.6889,+2.9364]`，故仍为`INCONCLUSIVE/selected=0`。2/3父订单各因`688052.SH`无法合法拆单为63/64，仅标成本敏感性不完整，不否决主证据。该精确规则不调参、不serving。
 
-`PT-NEXT-020` 已按用户确认的基准验证顺序恢复实施，权威设计为[择时策略全市场与核心指数股票池基准验证](position_timing_universe_benchmark_validation_f1_20260914.md)。它在读取本任务收益前把原 r4 输入修订为显式 r5 candidate，并同时绑定 r5 配股与复权因子重述 authority；R0/P 冻结策略、全市场、沪深300、中证500、中证1000、科创50与科创100六个 PIT 动态人口、同股 `BUY_AND_HOLD` 主基准和六项 family 均不改变。沪深300价格指数仅作市场背景，池间差异仅作诊断；父研究 Q/Enhanced 已未入选，本轮只绑定父 bundle 谱系而不加载或重放。本任务不接 QE、不重训或重选、不等待最新交易日/HMM，不新增 API/UI/调度平台，也不写其他模块、数据库、registry/current、card、alert、order 或 serving。结果只具探索性横截面外部有效性，不是时间外确认；完成后再回到“突破失败/支撑失守 EXIT”。
+`PT-NEXT-020` 已按用户确认的基准验证顺序恢复实施，权威设计为[择时策略全市场与核心指数股票池基准验证](position_timing_universe_benchmark_validation_f1_20260914.md)。业务管线已迁移到显式 r5 candidate、r5 父 bundle、配股 authority 与复权重述 authority；文件侧审计读回 `000970.SZ/600008.SH/601236.SH` 三条配股，且 `300506.SZ/688109.SH` 的伪 factor seam 均为 1。R0/P 冻结策略、全市场、沪深300、中证500、中证1000、科创50与科创100六个 PIT 动态人口、同股 `BUY_AND_HOLD` 主基准和六项 family 均不改变。生产源只读预检仍在收益读取前因 `002352.SZ/2024-11-07` 与 `600989.SH/2024-07-24` 的 `market.dividend` 同期经济值冲突 fail closed；尚无正式 request、收益 bundle 或策略结论，不能记作 `INCONCLUSIVE`。本任务不接 QE、不重训或重选、不等待最新交易日/HMM，不新增 API/UI/调度平台，也不写其他模块、数据库、registry/current、card、alert、order 或 serving；source authority 修复/readback 后才继续正式 `prepare → run → inspect → exact retry`，随后再回到“突破失败/支撑失守 EXIT”。
 
 2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。该次 GET evidence 读到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。
 
@@ -1242,13 +1242,15 @@ r5最终factor coverage为695/695，其中692个绑定普通公司行动，`0009
 
 因此该精确OPEN假设停止，不依据负点估计或区间继续调参，也不发布card、alert、registry/current或serving。用户随后把同股基准的跨股票池外部有效性验证提升为下一优先任务；“突破失败/支撑失守 EXIT”保留在其后，不通过HMM、模型、QE或Agent叠加绕过本次结果。
 
-### 9.23 已启动：PT-NEXT-020 全市场与核心指数股票池基准验证
+### 9.23 已实现管线、source preflight 阻断：PT-NEXT-020 全市场与核心指数股票池基准验证
 
-权威单模块设计为[择时策略全市场与核心指数股票池基准验证](position_timing_universe_benchmark_validation_f1_20260914.md)。本项不生成另一套择时规则，而把 PT-NEXT-018 已冻结的 R0/P 完整策略投影到 r4 candidate 明确绑定的六个 PIT 动态股票池，并以同股、同起点、同账户/成交/公司行动/停牌/配股/逐腿成本和同终端语义的 `BUY_AND_HOLD` 作为唯一主要 comparator。这样先回答择时增量是否随全市场、宽基指数和科创板人口发生系统差异，再讨论与 QE 选股组合；不把一次 QE alpha 列表固定成整个回测期股票池，也不把资金利用率差异混入本轮 estimand。
+权威单模块设计为[择时策略全市场与核心指数股票池基准验证](position_timing_universe_benchmark_validation_f1_20260914.md)。本项不生成另一套择时规则，而把 PT-NEXT-018 已冻结的 R0/P 完整策略投影到 r5 candidate 明确绑定的六个 PIT 动态股票池，并以同股、同起点、同账户/成交/公司行动/停牌/配股/逐腿成本和同终端语义的 `BUY_AND_HOLD` 作为唯一主要 comparator。这样先回答择时增量是否随全市场、宽基指数和科创板人口发生系统差异，再讨论与 QE 选股组合；不把一次 QE alpha 列表固定成整个回测期股票池，也不把资金利用率差异混入本轮 estimand。
 
 本轮只执行一个父订单的 componentized 主成本情景；不把父研究的 2/3 父订单和每腿额外摩擦扩成全市场五倍路径，也不做忽略仓位反馈的近似费用重算。父 Q/Enhanced 已在 PT-NEXT-018 中未入选，本轮只绑定父 bundle 谱系而不加载或重放它们；六项 R0/P 相对同股 `BUY_AND_HOLD` 构成唯一主 family。保护边界以 receipt 零写入声明、changed-file scope 和调用图审计验证，不虚构对未读取模块的全目录前后 hash 快照。
 
-六个 `P_MINUS_BUY_AND_HOLD` 比较事前组成一个 family；沪深300价格指数只作为市场背景，不替代同股基准。父 bundle 由既有 inspect 只读递归验真；未入选的 Q/Enhanced 不加载、不重放、不重训，池间排序也不得反向定义适用人口。实现只允许位于 `position_timing` 与直接测试，采用 source-first、canonical-symbol 单读/单次特征构建、相关 pool 独立连续账户、有界分块和不可变 `prepare → run → inspect → exact retry`；成员资格改变开仓 eligibility，禁止把全市场已执行路径事后贴上指数标签。全市场公司行动/配股/factor 覆盖若出现新缺口，只输出精确 local_data handoff 并阻止错误收益计算，不换股、不缩短历史、不抓取或修改数据。当前状态为设计已闭合、正式实现与回放进行中；测试通过、覆盖完整或收益点估计都不能提前冒充 alpha，正式结果和哈希将在同一实施块回填。
+六个 `P_MINUS_BUY_AND_HOLD` 比较事前组成一个 family；沪深300价格指数只作为市场背景，不替代同股基准。父 bundle 由既有 inspect 只读递归验真；未入选的 Q/Enhanced 不加载、不重放、不重训，池间排序也不得反向定义适用人口。实现只允许位于 `position_timing` 与直接测试，采用 source-first、canonical-symbol 单读/单次特征构建、相关 pool 独立连续账户、有界分块和不可变 `prepare → run → inspect → exact retry`；成员资格改变开仓 eligibility，禁止把全市场已执行路径事后贴上指数标签。v2 request/receipt/bundle 同时 hash-bound r5 candidate manifest/dataset identity、父 manifest、配股 authority/共同账户政策、复权重述 authority/审计及实际读取的公司行动 snapshot。
+
+r5 文件侧审计已经通过：三条合法配股均保留；`300506.SZ` 与 `688109.SH` 的 candidate factor 日期无 authority 缺口，最大归一化误差分别为 `0.0000000244909026016721418674` 与 `0.0000000291564993790154602497`，修复 seam 比值均为 1。随后生产 `market.dividend` 的只读、`REPEATABLE READ`、`transaction_read_only=on` 快照在收益读取前返回 `CORPORATE_ACTION_ECONOMIC_CONFLICT`：`002352.SZ/2024-11-07` 同一 `2024-06-30` 期间存在 `cash_div=1.4/0.4`，另有不同身份的 `1.0`；`600989.SH/2024-07-24` 同一 `2023-12-31` 期间存在 `0.3158/0.265` 且 `base_share` 不同。择时模块无权判断其为修订、合计或独立分配，未生成全市场公司行动 snapshot、正式 request 或收益 bundle。该 blocker 只阻止错误收益计算，不阻止 fail-closed 管线代码合入；不得换股、缩短历史、放宽 10 bps 阈值或在择时模块内修源。
 
 ## 10. Verification Plan / 验证方案
 
@@ -1453,14 +1455,14 @@ git diff --check
 5. 四个不可变request保留JSON身份、覆盖分层及estimand修复谱系；最终bundle inspect与exact retry均通过，所有protected/DB/runtime写入为false。
 6. 已执行结果：直接测试36项、完整`backend/tests/position_timing` 318项及显式AIstock PATH的集中`position_timing_backend` nox均通过；未修正PATH的nox会选中缺LightGBM的Conda base，该环境失败不作为代码fallback。最终主路径64/64、source364/364、区间`[-11.6889,+2.9364] bps/日`、`INCONCLUSIVE/selected=0`。Ruff、compile、F1/F2 validator、diff/scope检查与GitHub CI以本次PR最终记录为准；不serving、不要求后端重启。
 
-### 10.21 PT-NEXT-020 待执行验证契约
+### 10.21 PT-NEXT-020 已执行业务验证与待续正式回放契约
 
-1. reader 从 r4 manifest 核验六个 sidecar 的 path/hash/size/schema、日期和无重叠区间；指数逐日有效人口必须再与 `stock_universe` PIT 取交集，不把指数成员文件单独当作 ST/退市已过滤人口；不得读取 active profile、当前成分股或数据库成员替换历史 PIT。
+1. reader 从 r5 manifest 核验六个 sidecar 的 path/hash/size/schema、日期和无重叠区间；指数逐日有效人口必须再与 `stock_universe` PIT 取交集，不把指数成员文件单独当作 ST/退市已过滤人口；不得读取 active profile、当前成分股或数据库成员替换历史 PIT。
 2. 同一 canonical symbol 只读取和构建一次特征，但按其相关 pool 分别回放账户；首次进入 pool 且达到共同评价时钟前不计入分母，调出后不新开仓但已有仓位继续，再入后恢复入场资格。
 3. R0/P 与同股 `BUY_AND_HOLD` 共享 raw 人民币、资金、成交、公司行动、停牌、涨跌停、配股、逐腿费用和 terminal；只 mark-to-market 或伪造成交不得用于正式比较。
 4. 父 bundle 必须由既有 inspect 递归验真并绑定 canonical manifest/request；父 Q/Enhanced 不加载、不重放、不重训，也不按新人口重选。
 5. 六项 P-minus-BH 使用同一 Bonferroni family，同时报告 nominal 95% 与 family-wise 99.1666667% 区间；池间差异和沪深300背景仅为 diagnostic-only，`selected_trial_count=0`。
-6. source-only preflight 必须先覆盖全候选 material factor interval；缺口保留股票并输出 typed handoff，不读取对应收益、换股、缩期、放宽10 bps阈值或在本模块补数据。
+6. source-only preflight 必须先绑定同一 r5 的配股/复权重述 authority，再覆盖全候选 material factor interval；缺口保留股票并输出 typed handoff，不读取对应收益、换股、缩期、放宽10 bps阈值或在本模块补数据。当前文件侧 r5 authority 审计已通过，生产公司行动源仍因两条 typed 经济值冲突阻断，故正式收益步骤待数据 authority 修复/readback 后原样续跑。
 7. 分块输出、request、coverage、receipt 与 bundle 首写不可变；inspect 能发现篡改，exact retry 返回同一 manifest identity，失败 chunk 不被跳过。
 8. 直接测试、完整 position-timing、Ruff、compile、F1/F2 validator、集中 nox、三轮复核与 GitHub CI 通过后合入。正式收益无论正负均不阻止工程合入但不自动 serving；backend-main 源码若变更，合入后重启由用户执行。
 
@@ -1600,7 +1602,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-047 | PT-NEXT-017 | HARD | 独立 `ENTRY_TIMING_VALUE_V1` 比较同股同量 T+1 立即入场与 T+2 延后一交易日入场，两侧共享冻结 risk-exit、成本、公司行动、停牌和 common T+20；在全部 prior request 外第五批 64 股做 buy-and-hold、frozen L1、always-open 三项 family-wise 比较。单一 defer horizon/模型/阈值，无自动 serving、零 protected/runtime/DB 写入 |
 | F-048 | PT-NEXT-018 | HARD | 单一离线request冻结R0四项原型比较与R0～R7/双特征集模型五项演进比较；新评价人口排除全部prior request与训练股，PIT/公司行动/停牌/逐腿费用/UNKNOWN及开发-训练-外层覆盖fail-closed。配股绑定独立typed authority与候选/基线共同账户政策；r5 source-revision保持r4人口和全部规格，以candidate内独立restatement authority关闭两处历史factor拼接且保留三条真实配股，不得在择时内手工补源或从factor推断认购。只写timing-owned research bundle，无API/UI/serving/registry/current/card/order/DB/runtime写入 |
 | F-049 | PT-NEXT-019 | HARD | 只检验波动收缩、量缩与20日收盘突破后T+1 OPEN一个冻结规则；候选与`ALWAYS_OPEN_RISK_MANAGED`同股、同资金、同成本/公司行动/配股政策、同风险退出，唯一差异为现金入场时机。复用明确r4 candidate；1父订单主覆盖与2/3父订单诊断覆盖分离。单一正式比较、无模型/阈值搜索/runtime serving，零protected/DB/runtime写入 |
-| F-050 | PT-NEXT-020 | HARD | 在明确r4 candidate-bound的全市场与五个核心指数PIT动态人口上，只检验冻结R0/P相对同股BUY_AND_HOLD的六项主比较；父bundle只读验真，未入选Q/Enhanced不再扩样。source-first、单股单读/单次特征构建、相关pool独立账户、有界分块、共同公司行动/配股/停牌/成本/terminal与不可变重试；无QE/API/UI/DB/registry/current/card/order/serving或其他模块写入 |
+| F-050 | PT-NEXT-020 | HARD | 在明确r5 candidate-bound的全市场与五个核心指数PIT动态人口上，只检验冻结R0/P相对同股BUY_AND_HOLD的六项主比较；父bundle只读验真，配股与复权重述authority分别绑定且不从factor推断账户行动，未入选Q/Enhanced不再扩样。source-first、单股单读/单次特征构建、相关pool独立账户、有界分块、共同公司行动/配股/停牌/成本/terminal与不可变重试；无QE/API/UI/DB/registry/current/card/order/serving或其他模块写入 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1657,7 +1659,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-047 | `action_value_entry_timing_model.py` 独立单头；`action_value_research.py` 同量 T+1/T+2 标签与连续路径；`action_value_deferred_entry.py` immutable pipeline | §6.18；§9.20；§10.19；`backend/tests/position_timing/test_action_value_deferred_entry.py`（7 项）；完整 position-timing 255 项与集中 nox；`EVID-ACTION-DEFERRED-ENTRY-FORMAL-20260911`；bundle inspect/exact retry 与 protected hash 隔离 readback | ACTION_VALUE_DEFERRED_ENTRY_FORMAL_VERIFIED_INCONCLUSIVE | none |
 | F-048 | `pattern_strategy.py`、`pattern_research.py`、`pattern_optimizer.py`、`pattern_model.py`、`pattern_rights_issue.py`、`pattern_adj_factor_restatement.py`；request v3/v4与source-revision lineage；§9.21与独立F1设计v2.3 | 六个`backend/tests/position_timing/test_pattern_*.py`；完整模块325 passed；F1/F2 validator；r4 request `2a8cdf...cb6f` source696/696与r5 request `014547...eeb2` source695/695均三层64/64、九项`INCONCLUSIVE`、selected=0；r5两处伪接缝ratio=1、三条rights保留、unbound=0；bundle inspect/exact retry | PATTERN_TIMING_R5_SOURCE_REVISION_FORMAL_REPLAY_VERIFIED_INCONCLUSIVE | none |
 | F-049 | `volatility_contraction_breakout.py`、`volatility_contraction_breakout_research.py`、`pattern_research.py`默认不变扩展；§9.22与独立F1设计v1.2 | `backend/tests/position_timing/test_volatility_contraction_breakout.py`、`test_volatility_contraction_breakout_research.py`与`test_pattern_research.py`；直接36项、模块及AIstock PATH集中nox均318项；最终request `c2a959...494`主路径64/64、source364/364、区间跨0、selected=0；bundle inspect/exact retry | VCB_ENTRY_TIMING_FORMAL_REPLAY_VERIFIED_INCONCLUSIVE | none |
-| F-050 | `pattern_universe_benchmark.py`（计划）；§9.23与独立F1设计v1.0 | `backend/tests/position_timing/test_pattern_universe_benchmark.py`；F1设计validator 10/10、0 warnings | DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS | none |
+| F-050 | `pattern_universe_benchmark.py` request/receipt/bundle v2；§9.23与独立F1设计v1.1 | `backend/tests/position_timing/test_pattern_universe_benchmark.py`；r5配股/重述只读审计；生产只读 `CORPORATE_ACTION_ECONOMIC_CONFLICT` 明细 | DESIGN_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
@@ -1669,5 +1671,6 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 6. **PT-NEXT-017 专项复核**：实现和正式回放只修改/调用 `position_timing` 离线边界及既有只读源；旧双头/ADD 单头、旧模型 artifact、N0、timing registry/current、正式 card/event 与运行态保持不变。标签严格比较同股同量 T+1/T+2，并将立即未成交/未知与延后现金不足 typed 分离；最终三项区间全部跨零，故只交付 `INCONCLUSIVE` immutable receipt，不把标签方差下降、弱正 OOF 相关性或 frozen L1 正点估计包装成 alpha，也不沿结果追加搜索或审批门禁。
 7. **PT-NEXT-018 专项复核**：新增代码全部位于`backend/services/position_timing/`与直接测试；复用既有纯成交/成本/公司行动/停牌/模型函数但不改其默认值或入口。一个顶层request事前冻结两个family共9项正式比较；UNKNOWN或任一开发、训练、评价、外层覆盖不完整均不能进入SUPPORTED。r4 reader只消费明确candidate与typed authority，统一`NEVER_SUBSCRIBE`政策在收益前冻结；r5 request v4再绑定最终r4人口、独立restatement authority和双接缝逐日审计，不形成新人口或假设。r4 source696/696、r5 source695/695均rights=3、三层64/64且无排除；减少的一个interval来自伪拼接消失，不是删股或放宽阈值。两次九项区间均全部跨0、selected=0，故只保留研究证据。没有抓取数据、读取或修改数据库、重建/激活candidate、换股或改变策略；旧研究、N0、timing registry/current、card/event/alert/order、数据库与运行态保持不变。
 8. **PT-NEXT-019 专项复核**：新增规则、研究管线及复用扩展全部位于`position_timing`与直接测试，三个扩展参数默认值保持旧P0路径不变。唯一正式对照与候选共享风险退出，避免把入场与退出效应混合；1父订单主证据不再被2/3父订单诊断缺口错误否决。四个request身份和三类失败原样留存，修复未改变64股人口、日期、信号阈值、成本或配股政策。最终source364/364、主路径64/64，但95%区间跨0、selected=0，故只保留不可变`INCONCLUSIVE`证据；未抓取数据、读写数据库、重建/激活candidate、修改其他模块或写入N0/timing registry/current/card/event/alert/order/runtime，也不发布serving或要求重启。
+9. **PT-NEXT-020 专项复核**：实现只在`position_timing`、直接测试、BUG与本文档范围内迁移；固定r5 candidate、六个PIT池、父R0/P、同股BUY_AND_HOLD、六项family、成本和10 bps source阈值。配股与复权重述authority绑定同一r5身份，后者只证明源修订，不推断账户行动。生产源冲突在收益前显式失败，无正式request/bundle、无股票删除或参数放宽；source blocker不妨碍工程代码审查和合入，但在authority修复前禁止声称已完成全市场收益验证。
 
-结论：首发 L1/L1a 规则能力已上线，L2 v1 无入选模型，L4b-1 暂无 eligible prospective action-card；它们继续为持仓与显式自选提供正式人工建议和非阻塞旁证。PT-NEXT-004～011 的 action-value core、公司行动/停牌连续路径、分钟覆盖审计及 ATR/行业/资金流/筹码单块历史研究均已完成，但没有形成可发布的联合 alpha 证据；PT-NEXT-012～017 又依次定位并修正了弱 OOF 响应、ENTRY/EXIT 不对称、跨股票评价、空仓 ENTRY 标签外推 ADD、持仓状态监督与入场时点目标问题，相关正式区间仍不可分辨。PT-NEXT-018已完成形态原型、有界模板选择、模型条件化、typed配股authority、共同账户政策、不可变历史管线及r4/r5同人口正式重放；r5消除了两处伪factor拼接并保留三条真实配股，但两版九项family-wise区间均全部跨0。PT-NEXT-019进一步以同风险退出基线单独检验波动收缩突破后的OPEN时机，主路径64/64、source364/364，但区间仍跨0、selected=0。两项均没有成本后超额收益支持证据，不发布正式模型或规则策略，也不依据结果继续调参。当前 PT-NEXT-020 正在以 r5 source revision 收口全市场和五个核心指数 PIT 人口的冻结 R0/P 相对同股长期持有增量；不把沪深300背景或最好股票池冒充择时 alpha。“突破失败/支撑失守 EXIT”顺延为下一独立假设，不以 QE/HMM/Agent 堆叠绕过不可分辨证据。production DDL/DML/dependency/restart/activation 均为 noop；BUG-1403 的源码、用户重启后生产加载、只读 identity/API 验收及 close-sync 已完成，且不改变模型支持态。
+结论：首发 L1/L1a 规则能力已上线，L2 v1 无入选模型，L4b-1 暂无 eligible prospective action-card；它们继续为持仓与显式自选提供正式人工建议和非阻塞旁证。PT-NEXT-004～011 的 action-value core、公司行动/停牌连续路径、分钟覆盖审计及 ATR/行业/资金流/筹码单块历史研究均已完成，但没有形成可发布的联合 alpha 证据；PT-NEXT-012～017 又依次定位并修正了弱 OOF 响应、ENTRY/EXIT 不对称、跨股票评价、空仓 ENTRY 标签外推 ADD、持仓状态监督与入场时点目标问题，相关正式区间仍不可分辨。PT-NEXT-018已完成形态原型、有界模板选择、模型条件化、typed配股authority、共同账户政策、不可变历史管线及r4/r5同人口正式重放；r5消除了两处伪factor拼接并保留三条真实配股，但两版九项family-wise区间均全部跨0。PT-NEXT-019进一步以同风险退出基线单独检验波动收缩突破后的OPEN时机，主路径64/64、source364/364，但区间仍跨0、selected=0。两项均没有成本后超额收益支持证据，不发布正式模型或规则策略，也不依据结果继续调参。PT-NEXT-020 的 r5 业务管线与文件侧 authority 已闭合，但全市场公司行动 source preflight 仍被两条 `market.dividend` 冲突阻断，当前没有新的策略收益结论；修复/readback 后按原六池规格继续，不把沪深300背景或最好股票池冒充择时 alpha。“突破失败/支撑失守 EXIT”顺延为下一独立假设，不以 QE/HMM/Agent 堆叠绕过不可分辨证据。production DDL/DML/dependency/restart/activation 均为 noop；BUG-1403 的源码、用户重启后生产加载、只读 identity/API 验收及 close-sync 已完成，且不改变模型支持态。

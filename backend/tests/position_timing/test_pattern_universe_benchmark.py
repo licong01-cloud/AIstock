@@ -78,7 +78,7 @@ def test_research_question_and_exploratory_scope_are_frozen():
     assert benchmark.BENCHMARK_CONTRACT["serving"] is False
 
 
-def test_frozen_authorities_match_r4_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_frozen_authorities_match_r5_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     candidate = _membership_candidate(tmp_path, monkeypatch)
     memberships = benchmark.open_candidate_pool_memberships(candidate)
     assert memberships.symbols == ("000001.SZ",)
@@ -89,6 +89,27 @@ def test_frozen_authorities_match_r4_candidate(tmp_path: Path, monkeypatch: pyte
     csi300.write_text("000001.SZ\t2024-01-03\t2024-01-05\n", encoding="utf-8")
     with pytest.raises(ActionValueError, match="PATTERN_POOL_FILE_IDENTITY_MISMATCH"):
         benchmark.open_candidate_pool_memberships(candidate)
+
+
+def test_r5_candidate_parent_and_authority_identities_are_frozen():
+    assert benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256 == (
+        "7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1"
+    )
+    assert benchmark.EXPECTED_CANDIDATE_DATASET_SHA256 == (
+        "59b92120a4fb52fdde8a3db57337eb9af3810d28881861db7d9e3d028987407f"
+    )
+    assert benchmark.EXPECTED_PARENT_MANIFEST_SHA256 == (
+        "7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541"
+    )
+    assert benchmark.EXPECTED_RIGHTS_AUTHORITY_SHA256 == (
+        "4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c"
+    )
+    assert benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256 == (
+        "c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd"
+    )
+    assert benchmark.BENCHMARK_CONTRACT[
+        "adj_factor_restatement_authority_canonical_sha256"
+    ] == benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
 
 
 def test_pit_membership_projection_preserves_population_clock(
@@ -269,6 +290,23 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "pipeline_id": benchmark.PIPELINE_ID,
         "benchmark_contract": benchmark.BENCHMARK_CONTRACT,
         "benchmark_contract_sha256": benchmark.BENCHMARK_CONTRACT_SHA256,
+        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "candidate_dataset_manifest_sha256": benchmark.EXPECTED_CANDIDATE_DATASET_SHA256,
+        "parent_manifest_sha256": benchmark.EXPECTED_PARENT_MANIFEST_SHA256,
+        "rights_issue_authority_canonical_sha256": (
+            benchmark.EXPECTED_RIGHTS_AUTHORITY_SHA256
+        ),
+        "adj_factor_restatement_authority_canonical_sha256": (
+            benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+        ),
+        "adj_factor_restatement_audit": {},
+        "repository_commit": "1" * 40,
+        "candidate_data_references_sha256": "2" * 64,
+        "corporate_action_snapshot_sha256": "3" * 64,
+        "corporate_action_application_sha256": "4" * 64,
+        "combined_corporate_action_source_sha256": "5" * 64,
+        "rights_issue_participation_policy_sha256": "6" * 64,
+        "factor_action_coverage_audit_sha256": "7" * 64,
         "pool_ids": benchmark.POOL_IDS,
         "population_symbols": (),
         "population_symbols_sha256": canonical_sha256(()),
@@ -283,6 +321,12 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "database_write": False,
         "runtime_write": False,
     }
+    request["adj_factor_restatement_audit"]["audit_sha256"] = canonical_sha256(
+        request["adj_factor_restatement_audit"]
+    )
+    request["adj_factor_restatement_audit_sha256"] = request[
+        "adj_factor_restatement_audit"
+    ]["audit_sha256"]
     request["request_sha256"] = canonical_sha256(request)
     request_path = tmp_path / "request.json"
     request_path.write_bytes(canonical_json_bytes(request))
@@ -292,6 +336,25 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "request_sha256": request["request_sha256"],
         "result_class": benchmark.RESULT_CLASS,
         "selected_trial_count": 0,
+        **{
+            field: request[field]
+            for field in (
+                "repository_commit",
+                "benchmark_contract_sha256",
+                "candidate_manifest_sha256",
+                "candidate_dataset_manifest_sha256",
+                "candidate_data_references_sha256",
+                "parent_manifest_sha256",
+                "corporate_action_snapshot_sha256",
+                "corporate_action_application_sha256",
+                "combined_corporate_action_source_sha256",
+                "rights_issue_authority_canonical_sha256",
+                "rights_issue_participation_policy_sha256",
+                "adj_factor_restatement_authority_canonical_sha256",
+                "adj_factor_restatement_audit_sha256",
+                "factor_action_coverage_audit_sha256",
+            )
+        },
         **benchmark.EXTERNAL_WRITE_RECEIPT_FLAGS,
     }
     receipt["receipt_sha256"] = canonical_sha256(receipt)
@@ -309,6 +372,25 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         receipt=receipt,
     )
     benchmark.inspect_bundle(bundle)
+
+    original_receipt = canonical_json_bytes(receipt)
+    drifted_receipt = dict(receipt)
+    drifted_receipt["adj_factor_restatement_audit_sha256"] = "0" * 64
+    drifted_receipt.pop("receipt_sha256")
+    drifted_receipt["receipt_sha256"] = canonical_sha256(drifted_receipt)
+    (bundle / "receipt.json").write_bytes(canonical_json_bytes(drifted_receipt))
+    (bundle / "manifest.json").write_bytes(
+        canonical_json_bytes(benchmark._bundle_manifest(bundle, drifted_receipt))
+    )
+    with pytest.raises(
+        ActionValueError, match="PATTERN_BENCHMARK_BUNDLE_IDENTITY_MISMATCH"
+    ):
+        benchmark.inspect_bundle(bundle)
+
+    (bundle / "receipt.json").write_bytes(original_receipt)
+    (bundle / "manifest.json").write_bytes(
+        canonical_json_bytes(benchmark._bundle_manifest(bundle, receipt))
+    )
     (chunk / "diagnostics.json").write_text("tampered", encoding="utf-8")
     with pytest.raises(
         ActionValueError, match="PATTERN_BENCHMARK_EXTERNAL_CHUNK_CHANGED"

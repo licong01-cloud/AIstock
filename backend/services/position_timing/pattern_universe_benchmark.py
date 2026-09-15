@@ -42,6 +42,10 @@ from .pattern_research import (
     mean_interval,
     replay_full_policy_symbol,
 )
+from .pattern_adj_factor_restatement import (
+    audit_candidate_adj_factor_restatement,
+    open_adj_factor_restatement_authority,
+)
 from .pattern_rights_issue import (
     RIGHTS_ISSUE_PARTICIPATION_POLICY,
     RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
@@ -55,24 +59,27 @@ from .pattern_strategy import PATTERN_FEATURE_COLUMNS, pattern_feature_frame
 
 PIPELINE_ID = "POSITION_TIMING_PATTERN_UNIVERSE_BENCHMARK_V1"
 ARTIFACT_FOLDER = "pattern_universe_benchmark_v1"
-REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v1"
-RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v1"
-BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v1"
+REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v2"
+RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v2"
+BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v2"
 CHUNK_SCHEMA = "position_timing_pattern_universe_benchmark_chunk_v1"
 MEMBERSHIP_SCHEMA = "position_timing_candidate_bound_pool_membership_v1"
 RESULT_CLASS = "EXPLORATORY_CROSS_SYMBOL_EXTERNAL_VALIDITY_NOT_TEMPORAL_HOLDOUT"
 
 EXPECTED_CANDIDATE_MANIFEST_SHA256 = (
-    "ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de"
+    "7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1"
 )
 EXPECTED_CANDIDATE_DATASET_SHA256 = (
-    "1db13b2129409c2ee4aabd8bc83c3f5e5eee1fde2a859a3cb2a722d885dd5c49"
+    "59b92120a4fb52fdde8a3db57337eb9af3810d28881861db7d9e3d028987407f"
 )
 EXPECTED_PARENT_MANIFEST_SHA256 = (
-    "a6e7a1db0d4ee9ac2e6fc57d6da31aefd46365c81fe277b03213b3f71aebf8ac"
+    "7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541"
 )
 EXPECTED_RIGHTS_AUTHORITY_SHA256 = (
     "4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c"
+)
+EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256 = (
+    "c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd"
 )
 POOL_IDS = (
     "stock_universe",
@@ -138,6 +145,9 @@ BENCHMARK_CONTRACT: Mapping[str, Any] = {
     "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
     "candidate_dataset_manifest_sha256": EXPECTED_CANDIDATE_DATASET_SHA256,
     "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
+    "adj_factor_restatement_authority_canonical_sha256": (
+        EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+    ),
     "pool_ids": POOL_IDS,
     "effective_index_population": "INDEX_MEMBERSHIP_AND_STOCK_UNIVERSE_PIT",
     "primary_strategy": PRIMARY_STRATEGY,
@@ -358,6 +368,7 @@ def _source_code_references(repository_root: Path) -> Mapping[str, Mapping[str, 
         "pattern_research": source_root / "pattern_research.py",
         "pattern_strategy": source_root / "pattern_strategy.py",
         "rights_issue": source_root / "pattern_rights_issue.py",
+        "adj_factor_restatement": source_root / "pattern_adj_factor_restatement.py",
         "daily_candidate": source_root / "action_value_data.py",
         "corporate_actions": source_root / "action_value_corporate_actions.py",
         "cost_and_fill": source_root / "action_value.py",
@@ -443,6 +454,27 @@ def prepare_request(
         start=start,
         end=end,
     )
+    restatement_authority = open_adj_factor_restatement_authority(
+        candidate_root=candidate_root,
+        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        expected_authority_canonical_sha256=(
+            EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+        ),
+    )
+    if (
+        restatement_authority.candidate_manifest_reference
+        != rights_authority.candidate_manifest_reference
+        or restatement_authority.candidate_dataset_manifest_sha256
+        != rights_authority.candidate_dataset_manifest_sha256
+        or restatement_authority.candidate_revision
+        != rights_authority.candidate_revision
+    ):
+        raise ActionValueError(
+            "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_CANDIDATE_IDENTITY_MISMATCH"
+        )
+    restatement_audit = audit_candidate_adj_factor_restatement(
+        DailyCandidate.open(candidate_root), restatement_authority
+    )
     combined_source = combined_corporate_action_source_snapshot(
         dividend_snapshot_sha256=source_actions.snapshot_sha256,
         authority=rights_authority,
@@ -486,6 +518,13 @@ def prepare_request(
                 "corporate_action_snapshot": corporate_snapshot_reference,
                 "corporate_action_application": action_application,
                 "rights_issue_authority": rights_authority.authority_reference,
+                "adj_factor_restatement_authority": (
+                    restatement_authority.authority_reference
+                ),
+                "adj_factor_restatement_authority_canonical_sha256": (
+                    restatement_authority.authority_canonical_sha256
+                ),
+                "adj_factor_restatement_audit": restatement_audit,
                 "rights_issue_participation_policy_sha256": RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
                 "factor_action_coverage": factor_coverage,
                 "outcomes_read": False,
@@ -547,6 +586,27 @@ def prepare_request(
         "rights_issue_participation_policy_artifact": rights_policy_reference,
         "rights_issue_application_audit": rights_application,
         "rights_issue_application_sha256": rights_application["application_sha256"],
+        "adj_factor_restatement_authority": (
+            restatement_authority.authority_reference
+        ),
+        "adj_factor_restatement_authority_canonical_sha256": (
+            restatement_authority.authority_canonical_sha256
+        ),
+        "adj_factor_restatement_diagnosis_sha256": (
+            restatement_authority.diagnosis_sha256
+        ),
+        "adj_factor_restatement_series": [
+            {
+                "symbol": series.symbol,
+                "start": series.start.isoformat(),
+                "end": series.end.isoformat(),
+                "row_count": series.row_count,
+                "ordered_rows_sha256": series.ordered_rows_sha256,
+            }
+            for series in restatement_authority.series
+        ],
+        "adj_factor_restatement_audit": restatement_audit,
+        "adj_factor_restatement_audit_sha256": restatement_audit["audit_sha256"],
         "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
         "factor_action_coverage_policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
         "factor_action_coverage_audit": factor_coverage,
@@ -596,6 +656,16 @@ def _load_request(path: Path) -> dict[str, Any]:
         "database_write",
         "runtime_write",
     )
+    restatement_audit = request.get("adj_factor_restatement_audit")
+    restatement_audit_identity = (
+        {
+            key: value
+            for key, value in restatement_audit.items()
+            if key != "audit_sha256"
+        }
+        if isinstance(restatement_audit, Mapping)
+        else {}
+    )
     if (
         request.get("schema_version") != REQUEST_SCHEMA
         or request.get("pipeline_id") != PIPELINE_ID
@@ -604,6 +674,20 @@ def _load_request(path: Path) -> dict[str, Any]:
             request.get("benchmark_contract"), BENCHMARK_CONTRACT
         )
         or request.get("benchmark_contract_sha256") != BENCHMARK_CONTRACT_SHA256
+        or request.get("candidate_manifest_sha256")
+        != EXPECTED_CANDIDATE_MANIFEST_SHA256
+        or request.get("candidate_dataset_manifest_sha256")
+        != EXPECTED_CANDIDATE_DATASET_SHA256
+        or request.get("parent_manifest_sha256") != EXPECTED_PARENT_MANIFEST_SHA256
+        or request.get("rights_issue_authority_canonical_sha256")
+        != EXPECTED_RIGHTS_AUTHORITY_SHA256
+        or request.get("adj_factor_restatement_authority_canonical_sha256")
+        != EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+        or not isinstance(restatement_audit, Mapping)
+        or request.get("adj_factor_restatement_audit_sha256")
+        != restatement_audit.get("audit_sha256")
+        or restatement_audit.get("audit_sha256")
+        != canonical_sha256(restatement_audit_identity)
         or tuple(request.get("pool_ids") or ()) != POOL_IDS
         or tuple(request.get("population_symbols") or ())
         != tuple(sorted(set(request.get("population_symbols") or ())))
@@ -1421,6 +1505,22 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         "database_written",
         "runtime_written",
     )
+    request_bound_receipt_fields = (
+        "repository_commit",
+        "benchmark_contract_sha256",
+        "candidate_manifest_sha256",
+        "candidate_dataset_manifest_sha256",
+        "candidate_data_references_sha256",
+        "parent_manifest_sha256",
+        "corporate_action_snapshot_sha256",
+        "corporate_action_application_sha256",
+        "combined_corporate_action_source_sha256",
+        "rights_issue_authority_canonical_sha256",
+        "rights_issue_participation_policy_sha256",
+        "adj_factor_restatement_authority_canonical_sha256",
+        "adj_factor_restatement_audit_sha256",
+        "factor_action_coverage_audit_sha256",
+    )
     actual_files = {
         path.relative_to(root).as_posix()
         for path in root.rglob("*")
@@ -1437,6 +1537,10 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         or receipt.get("result_class") != RESULT_CLASS
         or receipt.get("selected_trial_count") != 0
         or any(receipt.get(flag) is not False for flag in false_flags)
+        or any(
+            receipt.get(field) != request.get(field)
+            for field in request_bound_receipt_fields
+        )
         or coverage.get("coverage_sha256") != canonical_sha256(coverage_identity)
         or chunk_refs.get("chunk_references_sha256")
         != canonical_sha256(chunk_identity)
@@ -1550,6 +1654,44 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         or rights_application != request["rights_issue_application_audit"]
     ):
         raise ActionValueError("PATTERN_BENCHMARK_RIGHTS_AUTHORITY_DRIFT")
+    restatement_authority = open_adj_factor_restatement_authority(
+        candidate_root=candidate.root,
+        expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
+        expected_authority_canonical_sha256=request[
+            "adj_factor_restatement_authority_canonical_sha256"
+        ],
+    )
+    restatement_audit = audit_candidate_adj_factor_restatement(
+        DailyCandidate.open(candidate.root), restatement_authority
+    )
+    declared_restatement_series = [
+        {
+            "symbol": series.symbol,
+            "start": series.start.isoformat(),
+            "end": series.end.isoformat(),
+            "row_count": series.row_count,
+            "ordered_rows_sha256": series.ordered_rows_sha256,
+        }
+        for series in restatement_authority.series
+    ]
+    if (
+        restatement_authority.authority_reference
+        != request["adj_factor_restatement_authority"]
+        or restatement_authority.candidate_manifest_reference
+        != rights_authority.candidate_manifest_reference
+        or restatement_authority.candidate_dataset_manifest_sha256
+        != rights_authority.candidate_dataset_manifest_sha256
+        or restatement_authority.candidate_revision
+        != rights_authority.candidate_revision
+        or restatement_authority.diagnosis_sha256
+        != request["adj_factor_restatement_diagnosis_sha256"]
+        or declared_restatement_series
+        != request["adj_factor_restatement_series"]
+        or restatement_audit != request["adj_factor_restatement_audit"]
+    ):
+        raise ActionValueError(
+            "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_AUTHORITY_DRIFT"
+        )
     source_actions = CorporateActionBook.open(corporate_snapshot)
     combined_source = combined_corporate_action_source_snapshot(
         dividend_snapshot_sha256=source_actions.snapshot_sha256,
@@ -1668,6 +1810,12 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         ],
         "rights_issue_participation_policy_sha256": request[
             "rights_issue_participation_policy_sha256"
+        ],
+        "adj_factor_restatement_authority_canonical_sha256": request[
+            "adj_factor_restatement_authority_canonical_sha256"
+        ],
+        "adj_factor_restatement_audit_sha256": request[
+            "adj_factor_restatement_audit_sha256"
         ],
         "factor_action_coverage_audit_sha256": request[
             "factor_action_coverage_audit_sha256"

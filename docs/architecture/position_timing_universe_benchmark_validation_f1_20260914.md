@@ -1,7 +1,7 @@
 # 择时策略全市场与核心指数股票池基准验证设计
 
-> 版本：v1.0；日期：2026-09-14；Feature tier：F1（`position_timing` 单模块离线研究）  
-> 状态：`APPROVED_FOR_IMPLEMENTATION`  
+> 版本：v1.1；日期：2026-09-15；Feature tier：F1（`position_timing` 单模块离线研究）  
+> 状态：`IMPLEMENTED_SOURCE_PREFLIGHT_BLOCKED`  
 > 任务：`PT-NEXT-020 / PATTERN_UNIVERSE_BENCHMARK_V1`  
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)  
 > 父研究：[自选股与持仓股形态择时研究](position_timing_pattern_strategy_design_20260911.md)  
@@ -15,9 +15,11 @@
 
 主研究问题只有一个：冻结 R0/P 完整策略在六个 candidate-bound PIT 股票池上，相对同股直接长期持有的逐腿成本后日均财富增量是否为正。沪深300只回答市场背景问题。父研究中未入选的 Q 与 Enhanced 不在本轮扩样中重复运行，避免无助于主问题的三倍计算与 57 个模型加载。
 
+截至 2026-09-15，管线实现和 r5 candidate/配股/复权重述 reader 已完成；r5 文件侧审计确认三条配股事件及 `300506.SZ`、`688109.SH` 两条重述序列身份闭合。生产源只读快照仍在收益读取前被 `002352.SZ/2024-11-07` 与 `600989.SH/2024-07-24` 的 `market.dividend` 同期经济值冲突阻断。因此尚无 PT-NEXT-020 正式 request、收益 bundle 或策略结论；该状态是数据 authority 缺口，不是 `NEGATIVE` 或 `INCONCLUSIVE` 研究结果，也不得通过删股、缩短历史或放宽 10 bps 阈值绕过。
+
 ## 2. Scope / 范围与 Non-goals
 
-本任务交付一个 F1 设计、一条 timing-owned 不可变 `prepare → run → inspect → exact retry` 管线、全市场及五个核心指数池真实历史回放、直接测试、结果回填和主蓝图进度同步。
+本任务目标交付一个 F1 设计、一条 timing-owned 不可变 `prepare → run → inspect → exact retry` 管线、全市场及五个核心指数池真实历史回放、直接测试、结果回填和主蓝图进度同步。源 authority 不闭合时允许先合入 fail-closed 管线，但不得把未执行的正式回放写成已完成。
 
 写入范围限于：
 
@@ -31,7 +33,7 @@
 ## 3. Architecture / 最小架构与允许复用的 API
 
 ```text
-r4 candidate manifest + candidate-bound PIT sidecars + 000300.SH 日线
+r5 candidate manifest + candidate-bound PIT sidecars + 000300.SH 日线
                               ↓
      source-only factor/corporate-action/rights/suspension preflight
                               ↓
@@ -48,13 +50,14 @@ r4 candidate manifest + candidate-bound PIT sidecars + 000300.SH 日线
 
 | 能力 | 权威实现与复用方式 |
 |---|---|
-| candidate 日线与全局交易日 | `action_value_data.DailyCandidate.open/bars/coverage`；只读明确 r4 路径 |
+| candidate 日线与全局交易日 | `action_value_data.DailyCandidate.open/bars/coverage`；只读明确 r5 路径 |
 | R0/P 连续路径 | `pattern_research.replay_full_policy_symbol`；候选与 `BUY_AND_HOLD` 共享 source、资金、公司行动和逐腿费用 |
 | 形态特征 | `pattern_strategy.pattern_feature_frame`；不复制第二套形态公式 |
 | 父研究谱系 | `pattern_research.inspect_pattern_bundle` 递归核验父 bundle 与 manifest，只绑定产生 R0/P 的冻结请求和代码身份，不读取父结果来重选规则 |
 | 公司行动 | `CorporateActionBook`、`freeze_corporate_action_snapshot` 与 `apply_pattern_corporate_action_policy`；只读源并写 timing-owned snapshot |
-| 停牌 | r4 candidate 的 `suspend_d_daily_candidate_v2` 及已有 `SuspensionSnapshotBook` 语义 |
+| 停牌 | r5 candidate 的 `suspend_d_daily_candidate_v2`，由 `DailyCandidate.bars` 显式映射为 `is_suspended`；不另建第二套 snapshot |
 | 配股 | `pattern_rights_issue.open_rights_issue_authority` 与统一 `NEVER_SUBSCRIBE` policy；factor 不推断账户认购 |
+| 复权重述 | `pattern_adj_factor_restatement.open_adj_factor_restatement_authority/audit_candidate_adj_factor_restatement`；只证明 r5 数据源修订，不把 factor 变化解释为账户已发生公司行动 |
 | 不可变发布 | `PositionTimingArtifactStore._publish_immutable`、`file_reference`、`canonical_sha256` 与现有原子目录发布/inspect 方式 |
 
 本任务不新增“从父 pattern bundle 恢复全部 walk-forward 模型”的 loader。父 bundle 只通过既有 inspect 递归验真并绑定 canonical manifest 与 request 身份；缺失、额外文件或 hash 漂移仍由父 inspect fail closed。
@@ -65,15 +68,15 @@ r4 candidate manifest + candidate-bound PIT sidecars + 000300.SH 日线
 
 candidate 显式固定为：
 
-`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260912-r4-candidate`
+`X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260915-r5-candidate`
 
-根 manifest 文件 SHA256 为 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`，dataset identity 为 `1db13b2129409c2ee4aabd8bc83c3f5e5eee1fde2a859a3cb2a722d885dd5c49`。父 request 为 `2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f`；父 bundle manifest canonical SHA256 为 `a6e7a1db0d4ee9ac2e6fc57d6da31aefd46365c81fe277b03213b3f71aebf8ac`。父结果值不用于生成本任务规格，只绑定产生冻结 R0/P 的 source、policy 与代码身份。
+根 manifest 文件 SHA256 为 `7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1`，dataset identity 为 `59b92120a4fb52fdde8a3db57337eb9af3810d28881861db7d9e3d028987407f`。父 request 为 `014547fa46994c7b01b809580a8db5d4cce449c723661454bb3a29e6f0d9eeb2`；父 bundle manifest canonical SHA256 为 `7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541`。父结果值不用于生成本任务规格，只绑定产生冻结 R0/P 的 source、policy 与代码身份。
 
-配股 authority canonical SHA256 保持 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`，共同参与政策 canonical SHA256 保持 `4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。研究范围为 candidate 的 `2018-08-01..2026-08-31` 共 1,961 个全局 session；R0/P 的可用起点继续使用父合同的 756-session 初始边界，不等待新交易日。
+配股 authority canonical SHA256 保持 `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`，共同参与政策 canonical SHA256 保持 `4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。r5 复权重述 authority canonical SHA256 为 `c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd`；其文件 SHA256 为 `1639b06a1e43998273ac21e6d5593671c0be934fd24714f8ebfe920bfe3a96ad`，审计 SHA256 为 `48b78cc7237fc02d4c0d840f3ef63c7cb9ddc6ef46325330b8b7acc3b2dd32ac`。研究范围为 candidate 的 `2018-08-01..2026-08-31` 共 1,961 个全局 session；R0/P 的可用起点继续使用父合同的 756-session 初始边界，不等待新交易日。
 
 ### 4.2 六个股票池
 
-股票池身份全部来自 r4 manifest 的 `st_pit_manifest.index_membership_sidecars`：
+股票池身份全部来自 r5 manifest 的 `st_pit_manifest.index_membership_sidecars`；六个 sidecar 的内容身份相对 r4 未变化：
 
 | pool_id | sidecar SHA256 | intervals | historical symbols | membership start |
 |---|---|---:|---:|---|
@@ -94,7 +97,7 @@ reader 必须核验 manifest 的 path/hash/size、三列 schema、股票代码�
 
 研究终点必须明确区分终值计价与真实终端清仓。实现先核对现有 `replay_full_policy_symbol` 是否在共同 terminal 执行卖出、顺延最多 5 个全局交易日并收取卖出腿费用；如果只 mark-to-market，则登记同模块 BUG 并新增对称的 `TERMINAL_LIQUIDATED` 口径。旧 artifact 保留原样；新研究只使用修正后且候选/基准完全相同的终端语义。任一路径无法在最大顺延期内清仓时均记 `UNAVAILABLE_AT_HORIZON`，不得用最后价格伪造成交。
 
-沪深300 `000300.SH` 使用 r4 `index_context` 的 close-to-close 价格指数，按每个股票池有效评价日期归一化，只标 `MARKET_CONTEXT_PRICE_INDEX_NOT_INVESTABLE_TOTAL_RETURN`。跑赢它不足以证明择时有增量。
+沪深300 `000300.SH` 使用 r5 `index_context` 的 close-to-close 价格指数，按每个股票池有效评价日期归一化，只标 `MARKET_CONTEXT_PRICE_INDEX_NOT_INVESTABLE_TOTAL_RETURN`。跑赢它不足以证明择时有增量。
 
 ### 4.4 父诊断与成本边界
 
@@ -132,7 +135,7 @@ inspect --bundle
 run --request
 ```
 
-`prepare` 在任何候选收益读取前冻结源码 commit、candidate、六个 sidecar、父 bundle、策略/模型/成本/统计、公司行动、停牌和配股身份。source preflight 对全部候选股票检查大于 10 bps 的 material factor interval；覆盖不足时只写 content-addressed `source_diagnostics` 并 typed fail，不生成可被误读为完整的收益 bundle。
+`prepare` 在任何候选收益读取前冻结源码 commit、candidate、六个 sidecar、父 bundle、策略/模型/成本/统计、公司行动、停牌、配股和复权重述身份。复权重述 authority 必须与配股 authority 绑定同一 r5 manifest/revision，且 `300506.SZ`、`688109.SH` 修订 seam 审计通过；它只说明 candidate factor 源修订，不推断账户行动。source preflight 对全部候选股票检查大于 10 bps 的 material factor interval；覆盖不足时只写 content-addressed `source_diagnostics` 并 typed fail，不生成可被误读为完整的收益 bundle。
 
 `run` 按 canonical symbol 顺序分块执行；staging 只允许位于 timing-owned root，按 request hash 与 chunk ordinal 命名。单个 symbol 只读一次源数据并只构建一次冻结 features，但成员资格会改变新开仓 eligibility，因此必须为该 symbol 所属的每个 PIT pool 分别维护和回放连续账户，禁止把全市场已执行路径事后贴上指数池标签。R0/P 与同股基准在同一 pool path 内使用相同冻结 bars/features/membership。分块文件原子写入并记录 symbol range、row count 与 SHA256；失败重试只能复用 hash 完全相同的已完成 chunk，不能跳过失败股票。最终 bundle manifest 递归绑定 request、coverage、receipt、日级聚合、pool summary、symbol diagnostics、fills 摘要及分块明细，并在顶层 inspect 时递归复核外部分块内容。
 
@@ -147,7 +150,7 @@ run --request
 1. 冻结本 F1 设计并通过 validator，同时把主蓝图后续优先级改为 PT-NEXT-020；
 2. 实现 sidecar/父模型不可变 reader、source-only 全市场 preflight、分块回放与 receipt；
 3. 用小型 fixture 和父 64 股做旧路径数值/行为等价验证；
-4. 在 clean source commit 上执行全市场 source preflight；新数据缺口输出精确 handoff，不在本模块补数据；
+4. 在 clean source commit 上执行全市场 source preflight；当前已确认两条 `market.dividend` 经济值冲突，新数据缺口输出精确 handoff，不在本模块补数据；
 5. source 完整后执行正式 `prepare → run → inspect → exact retry`；
 6. 回填真实结果和 hash，执行三轮不同关注点的审核、修复与回归；
 7. 通过 F1/F2 validator、最小本地 gate、PR CI 后直接合入；backend restart 若由 runtime catalog 推断为 required，合入后等待用户重启再做只读验收。
@@ -167,7 +170,7 @@ run --request
 - 父 bundle 由既有 inspect 递归验真，canonical manifest/request 漂移 fail closed；本轮不加载或运行 Q/Enhanced；
 - 六项主比较 family-wise 区间、95% nominal、池间 diagnostic、有效 sleeve 分母和沪深300 context 语义正确；
 - coverage 不完整只能得到 typed incomplete/`INCONCLUSIVE`，不能通过删股恢复 `SUPPORTED`；
-- prepare 不读取本任务收益，bundle 不可变，inspect 能发现任意篡改，exact retry 不写第二份结果；
+- prepare 不读取本任务收益，r5 candidate/配股/复权重述 authority 及其审计均 hash-bound，bundle 不可变，inspect 能发现任意篡改，exact retry 不写第二份结果；
 - N0、QE、Selection、Advisory、Watchlist、Paper、MiniQMT、registry/current/card/alert/order/DB/runtime/serving 写入均为 false。
 
 本地最终 gate：changed-file compile/ruff、直接测试、一次完整 `python -m nox -s position_timing_backend`、`git diff --check`、scope/ownership 检查、F1 validator、主蓝图 F2 validator，以及 DESIGN-COMPLIANCE-001 逐条复核。失败后只重跑失败 nodeid/`--lf`，稳定后再运行一次完整矩阵，禁止机械重复同一日志冒充多轮审核。
@@ -177,7 +180,7 @@ run --request
 | design_item | acceptance requirement |
 |---|---|
 | F-001 | 单一外部有效性问题、终极目标、探索性限制和不按收益阻碍工程明确 |
-| F-002 | r4 candidate、父 bundle、日期、六个 sidecar、配股与共同政策 hash 全部冻结 |
+| F-002 | r5 candidate、父 bundle、日期、六个 sidecar、配股、复权重述与共同政策 hash 全部冻结 |
 | F-003 | PIT 动态成员、有效 sleeve 分母、调出后持仓与再入场语义无幸存者偏差 |
 | F-004 | R0/P 与同股 BUY_AND_HOLD 是唯一主基准，沪深300只作价格指数背景 |
 | F-005 | 父 artifact 只读且递归验真；未入选 Q/Enhanced 不在本轮扩样或进入主策略选择 |
@@ -194,7 +197,7 @@ run --request
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | 本文 §1、§5 | `python -m pytest backend/tests/position_timing/test_pattern_universe_benchmark.py::test_research_question_and_exploratory_scope_are_frozen -q` | DESIGN_VERIFIED | none |
-| F-002 | 本文 §4.1、§4.2 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_frozen_authorities_match_r4_candidate` | DESIGN_VERIFIED | none |
+| F-002 | 本文 §4.1、§4.2 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_frozen_authorities_match_r5_candidate`、`::test_r5_candidate_parent_and_authority_identities_are_frozen` | DESIGN_VERIFIED | none |
 | F-003 | 本文 §4.2、§5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_pit_membership_projection_preserves_population_clock` | DESIGN_VERIFIED | none |
 | F-004 | 本文 §4.3、§5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_same_stock_buy_and_hold_and_market_context_are_distinct` | DESIGN_VERIFIED | none |
 | F-005 | 本文 §3、§4.4 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_parent_artifact_identity_is_hash_bound_and_read_only` | DESIGN_VERIFIED | none |
@@ -207,6 +210,8 @@ run --request
 ## 11. Risks and Production Gates / 风险与生产边界
 
 主要风险是：全市场新配股/复权区间未闭合；动态成分分母把未进入股票当零收益；长期持有的终端费用遗漏；重叠指数池被误当独立样本；全市场内存无界；按最好股票池回选；把沪深300相对收益、coverage 或工程通过包装成择时 alpha。处置分别是收益前 source audit、typed 状态、有界分块、同一六假设 family、diagnostic-only 池间比较和不可变证据措辞。
+
+当前 source blocker 的只读证据为：`002352.SZ/2024-11-07` 同一实施日包含同一 `2024-06-30` 期间的 `cash_div=1.4` 与 `0.4`，另有 `2024-10-11` 身份的 `1.0`；`600989.SH/2024-07-24` 同一 `2023-12-31` 期间存在 `cash_div=0.3158` 与 `0.265` 且 `base_share` 不同。position_timing 无权判断其为修订、合计或独立分配，必须由 local_data authority 修复或给出可验证分类；此前不得生成收益 request。
 
 DESIGN-COMPLIANCE-001：①不以 128 股烟测、部分股票池或 source coverage 冒充完整交付；②unknown/no-fill/source gap/terminal unavailable/分块失败均显式保留；③不修改冻结策略、父模型、用户目标、成本或其他模块；④不增加 MDE、最新日期、HMM、人工审批或收益方向门禁，只有来源、因果和身份错误阻止对应错误计算。
 
