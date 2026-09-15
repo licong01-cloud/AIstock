@@ -109,3 +109,63 @@ def test_max_ratio_validation_is_fail_closed(tmp_path: Path) -> None:
         assert "max_ratio" in str(exc)
     else:
         raise AssertionError("invalid max_ratio must fail closed")
+
+
+def test_cli_rejects_explicit_forbidden_test_only_owner(tmp_path: Path, monkeypatch, capsys) -> None:
+    report = {
+        "totals": {
+            "production_sloc": 0,
+            "test_sloc": 1,
+            "test_to_production_percent": None,
+            "module_count": 1,
+            "over_budget_module_count": 1,
+            "test_only_bucket_count": 1,
+        },
+        "modules": [
+            {
+                "module_id": "tests.backend",
+                "test_only_bucket": False,
+                "test_files": 1,
+                "over_budget": True,
+                "over_budget_sloc": 1,
+            }
+        ],
+    }
+    monkeypatch.setattr(audit, "build_audit", lambda **_: report)
+    class _Loader:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def load(self) -> None:
+            pass
+
+    monkeypatch.setattr(audit, "ModuleRegistry", _Loader)
+    monkeypatch.setattr(audit, "FileOwnershipCatalog", _Loader)
+
+    result = audit.main(
+        ["--repo-root", str(tmp_path), "--json", "--fail-test-only-owner", "tests.backend"]
+    )
+
+    assert result == 1
+    assert "forbidden test-only owners: tests.backend" in capsys.readouterr().err
+
+
+def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
+    root = audit.REPO_ROOT_FOR_IMPORT
+    registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
+    catalog = audit.FileOwnershipCatalog(
+        root / "tests/aistock_validation/catalog/file_ownership.yaml",
+        module_registry=registry,
+    )
+    registry.load()
+    catalog.load()
+
+    offenders = [
+        path
+        for path in audit._git_tracked_paths(root)
+        if audit._is_executable_source(path)
+        and audit._is_test_path(path)
+        and catalog.match_path(path).primary_module == "tests.backend"
+    ]
+
+    assert offenders == []
