@@ -63,8 +63,8 @@ GIT_MIRROR_CHECKOUT_MARKER = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}"
 )
 GIT_HTTP_LOW_SPEED_MARKERS = (
-    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n",
-    "\n  GIT_HTTP_LOW_SPEED_TIME: '30'\n",
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
     "\n  GIT_CONFIG_COUNT: '1'\n",
     "\n  GIT_CONFIG_KEY_0: http.version\n",
     "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
