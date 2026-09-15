@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1521",
-  "closed_at": null,
+  "closed_at": "2026-09-15T15:36:27.954318Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -146,10 +146,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1521\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1521",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "4161c974703aff260622c9dd5d321fba3295c678d6185f2aa00d22a3cae6bec6",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "d28e42ca7d970de1da5bdd630e623ae897d1390f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-15T15:35:11.745594Z",
+      "mode": "read_only",
+      "observed_identity": "d267d34767853f35c044a6b614e537f58da326f9",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "048ff6fe89831d77407b34aebd5706daa66fae5366aa6d235575fe856dde17b6",
+      "receipt_sha256": "6ffded6f323c432dd7ca2c5c3f468d1b45b55aad27abb4cfbe7c6b3cb70e6028",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2c192453205b440fe3238f9d6ffd127fcfe48d3d003ca7bd6d25646339c0b2b9",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -181,7 +203,7 @@
     ],
     "validation_evidence_digest": "dcee7adbb80d96aa0889dc084a9f5cf53741cae20c6cdc603e70b946ed3d6ca6"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -192,7 +214,8 @@
   },
   "validation_evidence": [
     "pytest backend/tests/unified_engine/test_qe_prediction_replay.py -q -> 29 passed",
-    "python -m nox -s l0 --no-error-on-missing-interpreters -> passed"
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> passed",
+    "post-restart-verify BUG-1521 backend-main expected d28e42ca -> verified"
   ],
   "verification_budget": {
     "budget": "standard",
