@@ -2752,6 +2752,12 @@ def prepare_pattern_request(
         )
     suspension_scope = _snapshot_scope(suspension_snapshot.resolve(), expected_symbols=symbols, start=start, end=end)
     candidate = DailyCandidate.open(Path(plan["candidate_root"]))
+    # Freeze only the formal 128-stock replay population here.  The auxiliary
+    # r5 restatement audit intentionally includes 300506.SZ even though it is
+    # outside that population, and DailyCandidate tracks every source file it
+    # reads.  Use an isolated reader below so auxiliary provenance cannot alter
+    # the replay source identity.
+    coverage = candidate.coverage(symbols)
     restatement_authority: AdjFactorRestatementAuthority | None = None
     restatement_audit: Mapping[str, Any] | None = None
     if adj_factor_restatement_authority_canonical_sha256 is not None:
@@ -2774,11 +2780,10 @@ def prepare_pattern_request(
                 "ADJ_FACTOR_RESTATEMENT_CANDIDATE_IDENTITY_MISMATCH"
             )
         restatement_audit = audit_candidate_adj_factor_restatement(
-            candidate, restatement_authority
+            DailyCandidate.open(candidate.root), restatement_authority
         )
     # Both development and outer populations are consumed by this request;
     # binding only evaluation files would leave model training source mutable.
-    coverage = candidate.coverage(symbols)
     corporate_book = CorporateActionBook.open(corporate_action_snapshot.resolve())
     corporate_source_snapshot = combined_corporate_action_source_snapshot(
         dividend_snapshot_sha256=corporate_book.snapshot_sha256,
@@ -3987,7 +3992,8 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             for series in restatement_authority.series
         ]
         restatement_audit = audit_candidate_adj_factor_restatement(
-            candidate, restatement_authority
+            DailyCandidate.open(Path(request["candidate_root"])),
+            restatement_authority,
         )
         if (
             restatement_authority.candidate_manifest_reference
