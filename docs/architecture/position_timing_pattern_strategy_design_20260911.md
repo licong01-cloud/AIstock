@@ -1,12 +1,12 @@
 # 自选股与持仓股形态择时研究设计
 
-> 版本：v2.2；日期：2026-09-15；Feature tier：F1（本模块研究扩展）
-> 状态：`R5_SOURCE_REVISION_ENGINEERING_READY_FORMAL_REPLAY_PENDING_NOT_SERVING`
+> 版本：v2.3；日期：2026-09-15；Feature tier：F1（本模块研究扩展）
+> 状态：`R5_SOURCE_REVISION_FORMAL_REPLAY_VERIFIED_INCONCLUSIVE_NOT_SERVING`
 > 首项任务：`PT-NEXT-018 / TREND_PULLBACK_ACCELERATION_V1`
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 设计源提交：`535180c15`；因子覆盖预检实现提交：`ab1a20ba2`；工程由 PR `#4565` 合入提交 `34c18f974a1e4734ff7a83ac95df073da6dab847`。数据窗口交付的不可变 r4 candidate 与三项配股 authority 已由本模块 fail-closed 读取。首个 r4 request `a9d8e5410f0baec676a058d0deae9253f59a04ff852948db2d21b90809cdf5e3` 在收益读取前因 JSON round-trip 身份比较失败而未生成 bundle；其 pre-outcome supersession `40d1a9d4c1e10160e9939534922ad35ad7de1f657205b39b6b022b6c756be8c6` 完成运行后又以 63/64 暴露 `688109.SH` 长期停牌跨现金分红日的参考价缺陷。最终 technical supersession `2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f` 绑定源码提交 `63179ea1cfb3327f5efded9532cadd3bb103d755`，保持相同 64 训练股、64 评价股、日期、阈值、九项比较和先验集合，正式 replay/inspect/exact retry 均通过；原型、优化器外层与模型外层均为 64/64、无排除，696/696 个 material factor interval 全部绑定，其中三项为 typed `RIGHTS_ISSUE`。九项比较全部 `INCONCLUSIVE`、`selected_trial_count=0`，因此当前仍无 serving 模型，也不改变 L1/L1a。
-> r5 source-revision 只修复数据源历史因子拼接，不形成新假设或新人口搜索。当前源码已增加 request v4、独立 restatement authority reader 与候选归一化 factor 审计；正式 `prepare→run→inspect→exact retry` 尚未执行，故本版本不预写 r5 coverage、收益或 bundle 成功。
+> r5 source-revision 只修复数据源历史因子拼接，不形成新假设或新人口搜索。request v4 `014547fa46994c7b01b809580a8db5d4cce449c723661454bb3a29e6f0d9eeb2` 绑定源码提交 `9c78533d2bbc33851f8798bdb334c2f5c2ad7a75`、最终 r4 人口谱系、r5 candidate、配股与复权因子重述双 authority；正式 `prepare→run→inspect→exact retry` 已通过。695/695 个 material factor interval 全部绑定，其中三项为 typed `RIGHTS_ISSUE`；两处伪拼接已消失。九项比较仍全部 `INCONCLUSIVE`、`selected_trial_count=0`，故只形成修正后的不可变研究证据，不进入 serving、card、alert、registry/current 或 L1/L1a。
 
 ## 1. Background / 目标与现状
 
@@ -84,7 +84,7 @@ r5 source-revision 显式绑定 `X:/AIstock_dataset_candidates/backtest_dataset_
 
 `pattern_adj_factor_restatement.py` 只验证数据侧重述事实，不把它解释为账户或公司行动。reader 校验 authority canonical identity、provider/request/cutoff、全零安全计数、两条完整有序序列及逐序列 row hash；应用审计把候选有限 factor 与“权威绝对 factor ÷ 权威终值”逐日比较，只允许冻结的 float32 误差。它还要求 `300506.SZ 2026-07-03→07-06` 与 `688109.SH 2026-07-08→07-09` 两个接缝在 authority 和 candidate 中均保持比值1。authority早于2018-08-01的历史是合法长覆盖，审计范围取候选交易日交集；反向约束仍是候选内每个有限 factor 日期必须有 authority 行。任一未知日期、数值漂移、接缝残留或身份不一致都 fail closed，不回退到数据库、网络或手工补值。
 
-request v4 仅用于此次 source-revision：它绑定最终 r4 request `2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f` 及其已验 bundle manifest，把 r4 的64训练股、64评价股、128股 snapshot、2018-08-01..2026-08-31、prior-request identity、R0～R7、两个 family、九项比较、费用和10 bps阈值原样复制；不得调用当前 prior 集合重新选股，也不得用 r5 结果选择规则、模型或人口。v1～v3 request/bundle继续只读兼容。三条真实 `RIGHTS_ISSUE` 必须继续由现有 typed authority 与统一 `NEVER_SUBSCRIBE` 政策绑定，重述 authority 不得覆盖、删除或把它们改称普通factor修复。v4的正式结果、coverage和exact-retry身份只在真实运行后回填。
+request v4 仅用于此次 source-revision：它绑定最终 r4 request `2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f` 及其已验 bundle manifest，把 r4 的64训练股、64评价股、128股 snapshot、2018-08-01..2026-08-31、prior-request identity、R0～R7、两个 family、九项比较、费用和10 bps阈值原样复制；不得调用当前 prior 集合重新选股，也不得用 r5 结果选择规则、模型或人口。v1～v3 request/bundle继续只读兼容。三条真实 `RIGHTS_ISSUE` 继续由现有 typed authority 与统一 `NEVER_SUBSCRIBE` 政策绑定，重述 authority 没有覆盖、删除或把它们改称普通factor修复。正式 request 的 source-revision binding SHA256 为 `285edd4d6486e00e5157bd22bbd7536318bec5eac616f748f2cc49217f1789b5`，restatement application audit SHA256 为 `48b78cc7237fc02d4c0d840f3ef63c7cb9ddc6ef46325330b8b7acc3b2dd32ac`。
 
 所有窗口以全局交易日索引、完整有效 observation 计算，不删停牌日压缩时钟，不向前填价格来造形态。特征不可用时输出 `PATTERN_SOURCE_UNAVAILABLE`，中止当前等待事件；持仓继续按现有估值/风险路径处理。零波幅导致 ATR=0 时输出 `PATTERN_SCALE_UNAVAILABLE`，不能除零或填成正常形态。unknown 不等同于没有信号。
 
@@ -247,7 +247,7 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 |---|---|---|
 | 规则历史研究 | 已实现纯形态与事件状态、四项固定比较、连续账户回放、不可变request/bundle/receipt及请求前因子—公司行动覆盖审计 | r4 最终正式 replay 为64/64、无排除；四项区间均跨零，结论均为`INCONCLUSIVE` |
 | 有界优化、模型条件化与历史解释 | 已实现8模板训练期选择、同状态两头监督、core/增强对照、历史逐股解释 | r4 优化器和模型外层均64/64、无排除；五项区间均跨零，`selected_trial_count=0`，不接 serving |
-| r5 数据源修订同人口复放 | 已实现独立 restatement authority reader、request v4 source-revision lineage、候选factor逐日与接缝审计；v1～v3保持可读 | 正式复放待本次干净提交后执行；不得预写coverage/收益，也不构成新试验 |
+| r5 数据源修订同人口复放 | 已实现独立 restatement authority reader、request v4 source-revision lineage、候选factor逐日与接缝审计；v1～v3保持可读 | 正式同人口复放64/64、无排除；九项区间仍全部跨零，`INCONCLUSIVE/selected=0`，不构成新试验、不接serving |
 | 后续独立OPEN机制 | PT-NEXT-019已按独立F1设计实现波动收缩、量缩、20日收盘突破后T+1入场，并以同风险退出always-open作唯一正式对照 | 主路径64/64；成本后`-4.2788 bps/日`、95%区间`[-11.6889,+2.9364]`，`INCONCLUSIVE/selected=0`，不接serving |
 
 其他策略和QE组合留在后续队列，不占当前实现量。PT-NEXT-019 的权威规格、失败谱系和不可变证据见[波动收缩后区间突破择时研究设计](position_timing_volatility_contraction_breakout_f1_20260914.md)；该精确规则不再调参。下一优先项为表中机制不同的“突破失败或支撑失守”EXIT。当前工程不接卡片、提醒或serving；正式结果无论正、负或不确定都如实回填，不把研究分类作为源码合入门槛。
@@ -279,14 +279,14 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 
 任务结束交付：可运行CLI和测试；原型及优化/模型的不可变request、receipt、逐日连续净值、事件/成交/费用明细、月度模板与模型身份；固定SHA排序的前20条可评价入场/退出案例及全部类型失败计数（不按收益选案例）；逐股历史建议；一份中文结果报告与更新的蓝图/验收矩阵；源码PR、CI及合入状态。病例不足20条按实际交付。数值不足以训练某head时交付已实现代码、真实零/稀疏样本统计和`MODEL_NOT_ESTIMABLE`原因，明确“训练未成功/模型效力不可判定”，不报虚假的模型完成；规则和其他独立比较继续。
 
-本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把`INCONCLUSIVE`研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。数据所属模块已交付 r4 candidate 与PIT配股authority；本模块已按同一第四批人口和冻结共同政策完成正式 replay，没有换股、缩短历史、放宽10 bps、等待最新交易日或依据旧结果调参。九项比较全部不可分辨，本假设到此停止，不沿点估计追加阈值、模型、股票或账户参与政策搜索；后续仅把该不可变证据纳入方法队列选择，不发布运行策略。
+本长任务验收分别报告工程完成度、原型证据、有界优化证据、模型增量证据、合入状态；不得把`INCONCLUSIVE`研究结果当工程失败，也不得把代码测试通过当有效策略。当前不激活正式card/alert/serving，不要求后端重启、不做生产DML。数据所属模块已交付 r4/r5 candidate、PIT配股authority与r5复权因子重述authority；本模块已按同一第四批人口和冻结共同政策完成两版正式 replay，没有换股、缩短历史、放宽10 bps、等待最新交易日或依据旧结果调参。两版九项比较均全部不可分辨，本假设到此停止，不沿点估计追加阈值、模型、股票或账户参与政策搜索；后续仅把该不可变证据纳入方法队列选择，不发布运行策略。
 
 ### 9.2 当前实施读回
 
 - source-only人口：从所有既有择时研究request声明人口并集中排除训练股后，确定性选出64只新评价股；该步骤未读取其收益或标签。
 - 开发烟测：固定训练股前2只完成原型、8模板选择、双特征集双头LightGBM与外层回放。观测到34条模型标签、19,184条模板开发日、60个月度选择记录、102次成功fit/118次尝试、2,054条模型外层日记录和34条历史预测；这些数字只证明实际执行路径可达，不进入正式统计结论。
 - 审核修复：已修正延后买入现金不足的typed no-fill、持仓退出PIT边界、父订单费用净/毛拆分、除权停牌日估值、UNKNOWN覆盖、开发/训练/外层联合覆盖和递归artifact文件集校验。第二次正式运行后又据真实 source/factor 对照修正公司行动身份：同一 `(end_date, record_date)`、不同 `base_date` 是修订；唯一已实施条款覆盖较早预案，只有不同财报期的同日分配才相加。形态研究在源 snapshot 之上增加 hash-bound 因子一致性应用审计；只有已由公告与源身份支持的定向转增/重整等特殊事项才能按冻结策略 no-op 或 factor-map，配股明确排除在该通用映射之外，其他不一致继续拒绝。修复均有直接反例，不改变形态阈值、模型规格或已冻结评价人口。
-- 验证状态：PT-NEXT-018合入时完整 `backend/tests/position_timing` 回归为305项通过；叠加PT-NEXT-019后的当前分支为318项通过。新增 authority reader、JSON round-trip、supersession lineage、停牌跨除权日理论参考价和拒绝不合法映射均有直接反例。当前分支的Ruff、compile、AIstock PATH集中nox、F1/F2 validator与`git diff --check`均已通过；本地结果不替代最终CI或收益证据。
+- 验证状态：PT-NEXT-018合入时完整 `backend/tests/position_timing` 回归为305项通过；叠加PT-NEXT-019后及本次 r5 reader/source-revision 直接反例，当前分支 AIstock PATH 集中 nox 为325项通过。新增 authority reader、精确双序列集合、JSON round-trip、source-revision lineage、停牌跨除权日理论参考价和拒绝不合法映射均有直接反例；Ruff与compile通过。F1/F2 validator、`git diff --check`及CI以本次最终校验和PR回执为准；本地结果不替代收益证据。
 - 首次正式运行：request `df591f237f6263873e720a678218b59042cc9490c63a0f482ffd0891c60d4a12` 绑定提交 `888a6576e2fa54cccfcfbac91cbcc2c92c3e9be5`、64训练股、64只此前未评价股票、2个family和9项比较。计算生成了receipt与模型文件，但根 manifest 构造使用 `path.name != "manifest.json"`，错误排除了114个模型子目录 manifest；inspect得到 `PATTERN_BUNDLE_FILE_SET_MISMATCH`，故整份bundle按fail-closed处理，不读取或报告其中收益。这是artifact完整性缺陷，不是统计结论；旧request、bundle与评价人口永久保留，禁止原地补manifest。
 - 修复与重跑：根 manifest 只排除bundle根自身的 `manifest.json`，嵌套模型manifest必须进入文件集并绑定hash；Pattern专属LightGBM参数只增加 `verbosity=-1` 以压制重复日志，不改树、目标、样本、阈值或预测语义。新request须绑定修复后的干净提交，并把首次64只评价股票纳入prior-request禁用集合后确定性选择新评价人口；所需公司行动/停牌快照重新按新128股范围只读冻结。首次公司行动快照 `bd6590e3888a305baf369106fef519a8151ee48d5a7faadf95961f2662fb9b08` 与停牌快照 `13be7919a67a7f98a1029023c2a5d95940bbf89234422c3e706211ea9e780d9a` 仅属于失败request的输入谱系，不覆盖未来新人口。没有研究模型current、selected或任何运行态写入。
 - 新人口数据适配：新评价股 `600803.SH` 的 `2025-07-22` 已实施分红行缺少 `imp_ann_date`，但唯一 `record_date=2025-07-21`。快照按§4的record-date保守代理契约升级为v3并显式留证；不删除该股票、不使用更早 `ann_date=2025-03-27` 推定最终条款，也不修改生产数据。v1/v2不可变快照继续只读兼容。
@@ -304,6 +304,10 @@ receipt同时记录gross/net、逐腿费用、1/2/3父订单费用敏感性、�
 - 最终正式artifact：bundle位于`research/pattern_strategy_v1/bundles/2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f`，总文件366个（manifest绑定其余365个）；manifest原始/canonical SHA256为`a0f03b1bd9992ceadb9922a66117a0d97a79535f8a778b4254b50cd97e2c51e6`/`a6e7a1db0d4ee9ac2e6fc57d6da31aefd46365c81fe277b03213b3f71aebf8ac`，receipt原始/canonical SHA256为`b7e597bbc99b1415732f91b42894a411cd8701a1dfcea1accbdf09403e6e5f43`/`97ba38a710ea53cd2a69d3e651c232bf53539665169f57db80e9aa4163703656`。source coverage为696/696、rights=3、unbound=0、insufficient=0；原型、优化器外层和模型外层均64/64且`excluded={}`，model input/evidence coverage均完整。
 - 最终九项结果：原型family的`E1_MINUS_E0=-37.6236[-183.2759,+86.0890]`、`P_MINUS_BUY_AND_HOLD=-2.3422[-11.6717,+6.8978]`、`P_MINUS_FROZEN_L1=+0.5855[-1.2028,+2.5487]`、`X1_MINUS_X0=-156.0723[-581.1588,+234.5872]`；演进family的`ENHANCED_MINUS_BUY_AND_HOLD=-1.7977[-9.4015,+5.6482]`、`ENHANCED_MINUS_CORE=-0.4665[-1.4885,+0.4334]`、`ENHANCED_MINUS_P=+0.8491[-2.2359,+4.0820]`、`Q_MINUS_BUY_AND_HOLD=-2.3314[-11.8784,+7.2830]`、`Q_MINUS_P=+0.0108[-0.9545,+0.8840]`，单位分别以receipt声明的事件bps/active anchor date或bps/trading day为准。所有family-wise区间跨0，均`INCONCLUSIVE`且power因无预注册同estimand效应尺度而`NOT_COMPUTABLE`；不把正点估计或coverage通过称为alpha。
 - 正式inspect与exact retry：`inspect_pattern_bundle`通过；同request立即重跑返回`ALREADY_MATERIALIZED`，manifest原始SHA256前后均为`a0f03b1bd9992ceadb9922a66117a0d97a79535f8a778b4254b50cd97e2c51e6`。receipt读回`selected_trial_count=0`，registry/current/card/alert/order/database/runtime/serving-model写入全部为false，旧artifact与r3 active profile均未修改。
+- r5首次request与修复：request `1e624c4ada9c89b11111594cea37265c6c283b31a8610500338ab424404d7052` 在读取收益前返回 `PATTERN_CANDIDATE_SOURCE_CHANGED` 且无bundle。原因不是candidate漂移，而是辅助restatement审计先读取了不在128股人口内的`300506.SZ`，污染`DailyCandidate`累计的正式source references；修复提交`9c78533d2bbc33851f8798bdb334c2f5c2ad7a75`先冻结正式人口身份并用隔离reader执行辅助审计。新request中formal source SHA256在prepare/run两侧均为`b331c1f34cfee64ceaed5ccb5dd6aea4c2e1827bd8f7a9196a7575041abb2eeb`，同时仍独立核验`300506.SZ/688109.SH`两处接缝。旧失败request不覆盖、不冒充结果。
+- r5正式artifact：最终request/bundle均为`014547fa46994c7b01b809580a8db5d4cce449c723661454bb3a29e6f0d9eeb2`，bundle共366个文件并由根manifest绑定其余365个；manifest原始/canonical SHA256为`20c5c1301c0d618e8ec7f7c02cddd4c6a3a006f64784804c7de617dcf1b0b3c1`/`7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541`，receipt原始/canonical SHA256为`a602a5d906b7b3f7e07d2c4f159df948a25489c91601a03491ca47650116f616`/`f756fdecf307c81646a268aab23ddd5dbce876cc18ef649714b675ee9a78cb23`，coverage原始/canonical SHA256为`0f34dac113dfd09c0d461d3eb4f1c0026e8e8175b72fac5733adb85c3ed282e5`/`cbb27c361d44743554a65580c917d3c0224b81bbb2ade83ec8a672dd66501980`。原型、优化器、模型外层均64/64且无排除；695/695个material interval由692个普通公司行动和3个配股组成，unbound=0、insufficient=0。restatement审计无候选未知日期、无数值不匹配，两处接缝在authority/candidate中的比值均为1；没有从factor推断认购。
+- r5九项结果：原型family的`E1_MINUS_E0=-34.8892[-179.6241,+87.8283]`、`P_MINUS_BUY_AND_HOLD=-2.2944[-11.6329,+7.0089]`、`P_MINUS_FROZEN_L1=+0.6334[-1.1363,+2.6095]`、`X1_MINUS_X0=-156.0723[-581.1588,+234.5872]`；演进family的`ENHANCED_MINUS_BUY_AND_HOLD=-1.6902[-9.4567,+5.9641]`、`ENHANCED_MINUS_CORE=-0.2022[-1.1467,+0.6895]`、`ENHANCED_MINUS_P=+0.9065[-2.1701,+4.1439]`、`Q_MINUS_BUY_AND_HOLD=-2.2948[-11.8781,+7.3276]`、`Q_MINUS_P=-0.0005[-0.8875,+0.8475]`，单位分别以receipt声明为准。所有family-wise区间仍跨0，均`INCONCLUSIVE/NOT_COMPUTABLE`，且所有成本情景均未改变分类；不把轻微数值变化解释为新假设或alpha。
+- r5 inspect/exact retry：独立inspect读回`selected_trial_count=0`及全部保护写入false；同request精确重试返回`ALREADY_MATERIALIZED`，manifest文件SHA256前后均为`20c5c1301c0d618e8ec7f7c02cddd4c6a3a006f64784804c7de617dcf1b0b3c1`。未抓取数据、未读写数据库、未重建/激活candidate、未控制服务，也不需要后端重启。
 
 ## 10. Verification Plan / 测试与验收
 
@@ -339,7 +343,7 @@ PT-NEXT-018直接测试落在 `backend/tests/position_timing/test_pattern_strate
 
 ## 12. Design Acceptance Matrix / 设计验收矩阵
 
-`ENGINEERING_VERIFIED`表示设计条款已有真实代码与直接测试；`ENGINEERING_AND_FORMAL_REPLAY_VERIFIED`还表示 r4 source、账户政策、实际策略回放和不可变artifact已闭合，不表示模型取得增量或生产功能已加载。早期不完整request/bundle仅保留为失败谱系；最终64/64结果九项均`INCONCLUSIVE`。不得引用该矩阵、coverage、正点估计或旧bundle声称策略有效。
+`ENGINEERING_VERIFIED`表示设计条款已有真实代码与直接测试；`ENGINEERING_AND_FORMAL_REPLAY_VERIFIED`还表示对应 source、账户政策、实际策略回放和不可变artifact已闭合，不表示模型取得增量或生产功能已加载。早期不完整request/bundle与r5 pre-outcome失败request仅保留为失败谱系；r4与r5最终64/64结果九项均`INCONCLUSIVE`。不得引用该矩阵、coverage、正点估计或旧bundle声称策略有效。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -354,7 +358,7 @@ PT-NEXT-018直接测试落在 `backend/tests/position_timing/test_pattern_strate
 | F-009 | 本文§7、§8；当前代码无HMM/QE/Agent import | `backend/tests/position_timing/test_pattern_research.py`；合入前显式import扫描 | ENGINEERING_VERIFIED | none |
 | F-010 | 本文§4、§9.2、§10、§13、§14；五个pattern直接测试文件；官方配股公告与candidate authority读回 | `backend/tests/position_timing/test_pattern_research.py`；PT-NEXT-018合入时305 passed，叠加PT-NEXT-019后的当前模块回归及AIstock PATH集中nox均为318 passed；`scripts/aistock_feature_workflow.py`与CI以本次PR记录为准 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
 | F-011 | 本文§4“配股与复权历史重述补充契约”；`pattern_rights_issue.py`；`pattern_research.py` request v3；`pattern_optimizer.py`；`pattern_model.py` | `backend/tests/position_timing/test_pattern_rights_issue.py`；`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/bundles/2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f/receipt.json`：source 696/696、rights 3、三层64/64、九项`INCONCLUSIVE`、selected=0；bundle inspect与exact retry通过 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
-| F-012 | 本文§4 r5 source-revision契约；`pattern_adj_factor_restatement.py`；`pattern_research.py` request v4 | `backend/tests/position_timing/test_pattern_adj_factor_restatement.py`；真实r5只读审计：两处接缝比值均为1、候选无authority日期=0、数值不匹配=0 | ENGINEERING_VERIFIED | 正式prepare/run/inspect/exact retry待干净提交后执行 |
+| F-012 | 本文§4、§9.2 r5 source-revision契约；`pattern_adj_factor_restatement.py`；`pattern_research.py` request v4 | `backend/tests/position_timing/test_pattern_adj_factor_restatement.py`；模块325 passed；最终request `014547...eeb2`：两处接缝比值均为1、候选无authority日期=0、数值不匹配=0、factor 695/695、三层64/64、九项`INCONCLUSIVE`、selected=0；bundle inspect与exact retry通过 | ENGINEERING_AND_FORMAL_REPLAY_VERIFIED | none |
 
 ## 13. Risks / 失败模式与 Production Gates
 
@@ -362,7 +366,7 @@ PT-NEXT-018直接测试落在 `backend/tests/position_timing/test_pattern_strate
 
 本次 `production_ddl_gate=noop`、DML/dependency/restart/runtime均noop。后续研究读本地候选和timing-owned快照；源问题跨模块时只提交需求。Rollback：撤回本设计的下一任务链接或停止后续独立研究即可，既有生产卡和历史研究不变；未来运行版用既有版本化policy回退，不能覆盖旧artifact。
 
-DESIGN-COMPLIANCE-001：①当前交付为完整离线工程、r4 authority消费与正式64/64历史回放，不冒充已取得超额收益或运行功能；②未知/无事件/失败显式留证，不填零冒充成功，任何开发、训练或评价覆盖不完整均不能进入SUPPORTED；配股不按factor反推账户动作，历史因子修复由既有candidate交付而非本模块打补丁；③用户概要作为原型，九项最终结果全部`INCONCLUSIVE/selected=0`，因此本假设停止且不发布serving，不把正点估计或coverage包装成有效策略；④不增加审批、双人确认、sealed holdout、MDE或最新数据等待。未读取或修改数据库、未抓取数据、未重建/激活数据集；研究结论不控制工程合入，正式服务仍沿主蓝图已有证据语义。
+DESIGN-COMPLIANCE-001：①当前交付为完整离线工程、r4/r5双authority消费与同人口正式64/64历史回放，不冒充已取得超额收益或运行功能；②未知/无事件/失败显式留证，不填零冒充成功，任何开发、训练或评价覆盖不完整均不能进入SUPPORTED；配股不按factor反推账户动作，历史因子修复由既有candidate交付而非本模块打补丁，r5首个source identity失败也以无bundle request留证；③用户概要作为原型，r4与r5九项最终结果均为`INCONCLUSIVE/selected=0`，因此本假设停止且不发布serving，不把正点估计或coverage包装成有效策略；④不增加审批、双人确认、sealed holdout、MDE或最新数据等待。未读取或修改数据库、未抓取数据、未重建/激活数据集；研究结论不控制工程合入，正式服务仍沿主蓝图已有证据语义。
 
 ## 14. 方法论依据与设计审核记录
 
@@ -375,7 +379,7 @@ DESIGN-COMPLIANCE-001：①当前交付为完整离线工程、r4 authority消�
 - [Bailey等：The Probability of Backtest Overfitting](https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf)研究回测选择的过拟合风险；本设计据此要求记录搜索集合及外层样本外路径，不额外建立CSCV平台或把过拟合概率当准入条件。
 - [AQR：A Century of Evidence on Trend-Following Investing](https://www.aqr.com/Insights/Research/Journal-Article/A-Century-of-Evidence-on-Trend-Following-Investing)提供跨市场长期趋势研究背景。这不能直接推出A股数日尺度的均线或止盈参数；它提醒本研究同时衡量提前退出错失趋势的代价。
 
-以上来源于2026-09-11公开摘要核验；NBER页面直读受限时使用检索返回的原始摘要，未声称阅读不可访问全文。所有具体窗口/阈值来自用户意图和本设计的可操作定义，尚无本地receipt支持。
+以上来源于2026-09-11公开摘要核验；NBER页面直读受限时使用检索返回的原始摘要，未声称阅读不可访问全文。所有具体窗口/阈值在预注册时来自用户意图和本设计的可操作定义，而不是既有本地收益证据；随后形成的r4/r5 receipt只证明它们已被正式检验且结果均不可分辨，不反向改写其来源。
 
 第一轮语义审核已修订：清仓保留为原型；回踩等待从突破日锚定；没有回踩的事件保留；收盘确认只在次日尝试；模型只能在决策时看到已经出现的形态。第二轮契约审核已修订：机制收益与完整策略收益分开、两者统计单位分开；完整策略加入同股buy-and-hold与L1；成本未知不虚构浮盈；量比处理送转可比数量；旧研究不因新策略覆盖。用户补充授权后第三轮修订加入有界优化、减仓与衰竭确认，区分一次试验冻结和长期可调整，并修正`initial_holding_endowment`需要非空成本的复用误判。最终文档校验结果由本次PR的命令输出记录。
 
