@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1508",
-  "closed_at": null,
+  "closed_at": "2026-09-15T05:56:52.036492Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -147,10 +147,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1508\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1508",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8ff2b67a2ebdc235f9632217439f8a44b29be84cb73134c6c6529a7c093456ca",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "7207f4450b351307135dc2dc309a89401767d07e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-15T05:52:51.876596Z",
+      "mode": "read_only",
+      "observed_identity": "ac4b61eadb0f4cd1d93060958747a567bf4be087",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f4750857992e71eb11369e96cb32385854b55e6016a4bd4c5834a05001d7c2d4",
+      "receipt_sha256": "8dd903938c6da624211e013340e56d7efae0faa3ecc8ed996c53f5a272748a02",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6a58de0fe3261ec15a157125416d3d4f6a281e4563affd51957cb775fd2ef267",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -181,7 +203,7 @@
     ],
     "validation_evidence_digest": "be062156362eb71a51ec2ae8ffd66fbf6e60980008d27c0b4997cc2e0d8a7d68"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
