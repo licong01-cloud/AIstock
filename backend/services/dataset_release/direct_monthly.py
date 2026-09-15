@@ -80,7 +80,9 @@ DIRECT_INDEX_CODES = (
     "399102.SZ",
     "399107.SZ",
 )
-_CANDIDATE_NAME = re.compile(r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}-candidate\Z")
+_CANDIDATE_NAME = re.compile(
+    r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}(?:-r[1-9][0-9]*)?-candidate\Z"
+)
 
 
 class DirectMonthlyError(DatasetReleaseError):
@@ -1040,7 +1042,8 @@ def _daily_benchmark_complete(layout: DirectMonthlyLayout) -> bool:
         )
         all_lines = all_path.read_text(encoding="utf-8").splitlines()
         stock_lines = stocks_path.read_text(encoding="utf-8").splitlines()
-        if all_lines.count(benchmark_line) != 1 or [line for line in all_lines if line != benchmark_line] != stock_lines:
+        stock_codes = [line.split("\t", 1)[0].upper() for line in stock_lines]
+        if all_lines.count(benchmark_line) != 1 or DIRECT_BENCHMARK_CODE in stock_codes:
             return False
         if benchmark_path.read_text(encoding="utf-8").splitlines() != [benchmark_line]:
             return False

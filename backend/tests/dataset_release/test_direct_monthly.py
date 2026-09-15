@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import hashlib
 import json
 
 import pandas as pd
@@ -9,6 +10,9 @@ from scripts import update_backtest_dataset_monthly as cli
 from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 
 from backend.services.dataset_release.direct_monthly import (
+    DIRECT_BENCHMARK_CODE,
+    DIRECT_BENCHMARK_FIELDS,
+    DIRECT_BENCHMARK_SCHEMA,
     DIRECT_COMPONENTS,
     DIRECT_FACTOR_SCHEMA,
     DIRECT_INDEX_CODES,
@@ -44,6 +48,7 @@ from backend.services.dataset_release.direct_monthly import (
     _ClassificationInterval,
     _filter_frame_to_pit,
     _read_classification_intervals,
+    _daily_benchmark_complete,
 )
 
 
@@ -77,6 +82,86 @@ def test_component_plan_includes_suspend_and_sw_l1_components() -> None:
     assert next(item for item in plan if item.component == "sw_l1_index").reason == (
         "exact_31_published_sw2021_l1_close_series"
     )
+
+
+def test_layout_accepts_versioned_revision_candidate_name(tmp_path) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=(
+            parent / "20260831-qe_hmm_full_v2-direct-20260915-r5-candidate"
+        ),
+        baseline_root=None,
+        cutoff=date(2026, 8, 31),
+    )
+
+    assert layout.candidate_root.name.endswith("20260915-r5-candidate")
+
+
+def test_benchmark_contract_keeps_provider_catalog_separate_from_pit_pool(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    daily = layout.components_root / "daily_bin_candidate"
+    instruments = daily / "instruments"
+    features = daily / "features" / DIRECT_BENCHMARK_CODE.lower()
+    index_root = layout.components_root / "index_context"
+    instruments.mkdir(parents=True)
+    features.mkdir(parents=True)
+    index_root.mkdir(parents=True)
+    layout.reports_root.mkdir(parents=True)
+    benchmark_line = f"{DIRECT_BENCHMARK_CODE}\t2018-08-01\t2026-08-31"
+    (instruments / "all.txt").write_text(
+        "000001.SZ\t2018-08-01\t2026-08-31\n" + benchmark_line + "\n",
+        encoding="utf-8",
+    )
+    (instruments / "stock_universe.txt").write_text(
+        "000001.SZ\t2018-08-01\t2020-01-01\n"
+        "000001.SZ\t2020-01-02\t2026-08-31\n",
+        encoding="utf-8",
+    )
+    (instruments / "benchmark.txt").write_text(benchmark_line + "\n", encoding="utf-8")
+    (daily / "meta_export.json").write_text("{}\n", encoding="utf-8")
+    (index_root / "index_daily.h5").write_bytes(b"index")
+    (layout.reports_root / "daily_bin_candidate_stock_daily_all.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    for field in DIRECT_BENCHMARK_FIELDS:
+        (features / f"{field}.day.bin").write_bytes(field.encode("ascii"))
+
+    paths = {
+        "instruments_all": instruments / "all.txt",
+        "instruments_stock_universe": instruments / "stock_universe.txt",
+        "instruments_benchmark": instruments / "benchmark.txt",
+        "meta_export": daily / "meta_export.json",
+        "source_index_daily_h5": index_root / "index_daily.h5",
+        "daily_export_report": layout.reports_root / "daily_bin_candidate_stock_daily_all.json",
+        **{
+            f"feature_{field}": features / f"{field}.day.bin"
+            for field in DIRECT_BENCHMARK_FIELDS
+        },
+    }
+    receipt = {
+        "schema_version": DIRECT_BENCHMARK_SCHEMA,
+        "code": DIRECT_BENCHMARK_CODE,
+        "end": "2026-08-31",
+        "source_freeze": False,
+        "full_history_content_hash": False,
+        "sha256": {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in paths.items()
+        },
+    }
+    (layout.reports_root / "daily_benchmark_000300_completion.json").write_text(
+        json.dumps(receipt), encoding="utf-8"
+    )
+
+    assert _daily_benchmark_complete(layout)
+
+    (instruments / "stock_universe.txt").write_text(
+        benchmark_line + "\n", encoding="utf-8"
+    )
+    assert not _daily_benchmark_complete(layout)
 
 
 def test_legacy_four_component_state_resumes_only_new_components(tmp_path) -> None:
