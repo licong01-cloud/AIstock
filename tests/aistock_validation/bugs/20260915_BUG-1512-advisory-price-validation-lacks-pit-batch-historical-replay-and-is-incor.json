@@ -9,6 +9,7 @@
     "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
     "backend/tests/advisory_model_first/test_historical_price_replay.py",
     "backend/tests/advisory_model_first/test_historical_price_replay_cli.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260915_BUG-1512-advisory-price-validation-lacks-pit-batch-historical-replay-and-is-incor.json"
   ],
   "assigned_agent": null,
