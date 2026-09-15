@@ -784,8 +784,91 @@ def test_full_policy_explicit_defaults_preserve_existing_behavior():
         entry_observer=None,
         supplemental_exit_enabled=True,
         risk_managed_open_baseline_enabled=False,
+        terminal_liquidation_enabled=False,
     )
     assert implicit == explicit
+
+
+@pytest.mark.parametrize(
+    ("overrides", "code"),
+    (
+        ({"parent_count": 0}, "PATTERN_PARENT_ORDER_COUNT_INVALID"),
+        (
+            {"additional_friction_bps": Decimal("NaN")},
+            "PATTERN_ADDITIONAL_FRICTION_INVALID",
+        ),
+        (
+            {"additional_friction_bps": Decimal("-0.1")},
+            "PATTERN_ADDITIONAL_FRICTION_INVALID",
+        ),
+    ),
+)
+def test_full_policy_rejects_invalid_cost_scenario_inputs(overrides, code):
+    bars = _bars(45)
+    arguments = {
+        "symbol": "000001.SZ",
+        "bars": bars,
+        "features": pattern_feature_frame(bars, symbol="000001.SZ"),
+        "calendar_dates": tuple(bars.index.date),
+        "corporate_actions": CorporateActionBook.empty(),
+        "start_ordinal": 20,
+        "terminal_ordinal": 35,
+        **overrides,
+    }
+    with pytest.raises(ActionValueError, match=code):
+        replay_full_policy_symbol(**arguments)
+
+
+def test_full_policy_optional_terminal_liquidation_is_symmetric_and_costed():
+    bars = _bars(45)
+    features = pattern_feature_frame(bars, symbol="000001.SZ")
+    rows, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=20,
+        terminal_ordinal=35,
+        terminal_liquidation_enabled=True,
+    )
+
+    terminal = [
+        item
+        for item in fills
+        if item["path_role"] == "FULL_BUY_AND_HOLD_TERMINAL"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["fill_status"] == "FILLED"
+    assert terminal[0]["fill_delta_qty"] < 0
+    assert terminal[0]["fill_fee_cny"] > 0
+    assert terminal[0]["target_date"] == bars.index[36].date()
+    assert counts["TERMINAL_LIQUIDATED"] == 1
+    assert rows[-1]["policy_authority"] == "TERMINAL_LIQUIDATED"
+    assert rows[-1]["baseline_quantity"] == 0
+
+
+def test_full_policy_optional_terminal_liquidation_fails_closed_when_blocked():
+    bars = _bars(45)
+    for ordinal in range(36, 41):
+        down = bars.iloc[ordinal]["down_limit"]
+        for column in ("open", "high", "low", "close"):
+            bars.iloc[ordinal, bars.columns.get_loc(column)] = down
+    features = pattern_feature_frame(bars, symbol="000001.SZ")
+
+    with pytest.raises(
+        ActionValueError, match="PATTERN_TERMINAL_LIQUIDATION_UNAVAILABLE"
+    ):
+        replay_full_policy_symbol(
+            symbol="000001.SZ",
+            bars=bars,
+            features=features,
+            calendar_dates=tuple(bars.index.date),
+            corporate_actions=CorporateActionBook.empty(),
+            start_ordinal=20,
+            terminal_ordinal=35,
+            terminal_liquidation_enabled=True,
+        )
 
 
 def test_buy_and_hold_does_not_enter_before_pit_membership():
@@ -804,6 +887,52 @@ def test_buy_and_hold_does_not_enter_before_pit_membership():
     buy = next(row for row in fills if row["path_role"] == "FULL_BUY_AND_HOLD")
     assert buy["decision_date"] == bars.index[10].date()
     assert buy["target_date"] == bars.index[11].date()
+
+
+def test_policy_cannot_plan_entry_outside_pit_when_buy_and_hold_has_inventory():
+    bars = _bars(45)
+    bars.iloc[20, bars.columns.get_loc("pit_active")] = False
+    features = pattern_feature_frame(bars, symbol="000001.SZ")
+    _, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=0,
+        terminal_ordinal=35,
+        entry_observer=lambda _features, ordinal: ordinal == 20,
+        entry_selector=lambda **_kwargs: {
+            "choice": "E0",
+            "authority": "TEST_ENTRY",
+        },
+    )
+
+    assert any(item["path_role"] == "FULL_BUY_AND_HOLD" for item in fills)
+    assert not any(item["path_role"] == "FULL_POLICY" for item in fills)
+    assert counts["BREAKOUT_OBSERVED"] == 0
+
+
+def test_pending_pullback_entry_is_cancelled_when_pit_eligibility_ends():
+    bars = _bars(45)
+    features = _forced_breakout_features(bars, 20, confirm=22)
+    bars.loc[bars.index[21:25], "pit_active"] = False
+    _, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=20,
+        terminal_ordinal=35,
+        entry_observer=lambda _features, ordinal: ordinal == 20,
+    )
+
+    assert counts["BREAKOUT_OBSERVED"] == 1
+    assert counts["ENTRY_EVENT_CANCELLED_OUTSIDE_PIT"] == 1
+    assert counts["OUTSIDE_PIT_NO_ACTION"] == 4
+    assert counts["DECISION_PRICE_UNAVAILABLE"] == 0
+    assert not any(item["path_role"] == "FULL_POLICY" for item in fills)
 
 
 def test_existing_inventory_can_be_priced_and_sold_after_pit_buy_eligibility_ends():

@@ -10,6 +10,7 @@ import pytest
 from backend.services.position_timing.action_value import ActionValueError, PositionState, TZ, cutoff_on
 from backend.services.position_timing.action_value_corporate_actions import (
     AVAILABILITY_SNAPSHOT_SCHEMA,
+    CONNECTED_REVISION_SNAPSHOT_SCHEMA,
     CorporateAction,
     CorporateActionBook,
     IDENTITY_SNAPSHOT_SCHEMA,
@@ -217,12 +218,49 @@ def test_snapshot_implemented_terms_supersede_preliminary_terms_for_same_distrib
     ).isoformat()
 
 
-def test_snapshot_collapses_same_distribution_when_only_end_date_differs() -> None:
+def test_snapshot_keeps_distinct_non_null_fiscal_periods_on_same_base_date() -> None:
     payload = _snapshot_payload(
         [
-            _row(end_date=date(2025, 12, 31), base_date=date(2026, 5, 20)),
             _row(
-                end_date=date(2026, 5, 1),
+                end_date=date(2025, 12, 31),
+                base_date=date(2026, 5, 20),
+                stk_div=Decimal("0"),
+                stk_bo_rate=Decimal("0"),
+                stk_co_rate=Decimal("0"),
+                cash_div=Decimal("0.132"),
+                cash_div_tax=Decimal("0.132"),
+                div_listdate=None,
+            ),
+            _row(
+                end_date=date(2026, 3, 31),
+                ann_date=date(2026, 5, 2),
+                base_date=date(2026, 5, 20),
+                stk_div=Decimal("0"),
+                stk_bo_rate=Decimal("0"),
+                stk_co_rate=Decimal("0"),
+                cash_div=Decimal("0.18"),
+                cash_div_tax=Decimal("0.18"),
+                div_listdate=None,
+            ),
+        ],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+
+    assert payload["canonical_economic_action_count"] == 2
+    assert payload["canonicalized_equivalent_revision_count"] == 0
+    assert payload["combined_same_day_economic_action_count"] == 1
+    assert payload["actions"][0]["quantity_multiplier"] == "1"
+    assert payload["actions"][0]["cashflow_yuan_per_share"] == "0.312"
+
+
+def test_snapshot_uses_base_date_identity_when_fiscal_end_is_missing() -> None:
+    payload = _snapshot_payload(
+        [
+            _row(end_date=None, base_date=date(2026, 5, 20)),
+            _row(
+                end_date=date(2025, 12, 31),
                 ann_date=date(2026, 5, 2),
                 base_date=date(2026, 5, 20),
             ),
@@ -236,6 +274,33 @@ def test_snapshot_collapses_same_distribution_when_only_end_date_differs() -> No
     assert payload["canonicalized_equivalent_revision_count"] == 1
     assert payload["combined_same_day_economic_action_count"] == 0
     assert payload["actions"][0]["quantity_multiplier"] == "1.3"
+
+
+def test_snapshot_rejects_ambiguous_or_missing_fallback_identity() -> None:
+    with pytest.raises(
+        ActionValueError,
+        match="CORPORATE_ACTION_DISTRIBUTION_IDENTITY_AMBIGUOUS",
+    ):
+        _snapshot_payload(
+            [
+                _row(end_date=date(2025, 12, 31), base_date=date(2026, 5, 20)),
+                _row(end_date=date(2026, 3, 31), base_date=date(2026, 5, 20)),
+                _row(end_date=None, base_date=date(2026, 5, 20)),
+            ],
+            symbols=("000001.SZ",),
+            start=date(2026, 1, 1),
+            end=date(2026, 12, 31),
+        )
+    with pytest.raises(
+        ActionValueError,
+        match="CORPORATE_ACTION_DISTRIBUTION_IDENTITY_UNAVAILABLE",
+    ):
+        _snapshot_payload(
+            [_row(end_date=None, base_date=None)],
+            symbols=("000001.SZ",),
+            start=date(2026, 1, 1),
+            end=date(2026, 12, 31),
+        )
 
 
 def test_v1_snapshot_remains_readable_after_same_day_contract_upgrade(tmp_path: Path) -> None:
@@ -372,6 +437,26 @@ def test_v4_snapshot_with_end_record_identity_remains_readable(tmp_path: Path) -
     )
     legacy["snapshot_sha256"] = canonical_sha256(legacy)
     path = tmp_path / "legacy-v4.json"
+    path.write_bytes(canonical_json_bytes(legacy))
+
+    assert CorporateActionBook.open(path).actions[0].quantity_multiplier == Decimal("1.3")
+
+
+def test_v5_snapshot_with_connected_revision_identity_remains_readable(tmp_path: Path) -> None:
+    payload = _snapshot_payload(
+        [_row()],
+        symbols=("000001.SZ",),
+        start=date(2026, 1, 1),
+        end=date(2026, 12, 31),
+    )
+    legacy = {key: value for key, value in payload.items() if key != "snapshot_sha256"}
+    legacy["schema_version"] = CONNECTED_REVISION_SNAPSHOT_SCHEMA
+    legacy["source_query"]["same_day_canonicalization"] = (
+        "COLLAPSE_CONNECTED_REVISIONS_WITHIN_RECORD_AND_SHARED_END_OR_BASE_"
+        "THEN_SUM_DISTINCT_PRE_ACTION_PER_SHARE_DISTRIBUTIONS"
+    )
+    legacy["snapshot_sha256"] = canonical_sha256(legacy)
+    path = tmp_path / "legacy-v5.json"
     path.write_bytes(canonical_json_bytes(legacy))
 
     assert CorporateActionBook.open(path).actions[0].quantity_multiplier == Decimal("1.3")
