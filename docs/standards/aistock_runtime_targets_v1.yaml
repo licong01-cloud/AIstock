@@ -8,6 +8,9 @@ policy:
 non_runtime_source_paths:
   - backend/services/advisory_model_first/qe_alpha_generator_contracts.py
   - backend/services/advisory_model_first/qe_alpha_generator_pipeline.py
+  - backend/services/advisory_model_first/historical_price_replay.py
+  - backend/services/advisory_model_first/historical_price_replay_cli.py
+  - backend/services/advisory_model_first/historical_price_replay_contracts.py
   - backend/services/advisory_model_first/score_hmm_admission_pipeline.py
   - backend/services/advisory_model_first/selection_liability_gate_pipeline.py
   - backend/services/advisory_model_first/turnover_constrained_utility_training.py
