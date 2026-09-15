@@ -1,7 +1,9 @@
 {
   "actual": "The HMM PR-slice selector requires a mapped direct-neighbor test to exist even when the changed HMM source and that test are intentionally deleted together. This blocks safe atomic retirement of terminal HMM contracts. Preserve fail-closed behavior for added or modified source, but allow deleted source whose mapped test is also absent while retaining the stable smoke slice.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json"
+    "tests/aistock_validation/bugs/20260915_BUG-1515-hmm-pr-slice-blocks-atomic-retirement-of-deleted-source-and-direct-neigh.json",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1515",
@@ -25,7 +27,10 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +40,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
+    ]
   },
   "first_seen_at": "2026-09-15T05:45:13.602038Z",
   "fix_branch": null,

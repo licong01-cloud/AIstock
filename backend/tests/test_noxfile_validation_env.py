@@ -100,6 +100,23 @@ def test_validation_registry_l0_keeps_business_dependencies_out(monkeypatch: pyt
     assert "backend/tests/test_validation_ui_target_catalog.py" not in pytest_args
 
 
+def _configure_hmm_pr_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    changed_files: list[str],
+    existing_paths: list[str] | None = None,
+) -> None:
+    for relative in [*noxfile.HMM_RISK_PR_SMOKE_TESTS, *(existing_paths or [])]:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# test fixture\n", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"changed_files": changed_files}), encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
+
+
 def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -108,25 +125,16 @@ def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
         "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
         "backend/tests/hmm_risk/test_rotation_l1_gbdt.py",
     ]
-    for relative in targets:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# test fixture\n", encoding="utf-8")
-    summary = tmp_path / "summary.json"
-    summary.write_text(
-        json.dumps(
-            {
-                "changed_files": [
-                    "backend/services/hmm_risk/rotation_l1_prediction.py",
-                    "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
-                    "scripts/hmm_risk/run_rotation_l1_g2a.py",
-                ]
-            }
-        ),
-        encoding="utf-8",
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+            "scripts/hmm_risk/run_rotation_l1_g2a.py",
+        ],
+        existing_paths=targets[3:],
     )
-    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
-    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
 
     assert noxfile._hmm_risk_pr_test_targets() == targets
 
@@ -146,17 +154,12 @@ def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
         *noxfile.HMM_RISK_PR_SMOKE_TESTS,
         "backend/tests/hmm_risk/test_rotation_l1_api.py",
     ]
-    for relative in targets:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# test fixture\n", encoding="utf-8")
-    summary = tmp_path / "summary.json"
-    summary.write_text(
-        json.dumps({"changed_files": ["backend/routers/hmm_risk.py"]}),
-        encoding="utf-8",
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=["backend/routers/hmm_risk.py"],
+        existing_paths=targets[3:],
     )
-    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
-    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
 
     assert noxfile._hmm_risk_pr_test_targets() == targets
 
@@ -164,19 +167,107 @@ def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
 def test_hmm_risk_pr_targets_fail_closed_without_neighbor_mapping(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    for relative in noxfile.HMM_RISK_PR_SMOKE_TESTS:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# test fixture\n", encoding="utf-8")
-    summary = tmp_path / "summary.json"
-    summary.write_text(
-        json.dumps({"changed_files": ["backend/services/hmm_risk/new_contract.py"]}),
-        encoding="utf-8",
+    changed_source = "backend/services/hmm_risk/new_contract.py"
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[changed_source],
+        existing_paths=[changed_source],
     )
-    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
-    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
 
     with pytest.raises(ValueError, match="lacks a direct-neighbor test mapping"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
+@pytest.mark.parametrize(
+    ("deleted_source", "deleted_test"),
+    [
+        (
+            "backend/services/hmm_risk/retired_contract.py",
+            "backend/tests/hmm_risk/test_retired_contract.py",
+        ),
+        (
+            "scripts/hmm_risk/retired_contract.py",
+            "backend/tests/hmm_risk/test_retired_contract.py",
+        ),
+        (
+            "scripts/hmm_risk/prepare_state_model_set.py",
+            "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        ),
+    ],
+)
+def test_hmm_risk_pr_targets_allow_atomic_source_and_neighbor_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    deleted_source: str,
+    deleted_test: str,
+) -> None:
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[deleted_source, deleted_test],
+    )
+
+    assert noxfile._hmm_risk_pr_test_targets() == list(noxfile.HMM_RISK_PR_SMOKE_TESTS)
+
+
+def test_hmm_risk_pr_targets_run_remaining_neighbor_for_deleted_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    neighbor = "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    targets = [*noxfile.HMM_RISK_PR_SMOKE_TESTS, neighbor]
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=["scripts/hmm_risk/prepare_state_model_set.py"],
+        existing_paths=[neighbor],
+    )
+
+    assert noxfile._hmm_risk_pr_test_targets() == targets
+
+
+def test_hmm_risk_pr_targets_fail_closed_when_existing_override_loses_its_test(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    changed_source = "scripts/hmm_risk/prepare_state_model_set.py"
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[changed_source],
+        existing_paths=[changed_source],
+    )
+
+    with pytest.raises(ValueError, match="mapped direct-neighbor test is missing"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
+@pytest.mark.parametrize(
+    ("live_source", "deleted_test"),
+    [
+        (
+            "backend/services/hmm_risk/new_contract.py",
+            "backend/tests/hmm_risk/test_new_contract.py",
+        ),
+        (
+            "scripts/hmm_risk/prepare_state_model_set.py",
+            "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        ),
+    ],
+)
+def test_hmm_risk_pr_targets_reject_test_only_deletion_for_live_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    live_source: str,
+    deleted_test: str,
+) -> None:
+    _configure_hmm_pr_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[deleted_test],
+        existing_paths=[live_source],
+    )
+
+    with pytest.raises(ValueError, match="deleted HMM direct-neighbor test still covers live source"):
         noxfile._hmm_risk_pr_test_targets()
 
 

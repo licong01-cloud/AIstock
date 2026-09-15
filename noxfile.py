@@ -3383,6 +3383,22 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
 }
 
 
+def _hmm_risk_live_sources_for_test(test_path: str) -> list[str]:
+    test_stem = Path(test_path).stem.removeprefix("test_")
+    candidates = [
+        *[source for source, target in HMM_RISK_PR_NEIGHBOR_OVERRIDES.items() if target == test_path],
+        f"backend/services/hmm_risk/{test_stem}.py",
+        f"scripts/hmm_risk/{test_stem}.py",
+        f"scripts/hmm_risk/run_{test_stem}.py",
+    ]
+    return [
+        source
+        for source in dict.fromkeys(candidates)
+        if (ROOT / source).is_file()
+        and HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(source, test_path) == test_path
+    ]
+
+
 def _hmm_risk_pr_test_targets() -> list[str]:
     summary_value = os.environ.get("AISTOCK_CI_CLASSIFIER_SUMMARY", "").strip()
     if not summary_value:
@@ -3401,14 +3417,23 @@ def _hmm_risk_pr_test_targets() -> list[str]:
     targets = list(HMM_RISK_PR_SMOKE_TESTS)
     for raw_path in changed_files:
         path = raw_path.replace("\\", "/")
+        changed_path_exists = (ROOT / path).is_file()
         if path.startswith("backend/tests/hmm_risk/") and path.endswith(".py") and "/test_" in path:
-            if not (ROOT / path).is_file():
+            if not changed_path_exists:
+                live_sources = _hmm_risk_live_sources_for_test(path)
+                if live_sources:
+                    raise ValueError(
+                        f"deleted HMM direct-neighbor test still covers live source {live_sources}: {path}"
+                    )
                 continue
             targets.append(path)
             continue
         override = HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(path)
         if override:
-            targets.append(override)
+            if (ROOT / override).is_file():
+                targets.append(override)
+            elif changed_path_exists:
+                raise ValueError(f"HMM PR slice mapped direct-neighbor test is missing for {path}: {override}")
             continue
         if path.startswith("backend/services/hmm_risk/") and path.endswith(".py"):
             candidate = f"backend/tests/hmm_risk/test_{Path(path).name}"
@@ -3418,7 +3443,7 @@ def _hmm_risk_pr_test_targets() -> list[str]:
             continue
         if (ROOT / candidate).is_file():
             targets.append(candidate)
-        elif Path(path).name != "__init__.py":
+        elif changed_path_exists and Path(path).name != "__init__.py":
             raise ValueError(f"HMM PR slice lacks a direct-neighbor test mapping for {path}")
 
     ordered = list(dict.fromkeys(targets))
