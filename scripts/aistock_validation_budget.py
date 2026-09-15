@@ -58,7 +58,9 @@ def _is_test_path(path: str) -> bool:
 
 def _is_executable_source(path: str) -> bool:
     normalized = path.replace("\\", "/")
-    return Path(normalized).suffix.lower() in CODE_SUFFIXES and not any(
+    suffix = Path(normalized).suffix.lower()
+    executable_workflow = normalized.startswith(".github/workflows/") and suffix in {".yml", ".yaml"}
+    return (suffix in CODE_SUFFIXES or executable_workflow) and not any(
         normalized.startswith(prefix) for prefix in EXCLUDED_PREFIXES
     )
 

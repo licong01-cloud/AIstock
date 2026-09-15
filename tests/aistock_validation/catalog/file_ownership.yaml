@@ -472,6 +472,15 @@ rules:
     layer: script
     risk_level: high
     ownership_reason: CI, issue, Nightly, runner and code-intelligence entry points are the production side of workflow automation and must share its test-debt denominator.
+  - rule_id: validation_workflow_automation_github_workflows
+    priority: 110
+    include:
+      - .github/workflows/**
+    primary_module: validation.workflow_automation
+    impact_modules: [validation.runner, validation.guardrails]
+    layer: workflow
+    risk_level: high
+    ownership_reason: GitHub Actions workflow YAML is executable orchestration code and belongs in the production denominator of workflow automation.
   - rule_id: validation_test_debt_audit
     priority: 110
     include:

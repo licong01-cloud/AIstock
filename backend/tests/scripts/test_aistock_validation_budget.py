@@ -102,6 +102,12 @@ def test_test_path_detection_covers_helpers_and_language_conventions() -> None:
     assert not audit._is_test_path("backend/services/testing_policy.py")
 
 
+def test_only_github_workflow_yaml_counts_as_executable_source() -> None:
+    assert audit._is_executable_source(".github/workflows/test.yml")
+    assert audit._is_executable_source(".github/workflows/nightly.yaml")
+    assert not audit._is_executable_source("docs/example.yml")
+
+
 def test_max_ratio_validation_is_fail_closed(tmp_path: Path) -> None:
     try:
         audit.build_audit(repo_root=tmp_path, catalog=_Catalog({}), tracked_paths=[], max_ratio=0)  # type: ignore[arg-type]
@@ -200,3 +206,4 @@ def test_workflow_automation_has_an_honest_production_denominator() -> None:
 
     assert workflow["production_sloc"] > 0
     assert workflow["test_only_bucket"] is False
+    assert workflow["test_to_production_ratio"] <= 0.30
