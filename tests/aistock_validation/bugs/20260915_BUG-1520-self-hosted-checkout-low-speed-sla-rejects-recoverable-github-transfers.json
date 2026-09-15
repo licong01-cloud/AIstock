@@ -11,6 +11,7 @@
     "scripts/ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260915_BUG-1520-self-hosted-checkout-low-speed-sla-rejects-recoverable-github-transfers.json"
   ],
   "assigned_agent": null,
@@ -47,7 +48,8 @@
       ".github/workflows/code-intelligence-refresh.yml",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -61,7 +63,8 @@
         ".github/workflows/code-intelligence-refresh.yml",
         "scripts/ci_workflow_policy_scan.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-        "docs/standards/aistock_development_standard_v1.5_20260523.md"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -178,6 +181,15 @@
           "primary_module": "docs.standards",
           "risk_level": "medium",
           "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
         }
       ],
       "risk_levels": [
@@ -194,7 +206,8 @@
         ".github/workflows/code-intelligence-refresh.yml",
         "scripts/ci_workflow_policy_scan.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-        "docs/standards/aistock_development_standard_v1.5_20260523.md"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "unmatched_files": []
     },
@@ -208,7 +221,8 @@
       ".github/workflows/code-intelligence-refresh.yml",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -221,7 +235,8 @@
       ".github/workflows/code-intelligence-refresh.yml",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md"
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
   "first_seen_at": "2026-09-15T08:07:09.876908Z",
