@@ -540,6 +540,8 @@ def test_repository_backtest_cohort_proof_fails_closed_for_mixed_active_work(
     if cursor.calls:
         query, params = cursor.calls[0]
         assert "LEFT JOIN qe_evolution_loops" in query
+        assert "prediction_replay" in query
+        assert "backtest_only" in query
         assert params[0] == "wsl2-5080"
         assert params[2] == "qe_task_1"
 
@@ -588,10 +590,12 @@ def test_repository_parallel_training_cohort_proof_fails_closed_for_mixed_work(
     assert len(cursor.calls) == 2
     current_query, current_params = cursor.calls[0]
     assert "eligible_count" in current_query
+    assert "prediction_replay" in current_query
     assert current_params == ("qe_task_1", "Loop2")
     query, params = cursor.calls[1]
     assert "parallel_training_eligible" in query
     assert "gpu_training_policy" in query
+    assert "prediction_replay" in query
     assert params[0] == "wsl2-5080"
     assert params[2] == "qe_task_1"
 

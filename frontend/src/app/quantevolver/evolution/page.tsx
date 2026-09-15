@@ -479,6 +479,10 @@ function SingleAlphaEvolutionDashboard() {
     backtest_only: boolean;
     model_source_task_id: string;
     model_source_loop_index: number | null;
+    prediction_replay: boolean;
+    prediction_source_task_id: string;
+    prediction_source_loop_index: number | null;
+    prediction_source_sha256: string;
     _source_factor_keys: Set<string>; // 源模型的因子快照，用于变更检测
     _source_disable_alpha158: boolean; // 源模型是否禁用了 Alpha158 基线
   };
@@ -510,6 +514,10 @@ function SingleAlphaEvolutionDashboard() {
     backtest_only: false,
     model_source_task_id: "",
     model_source_loop_index: null,
+    prediction_replay: false,
+    prediction_source_task_id: "",
+    prediction_source_loop_index: null,
+    prediction_source_sha256: "",
     _source_factor_keys: new Set(),
     _source_disable_alpha158: false,
   });
@@ -535,21 +543,23 @@ function SingleAlphaEvolutionDashboard() {
       const next = [...prev];
       const cur = next[index];
       // 因子变更检测：如果修改了因子且当前是 backtest_only，自动关闭
-      if (updates.factor_keys && cur.backtest_only && cur._source_factor_keys.size > 0) {
+      if (updates.factor_keys && (cur.backtest_only || cur.prediction_replay) && cur._source_factor_keys.size > 0) {
         const srcNames = new Set([...cur._source_factor_keys].map(k => k.split("||")[0]));
         const newNames = new Set([...updates.factor_keys].map(k => k.split("||")[0]));
         const changed = srcNames.size !== newNames.size || [...srcNames].some(n => !newNames.has(n));
         if (changed) {
           updates.backtest_only = false;
+          updates.prediction_replay = false;
           setTimeout(() => alert("因子已变更，需要重新训练模型。已自动关闭 backtest-only 模式。"), 0);
         }
       }
       if (
         updates.disable_alpha158 !== undefined &&
-        cur.backtest_only &&
+        (cur.backtest_only || cur.prediction_replay) &&
         updates.disable_alpha158 !== cur._source_disable_alpha158
       ) {
         updates.backtest_only = false;
+        updates.prediction_replay = false;
         setTimeout(() => alert("Alpha158 基线设置已变更，需要重新训练模型。已自动关闭 backtest-only 模式。"), 0);
       }
       next[index] = { ...cur, ...updates };
@@ -666,6 +676,10 @@ function SingleAlphaEvolutionDashboard() {
       backtest_only: !!loop.backtest_only,
       model_source_task_id: loop.model_source_task_id || "",
       model_source_loop_index: loop.model_source_loop_index ?? null,
+      prediction_replay: !!loop.prediction_replay,
+      prediction_source_task_id: loop.prediction_source_task_id || "",
+      prediction_source_loop_index: loop.prediction_source_loop_index ?? null,
+      prediction_source_sha256: loop.prediction_source_sha256 || "",
       _source_factor_keys: new Set(sourceKeys),
       _source_disable_alpha158: !!loop.disable_alpha158,
     };
@@ -765,6 +779,10 @@ function SingleAlphaEvolutionDashboard() {
         backtest_only: !!sourceTaskId,
         model_source_task_id: sourceTaskId,
         model_source_loop_index: sourceTaskId ? sourceLoopIdx : null,
+        prediction_replay: false,
+        prediction_source_task_id: sourceTaskId,
+        prediction_source_loop_index: sourceTaskId ? sourceLoopIdx : null,
+        prediction_source_sha256: "",
         _source_factor_keys: new Set(factorKeys),
         _source_disable_alpha158: expDisableAlpha158,
       });
@@ -819,6 +837,10 @@ function SingleAlphaEvolutionDashboard() {
         backtest_only: true,
         model_source_task_id: taskId,
         model_source_loop_index: loopIndex,
+        prediction_replay: false,
+        prediction_source_task_id: taskId,
+        prediction_source_loop_index: loopIndex,
+        prediction_source_sha256: "",
         _source_factor_keys: new Set(factorKeys),
         _source_disable_alpha158: loopDisableAlpha158,
       });
@@ -1553,6 +1575,10 @@ function SingleAlphaEvolutionDashboard() {
           backtest_only: loop.backtest_only,
           model_source_task_id: loop.backtest_only ? (loop.model_source_task_id || undefined) : undefined,
           model_source_loop_index: loop.backtest_only ? (loop.model_source_loop_index ?? undefined) : undefined,
+          prediction_replay: loop.prediction_replay,
+          prediction_source_task_id: loop.prediction_replay ? (loop.prediction_source_task_id || undefined) : undefined,
+          prediction_source_loop_index: loop.prediction_replay ? (loop.prediction_source_loop_index ?? undefined) : undefined,
+          prediction_source_sha256: loop.prediction_replay ? (loop.prediction_source_sha256 || undefined) : undefined,
           node_id: i === 0
             ? (loop.node_id || customEvoNodeId || undefined)
             : (loop.node_id || undefined),
@@ -4056,7 +4082,10 @@ function SingleAlphaEvolutionDashboard() {
                               alert("Alpha158 基线设置已变更，无法启用 backtest-only 模式。请先恢复源模型的 Alpha158 设置。");
                               return;
                             }
-                            updateCustomEvoLoop(loopIdx, { backtest_only: e.target.checked });
+                            updateCustomEvoLoop(loopIdx, {
+                              backtest_only: e.target.checked,
+                              prediction_replay: e.target.checked ? false : loop.prediction_replay,
+                            });
                           }} />
                           <label style={{ fontSize: "12px", fontWeight: 600, color: loop.backtest_only ? "#1e40af" : "#64748b" }}>
                             Backtest-only（跳过训练，复用已有模型）
@@ -4065,6 +4094,34 @@ function SingleAlphaEvolutionDashboard() {
                         <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", marginLeft: "24px" }}>
                           复用模型自 {loop.model_source_task_id}/Loop{loop.model_source_loop_index ?? "?"}
                           {loop.backtest_only && " — 因子不可变更"}
+                        </div>
+                      </div>
+                    )}
+                    {loop.prediction_source_task_id && (
+                      <div style={{ padding: "10px 14px", backgroundColor: loop.prediction_replay ? "#f5f3ff" : "#f8fafc", borderRadius: "8px", border: `1px solid ${loop.prediction_replay ? "#c4b5fd" : "#e2e8f0"}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <input type="checkbox" checked={loop.prediction_replay} onChange={e => {
+                            if (e.target.checked && loop._source_factor_keys.size > 0) {
+                              const sourceNames = new Set([...loop._source_factor_keys].map(k => k.split("||")[0]));
+                              const currentNames = new Set([...loop.factor_keys].map(k => k.split("||")[0]));
+                              const changed = sourceNames.size !== currentNames.size || [...sourceNames].some(name => !currentNames.has(name));
+                              if (changed) { alert("因子已变更，无法启用冻结预测回放。请先恢复源配置。"); return; }
+                            }
+                            if (e.target.checked && loop.disable_alpha158 !== loop._source_disable_alpha158) {
+                              alert("Alpha158 基线设置已变更，无法启用冻结预测回放。请先恢复源配置。");
+                              return;
+                            }
+                            updateCustomEvoLoop(loopIdx, {
+                              prediction_replay: e.target.checked,
+                              backtest_only: e.target.checked ? false : loop.backtest_only,
+                            });
+                          }} />
+                          <label style={{ fontSize: "12px", fontWeight: 600, color: loop.prediction_replay ? "#5b21b6" : "#64748b" }}>
+                            冻结预测回放（不训练、不重新推理，仅分钟线回测）
+                          </label>
+                        </div>
+                        <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", marginLeft: "24px" }}>
+                          来源 {loop.prediction_source_task_id}/Loop{loop.prediction_source_loop_index ?? "?"}；SHA256 由服务端目录解析并钉住。
                         </div>
                       </div>
                     )}
@@ -4101,17 +4158,18 @@ function SingleAlphaEvolutionDashboard() {
                       </div>
                     </div>
 
-                    <div style={{ border: "1px solid #ccfbf1", borderRadius: "8px", padding: "10px", backgroundColor: loop.backtest_only ? "#f8fafc" : "#f0fdfa" }}>
+                    <div style={{ border: "1px solid #ccfbf1", borderRadius: "8px", padding: "10px", backgroundColor: loop.backtest_only || loop.prediction_replay ? "#f8fafc" : "#f0fdfa" }}>
                       <div style={{ fontSize: "12px", fontWeight: 700, color: "#0f766e", marginBottom: "6px" }}>
                         训练标签期限（Label Horizon）
                         {loop.backtest_only && <span style={{ color: "#64748b", fontWeight: 500 }}> - backtest-only 锁定源模型</span>}
+                        {loop.prediction_replay && <span style={{ color: "#64748b", fontWeight: 500 }}> - 冻结预测回放锁定源标签</span>}
                       </div>
                       <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
                         {QE_LABEL_HORIZONS.map(h => (
                           <button
                             key={h}
                             type="button"
-                            disabled={loop.backtest_only}
+                            disabled={loop.backtest_only || loop.prediction_replay}
                             onClick={() => updateCustomEvoLoop(loopIdx, { label_horizon: h })}
                             style={{
                               padding: "5px 10px",
@@ -4121,8 +4179,8 @@ function SingleAlphaEvolutionDashboard() {
                               color: loop.label_horizon === h ? "#0f766e" : "#64748b",
                               fontSize: "12px",
                               fontWeight: 700,
-                              cursor: loop.backtest_only ? "not-allowed" : "pointer",
-                              opacity: loop.backtest_only && loop.label_horizon !== h ? 0.45 : 1,
+                              cursor: loop.backtest_only || loop.prediction_replay ? "not-allowed" : "pointer",
+                              opacity: (loop.backtest_only || loop.prediction_replay) && loop.label_horizon !== h ? 0.45 : 1,
                             }}
                           >
                             {h}d
