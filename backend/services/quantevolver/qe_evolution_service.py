@@ -5,6 +5,8 @@ import asyncio
 import uuid
 import threading
 import base64
+import hashlib
+import re
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +126,7 @@ QE_EVOLUTION_LOG_TERMINAL_STATUSES = {
     "stopped",
 }
 QE_LOG_TAIL_DEFAULT_LINES = 500
+QE_PREDICTION_REPLAY_MAX_BYTES = 512 * 1024 * 1024
 
 QE_LOOP_RETRY_MODE_AUTO = "auto"
 QE_LOOP_RETRY_MODE_BACKTEST_ONLY = "backtest_only"
@@ -956,6 +959,179 @@ class AutoEvolutionScheduler:
             len(mlruns_tar),
         )
         return model_source, extra_experiment_files
+
+    def _get_prediction_replay_source_loop(
+        self,
+        source_task_id: str,
+        source_loop_index: int,
+    ) -> Dict[str, str]:
+        """Return a completed source loop and its persisted execution node."""
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT l.status, l.node_id AS loop_node_id, t.node_id AS task_node_id
+                    FROM qe_evolution_loops l
+                    JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                    WHERE l.task_id = %s AND l.loop_index = %s
+                    """,
+                    (source_task_id, source_loop_index),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NOT_FOUND: "
+                f"{source_task_id}/Loop{source_loop_index}"
+            )
+        status = str(row.get("status") or "").strip().lower()
+        if status != "completed":
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NOT_COMPLETED: "
+                f"{source_task_id}/Loop{source_loop_index} status={status or 'missing'}"
+            )
+        node_id = str(row.get("loop_node_id") or row.get("task_node_id") or "").strip()
+        if not node_id:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NODE_MISSING: "
+                f"{source_task_id}/Loop{source_loop_index}"
+            )
+        return {"status": status, "node_id": node_id}
+
+    async def _build_prediction_replay_payload(
+        self,
+        source_client: QEWorkspaceClient,
+        source_task_id: str,
+        source_loop_index: int,
+        *,
+        source_node_id: str,
+        expected_sha256: str | None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        """Resolve and stage one immutable completed-loop prediction artifact."""
+
+        source_loop = f"Loop{source_loop_index}"
+        catalog = await source_client.list_workspace_files(source_task_id, source_loop)
+        if catalog.get("catalog_completeness") != "complete":
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_CATALOG_INCOMPLETE: "
+                f"{source_task_id}/{source_loop}"
+            )
+        rows = catalog.get("files")
+        if rows is None:
+            rows = catalog.get("assets")
+        if not isinstance(rows, list):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_CATALOG_INVALID: files/assets must be a list"
+            )
+        matches: List[tuple[str, Dict[str, Any]]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            raw_path = item.get("relative_path") or item.get("path") or item.get("filename")
+            normalized_path = str(raw_path or "").replace("\\", "/")
+            while normalized_path.startswith("./"):
+                normalized_path = normalized_path[2:]
+            if (
+                normalized_path == "artifacts/pred.pkl"
+                or normalized_path.endswith("/artifacts/pred.pkl")
+            ):
+                matches.append((normalized_path, item))
+        if len(matches) != 1:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY: "
+                f"expected=1 actual={len(matches)} source={source_task_id}/{source_loop}"
+            )
+        catalog_path, entry = matches[0]
+        if catalog_path.startswith("/") or ".." in Path(catalog_path).parts:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_PATH_INVALID")
+        if bool(entry.get("is_symlink")) or str(entry.get("file_type") or "").lower() in {
+            "directory",
+            "symlink",
+            "junction",
+        }:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_NOT_REGULAR")
+        try:
+            declared_size = int(entry.get("size_bytes"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_SIZE_INVALID") from exc
+        if declared_size < 1 or declared_size > QE_PREDICTION_REPLAY_MAX_BYTES:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SIZE_OUT_OF_RANGE: "
+                f"size_bytes={declared_size} max_bytes={QE_PREDICTION_REPLAY_MAX_BYTES}"
+            )
+        prediction_bytes = await source_client.download_workspace_file_bytes(
+            source_task_id,
+            source_loop,
+            catalog_path,
+        )
+        if len(prediction_bytes) != declared_size:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SIZE_MISMATCH: "
+                f"declared={declared_size} observed={len(prediction_bytes)}"
+            )
+        observed_sha256 = hashlib.sha256(prediction_bytes).hexdigest()
+        if expected_sha256 and observed_sha256 != expected_sha256:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SHA256_MISMATCH: "
+                f"expected={expected_sha256} observed={observed_sha256}"
+            )
+        source_ref: Dict[str, Any] = {
+            "schema_version": "qe_prediction_replay_source_ref_v1",
+            "mode": "prediction_replay",
+            "source_task_id": source_task_id,
+            "source_loop_index": source_loop_index,
+            "source_node_id": source_node_id,
+            "catalog_path": catalog_path,
+            "sha256": observed_sha256,
+            "size_bytes": declared_size,
+        }
+        extra_experiment_files = {
+            "frozen_prediction.pkl.b64": base64.b64encode(prediction_bytes).decode("ascii"),
+            "qe_prediction_replay_source_ref.json": json.dumps(
+                source_ref,
+                ensure_ascii=False,
+                indent=2,
+            ),
+        }
+        return source_ref, extra_experiment_files
+
+    @staticmethod
+    def _validate_prediction_replay_result(
+        replay_result: Any,
+        *,
+        expected_source_sha256: str,
+    ) -> Dict[str, Any]:
+        """Validate the runner receipt before it becomes persisted loop evidence."""
+
+        if (
+            not isinstance(replay_result, dict)
+            or replay_result.get("schema_version") != "qe_prediction_replay_result_v1"
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_INVALID")
+        if replay_result.get("source_prediction_sha256") != expected_source_sha256:
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_SOURCE_SHA256_MISMATCH")
+        executable_sha256 = replay_result.get("executable_prediction_panel_sha256")
+        if not isinstance(executable_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", executable_sha256
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_EXECUTABLE_SHA256_INVALID")
+        counts: Dict[str, int] = {}
+        for field in (
+            "source_prediction_rows",
+            "executable_prediction_rows",
+            "excluded_prediction_rows",
+        ):
+            value = replay_result.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"QE_PREDICTION_REPLAY_RESULT_COUNT_INVALID: field={field}"
+                )
+            counts[field] = value
+        if counts["source_prediction_rows"] != (
+            counts["executable_prediction_rows"] + counts["excluded_prediction_rows"]
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_COUNT_MISMATCH")
+        return dict(replay_result)
 
     async def _require_backtest_retry_isolation_passed(
         self,
@@ -2575,6 +2751,19 @@ class AutoEvolutionScheduler:
                 td = self._compute_training_diagnostics(enhanced_data.get("training_curves", {}))
                 enhanced_data["training_diagnostics"] = td
             metrics["enhanced_metrics"] = enhanced_data
+            if bool(config.get("prediction_replay")):
+                replay_client = self._get_workspace_client_for_node_id(
+                    config.get("node_id") or config.get("execution_node_id")
+                )
+                replay_result = await replay_client.get_workspace_file(
+                    task_id,
+                    loop_id,
+                    "qe_prediction_replay_result.json",
+                )
+                metrics["prediction_replay_result"] = self._validate_prediction_replay_result(
+                    replay_result,
+                    expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
+                )
 
             # S3: enhanced_metrics 先写入 DB，确保后续 _build_full_evolution_history 可读取
             with get_conn() as conn:
@@ -3354,15 +3543,15 @@ class AutoEvolutionScheduler:
             strategy_evo_config = task.get("strategy_evo_config") or {}
             if isinstance(strategy_evo_config, str):
                 strategy_evo_config = json.loads(strategy_evo_config)
-            backtest_only_loops = [
+            source_reuse_loops = [
                 loop.get("loop_index")
                 for loop in strategy_evo_config.get("loops", [])
-                if loop.get("backtest_only")
+                if loop.get("backtest_only") or loop.get("prediction_replay")
             ]
-            if backtest_only_loops:
+            if source_reuse_loops:
                 raise ValueError(
-                    "force_full_train=True would override backtest_only loop config "
-                    f"for custom_evo loops {backtest_only_loops}; refusing to silently "
+                    "force_full_train=True would override source-reuse loop config "
+                    f"for custom_evo loops {source_reuse_loops}; refusing to silently "
                     "change the UI-defined comparison. Resume with force_full_train=false."
                 )
 
@@ -4340,6 +4529,11 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
+        if bool(config.get("prediction_replay")):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
+                "prediction-replay loop instead of inferring model or training fallback"
+            )
         retry_submission = self._retry_submission_metadata(config)
         if _capacity_resume:
             if loop_row["status"] != "pending" or not retry_submission:
@@ -7537,6 +7731,11 @@ class AutoEvolutionScheduler:
         if not loop_config:
             logger.error(f"Loop {loop_index} 的配置未找到")
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
+        if force_full_train and bool(loop_config.get("prediction_replay")):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_FORCE_FULL_TRAIN_FORBIDDEN: "
+                "immutable prediction replay cannot be converted into model training"
+            )
 
         # The legacy custom-evolution executor has been retired; only the unified path may run.
         _engine_mode = custom_evo_config.get("engine_mode") or "unified"
@@ -7567,7 +7766,7 @@ class AutoEvolutionScheduler:
         """
         from .experiment_config_builders import build_config_from_custom_evo_loop
         from .executors.backtest import BacktestExecutor, BacktestMode
-        from .executors.base import ExecutionContext
+        from .executors.base import ExecutionContext, PredictionReplaySource
         from .config_composer import ConfigComposer
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
@@ -7615,7 +7814,10 @@ class AutoEvolutionScheduler:
             context=f"execute_custom_evo_loop:{task_id}:Loop{loop_index}",
         )
         requested_phase_pipeline = bool(strategy_config.get("phase_pipeline_enabled", False))
-        full_train_requested = not (bool(loop_config.get("backtest_only")) and not force_full_train)
+        full_train_requested = not (
+            bool(loop_config.get("prediction_replay"))
+            or (bool(loop_config.get("backtest_only")) and not force_full_train)
+        )
         phase_pipeline_enabled = False
 
         resource_service = QEResourcePhaseService()
@@ -7627,11 +7829,21 @@ class AutoEvolutionScheduler:
         try:
             loop_config = dict(loop_config)
             ensure_loop_fixed_seed(loop_config, context=f"custom_evo.task[{task_id}].Loop{loop_index}")
-            if loop_config.get("backtest_only") and "source_label_horizon" not in loop_config:
+            if (
+                loop_config.get("backtest_only") or loop_config.get("prediction_replay")
+            ) and "source_label_horizon" not in loop_config:
                 loop_config = dict(loop_config)
                 loop_config["source_label_horizon"] = self._get_source_loop_label_horizon(
-                    loop_config.get("model_source_task_id"),
-                    int(loop_config.get("model_source_loop_index")),
+                    (
+                        loop_config.get("model_source_task_id")
+                        if loop_config.get("backtest_only")
+                        else loop_config.get("prediction_source_task_id")
+                    ),
+                    int(
+                        loop_config.get("model_source_loop_index")
+                        if loop_config.get("backtest_only")
+                        else loop_config.get("prediction_source_loop_index")
+                    ),
                 )
             # 1. 构建 ExperimentConfig（配置层）
             experiment_name = f"{task_id}/{loop_id}"
@@ -7640,6 +7852,28 @@ class AutoEvolutionScheduler:
                 task=task,
                 experiment_name=experiment_name,
             )
+            prediction_replay_source: PredictionReplaySource | None = None
+            prediction_replay_files: Dict[str, str] | None = None
+            if cfg.prediction_replay:
+                if not cfg.prediction_source_task_id or cfg.prediction_source_loop_index is None:
+                    raise ValueError("QE_PREDICTION_REPLAY_SOURCE_IDENTITY_MISSING")
+                source_runtime = self._get_prediction_replay_source_loop(
+                    cfg.prediction_source_task_id,
+                    cfg.prediction_source_loop_index,
+                )
+                source_node_id = source_runtime["node_id"]
+                source_client = self._get_workspace_client_for_node_id(source_node_id)
+                source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
+                    source_client,
+                    cfg.prediction_source_task_id,
+                    cfg.prediction_source_loop_index,
+                    source_node_id=source_node_id,
+                    expected_sha256=cfg.prediction_source_sha256,
+                )
+                prediction_replay_source = PredictionReplaySource.model_validate(source_ref)
+                cfg = cfg.model_copy(
+                    update={"prediction_source_sha256": prediction_replay_source.sha256}
+                )
             (
                 gpu_training_policy,
                 phase_pipeline_enabled,
@@ -7671,7 +7905,7 @@ class AutoEvolutionScheduler:
             # 2. 保存 config 记录到 loop
             runtime_flags = cfg.build_runtime_flags()
             requested_seed = runtime_flags.get("random_seed")
-            if requested_seed is None and not cfg.backtest_only:
+            if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay):
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
             seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
             action_type = "ensemble_config" if seed_ensemble else "custom_config"
@@ -7691,6 +7925,15 @@ class AutoEvolutionScheduler:
                 "backtest_only": cfg.backtest_only,
                 "model_source_task_id": cfg.model_source_task_id,
                 "model_source_loop_index": cfg.model_source_loop_index,
+                "prediction_replay": cfg.prediction_replay,
+                "prediction_source_task_id": cfg.prediction_source_task_id,
+                "prediction_source_loop_index": cfg.prediction_source_loop_index,
+                "prediction_source_sha256": cfg.prediction_source_sha256,
+                "prediction_replay_source": (
+                    prediction_replay_source.model_dump(mode="json")
+                    if prediction_replay_source is not None
+                    else None
+                ),
                 "source_label_horizon": loop_config.get("source_label_horizon"),
                 "stock_pool": cfg.stock_pool,
                 "filter_suspended_on_signal": cfg.filter_suspended_on_signal,
@@ -7756,6 +7999,12 @@ class AutoEvolutionScheduler:
                 "ensemble": seed_ensemble,
                 "node_id": effective_node_id,
                 "backtest_only": cfg.backtest_only,
+                "prediction_replay": cfg.prediction_replay,
+                "prediction_replay_source": (
+                    prediction_replay_source.model_dump(mode="json")
+                    if prediction_replay_source is not None
+                    else None
+                ),
             }
             config_record["execution_manifest_sha256"] = sha256_json(config_record["execution_manifest"])
             with get_conn() as conn:
@@ -7812,9 +8061,40 @@ class AutoEvolutionScheduler:
                     planned_registration
                 ),
             )
+            if cfg.prediction_replay:
+                if prediction_replay_source is None or prediction_replay_files is None:
+                    raise ValueError("QE_PREDICTION_REPLAY_RESOLVED_PAYLOAD_MISSING")
+                ctx = ExecutionContext(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    experiment_name=experiment_name,
+                    node_id=effective_node_id,
+                    callback_url=self._get_callback_url_for_node(effective_node_id),
+                    prediction_replay_source=prediction_replay_source,
+                    extra_experiment_files=prediction_replay_files,
+                    require_fixed_seed=False,
+                    phase_pipeline_enabled=False,
+                    submission_node_capacity=int(slot["limit"]),
+                    parallel_training_eligible=False,
+                    submission_source_kind="qe_evolution_loop",
+                    submission_source_execution_id=submission_source_execution_id,
+                    submission_source_claim_id=submission_source_claim_id,
+                    submission_consumer_id=_consumer_id_from_registration(
+                        planned_registration
+                    ),
+                )
+                mode = BacktestMode.PREDICTION_REPLAY
+                logger.info(
+                    "[unified] custom evolution Loop %s uses immutable prediction replay "
+                    "source=%s/Loop%s sha256=%s",
+                    loop_index,
+                    prediction_replay_source.source_task_id,
+                    prediction_replay_source.source_loop_index,
+                    prediction_replay_source.sha256,
+                )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
-            if cfg.backtest_only and not force_full_train:
+            elif cfg.backtest_only and not force_full_train:
                 if not cfg.model_source_task_id or cfg.model_source_loop_index is None:
                     raise ValueError(
                         f"Loop {loop_index}: backtest_only=True 但未指定 model_source"
