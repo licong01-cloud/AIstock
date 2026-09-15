@@ -169,3 +169,34 @@ def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
     ]
 
     assert offenders == []
+
+
+def test_workflow_automation_has_an_honest_production_denominator() -> None:
+    root = audit.REPO_ROOT_FOR_IMPORT
+    registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
+    catalog = audit.FileOwnershipCatalog(
+        root / "tests/aistock_validation/catalog/file_ownership.yaml",
+        module_registry=registry,
+    )
+    registry.load()
+    catalog.load()
+
+    assert catalog.match_path("scripts/aistock_issue_workflow.py").primary_module == (
+        "validation.workflow_automation"
+    )
+    assert catalog.match_path("scripts/aistock_guardrail_scan.py").primary_module == (
+        "validation.guardrails"
+    )
+    report = audit.build_audit(
+        repo_root=root,
+        catalog=catalog,
+        tracked_paths=audit._git_tracked_paths(root),
+        max_ratio=0.30,
+        top_files=1,
+    )
+    workflow = next(
+        row for row in report["modules"] if row["module_id"] == "validation.workflow_automation"
+    )
+
+    assert workflow["production_sloc"] > 0
+    assert workflow["test_only_bucket"] is False
