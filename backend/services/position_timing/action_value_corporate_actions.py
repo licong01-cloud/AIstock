@@ -482,14 +482,16 @@ def _economic_identity(
 def _distribution_revision_groups(
     rows: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[Mapping[str, Any], ...], ...]:
-    """Group revisions by fiscal end, with an unambiguous base-date fallback."""
+    """Group by fiscal end; use base date only when the fiscal end is absent."""
 
     pending = sorted(
         (dict(row) for row in rows),
         key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
     )
     explicit: dict[tuple[str | None, str], list[Mapping[str, Any]]] = {}
-    fallback: dict[tuple[str | None, str], list[Mapping[str, Any]]] = {}
+    absent_fiscal_end_groups: dict[
+        tuple[str | None, str], list[Mapping[str, Any]]
+    ] = {}
     for row in pending:
         record_date = row["record_date"]
         fiscal_end = row["end_date"]
@@ -497,7 +499,9 @@ def _distribution_revision_groups(
         if fiscal_end is not None:
             explicit.setdefault((record_date, fiscal_end), []).append(row)
         elif base_date is not None:
-            fallback.setdefault((record_date, base_date), []).append(row)
+            absent_fiscal_end_groups.setdefault(
+                (record_date, base_date), []
+            ).append(row)
         else:
             raise ActionValueError(
                 "CORPORATE_ACTION_DISTRIBUTION_IDENTITY_UNAVAILABLE",
@@ -506,7 +510,7 @@ def _distribution_revision_groups(
             )
 
     standalone: list[list[Mapping[str, Any]]] = []
-    for (record_date, base_date), revisions in fallback.items():
+    for (record_date, base_date), revisions in absent_fiscal_end_groups.items():
         matches = [
             group
             for (group_record_date, _), group in explicit.items()

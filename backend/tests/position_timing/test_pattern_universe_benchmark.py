@@ -168,11 +168,27 @@ def test_same_stock_buy_and_hold_and_market_context_are_distinct():
         },
     ]
     partial, summary = benchmark._path_daily_partials(
-        rows, pool_id="csi300", strategy_id=benchmark.PRIMARY_STRATEGY
+        rows,
+        pool_id="csi300",
+        strategy_id=benchmark.PRIMARY_STRATEGY,
+        terminal_status="TERMINAL_LIQUIDATED",
     )
     assert partial["timing_increment_bps_sum"].tolist() == [-10.0, 5.0]
     assert summary["timing_increment_total_bps"] == pytest.approx(-5.0)
     assert "market" not in summary
+
+
+def test_terminal_status_is_derived_from_terminal_accounting_not_last_action():
+    assert benchmark._terminal_status_from_counts(
+        {"TERMINAL_LIQUIDATED": 1}
+    ) == "TERMINAL_LIQUIDATED"
+    assert benchmark._terminal_status_from_counts(
+        {"TERMINAL_LIQUIDATION_NOT_REQUIRED": 1}
+    ) == "TERMINAL_LIQUIDATION_NOT_REQUIRED"
+    with pytest.raises(
+        ActionValueError, match="PATTERN_BENCHMARK_TERMINAL_STATUS_INVALID"
+    ):
+        benchmark._terminal_status_from_counts({})
 
 
 def test_drawdown_includes_the_frozen_initial_capital():
@@ -288,10 +304,18 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
     request = {
         "schema_version": benchmark.REQUEST_SCHEMA,
         "pipeline_id": benchmark.PIPELINE_ID,
+        "repository_root": Path.cwd().resolve().as_posix(),
+        "timing_root": tmp_path.resolve().as_posix(),
         "benchmark_contract": benchmark.BENCHMARK_CONTRACT,
         "benchmark_contract_sha256": benchmark.BENCHMARK_CONTRACT_SHA256,
+        "candidate_manifest": {
+            "path": (tmp_path / "candidate-manifest.json").as_posix(),
+            "sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+            "size_bytes": 1,
+        },
         "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
         "candidate_dataset_manifest_sha256": benchmark.EXPECTED_CANDIDATE_DATASET_SHA256,
+        "pool_sidecars": {pool_id: {} for pool_id in benchmark.POOL_IDS},
         "parent_manifest_sha256": benchmark.EXPECTED_PARENT_MANIFEST_SHA256,
         "rights_issue_authority_canonical_sha256": (
             benchmark.EXPECTED_RIGHTS_AUTHORITY_SHA256
@@ -303,10 +327,37 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "repository_commit": "1" * 40,
         "candidate_data_references_sha256": "2" * 64,
         "corporate_action_snapshot_sha256": "3" * 64,
-        "corporate_action_application_sha256": "4" * 64,
         "combined_corporate_action_source_sha256": "5" * 64,
-        "rights_issue_participation_policy_sha256": "6" * 64,
-        "factor_action_coverage_audit_sha256": "7" * 64,
+        "corporate_action_application_policy": (
+            benchmark.CORPORATE_ACTION_APPLICATION_POLICY
+        ),
+        "corporate_action_application_policy_sha256": (
+            benchmark.CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+        ),
+        "rights_issue_participation_policy": (
+            benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY
+        ),
+        "rights_issue_participation_policy_sha256": (
+            benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        ),
+        "rights_issue_participation_policy_artifact": {
+            "path": (tmp_path / "rights-policy.json").as_posix(),
+            "sha256": benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
+            "size_bytes": 1,
+        },
+        "factor_action_coverage_policy": benchmark.FACTOR_ACTION_COVERAGE_POLICY,
+        "factor_action_coverage_policy_sha256": (
+            benchmark.FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        ),
+        "source_code": {
+            role: {
+                "path": (tmp_path / filename).as_posix(),
+                "sha256": "8" * 64,
+                "size_bytes": 1,
+            }
+            for role, filename in benchmark.SOURCE_CODE_FILES.items()
+        },
+        "chunk_size": 32,
         "pool_ids": benchmark.POOL_IDS,
         "population_symbols": (),
         "population_symbols_sha256": canonical_sha256(()),
@@ -321,6 +372,60 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "database_write": False,
         "runtime_write": False,
     }
+    request["candidate_identity_sha256"] = canonical_sha256(
+        {
+            "candidate_manifest": request["candidate_manifest"],
+            "candidate_dataset_manifest_sha256": request[
+                "candidate_dataset_manifest_sha256"
+            ],
+            "pool_sidecars": request["pool_sidecars"],
+        }
+    )
+    request["corporate_action_application_audit"] = {
+        "policy_sha256": benchmark.CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
+    }
+    request["corporate_action_application_audit"]["application_sha256"] = (
+        canonical_sha256(request["corporate_action_application_audit"])
+    )
+    request["corporate_action_application_sha256"] = request[
+        "corporate_action_application_audit"
+    ]["application_sha256"]
+    request["rights_issue_application_audit"] = {
+        "policy_sha256": benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
+        "outcomes_read": False,
+        "account_quantity_change": 0,
+        "account_cash_change_cny": "0",
+    }
+    request["rights_issue_application_audit"]["application_sha256"] = (
+        canonical_sha256(request["rights_issue_application_audit"])
+    )
+    request["rights_issue_application_sha256"] = request[
+        "rights_issue_application_audit"
+    ]["application_sha256"]
+    request["factor_action_coverage_audit"] = {
+        "policy_sha256": benchmark.FACTOR_ACTION_COVERAGE_POLICY_SHA256,
+        "corporate_action_application_sha256": request[
+            "corporate_action_application_sha256"
+        ],
+        "rights_issue_application_sha256": request[
+            "rights_issue_application_sha256"
+        ],
+        "coverage_complete": True,
+        "outcomes_read": False,
+        "factor_account_participation_inference": False,
+        "unbound_material_factor_change_count": 0,
+        "unbound_material_factor_changes": [],
+        "insufficient_factor_symbol_count": 0,
+        "insufficient_factor_symbols": [],
+        "material_factor_change_count": 0,
+        "bound_material_factor_change_count": 0,
+    }
+    request["factor_action_coverage_audit"]["audit_sha256"] = canonical_sha256(
+        request["factor_action_coverage_audit"]
+    )
+    request["factor_action_coverage_audit_sha256"] = request[
+        "factor_action_coverage_audit"
+    ]["audit_sha256"]
     request["adj_factor_restatement_audit"]["audit_sha256"] = canonical_sha256(
         request["adj_factor_restatement_audit"]
     )
@@ -372,6 +477,20 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         receipt=receipt,
     )
     benchmark.inspect_bundle(bundle)
+
+    drifted_request = dict(request)
+    drifted_request["factor_action_coverage_policy"] = {
+        **benchmark.FACTOR_ACTION_COVERAGE_POLICY,
+        "factor_change_tolerance_bps": "11",
+    }
+    drifted_request.pop("request_sha256")
+    drifted_request["request_sha256"] = canonical_sha256(drifted_request)
+    drifted_request_path = tmp_path / "drifted-request.json"
+    drifted_request_path.write_bytes(canonical_json_bytes(drifted_request))
+    with pytest.raises(
+        ActionValueError, match="PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH"
+    ):
+        benchmark._load_request(drifted_request_path)
 
     original_receipt = canonical_json_bytes(receipt)
     drifted_receipt = dict(receipt)

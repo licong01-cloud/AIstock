@@ -198,10 +198,10 @@ run --request
 |---|---|---|---|---|
 | F-001 | 本文 §1、§5 | `python -m pytest backend/tests/position_timing/test_pattern_universe_benchmark.py::test_research_question_and_exploratory_scope_are_frozen -q` | DESIGN_VERIFIED | none |
 | F-002 | 本文 §4.1、§4.2 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_frozen_authorities_match_r5_candidate`、`::test_r5_candidate_parent_and_authority_identities_are_frozen` | DESIGN_VERIFIED | none |
-| F-003 | 本文 §4.2、§5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_pit_membership_projection_preserves_population_clock` | DESIGN_VERIFIED | none |
+| F-003 | 本文 §4.2、§5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_pit_membership_projection_preserves_population_clock`；`backend/tests/position_timing/test_pattern_research.py::test_policy_cannot_plan_entry_outside_pit_when_buy_and_hold_has_inventory` | DESIGN_VERIFIED | none |
 | F-004 | 本文 §4.3、§5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_same_stock_buy_and_hold_and_market_context_are_distinct` | DESIGN_VERIFIED | none |
 | F-005 | 本文 §3、§4.4 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_parent_artifact_identity_is_hash_bound_and_read_only` | DESIGN_VERIFIED | none |
-| F-006 | 本文 §4.3、§4.4 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_candidate_and_comparator_share_terminal_and_accounting_contracts` | DESIGN_VERIFIED | none |
+| F-006 | 本文 §4.3、§4.4 | `backend/tests/position_timing/test_pattern_research.py::test_full_policy_optional_terminal_liquidation_is_symmetric_and_costed`；`backend/tests/position_timing/test_pattern_universe_benchmark.py::test_terminal_status_is_derived_from_terminal_accounting_not_last_action` | DESIGN_VERIFIED | none |
 | F-007 | 本文 §5 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_six_pool_familywise_classification_is_frozen` | DESIGN_VERIFIED | none |
 | F-008 | 本文 §3、§6 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_chunk_manifest_and_exact_retry_are_immutable` | DESIGN_VERIFIED | none |
 | F-009 | 本文 §2、§6 | `backend/tests/position_timing/test_pattern_universe_benchmark.py::test_receipt_declares_all_external_writes_false` | DESIGN_VERIFIED | none |

@@ -913,6 +913,28 @@ def test_policy_cannot_plan_entry_outside_pit_when_buy_and_hold_has_inventory():
     assert counts["BREAKOUT_OBSERVED"] == 0
 
 
+def test_pending_pullback_entry_is_cancelled_when_pit_eligibility_ends():
+    bars = _bars(45)
+    features = _forced_breakout_features(bars, 20, confirm=22)
+    bars.loc[bars.index[21:25], "pit_active"] = False
+    _, fills, counts = replay_full_policy_symbol(
+        symbol="000001.SZ",
+        bars=bars,
+        features=features,
+        calendar_dates=tuple(bars.index.date),
+        corporate_actions=CorporateActionBook.empty(),
+        start_ordinal=20,
+        terminal_ordinal=35,
+        entry_observer=lambda _features, ordinal: ordinal == 20,
+    )
+
+    assert counts["BREAKOUT_OBSERVED"] == 1
+    assert counts["ENTRY_EVENT_CANCELLED_OUTSIDE_PIT"] == 1
+    assert counts["OUTSIDE_PIT_NO_ACTION"] == 4
+    assert counts["DECISION_PRICE_UNAVAILABLE"] == 0
+    assert not any(item["path_role"] == "FULL_POLICY" for item in fills)
+
+
 def test_existing_inventory_can_be_priced_and_sold_after_pit_buy_eligibility_ends():
     bars = _bars(45)
     bars.loc[bars.index[20:], "pit_active"] = False

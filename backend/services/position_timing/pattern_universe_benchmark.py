@@ -129,6 +129,16 @@ NOMINAL_CONFIDENCE = 0.95
 BOOTSTRAP_SAMPLES = 5000
 INFERENCE_SEED = 20260914
 DEFAULT_CHUNK_SIZE = 32
+SOURCE_CODE_FILES: Mapping[str, str] = {
+    "pipeline": "pattern_universe_benchmark.py",
+    "pattern_research": "pattern_research.py",
+    "pattern_strategy": "pattern_strategy.py",
+    "rights_issue": "pattern_rights_issue.py",
+    "adj_factor_restatement": "pattern_adj_factor_restatement.py",
+    "daily_candidate": "action_value_data.py",
+    "corporate_actions": "action_value_corporate_actions.py",
+    "cost_and_fill": "action_value.py",
+}
 EXTERNAL_WRITE_RECEIPT_FLAGS: Mapping[str, bool] = {
     "registry_written": False,
     "current_written": False,
@@ -363,17 +373,10 @@ def load_frozen_parent_evidence(bundle: Path) -> FrozenParentEvidence:
 
 def _source_code_references(repository_root: Path) -> Mapping[str, Mapping[str, Any]]:
     source_root = repository_root / "backend" / "services" / "position_timing"
-    paths = {
-        "pipeline": source_root / "pattern_universe_benchmark.py",
-        "pattern_research": source_root / "pattern_research.py",
-        "pattern_strategy": source_root / "pattern_strategy.py",
-        "rights_issue": source_root / "pattern_rights_issue.py",
-        "adj_factor_restatement": source_root / "pattern_adj_factor_restatement.py",
-        "daily_candidate": source_root / "action_value_data.py",
-        "corporate_actions": source_root / "action_value_corporate_actions.py",
-        "cost_and_fill": source_root / "action_value.py",
+    return {
+        role: file_reference((source_root / filename).resolve())
+        for role, filename in SOURCE_CODE_FILES.items()
     }
-    return {role: file_reference(path.resolve()) for role, path in paths.items()}
 
 
 def _publish_source_diagnostic(
@@ -403,6 +406,8 @@ def prepare_request(
     corporate_action_snapshot: Path,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Path:
+    if not timing_root.is_absolute() or not repository_root.is_absolute():
+        raise ActionValueError("PATTERN_BENCHMARK_PREPARE_SPEC_INVALID")
     repository = repository_root.resolve()
     root = timing_root.resolve()
     candidate_root = candidate_root.resolve()
@@ -666,6 +671,51 @@ def _load_request(path: Path) -> dict[str, Any]:
         if isinstance(restatement_audit, Mapping)
         else {}
     )
+    corporate_application = request.get("corporate_action_application_audit")
+    corporate_application_identity = (
+        {
+            key: value
+            for key, value in corporate_application.items()
+            if key != "application_sha256"
+        }
+        if isinstance(corporate_application, Mapping)
+        else {}
+    )
+    rights_application = request.get("rights_issue_application_audit")
+    rights_application_identity = (
+        {
+            key: value
+            for key, value in rights_application.items()
+            if key != "application_sha256"
+        }
+        if isinstance(rights_application, Mapping)
+        else {}
+    )
+    factor_audit = request.get("factor_action_coverage_audit")
+    factor_audit_identity = (
+        {
+            key: value
+            for key, value in factor_audit.items()
+            if key != "audit_sha256"
+        }
+        if isinstance(factor_audit, Mapping)
+        else {}
+    )
+    candidate_manifest = request.get("candidate_manifest")
+    pool_sidecars = request.get("pool_sidecars")
+    source_code = request.get("source_code")
+    policy_artifact = request.get("rights_issue_participation_policy_artifact")
+    try:
+        repository_root = Path(str(request.get("repository_root")))
+        timing_root = Path(str(request.get("timing_root")))
+        resolved_repository_root = repository_root.resolve()
+        resolved_timing_root = timing_root.resolve()
+    except (OSError, TypeError, ValueError):
+        repository_root = Path()
+        timing_root = Path()
+        resolved_repository_root = Path()
+        resolved_timing_root = Path()
+    chunk_size = request.get("chunk_size")
     if (
         request.get("schema_version") != REQUEST_SCHEMA
         or request.get("pipeline_id") != PIPELINE_ID
@@ -688,6 +738,83 @@ def _load_request(path: Path) -> dict[str, Any]:
         != restatement_audit.get("audit_sha256")
         or restatement_audit.get("audit_sha256")
         != canonical_sha256(restatement_audit_identity)
+        or not isinstance(candidate_manifest, Mapping)
+        or candidate_manifest.get("sha256")
+        != request.get("candidate_manifest_sha256")
+        or not isinstance(pool_sidecars, Mapping)
+        or set(pool_sidecars) != set(POOL_IDS)
+        or request.get("candidate_identity_sha256")
+        != canonical_sha256(
+            {
+                "candidate_manifest": candidate_manifest,
+                "candidate_dataset_manifest_sha256": request.get(
+                    "candidate_dataset_manifest_sha256"
+                ),
+                "pool_sidecars": pool_sidecars,
+            }
+        )
+        or request.get("corporate_action_application_policy")
+        != CORPORATE_ACTION_APPLICATION_POLICY
+        or request.get("corporate_action_application_policy_sha256")
+        != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+        or not isinstance(corporate_application, Mapping)
+        or corporate_application.get("application_sha256")
+        != canonical_sha256(corporate_application_identity)
+        or request.get("corporate_action_application_sha256")
+        != corporate_application.get("application_sha256")
+        or corporate_application.get("policy_sha256")
+        != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
+        or request.get("rights_issue_participation_policy")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY
+        or request.get("rights_issue_participation_policy_sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or not isinstance(policy_artifact, Mapping)
+        or policy_artifact.get("sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or not isinstance(rights_application, Mapping)
+        or rights_application.get("application_sha256")
+        != canonical_sha256(rights_application_identity)
+        or request.get("rights_issue_application_sha256")
+        != rights_application.get("application_sha256")
+        or rights_application.get("policy_sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or rights_application.get("outcomes_read") is not False
+        or rights_application.get("account_quantity_change") != 0
+        or rights_application.get("account_cash_change_cny") != "0"
+        or request.get("factor_action_coverage_policy")
+        != FACTOR_ACTION_COVERAGE_POLICY
+        or request.get("factor_action_coverage_policy_sha256")
+        != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        or not isinstance(factor_audit, Mapping)
+        or factor_audit.get("audit_sha256")
+        != canonical_sha256(factor_audit_identity)
+        or request.get("factor_action_coverage_audit_sha256")
+        != factor_audit.get("audit_sha256")
+        or factor_audit.get("policy_sha256")
+        != FACTOR_ACTION_COVERAGE_POLICY_SHA256
+        or factor_audit.get("corporate_action_application_sha256")
+        != request.get("corporate_action_application_sha256")
+        or factor_audit.get("rights_issue_application_sha256")
+        != request.get("rights_issue_application_sha256")
+        or factor_audit.get("coverage_complete") is not True
+        or factor_audit.get("outcomes_read") is not False
+        or factor_audit.get("factor_account_participation_inference") is not False
+        or factor_audit.get("unbound_material_factor_change_count") != 0
+        or factor_audit.get("unbound_material_factor_changes") != []
+        or factor_audit.get("insufficient_factor_symbol_count") != 0
+        or factor_audit.get("insufficient_factor_symbols") != []
+        or factor_audit.get("material_factor_change_count")
+        != factor_audit.get("bound_material_factor_change_count")
+        or not isinstance(source_code, Mapping)
+        or set(source_code) != set(SOURCE_CODE_FILES)
+        or not all(isinstance(reference, Mapping) for reference in source_code.values())
+        or isinstance(chunk_size, bool)
+        or not isinstance(chunk_size, int)
+        or not 1 <= chunk_size <= 256
+        or not repository_root.is_absolute()
+        or not timing_root.is_absolute()
+        or resolved_timing_root == resolved_repository_root
+        or resolved_timing_root.is_relative_to(resolved_repository_root)
         or tuple(request.get("pool_ids") or ()) != POOL_IDS
         or tuple(request.get("population_symbols") or ())
         != tuple(sorted(set(request.get("population_symbols") or ())))
@@ -723,7 +850,13 @@ def _path_daily_partials(
     *,
     pool_id: str,
     strategy_id: str,
+    terminal_status: str,
 ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
+    if terminal_status not in {
+        "TERMINAL_LIQUIDATED",
+        "TERMINAL_LIQUIDATION_NOT_REQUIRED",
+    }:
+        raise ActionValueError("PATTERN_BENCHMARK_TERMINAL_STATUS_INVALID")
     frame = pd.DataFrame(
         item for item in rows if item.get("comparison") == "P_MINUS_BUY_AND_HOLD"
     )
@@ -796,7 +929,7 @@ def _path_daily_partials(
         "evaluation_start": pd.Timestamp(frame.iloc[0]["valuation_date"]).date().isoformat(),
         "evaluation_end": pd.Timestamp(frame.iloc[-1]["valuation_date"]).date().isoformat(),
         "session_count": len(frame),
-        "terminal_status": str(frame.iloc[-1]["policy_authority"]),
+        "terminal_status": terminal_status,
         "policy_terminal_wealth_cny": float(policy_wealth[-1]),
         "buy_hold_terminal_wealth_cny": float(buy_hold_wealth[-1]),
         "policy_total_return_bps": float(
@@ -818,6 +951,16 @@ def _path_daily_partials(
         ),
     }
     return partial, summary
+
+
+def _terminal_status_from_counts(counts: Mapping[str, int]) -> str:
+    liquidated = int(counts.get("TERMINAL_LIQUIDATED", 0))
+    not_required = int(counts.get("TERMINAL_LIQUIDATION_NOT_REQUIRED", 0))
+    if liquidated == 1 and not_required == 0:
+        return "TERMINAL_LIQUIDATED"
+    if liquidated == 0 and not_required == 1:
+        return "TERMINAL_LIQUIDATION_NOT_REQUIRED"
+    raise ActionValueError("PATTERN_BENCHMARK_TERMINAL_STATUS_INVALID")
 
 
 def _max_drawdown_bps(values: np.ndarray, *, initial_value: float) -> float:
@@ -1037,6 +1180,7 @@ def _run_chunk(
                             rows,
                             pool_id=pool_id,
                             strategy_id=strategy_id,
+                            terminal_status=_terminal_status_from_counts(counts),
                         )
                         daily_parts.append(partial)
                         summaries.append(summary)

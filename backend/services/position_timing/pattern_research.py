@@ -1720,8 +1720,18 @@ def replay_full_policy_symbol(
         if current_template_id != exit_edge_template_id:
             exit_edge_active = False
             exit_edge_template_id = current_template_id
+        pit_eligible = bool(bars.iloc[ordinal].get("pit_active"))
+        if active_event is not None and not pit_eligible:
+            counts["ENTRY_EVENT_CANCELLED_OUTSIDE_PIT"] += 1
+            blocked_until = max(
+                blocked_until,
+                active_event.breakout_ordinal
+                + TEMPLATE_BY_ID[active_event.template_id].pullback_wait_sessions,
+            )
+            active_event = None
+            event_reference = None
         has_inventory = any(state.quantity for state in states.values())
-        if has_inventory and not bool(bars.iloc[ordinal].get("pit_active")):
+        if has_inventory and not pit_eligible:
             counts["HELD_INVENTORY_OUTSIDE_PIT_BUY_ELIGIBILITY"] += 1
         reference = (
             _inventory_raw_close(bars.iloc[ordinal]) if has_inventory else _pattern_raw_close(bars.iloc[ordinal])
@@ -1731,8 +1741,12 @@ def replay_full_policy_symbol(
             states[role] = _roll_state_to_decision(states[role])
 
         if reference is None:
-            counts["DECISION_PRICE_UNAVAILABLE"] += 1
-            if active_event is not None:
+            source_unavailable = has_inventory or pit_eligible
+            if source_unavailable:
+                counts["DECISION_PRICE_UNAVAILABLE"] += 1
+            else:
+                counts["OUTSIDE_PIT_NO_ACTION"] += 1
+            if active_event is not None and source_unavailable:
                 counts["PATTERN_SOURCE_UNAVAILABLE"] += 1
                 blocked_until = max(
                     blocked_until,
@@ -1796,7 +1810,11 @@ def replay_full_policy_symbol(
                             * (last_prices["POLICY"] or Decimal(0))
                             / wealth["POLICY"]
                         ),
-                        "policy_authority": "SOURCE_UNAVAILABLE_NO_ACTION",
+                        "policy_authority": (
+                            "SOURCE_UNAVAILABLE_NO_ACTION"
+                            if source_unavailable
+                            else "OUTSIDE_PIT_NO_ACTION"
+                        ),
                         "template_id": current_template_id,
                     }
                 )
@@ -1855,7 +1873,7 @@ def replay_full_policy_symbol(
                 active_event is None
                 and policy_plan is None
                 and ordinal >= blocked_until
-                and bool(bars.iloc[ordinal].get("pit_active"))
+                and pit_eligible
                 and observe_entry(features, ordinal)
             ):
                 candidate = _max_budgeted_buy(symbol, policy_state, reference)
@@ -1885,7 +1903,7 @@ def replay_full_policy_symbol(
                 counts["BREAKOUT_OBSERVED"] += 1
 
         plans["POLICY"] = policy_plan or ActionPlan(symbol, 0, reference)
-        if not buy_hold_complete and bool(bars.iloc[ordinal].get("pit_active")):
+        if not buy_hold_complete and pit_eligible:
             plans["BUY_AND_HOLD"] = _max_budgeted_buy(symbol, states["BUY_AND_HOLD"], reference)
         else:
             plans["BUY_AND_HOLD"] = ActionPlan(symbol, 0, reference)
@@ -1894,7 +1912,7 @@ def replay_full_policy_symbol(
             l1_risk is None
             and risk_managed_open_baseline_enabled
             and states[l1_baseline].quantity == 0
-            and bool(bars.iloc[ordinal].get("pit_active"))
+            and pit_eligible
         ):
             plans[l1_baseline] = _max_budgeted_buy(
                 symbol, states[l1_baseline], reference
