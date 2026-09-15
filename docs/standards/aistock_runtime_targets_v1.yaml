@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-09-13"
+updated_at: "2026-09-15"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -26,6 +26,9 @@ non_runtime_source_paths:
   - backend/services/hmm_risk/rotation_l1_input_bundle.py
   - backend/services/hmm_risk/state_model_set.py
   - backend/services/hmm_risk/stock_fact_repository.py
+  - backend/services/position_timing/action_value_corporate_actions.py
+  - backend/services/position_timing/pattern_research.py
+  - backend/services/position_timing/pattern_universe_benchmark.py
   - backend/services/validation/catalog_integrity.py
   - backend/services/validation/plan_catalog.py
   - noxfile.py
