@@ -1,5 +1,5 @@
 {
-  "actual": "The HMM module collects 862 non-integration pytest nodes and about 32k test LOC. Historical contract versions, offline experiment paths, per-field rejection variants, and cross-layer duplicate assertions make the PR matrix take about 18 minutes. Consolidate current-contract coverage, retire demonstrably unused legacy code/tests, move slow full-fit coverage to Nightly, and split precise PR test plans without weakening current runtime/PIT/fail-closed guarantees.",
+  "actual": "Core HMM source changes escalated to the complete 862-test coverage matrix, while a manual PR-slice invocation without classifier context also defaulted to the complete package. The full suite took about 18 minutes even when changed-test and direct-neighbor coverage was sufficient.",
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/catalog/module_registry.yaml",
@@ -25,7 +25,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-15T04:39:47.350874Z",
-  "description": "The HMM module collects 862 non-integration pytest nodes and about 32k test LOC. Historical contract versions, offline experiment paths, per-field rejection variants, and cross-layer duplicate assertions make the PR matrix take about 18 minutes. Consolidate current-contract coverage, retire demonstrably unused legacy code/tests, move slow full-fit coverage to Nightly, and split precise PR test plans without weakening current runtime/PIT/fail-closed guarantees.",
+  "description": "Keep the complete HMM coverage matrix as Nightly or explicit diagnostic coverage, and make every PR use stable smoke tests plus changed tests and direct neighbors. A deeper reachability review must prevent test-count reduction from deleting contracts still used by V14/V15/V16, P6 or D1 code paths.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -38,10 +38,16 @@
       "actor": "Codex",
       "note": "Add exact HMM dead-source retirement and CI/Nightly routing contract files after live reachability and plan-selection audit.",
       "timestamp": "2026-09-15T04:55:00Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "Codex",
+      "note": "Withdrew runtime source and business-test deletion after direct import/runtime-catalog review showed active contracts; retained only CI and Nightly routing changes.",
+      "timestamp": "2026-09-15T05:20:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Ordinary HMM PRs execute only stable smoke tests plus exact changed tests and direct neighbors; the complete package remains available to Nightly and explicit diagnostics without blocking PR merge.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [

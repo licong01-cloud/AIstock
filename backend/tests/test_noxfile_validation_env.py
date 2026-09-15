@@ -161,35 +161,6 @@ def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
     assert noxfile._hmm_risk_pr_test_targets() == targets
 
 
-def test_hmm_risk_pr_targets_map_retired_source_to_surviving_repository_contract(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    targets = [
-        *noxfile.HMM_RISK_PR_SMOKE_TESTS,
-        "backend/tests/hmm_risk/test_stock_fact_repository.py",
-    ]
-    for relative in targets:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# test fixture\n", encoding="utf-8")
-    summary = tmp_path / "summary.json"
-    summary.write_text(
-        json.dumps(
-            {
-                "changed_files": [
-                    "backend/services/hmm_risk/canonical_stock_fact_source.py",
-                    "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
-    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
-
-    assert noxfile._hmm_risk_pr_test_targets() == targets
-
-
 def test_hmm_risk_pr_targets_fail_closed_without_neighbor_mapping(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

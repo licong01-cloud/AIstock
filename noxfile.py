@@ -3372,7 +3372,6 @@ HMM_RISK_PR_SMOKE_TESTS = (
 HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
     "backend/db/init_hmm_risk_schema.py": "backend/tests/hmm_risk/test_schema.py",
     "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
-    "backend/services/hmm_risk/canonical_stock_fact_source.py": "backend/tests/hmm_risk/test_stock_fact_repository.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
