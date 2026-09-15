@@ -3641,11 +3641,14 @@ class AutoEvolutionScheduler:
                                ) AS hmm_signal_preset,
                                COALESCE(
                                    config_json->>'sector_blacklist_enabled',
+                                   config_json#>>'{custom_params,sector_blacklist_enabled}',
                                    config_json#>>'{model_params,sector_blacklist_enabled}',
-                                   config_json#>>'{strategy_params,sector_blacklist_enabled}'
+                                   config_json#>>'{strategy_params,sector_blacklist_enabled}',
+                                   config_json#>>'{custom_params,_qe_sector_blacklist_policy,enabled}'
                                ) AS sector_blacklist_enabled,
                                COALESCE(
                                    config_json->'sector_blacklist',
+                                   config_json#>'{custom_params,sector_blacklist}',
                                    config_json#>'{model_params,sector_blacklist}',
                                    config_json#>'{strategy_params,sector_blacklist}'
                                ) AS sector_blacklist,
@@ -3701,7 +3704,10 @@ class AutoEvolutionScheduler:
                                ) AS hmm_trigger_count,
                                COALESCE(
                                    metrics_json->>'blacklist_excluded_count',
-                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,blacklist_excluded_count}'
+                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,blacklist_excluded_count}',
+                                   config_json#>>'{custom_params,_qe_sector_blacklist_policy,blacklist_excluded_count}',
+                                   config_json#>>'{model_params,_qe_sector_blacklist_policy,blacklist_excluded_count}',
+                                   config_json#>>'{_qe_sector_blacklist_policy,blacklist_excluded_count}'
                                ) AS blacklist_excluded_count,
                                COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
                                COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,

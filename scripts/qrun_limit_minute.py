@@ -1859,7 +1859,6 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_PREDICTION_WINDOW_EMPTY: "
             f"no prediction rows cover {start.date()}..{end.date()}"
         )
-
     indicators = recorder.load_object("portfolio_analysis/indicators_normal_1day.pkl")
     if not isinstance(indicators, pd.DataFrame) or indicators.empty:
         raise RuntimeError("QE_MINUTE_EXECUTION_INDICATORS_MISSING: daily execution indicators are empty")
@@ -1876,6 +1875,26 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_BACKTEST_ZERO_TRADES: "
             f"prediction_rows={prediction_rows} count={float(count)} deal_amount={float(deal_amount)}"
         )
+
+
+def _filter_pred_backtest_to_dataset(pred_df: pd.DataFrame, raw_label: pd.DataFrame) -> pd.DataFrame:
+    """Restrict replayed predictions to the run-scoped dataset universe.
+
+    ``--pred-backtest`` bypasses ``SignalRecord`` and injects an existing
+    prediction directly.  Intersecting with the freshly constructed dataset
+    label is therefore the final enforcement point for PIT stock pools and
+    derived sector-blacklist universes.
+    """
+
+    if not isinstance(raw_label.index, pd.MultiIndex):
+        raise RuntimeError("QE_PRED_BACKTEST_LABEL_INDEX_INVALID: label index must be MultiIndex")
+    mask = pred_df.index.isin(raw_label.index)
+    filtered = pred_df.loc[mask].copy()
+    if filtered.empty:
+        raise RuntimeError(
+            "QE_PRED_BACKTEST_UNIVERSE_EMPTY: prediction has no rows in the run-scoped dataset universe"
+        )
+    return filtered
 
 
 def main():
@@ -2084,6 +2103,13 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             "SigAnaRecord 需要 label 来计算 IC/ICIR。"
             "请检查 conf.yaml 的 dataset 配置和数据路径。"
         )
+    original_prediction_rows = len(pred_df)
+    pred_df = _filter_pred_backtest_to_dataset(pred_df, raw_label)
+    print(
+        "[INFO] Enforced run-scoped prediction universe: "
+        f"input_rows={original_prediction_rows} executable_rows={len(pred_df)} "
+        f"excluded_rows={original_prediction_rows - len(pred_df)}"
+    )
     print(f"[INFO] Extracted label from dataset: {len(raw_label)} rows")
 
     # 3. 构建 records 列表：跳过 SignalRecord（不需要模型预测），保留 SigAnaRecord + PortAnaRecord

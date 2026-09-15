@@ -14,6 +14,7 @@ from typing import Any, Mapping
 
 from .qe_active_dataset_profile import is_pure_star50_universe
 from .qe_run_registry import qe_registration_summary
+from .qe_sector_blacklist_policy import SECTOR_BLACKLIST_POLICY_PARAM
 
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "ic": ("ic", "IC"),
@@ -778,6 +779,16 @@ def compact_policy_summary(config: Any, metrics: Any) -> dict[str, Any]:
             "enhanced_metrics.policy_diagnostics.blacklist_excluded_count",
         ),
     )
+    if blacklist_action_count is None:
+        materialized_policy = _first_by_alias(
+            config_sources,
+            (SECTOR_BLACKLIST_POLICY_PARAM,),
+        )
+        if isinstance(materialized_policy, Mapping):
+            blacklist_action_count = _first_number_from_sources(
+                [materialized_policy],
+                ("blacklist_excluded_count",),
+            )
     blacklist_effective, blacklist_reason = _policy_effect(
         enabled=blacklist_enabled,
         count=blacklist_action_count,
