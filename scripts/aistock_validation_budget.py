@@ -211,6 +211,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--json", action="store_true", help="Print the complete JSON report instead of a compact summary.")
     parser.add_argument("--fail-over-budget", action="store_true")
+    parser.add_argument(
+        "--fail-test-only-owner",
+        action="append",
+        default=[],
+        help="Fail when the named synthetic owner still contains any executable test files.",
+    )
     return parser
 
 
@@ -250,6 +256,20 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             ratio = "test-only" if row["test_only_bucket"] else f"{row['test_to_production_percent']}%"
             print(f"  {row['module_id']}: ratio={ratio} excess_sloc={row['over_budget_sloc']}")
+    forbidden_test_only = {
+        str(owner)
+        for owner in args.fail_test_only_owner
+        if any(
+            row["module_id"] == str(owner) and int(row.get("test_files") or 0) > 0
+            for row in report["modules"]
+        )
+    }
+    if forbidden_test_only:
+        print(
+            "forbidden test-only owners: " + ", ".join(sorted(forbidden_test_only)),
+            file=sys.stderr,
+        )
+        return 1
     return 1 if args.fail_over_budget and report["totals"]["over_budget_module_count"] else 0
 
 
