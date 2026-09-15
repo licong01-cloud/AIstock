@@ -139,8 +139,7 @@ modules:
     ui_routes: [/quantevolver/experiments, /qe-archive]
     test_plans:
       required_on_change: [l0, qe_data_contract_backend]
-      recommended: [qe_read_backend]
-      recommended: [qe_read_l3]
+      recommended: [qe_read_backend, qe_read_l3]
   - module_id: qe.data_completeness
     display_name: QE data completeness
     parent_module: qe
