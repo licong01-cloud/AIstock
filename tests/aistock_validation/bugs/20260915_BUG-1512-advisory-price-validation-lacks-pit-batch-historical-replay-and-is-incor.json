@@ -35,6 +35,18 @@
   ],
   "expected": "Advisory price-envelope functionality and statistics can be validated immediately over an explicit historical date range using only PIT inputs available as of each decision date; outcomes are joined only after predictions are frozen; evidence is HISTORICAL_REPLAY/NAVIGATION_ONLY. Prospective settlement retains its 18:00 gate solely for natural forward evidence.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/historical_price_replay.py",
+      "backend/services/advisory_model_first/historical_price_replay_cli.py",
+      "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_cli.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+      "docs/architecture/advisory_price_prospective_evaluation_v1_f2_design_20260915.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20260915_BUG-1512-advisory-price-validation-lacks-pit-batch-historical-replay-and-is-incor.json"
+    ],
     "added_files": [
       "backend/services/advisory_model_first/historical_price_replay_contracts.py",
       "backend/services/advisory_model_first/historical_price_replay.py",
@@ -44,10 +56,18 @@
       "backend/tests/advisory_model_first/test_historical_price_replay_cli.py"
     ],
     "changed_files": [
+      "backend/services/advisory_model_first/historical_price_replay.py",
+      "backend/services/advisory_model_first/historical_price_replay_cli.py",
+      "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_cli.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
       "docs/architecture/advisory_price_prospective_evaluation_v1_f2_design_20260915.md",
-      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20260915_BUG-1512-advisory-price-validation-lacks-pit-batch-historical-replay-and-is-incor.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "docs/architecture/advisory_price_prospective_evaluation_v1_f2_design_20260915.md",
@@ -190,16 +210,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
