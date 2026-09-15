@@ -1,7 +1,12 @@
 {
   "actual": "After full-market production adj_factor reconciliation job 66711159-7165-4212-9a1d-c95df3685e41, the immutable r4 QE candidate differs on 4,904 provider symbols and 1,842,557 daily factor cells. The canonical monthly CLI only performs component-wide rebuilds and cannot create a new immutable candidate by rebuilding only affected stock/date outputs while preserving byte-identical unaffected files. Add a data-owned, fail-closed selective producer and tests; it must never modify the baseline candidate, active profile, QE model/runtime, DB, services, or unrelated components.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json"
+    "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
+    "backend/services/dataset_release/adj_factor_candidate_repair.py",
+    "scripts/repair_qe_adj_factor_candidate.py",
+    "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+    "backend/services/dataset_release/direct_monthly.py",
+    "backend/tests/dataset_release/test_direct_monthly.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1507",
@@ -19,13 +24,26 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260914-b51fd5622458",
       "timestamp": "2026-09-14T19:17:27.378946Z"
+    },
+    {
+      "action": "expand_write_scope",
+      "actor": "codex",
+      "note": "Add the selective producer and direct-monthly validator compatibility files required by the r5 candidate readback.",
+      "timestamp": "2026-09-15T00:00:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "scripts/repair_qe_adj_factor_candidate.py",
+      "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +53,22 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "scripts/repair_qe_adj_factor_candidate.py",
+      "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "scripts/repair_qe_adj_factor_candidate.py",
+      "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py"
+    ]
   },
   "first_seen_at": "2026-09-14T19:17:27.378968Z",
   "fix_branch": null,
