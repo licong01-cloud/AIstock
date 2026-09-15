@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Authoritative validation catalogs reject duplicate YAML mapping keys fail-closed, and qe.enhanced_metrics recommends both intended plans in one list.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/validation/catalog_integrity.py",
+      "backend/tests/test_validation_catalog_integrity.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
+      "tests/aistock_validation/catalog/module_registry.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
       "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "backend/tests/test_validation_catalog_integrity.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
+      "tests/aistock_validation/catalog/module_registry.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/module_registry.yaml",
@@ -131,10 +138,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
