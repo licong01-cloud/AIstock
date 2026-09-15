@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1517",
-  "closed_at": null,
+  "closed_at": "2026-09-15T08:02:38.411789Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -76,10 +76,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1517/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1517",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8ff2b67a2ebdc235f9632217439f8a44b29be84cb73134c6c6529a7c093456ca",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "3e1c09ea3bbb0ebca6a253f1b2e2f7f9942d853d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-15T07:56:17.748398Z",
+      "mode": "read_only",
+      "observed_identity": "3e1c09ea3bbb0ebca6a253f1b2e2f7f9942d853d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b5be5f25c941fdd0470e507e93b8b2837ca1ae33a9653617b36cbb041d5ac195",
+      "receipt_sha256": "b39245064040b940c2fd3ead1fce3fc7ce3014e1e542a9130dbd2509c2ef20ca",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "29954a8f5bfd23e7121895d0647fb20c4c34d18d336c73776075c7199075628a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -110,7 +132,7 @@
     ],
     "validation_evidence_digest": "01a6cc1c313863ea42c0224b07c2d5be162e67fb8001d9177c1f9a63ee9db3bf"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "factor_library.research"
   ],
