@@ -1,0 +1,257 @@
+{
+  "actual": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "backend/services/validation/catalog_integrity.py",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1523",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T15:53:39.419058Z",
+  "description": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-c78676d5100b",
+      "timestamp": "2026-09-15T15:53:39.419033Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Authoritative validation catalogs reject duplicate YAML mapping keys fail-closed, and qe.enhanced_metrics recommends both intended plans in one list.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "backend/services/validation/catalog_integrity.py",
+      "backend/tests/test_validation_catalog_integrity.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/test_validation_catalog_integrity.py"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "validation.runner",
+        "tests.backend",
+        "validation.center",
+        "validation.coverage"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/module_registry.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/services/validation/catalog_integrity.py",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_plan_catalog_services"
+        },
+        {
+          "file": "backend/tests/test_validation_catalog_integrity.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/test_validation_catalog_integrity.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "backend/services/validation/catalog_integrity.py",
+      "backend/tests/test_validation_catalog_integrity.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "backend/services/validation/catalog_integrity.py",
+      "backend/tests/test_validation_catalog_integrity.py"
+    ]
+  },
+  "first_seen_at": "2026-09-15T15:53:39.419058Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4777,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4777",
+  "last_seen_at": "2026-09-15T15:53:39.419058Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/test_validation_catalog_integrity.py -q",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation catalogs silently accept duplicate YAML mapping keys",
+  "trigger_condition": {
+    "fingerprint": "c78676d5100b6b01aa7672e8",
+    "source_event_id": "FE-20260915-c78676d5100b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
