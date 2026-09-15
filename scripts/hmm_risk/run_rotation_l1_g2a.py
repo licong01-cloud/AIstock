@@ -1,10 +1,9 @@
-"""Build and execute approved G2-A v1.4/v1.5/v1.6 development contracts.
+"""Build and execute the active zero-fit G2-A v1.6 development contract.
 
-The parent mode launches exactly two 12-fit model processes as fresh Python
-processes.  Horizon 10D is frozen by the approved v1.3 authority; v1.5/v1.6
-must be selected explicitly and paired with the frozen v1.4 receipt.  The v1.6
-children execute zero fits.  This CLI has no battery path and never reads the
-sealed tail, a database, or a runtime service.
+The parent launches two fresh Python processes and validates the frozen v1.4
+receipt only as the read-only authority baseline required by v1.6.  It never
+executes v1.4/v1.5 training, reads the sealed tail, queries a database, or
+controls a runtime service.
 """
 
 from __future__ import annotations
@@ -35,14 +34,11 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (  # noqa: E402
     REASON_INPUT,
     REASON_REPRODUCIBILITY,
     RotationL1G2AError,
-    V14_CONTRACT_VERSION,
-    V15_CONTRACT_VERSION,
     V16_CONTRACT_VERSION,
     canonical_sha256,
     close_processes,
     read_input_bundle,
     run_gbdt_process,
-    validate_v13_process_reference,
     validate_v14_process_reference,
     validate_v16_input_authority_rebind,
     write_input_bundle,
@@ -70,23 +66,6 @@ def _write_once(path: Path, value: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
-def _load_v13_reference(path: Path) -> dict[str, Any]:
-    if not path.is_absolute() or path.is_symlink():
-        raise RuntimeError("v1.3 process reference must be an absolute regular file")
-    resolved = path.resolve(strict=True)
-    if not resolved.is_file():
-        raise RuntimeError("v1.3 process reference must be an absolute regular file")
-    try:
-        resolved.relative_to(ROOT.resolve(strict=True))
-    except ValueError:
-        pass
-    else:
-        raise RuntimeError("v1.3 process reference must be outside the repository")
-    value = _load_object(resolved)
-    validate_v13_process_reference(value)
-    return value
-
-
 def _load_v14_reference(path: Path) -> dict[str, Any]:
     if not path.is_absolute() or path.is_symlink():
         raise RuntimeError("v1.4 process reference must be an absolute regular file")
@@ -109,7 +88,7 @@ def _failure(
     *,
     stage: str,
     fit_progress: dict[str, Any] | None = None,
-    contract_version: str = V14_CONTRACT_VERSION,
+    contract_version: str = V16_CONTRACT_VERSION,
 ) -> dict[str, Any]:
     reason = str(getattr(error, "reason_code", REASON_INPUT))
     raw_evidence = getattr(error, "evidence", None)
@@ -133,7 +112,7 @@ def _failure(
     return {**body, "failure_sha256": canonical_sha256(body)}
 
 
-def _parent_fit_progress(output: Path, *, contract_version: str = V14_CONTRACT_VERSION) -> dict[str, Any]:
+def _parent_fit_progress(output: Path, *, contract_version: str = V16_CONTRACT_VERSION) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
     for name in ("fresh_process_1", "fresh_process_2"):
         success_path = output / f"{name}.json"
@@ -142,17 +121,13 @@ def _parent_fit_progress(output: Path, *, contract_version: str = V14_CONTRACT_V
         status = "not_started"
         if success_path.exists():
             payload = _load_object(success_path)
-            progress = (
-                payload.get("fit_progress")
-                if name == "battery"
-                else (payload.get("reproducibility_payload") or {}).get("fit_progress")
-            )
+            progress = (payload.get("reproducibility_payload") or {}).get("fit_progress")
             status = "complete"
         elif failure_path.exists():
             payload = _load_object(failure_path)
             progress = payload.get("fit_progress")
             status = "failed"
-        expected_planned = 0 if contract_version == V16_CONTRACT_VERSION else 12
+        expected_planned = 0
         if status == "not_started":
             progress = {
                 "planned": expected_planned,
@@ -268,7 +243,7 @@ def _child_command(
     ]
 
 
-def _run_child(command: list[str], failure_path: Path, *, contract_version: str = V14_CONTRACT_VERSION) -> None:
+def _run_child(command: list[str], failure_path: Path, *, contract_version: str = V16_CONTRACT_VERSION) -> None:
     completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         if failure_path.exists():
@@ -299,35 +274,26 @@ def _run_child(command: list[str], failure_path: Path, *, contract_version: str 
 
 
 def _run_parent(args: argparse.Namespace) -> int:
-    model_contract_version = getattr(args, "model_contract_version", V14_CONTRACT_VERSION)
+    model_contract_version = getattr(args, "model_contract_version", V16_CONTRACT_VERSION)
+    if model_contract_version != V16_CONTRACT_VERSION:
+        raise RuntimeError("only the active v1.6 contract is executable")
     v14_process_file = getattr(args, "v14_process_file", None)
     v14_input_root = getattr(args, "v14_input_root", None)
     v14_input_bundle = None
-    if model_contract_version in {V15_CONTRACT_VERSION, V16_CONTRACT_VERSION}:
-        if v14_process_file is None or args.v13_process_file is not None:
-            raise RuntimeError("v1.5/v1.6 requires only --v14-process-file")
-        if model_contract_version == V15_CONTRACT_VERSION and v14_input_root is not None:
-            raise RuntimeError("v1.5 does not allow --v14-input-root")
-        v14_reference = _load_v14_reference(v14_process_file)
-        v13_reference = None
-        input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
-        if model_contract_version == V16_CONTRACT_VERSION:
-            baseline_identity = v14_reference["reproducibility_payload"]["input_identity"]
-            candidate_identity = input_bundle["identity"]
-            if baseline_identity == candidate_identity:
-                if v14_input_root is not None:
-                    raise RuntimeError("v1.6 --v14-input-root is ambiguous without an authority change")
-            else:
-                if v14_input_root is None:
-                    raise RuntimeError("v1.6 authority rebind requires --v14-input-root")
-                v14_input_bundle = read_input_bundle(v14_input_root, forbidden_roots=(ROOT,))["bundle"]
-                validate_v16_input_authority_rebind(v14_reference, v14_input_bundle, input_bundle)
+    if v14_process_file is None:
+        raise RuntimeError("v1.6 requires --v14-process-file")
+    v14_reference = _load_v14_reference(v14_process_file)
+    input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
+    baseline_identity = v14_reference["reproducibility_payload"]["input_identity"]
+    candidate_identity = input_bundle["identity"]
+    if baseline_identity == candidate_identity:
+        if v14_input_root is not None:
+            raise RuntimeError("v1.6 --v14-input-root is ambiguous without an authority change")
     else:
-        if args.v13_process_file is None or v14_process_file is not None or v14_input_root is not None:
-            raise RuntimeError("v1.4 requires only --v13-process-file")
-        v13_reference = _load_v13_reference(args.v13_process_file)
-        v14_reference = None
-        input_bundle = None
+        if v14_input_root is None:
+            raise RuntimeError("v1.6 authority rebind requires --v14-input-root")
+        v14_input_bundle = read_input_bundle(v14_input_root, forbidden_roots=(ROOT,))["bundle"]
+        validate_v16_input_authority_rebind(v14_reference, v14_input_bundle, input_bundle)
     output = _ensure_external_new_directory(args.output_root)
     try:
         child_paths = (output / "fresh_process_1.json", output / "fresh_process_2.json")
@@ -351,7 +317,6 @@ def _run_parent(args: argparse.Namespace) -> int:
         acceptance = close_processes(
             _load_object(child_paths[0]),
             _load_object(child_paths[1]),
-            v13_reference=v13_reference,
             v14_reference=v14_reference,
             input_bundle=input_bundle,
             v14_input_bundle=v14_input_bundle,
@@ -398,13 +363,12 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--input-root", type=Path, required=True)
     run.add_argument("--output-root", type=Path, required=True)
-    run.add_argument("--v13-process-file", type=Path)
     run.add_argument("--v14-process-file", type=Path)
     run.add_argument("--v14-input-root", type=Path)
     run.add_argument(
         "--model-contract-version",
-        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION, V16_CONTRACT_VERSION),
-        default=V14_CONTRACT_VERSION,
+        choices=(V16_CONTRACT_VERSION,),
+        default=V16_CONTRACT_VERSION,
     )
     run.add_argument("--producer-commit", required=True)
     child = subparsers.add_parser("model-child")
@@ -414,8 +378,8 @@ def _parser() -> argparse.ArgumentParser:
     child.add_argument("--producer-commit", required=True)
     child.add_argument(
         "--model-contract-version",
-        choices=(V14_CONTRACT_VERSION, V15_CONTRACT_VERSION, V16_CONTRACT_VERSION),
-        default=V14_CONTRACT_VERSION,
+        choices=(V16_CONTRACT_VERSION,),
+        default=V16_CONTRACT_VERSION,
     )
     return parser
 

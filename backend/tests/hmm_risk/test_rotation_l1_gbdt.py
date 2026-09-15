@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 from datetime import date
 import json
-from pathlib import Path
 import sys
 from types import SimpleNamespace
 
@@ -357,39 +356,6 @@ def test_cross_section_rank_preserves_nan_and_market_sign() -> None:
     assert float(delta_cross_section.max()) == pytest.approx(0.5)
 
 
-def test_v14_forbids_a_new_ridge_battery() -> None:
-    with pytest.raises(subject.RotationL1G2AError, match="forbids a new battery") as caught:
-        subject.run_ridge_battery(_bundle(), producer_commit="e" * 40, runtime_validator=_test_runtime)
-    assert caught.value.reason_code == subject.REASON_HORIZON
-
-
-def test_v14_cli_has_no_battery_subcommand_and_plans_exactly_24_fits() -> None:
-    with pytest.raises(SystemExit):
-        cli._parser().parse_args(["battery-child"])
-    assert cli._parent_fit_progress(Path("missing"))["planned"] == 24
-
-
-def test_v14_parent_validates_frozen_v13_reference_before_creating_output(tmp_path, monkeypatch) -> None:
-    invalid_reference = tmp_path / "invalid-v13-process.json"
-    invalid_reference.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(
-        cli,
-        "_ensure_external_new_directory",
-        lambda _path: pytest.fail("output must not be created before v1.3 reference validation"),
-    )
-    args = SimpleNamespace(
-        v13_process_file=invalid_reference,
-        output_root=tmp_path / "output",
-        input_root=tmp_path / "input",
-        producer_commit="e" * 40,
-    )
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        cli._run_parent(args)
-
-    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
-
-
 def test_formal_runtime_fails_closed_before_fit_when_thread_environment_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -433,9 +399,9 @@ def test_parent_fit_progress_aggregates_success_failure_and_not_started(tmp_path
         stage="leaf_date_coverage",
         evidence={
             "fit_progress": {
-                "planned": 12,
-                "started": 2,
-                "completed": 2,
+                "planned": 0,
+                "started": 0,
+                "completed": 0,
                 "failed": 0,
                 "active_fit": None,
             }
@@ -448,9 +414,9 @@ def test_parent_fit_progress_aggregates_success_failure_and_not_started(tmp_path
 
     progress = cli._parent_fit_progress(tmp_path)
 
-    assert progress["planned"] == 24
-    assert progress["started"] == 2
-    assert progress["completed"] == 2
+    assert progress["planned"] == 0
+    assert progress["started"] == 0
+    assert progress["completed"] == 0
     assert progress["failed"] == 0
     assert [item["status"] for item in progress["components"]] == ["failed", "not_started"]
     assert [item["readback_valid"] for item in progress["components"]] == [True, True]
@@ -484,239 +450,26 @@ def test_parent_rejects_rehashed_failure_from_stale_contract(tmp_path) -> None:
     assert caught.value.stage == "fresh_process_readback"
 
 
-class _FakeBooster:
-    def model_to_string(self) -> str:
-        return "fixed-model"
-
-
-class _FakeEstimator:
-    def __init__(self, **kwargs: object):
-        self.kwargs = kwargs
-        self.booster_ = _FakeBooster()
-
-    def fit(self, features: pd.DataFrame, target: pd.Series) -> "_FakeEstimator":
-        assert tuple(features.columns) == subject.V14_FEATURES
-        ranked_values = features.loc[:, list(subject.V14_CONTINUOUS_FEATURES)].to_numpy(dtype=np.float64)
-        assert np.nanmin(ranked_values) >= -0.5
-        assert np.nanmax(ranked_values) <= 0.5
-        self._mean = float(target.mean())
-        return self
-
-    def predict(self, features: pd.DataFrame, pred_leaf: bool = False, pred_contrib: bool = False) -> np.ndarray:
-        score = features[subject.V14_CONTINUOUS_FEATURES[0]].fillna(0.0).to_numpy(dtype=np.float64) + self._mean
-        if pred_leaf:
-            # Seven leaves, each spanning all dates in this synthetic rank panel.
-            leaf = np.floor((features[subject.V14_CONTINUOUS_FEATURES[0]].to_numpy() + 0.5) * 7).clip(0, 6)
-            return np.tile(leaf.reshape(-1, 1), (1, 240))
-        if pred_contrib:
-            result = np.zeros((len(features), len(subject.V14_FEATURES) + 1), dtype=np.float64)
-            result[:, 0] = features[subject.V14_CONTINUOUS_FEATURES[0]].fillna(0.0)
-            result[:, -1] = self._mean
-            return result
-        return score
-
-
-class _CapturingEstimator(_FakeEstimator):
-    fitted_targets: list[np.ndarray] = []
-
-    def fit(self, features: pd.DataFrame, target: pd.Series) -> "_CapturingEstimator":
-        type(self).fitted_targets.append(target.to_numpy(dtype=np.float64, copy=True))
-        super().fit(features, target)
-        return self
-
-
 @pytest.fixture(scope="module")
 def frozen_v14_reference() -> dict[str, object]:
-    return subject.run_gbdt_process(
+    """Build a hash-valid read-only baseline without executing retired v1.4 training."""
+
+    reference = subject.run_gbdt_process(
         _bundle(),
         producer_commit="e" * 40,
         process_index=1,
-        estimator_factory=_FakeEstimator,
+        model_contract_version=subject.V16_CONTRACT_VERSION,
         runtime_validator=_test_runtime,
     )
-
-
-def _as_v13_reference(child: dict[str, object]) -> dict[str, object]:
-    legacy = copy.deepcopy(child)
-    payload = legacy["reproducibility_payload"]
-    payload["contract_version"] = subject.V13_CONTRACT_VERSION
-    payload.pop("horizon_authority")
-    payload.pop("horizon_authority_sha256")
-    payload.pop("delta_feature_coverage")
-    payload["battery_receipt_sha256"] = "f" * 64
-    payload["input_identity"]["feature_contract_sha256"] = "9" * 64
-    for fold in payload["folds"]:
-        fold["feature_contributions"]["shape"][1] = len(subject.V13_FEATURES) + 1
-    for row in payload["oof_prediction_rows"]:
-        if row["feature_contributions"] is not None:
-            row["feature_contributions"].pop(8)
-    payload["oof_prediction_rows_sha256"] = subject.canonical_sha256(payload["oof_prediction_rows"])
-    legacy["schema_version"] = subject.V13_PROCESS_SCHEMA_VERSION
-    legacy["reproducibility_payload_sha256"] = subject.canonical_sha256(payload)
-    legacy["report_sha256"] = subject.canonical_sha256(
-        {key: value for key, value in legacy.items() if key != "report_sha256"}
+    payload = reference["reproducibility_payload"]
+    payload["contract_version"] = subject.V14_CONTRACT_VERSION
+    reference["schema_version"] = subject.PROCESS_SCHEMA_VERSION
+    reference["reproducibility_payload_sha256"] = subject.canonical_sha256(payload)
+    reference["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in reference.items() if key != "report_sha256"}
     )
-    return legacy
-
-
-def test_v15_rank_target_uses_full_daily_cross_section_and_average_ties() -> None:
-    day = date(2025, 1, 2)
-    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
-    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
-    raw = pd.Series(np.arange(subject.CANONICAL_SECTOR_COUNT, dtype=np.float64), index=index)
-    raw.iloc[10:12] = 10.0
-
-    labels, receipt = subject.build_rank_training_target(raw)
-
-    assert labels.iloc[0] == pytest.approx(-0.5)
-    assert labels.iloc[-1] == pytest.approx(0.5)
-    assert labels.iloc[10] == labels.iloc[11] == pytest.approx((10.5 / 30.0) - 0.5)
-    assert receipt["transform"] == subject.V15_TARGET_TRANSFORM
-    assert receipt["sector_count"] == 31
-    assert receipt["date_count"] == 1
-
-
-def test_v15_rank_target_rejects_partial_or_non_finite_daily_target() -> None:
-    day = date(2025, 1, 2)
-    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
-    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
-    raw = pd.Series(np.arange(subject.CANONICAL_SECTOR_COUNT, dtype=np.float64), index=index)
-
-    with pytest.raises(subject.RotationL1G2AError) as partial:
-        subject.build_rank_training_target(raw.iloc[:-1])
-    assert partial.value.reason_code == subject.REASON_LABEL
-
-    raw.iloc[3] = np.nan
-    with pytest.raises(subject.RotationL1G2AError) as non_finite:
-        subject.build_rank_training_target(raw)
-    assert non_finite.value.reason_code == subject.REASON_LABEL
-
-
-def test_v15_rank_target_all_equal_cross_section_is_neutral_without_fallback() -> None:
-    day = date(2025, 1, 2)
-    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
-    index = pd.MultiIndex.from_product([[day], sectors], names=["trade_date", "sector_code"])
-
-    labels, receipt = subject.build_rank_training_target(pd.Series(3.0, index=index))
-
-    assert labels.eq(0.0).all()
-    assert receipt["minimum"] == receipt["maximum"] == 0.0
-
-
-def test_v15_rank_target_rejects_cross_date_sector_identity_drift() -> None:
-    days = (date(2025, 1, 2), date(2025, 1, 3))
-    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
-    identities = [(days[0], code) for code in sectors]
-    identities.extend((days[1], code) for code in (*sectors[:-1], "809999"))
-    index = pd.MultiIndex.from_tuples(identities, names=["trade_date", "sector_code"])
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.build_rank_training_target(pd.Series(np.arange(len(index), dtype=np.float64), index=index))
-
-    assert caught.value.reason_code == subject.REASON_LABEL
-
-
-def test_v15_rank_target_canonical_receipt_is_invariant_to_input_row_order() -> None:
-    days = (date(2025, 1, 2), date(2025, 1, 3))
-    sectors = tuple(f"80{index:04d}" for index in range(subject.CANONICAL_SECTOR_COUNT))
-    index = pd.MultiIndex.from_product([days, sectors], names=["trade_date", "sector_code"])
-    raw = pd.Series(np.arange(len(index), dtype=np.float64), index=index)
-    reordered = raw.sample(frac=1.0, random_state=42)
-
-    expected_labels, expected_receipt = subject.build_rank_training_target(raw)
-    actual_labels, actual_receipt = subject.build_rank_training_target(reordered)
-
-    pd.testing.assert_series_equal(actual_labels, expected_labels)
-    assert actual_receipt == expected_receipt
-
-
-def test_v15_process_fits_rank_target_and_closes_against_v14_reference() -> None:
-    _CapturingEstimator.fitted_targets = []
-    bundle = _bundle()
-    v14_reference = subject.run_gbdt_process(
-        bundle,
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    children = [
-        subject.run_gbdt_process(
-            bundle,
-            producer_commit="e" * 40,
-            process_index=index,
-            model_contract_version=subject.V15_CONTRACT_VERSION,
-            estimator_factory=_CapturingEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-
-    assert len(_CapturingEstimator.fitted_targets) == 12
-    assert all(
-        float(target.min()) >= -0.5 and float(target.max()) <= 0.5 for target in _CapturingEstimator.fitted_targets
-    )
-    payload = children[0]["reproducibility_payload"]
-    assert payload["contract_version"] == subject.V15_CONTRACT_VERSION
-    assert payload["input_feature_contract_version"] == subject.V14_CONTRACT_VERSION
-    assert payload["target_transform"] == subject.V15_TARGET_TRANSFORM
-    assert all(fold["training_target_receipt"]["sector_count"] == 31 for fold in payload["folds"])
-    assert all(fold["training_target_receipt"]["fit_row_count"] == fold["fit_row_count"] for fold in payload["folds"])
-    assert payload["final_model"]["training_target_receipt"]["sector_count"] == 31
-    assert payload["final_model"]["training_target_receipt"]["fit_row_count"] == payload["final_model"]["fit_row_count"]
-
-    acceptance = subject.close_processes(*children, v14_reference=v14_reference, input_bundle=bundle)
-    assert acceptance["contract_version"] == subject.V15_CONTRACT_VERSION
-    assert acceptance["paired_v14_diagnostic"]["baseline_contract_version"] == subject.V14_CONTRACT_VERSION
-    assert acceptance["paired_v14_diagnostic"]["candidate_contract_version"] == subject.V15_CONTRACT_VERSION
-    assert acceptance["tail_accessed"] is False
-
-    with pytest.raises(subject.RotationL1G2AError) as missing_authority:
-        subject.close_processes(*children, v14_reference=v14_reference)
-    assert missing_authority.value.reason_code == subject.REASON_INPUT
-
-    tampered_bundle = copy.deepcopy(bundle)
-    first_train_date = subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON)[0].train_dates[0]
-    first_identity = (first_train_date, tampered_bundle["panel"].index.get_level_values("sector_code")[0])
-    tampered_bundle["panel"].loc[first_identity, "target_10d"] += 1.0
-    with pytest.raises(subject.RotationL1G2AError) as tampered_authority:
-        subject.close_processes(*children, v14_reference=v14_reference, input_bundle=tampered_bundle)
-    assert tampered_authority.value.reason_code == subject.REASON_REPRODUCIBILITY
-
-
-def test_cli_defaults_to_v14_and_requires_explicit_v15_selection() -> None:
-    parser = cli._parser()
-    default_args = parser.parse_args(
-        [
-            "model-child",
-            "--input-root",
-            "input",
-            "--output-file",
-            "output.json",
-            "--process-index",
-            "1",
-            "--producer-commit",
-            "e" * 40,
-        ]
-    )
-    explicit_args = parser.parse_args(
-        [
-            "model-child",
-            "--input-root",
-            "input",
-            "--output-file",
-            "output.json",
-            "--process-index",
-            "1",
-            "--producer-commit",
-            "e" * 40,
-            "--model-contract-version",
-            subject.V15_CONTRACT_VERSION,
-        ]
-    )
-
-    assert default_args.model_contract_version == subject.V14_CONTRACT_VERSION
-    assert explicit_args.model_contract_version == subject.V15_CONTRACT_VERSION
+    subject.validate_v14_process_reference(reference)
+    return reference
 
 
 def test_v16_cli_requires_and_prevalidates_explicit_v14_input_root(tmp_path, monkeypatch, frozen_v14_reference) -> None:
@@ -782,30 +535,6 @@ def test_v16_cli_rejects_unused_v14_input_root_before_output(tmp_path, monkeypat
         )
 
 
-def test_v15_cli_failure_receipt_keeps_explicit_contract_identity(tmp_path) -> None:
-    output = tmp_path / "fresh_process_1.json"
-    assert (
-        cli.main(
-            [
-                "model-child",
-                "--input-root",
-                str(tmp_path / "missing-input"),
-                "--output-file",
-                str(output),
-                "--process-index",
-                "1",
-                "--producer-commit",
-                "e" * 40,
-                "--model-contract-version",
-                subject.V15_CONTRACT_VERSION,
-            ]
-        )
-        == 2
-    )
-    failure = json.loads((tmp_path / "fresh_process_1.failure.json").read_text(encoding="utf-8"))
-    assert failure["contract_version"] == subject.V15_CONTRACT_VERSION
-
-
 def test_v16_score_is_target_free_average_rank_and_row_order_invariant() -> None:
     bundle = _bundle()
     expected, folds = subject.build_v16_scores(bundle)
@@ -844,25 +573,15 @@ def test_v16_does_not_gate_on_unused_historical_training_feature_coverage() -> N
     assert np.isfinite(scores.to_numpy(dtype=np.float64)).all()
 
 
-def test_v16_zero_fit_process_closes_against_input_and_v14_authorities() -> None:
-    def forbidden_estimator(**_kwargs):
-        raise AssertionError("v1.6 must not construct or fit an estimator")
-
+def test_v16_zero_fit_process_closes_against_input_and_v14_authorities(frozen_v14_reference) -> None:
     bundle = _bundle()
-    v14_reference = subject.run_gbdt_process(
-        bundle,
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
+    v14_reference = frozen_v14_reference
     children = [
         subject.run_gbdt_process(
             bundle,
             producer_commit="e" * 40,
             process_index=index,
             model_contract_version=subject.V16_CONTRACT_VERSION,
-            estimator_factory=forbidden_estimator,
             runtime_validator=_test_runtime,
         )
         for index in (1, 2)
@@ -1069,33 +788,6 @@ def test_v16_authority_rebind_requires_v14_process_to_match_old_bundle(frozen_v1
     assert caught.value.reason_code == subject.REASON_INPUT
 
 
-def test_v15_cannot_use_v16_authority_rebind(frozen_v14_reference, tmp_path, monkeypatch) -> None:
-    candidate = copy.deepcopy(frozen_v14_reference["reproducibility_payload"])
-    candidate["contract_version"] = subject.V15_CONTRACT_VERSION
-    candidate["input_identity"] = {**candidate["input_identity"], "mapping_sha256": "2" * 64}
-    with pytest.raises(subject.RotationL1G2AError, match="input identity differs") as mismatch:
-        subject._paired_v14_diagnostic(frozen_v14_reference, candidate)
-    assert mismatch.value.reason_code == subject.REASON_INPUT
-
-    monkeypatch.setattr(
-        cli,
-        "_load_v14_reference",
-        lambda _path: pytest.fail("v1.5 must reject the rebind option before loading an authority"),
-    )
-    with pytest.raises(RuntimeError, match="does not allow --v14-input-root"):
-        cli._run_parent(
-            SimpleNamespace(
-                v13_process_file=None,
-                v14_process_file=tmp_path / "v14.json",
-                v14_input_root=tmp_path / "old-input",
-                input_root=tmp_path / "new-input",
-                output_root=tmp_path / "output",
-                producer_commit="f" * 40,
-                model_contract_version=subject.V15_CONTRACT_VERSION,
-            )
-        )
-
-
 def test_v16_missing_score_is_unavailable_without_neutral_fallback() -> None:
     bundle = _bundle()
     first_day = subject.fold_slices(_calendar(), horizon=subject.FIXED_HORIZON)[0].validation_dates[0]
@@ -1122,7 +814,7 @@ def test_v16_missing_score_is_unavailable_without_neutral_fallback() -> None:
     assert row["feature_contributions"] is None
 
 
-def test_cli_requires_explicit_v16_and_keeps_zero_fit_parent_progress(tmp_path) -> None:
+def test_cli_defaults_to_v16_rejects_retired_contracts_and_keeps_zero_fit_progress(tmp_path) -> None:
     args = cli._parser().parse_args(
         [
             "model-child",
@@ -1134,11 +826,26 @@ def test_cli_requires_explicit_v16_and_keeps_zero_fit_parent_progress(tmp_path) 
             "1",
             "--producer-commit",
             "e" * 40,
-            "--model-contract-version",
-            subject.V16_CONTRACT_VERSION,
         ]
     )
     assert args.model_contract_version == subject.V16_CONTRACT_VERSION
+    for retired in (subject.V14_CONTRACT_VERSION, "hmm_risk_rotation_l1_g2a_v1_5"):
+        with pytest.raises(SystemExit):
+            cli._parser().parse_args(
+                [
+                    "model-child",
+                    "--input-root",
+                    "input",
+                    "--output-file",
+                    "output.json",
+                    "--process-index",
+                    "1",
+                    "--producer-commit",
+                    "e" * 40,
+                    "--model-contract-version",
+                    retired,
+                ]
+            )
     progress = cli._parent_fit_progress(tmp_path, contract_version=subject.V16_CONTRACT_VERSION)
     assert progress["planned"] == 0
     assert all(component["planned"] == 0 for component in progress["components"])
@@ -1198,377 +905,6 @@ def test_leaf_date_coverage_rejects_any_leaf_below_derived_ten_day_floor() -> No
     assert caught.value.evidence["summary"]["contract_passed"] is False
 
 
-def test_gbdt_process_enforces_profile_and_closes_two_identical_processes() -> None:
-    first = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    second = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=2,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    assert first["reproducibility_payload"]["fit_count"] == 12
-    assert first["reproducibility_payload"]["fit_progress"] == {
-        "planned": 12,
-        "started": 12,
-        "completed": 12,
-        "failed": 0,
-        "active_fit": None,
-    }
-    assert first["reproducibility_payload"]["profile"]["n_estimators"] == 240
-    assert first["reproducibility_payload"]["selected_horizon"] == 10
-    assert first["reproducibility_payload"]["horizon_authority"] == subject.HORIZON_AUTHORITY
-    assert first["reproducibility_payload"]["delta_feature_coverage"]["minimum_coverage"] == 0.90
-    assert first["reproducibility_payload_sha256"] == second["reproducibility_payload_sha256"]
-    fold_hashes = {fold["model_sha256"] for fold in first["reproducibility_payload"]["folds"]}
-    assert fold_hashes
-    assert {row["model_hash"] for row in first["reproducibility_payload"]["oof_prediction_rows"]} <= fold_hashes
-    acceptance = subject.close_processes(first, second, v13_reference=_as_v13_reference(first))
-    assert acceptance["research_surface_status"] == "NOT_AVAILABLE"
-    assert acceptance["rotation_l1_capability_status"] == "NOT_AVAILABLE"
-    assert acceptance["research_product_compute_conditions_satisfied"] is True
-    assert acceptance["research_product_gate_passed"] is False
-    assert acceptance["model_effect_tail_access_eligible"] is True
-    assert acceptance["forward_power_status"] == "INSUFFICIENT"
-    assert acceptance["tail_accessed"] is False
-    assert acceptance["paired_v13_diagnostic"]["binding_gate_applied"] is False
-    assert acceptance["paired_v13_diagnostic"]["common_date_count"] > 0
-    assert "moneyflow_intensity_delta_5d" in acceptance["paired_v13_diagnostic"]["contributions"]["v1_4"]
-
-
-def test_v14_closure_keeps_existing_v13_process_receipts_readable() -> None:
-    children = [
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=index,
-            estimator_factory=_FakeEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-    children = [_as_v13_reference(child) for child in children]
-
-    acceptance = subject.close_processes(*children)
-
-    assert acceptance["contract_version"] == subject.V13_CONTRACT_VERSION
-    assert acceptance["schema_version"] == subject.V13_ACCEPTANCE_SCHEMA_VERSION
-    assert acceptance["battery_receipt_sha256"] == "f" * 64
-    assert "horizon_authority" not in acceptance
-
-
-def test_close_processes_accepts_holiday_aligned_validation_window_start() -> None:
-    bundle = _bundle()
-    holiday_dates = set(pd.bdate_range("2025-10-01", "2025-10-08").date)
-    panel = bundle["panel"]
-    bundle["panel"] = panel.loc[~panel.index.get_level_values("trade_date").isin(holiday_dates)].copy()
-    bundle["benchmark_close"] = {
-        day: value for day, value in bundle["benchmark_close"].items() if day not in holiday_dates
-    }
-    children = [
-        subject.run_gbdt_process(
-            bundle,
-            producer_commit="e" * 40,
-            process_index=index,
-            estimator_factory=_FakeEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-
-    fold = children[0]["reproducibility_payload"]["folds"][4]
-    assert fold["purge_dates"][-1] == "2025-09-30"
-    assert fold["validation_start"] == "2025-10-09"
-    acceptance = subject.close_processes(*children, v13_reference=_as_v13_reference(children[0]))
-
-    assert acceptance["status"] == "development_complete"
-    assert acceptance["tail_accessed"] is False
-
-
-def test_close_processes_rejects_rehashed_stale_leaf_contract() -> None:
-    first = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    second = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=2,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    for child in (first, second):
-        leaf = child["reproducibility_payload"]["folds"][0]["leaf_date_coverage"]
-        leaf.pop("hard_floor_distinct_dates")
-        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-        body = {key: value for key, value in child.items() if key != "report_sha256"}
-        child["report_sha256"] = subject.canonical_sha256(body)
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.close_processes(first, second)
-
-    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
-
-
-def test_close_processes_rejects_rehashed_fold_authority_drift() -> None:
-    children = [
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=index,
-            estimator_factory=_FakeEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-    for child in children:
-        fold = child["reproducibility_payload"]["folds"][0]
-        fold["purge_dates"] = [*fold["purge_dates"][1:], "2023-09-04"]
-        fold["validation_start"] = "2023-09-05"
-        fold_body = {
-            key: fold[key]
-            for key in (
-                "fold",
-                "train_start",
-                "train_end",
-                "train_count",
-                "train_date_sha256",
-                "purge_dates",
-                "validation_start",
-                "validation_end",
-                "validation_count",
-                "validation_date_sha256",
-            )
-        }
-        fold["receipt_sha256"] = subject.canonical_sha256(fold_body)
-        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-        child["report_sha256"] = subject.canonical_sha256(
-            {key: value for key, value in child.items() if key != "report_sha256"}
-        )
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.close_processes(*children)
-
-    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
-    assert caught.value.stage == "closure"
-
-
-def test_close_processes_rejects_empty_purge_dates_with_typed_failure() -> None:
-    child = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    fold = child["reproducibility_payload"]["folds"][0]
-    fold["purge_dates"] = []
-    fold["receipt_sha256"] = subject.canonical_sha256(
-        {
-            key: fold[key]
-            for key in (
-                "fold",
-                "train_start",
-                "train_end",
-                "train_count",
-                "train_date_sha256",
-                "purge_dates",
-                "validation_start",
-                "validation_end",
-                "validation_count",
-                "validation_date_sha256",
-            )
-        }
-    )
-    child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-    child["report_sha256"] = subject.canonical_sha256(
-        {key: value for key, value in child.items() if key != "report_sha256"}
-    )
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.close_processes(child, {})
-
-    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
-    assert caught.value.stage == "closure"
-
-
-def test_close_processes_rejects_rehashed_oof_fold_model_lineage_drift() -> None:
-    first = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    second = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=2,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    first["reproducibility_payload"]["oof_prediction_rows"][0]["model_hash"] = "f" * 64
-    first["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
-        first["reproducibility_payload"]["oof_prediction_rows"]
-    )
-    first["reproducibility_payload_sha256"] = subject.canonical_sha256(first["reproducibility_payload"])
-    body = {key: value for key, value in first.items() if key != "report_sha256"}
-    first["report_sha256"] = subject.canonical_sha256(body)
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.close_processes(first, second)
-
-    assert caught.value.reason_code == subject.REASON_REPRODUCIBILITY
-    assert caught.value.stage == "closure"
-
-
-def test_close_processes_rejects_rehashed_oof_as_of_calendar_drift() -> None:
-    children = [
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=index,
-            estimator_factory=_FakeEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-    for child in children:
-        first_day = child["reproducibility_payload"]["oof_prediction_rows"][0]["trade_date"]
-        for row in child["reproducibility_payload"]["oof_prediction_rows"]:
-            if row["trade_date"] == first_day:
-                row["as_of_date"] = "2020-01-01"
-        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
-            child["reproducibility_payload"]["oof_prediction_rows"]
-        )
-        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-        child["report_sha256"] = subject.canonical_sha256(
-            {key: value for key, value in child.items() if key != "report_sha256"}
-        )
-
-    with pytest.raises(subject.RotationL1G2AError, match="as-of calendar"):
-        subject.close_processes(*children)
-
-
-def test_close_processes_rejects_existing_model_hash_from_the_wrong_fold() -> None:
-    first = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=1,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    second = subject.run_gbdt_process(
-        _bundle(),
-        producer_commit="e" * 40,
-        process_index=2,
-        estimator_factory=_FakeEstimator,
-        runtime_validator=_test_runtime,
-    )
-    hashes = [fold["model_sha256"] for fold in first["reproducibility_payload"]["folds"]]
-    if len(set(hashes)) == 1:
-        first["reproducibility_payload"]["folds"][1]["model_sha256"] = "e" * 64
-        second["reproducibility_payload"]["folds"][1]["model_sha256"] = "e" * 64
-        hashes[1] = "e" * 64
-    for child in (first, second):
-        child["reproducibility_payload"]["oof_prediction_rows"][0]["model_hash"] = hashes[1]
-        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
-            child["reproducibility_payload"]["oof_prediction_rows"]
-        )
-        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-        child["report_sha256"] = subject.canonical_sha256(
-            {key: value for key, value in child.items() if key != "report_sha256"}
-        )
-
-    with pytest.raises(subject.RotationL1G2AError, match="fold-model"):
-        subject.close_processes(first, second)
-
-
-def test_close_processes_rejects_rehashed_partial_oof_cross_section() -> None:
-    children = [
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=index,
-            estimator_factory=_FakeEstimator,
-            runtime_validator=_test_runtime,
-        )
-        for index in (1, 2)
-    ]
-    for child in children:
-        child["reproducibility_payload"]["oof_prediction_rows"].pop()
-        child["reproducibility_payload"]["oof_prediction_rows_sha256"] = subject.canonical_sha256(
-            child["reproducibility_payload"]["oof_prediction_rows"]
-        )
-        child["reproducibility_payload_sha256"] = subject.canonical_sha256(child["reproducibility_payload"])
-        child["report_sha256"] = subject.canonical_sha256(
-            {key: value for key, value in child.items() if key != "report_sha256"}
-        )
-
-    with pytest.raises(subject.RotationL1G2AError, match="denominator"):
-        subject.close_processes(*children)
-
-
-def test_gbdt_process_fails_closed_on_leaf_date_collapse() -> None:
-    class Collapsed(_FakeEstimator):
-        def predict(self, features: pd.DataFrame, pred_leaf: bool = False, pred_contrib: bool = False) -> np.ndarray:
-            if pred_leaf:
-                days = pd.Index(features.index.get_level_values("trade_date")).factorize()[0]
-                return np.tile(days.reshape(-1, 1), (1, 240))
-            return super().predict(features, pred_leaf=pred_leaf, pred_contrib=pred_contrib)
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=1,
-            estimator_factory=Collapsed,
-            runtime_validator=_test_runtime,
-        )
-    assert caught.value.reason_code == subject.REASON_LEAF
-    assert caught.value.stage == "leaf_date_coverage"
-    assert caught.value.evidence["fit_identity"] == "process-1:fold-1:gbdt"
-    assert caught.value.evidence["fit_progress"] == {
-        "planned": 12,
-        "started": 2,
-        "completed": 2,
-        "failed": 0,
-        "active_fit": None,
-    }
-
-
-def test_gbdt_fit_failure_records_active_fit_and_failed_count() -> None:
-    class FitFailed(_FakeEstimator):
-        def fit(self, features: pd.DataFrame, target: pd.Series) -> "_FakeEstimator":
-            raise ValueError("fit failed")
-
-    with pytest.raises(subject.RotationL1G2AError) as caught:
-        subject.run_gbdt_process(
-            _bundle(),
-            producer_commit="e" * 40,
-            process_index=1,
-            estimator_factory=FitFailed,
-            runtime_validator=_test_runtime,
-        )
-    assert caught.value.reason_code == subject.REASON_FIT
-    assert caught.value.evidence["fit_progress"] == {
-        "planned": 12,
-        "started": 2,
-        "completed": 1,
-        "failed": 1,
-        "active_fit": "process-1:fold-1:gbdt",
-    }
-
-
 def test_state_projection_keeps_boundary_tie_neutral_without_index_fallback() -> None:
     day = date(2026, 1, 5)
     sectors = [f"80{index:04d}" for index in range(31)]
@@ -1589,14 +925,12 @@ def test_close_processes_rejects_different_payload_hashes() -> None:
         _bundle(),
         producer_commit="e" * 40,
         process_index=1,
-        estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second = subject.run_gbdt_process(
         _bundle(),
         producer_commit="e" * 40,
         process_index=2,
-        estimator_factory=_FakeEstimator,
         runtime_validator=_test_runtime,
     )
     second["reproducibility_payload_sha256"] = "f" * 64
