@@ -100,9 +100,7 @@ class PostgresHistoricalPriceReplaySource:
             with self._connection_context_factory() as conn:
                 cursor = conn.cursor()
                 try:
-                    conn.set_session(
-                        isolation_level="REPEATABLE READ", readonly=True, autocommit=False
-                    )
+                    conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
                     contexts, unavailable = self._contexts(
                         cursor,
                         symbols=normalized,
@@ -164,18 +162,14 @@ class PostgresHistoricalPriceReplaySource:
             suspend_types.setdefault(str(symbol_value).strip().upper(), set()).add(
                 str(suspend_type_value).strip().upper()
             )
-        conflicting = sorted(
-            symbol for symbol, values in suspend_types.items() if len(values) != 1
-        )
+        conflicting = sorted(symbol for symbol, values in suspend_types.items() if len(values) != 1)
         if conflicting:
             raise _replay_error(
                 "historical replay suspend rows conflict",
                 "ADVISORY_HISTORICAL_PRICE_REPLAY_DATA_UNAVAILABLE",
                 context={"symbols": conflicting},
             )
-        suspended = frozenset(
-            symbol for symbol, values in suspend_types.items() if values == {"S"}
-        )
+        suspended = frozenset(symbol for symbol, values in suspend_types.items() if values == {"S"})
         if set(opens) & suspended:
             raise _replay_error(
                 "historical replay target is both traded and suspended",
@@ -354,9 +348,7 @@ class AdvisoryHistoricalPriceReplayService:
                 pit_universe_key=request.pit_universe_key,
             )
             rows.extend(_settle_day(group, snapshot=snapshot))
-        ordered = tuple(
-            sorted(rows, key=lambda row: (row.decision_as_of_trade_date, row.symbol))
-        )
+        ordered = tuple(sorted(rows, key=lambda row: (row.decision_as_of_trade_date, row.symbol)))
         metrics = _metrics(ordered)
         outcome_payload: dict[str, Any] = {
             "schema_version": "advisory_historical_price_replay_outcome_v1",
@@ -391,24 +383,17 @@ class AdvisoryHistoricalPriceReplayService:
     ) -> tuple[tuple[AdvisoryHistoricalPricePredictionRowV1, ...], str]:
         if target.exists():
             payload = _read_json(target / "prediction.json")
-            if payload.get("request_sha256") != request.request_sha256:
-                raise _replay_error(
-                    "existing historical prediction belongs to another request",
-                    "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
-                )
-            rows = tuple(
-                AdvisoryHistoricalPricePredictionRowV1.model_validate(item)
-                for item in payload.get("rows") or ()
-            )
-            expected = canonical_json_sha256([row.model_dump(mode="json") for row in rows])
-            if payload.get("prediction_snapshot_sha256") != expected:
-                raise _replay_error(
-                    "existing historical prediction hash is inconsistent",
-                    "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
-                )
-            return rows, expected
+            return _validate_prediction_snapshot(request=request, payload=payload)
         source = Path(prediction_source_path).resolve()
-        if _sha256_file(source) != request.prediction_source_sha256:
+        try:
+            source_sha256 = _sha256_file(source)
+        except OSError as exc:
+            raise _replay_error(
+                "historical prediction source is unavailable",
+                "ADVISORY_HISTORICAL_PRICE_REPLAY_DATA_UNAVAILABLE",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        if source_sha256 != request.prediction_source_sha256:
             raise _replay_error(
                 "historical prediction source hash changed",
                 "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH",
@@ -416,50 +401,33 @@ class AdvisoryHistoricalPriceReplayService:
         try:
             # Intentionally exclude entry_gap_return and every other outcome column.
             frame = pd.read_parquet(source, columns=list(PREDICTION_COLUMNS))
+            decisions = pd.to_datetime(frame["decision_as_of_trade_date"]).dt.date
+            selected = frame[
+                (decisions >= request.decision_start_trade_date) & (decisions <= request.decision_end_trade_date)
+            ].copy()
+            selected["decision_as_of_trade_date"] = pd.to_datetime(selected["decision_as_of_trade_date"]).dt.date
+            selected["target_trade_date"] = pd.to_datetime(selected["target_trade_date"]).dt.date
+            rows = tuple(
+                AdvisoryHistoricalPricePredictionRowV1(
+                    decision_as_of_trade_date=item.decision_as_of_trade_date,
+                    target_trade_date=item.target_trade_date,
+                    symbol=str(item.instrument).strip().upper(),
+                    calibrated_gap_q10=float(item.entry_gap_calibrated_q10),
+                    calibrated_gap_q50=float(item.entry_gap_calibrated_q50),
+                    calibrated_gap_q90=float(item.entry_gap_calibrated_q90),
+                )
+                for item in selected.sort_values(["decision_as_of_trade_date", "instrument"]).itertuples(index=False)
+            )
         except Exception as exc:
             raise _replay_error(
                 "historical prediction source cannot be read",
                 "ADVISORY_HISTORICAL_PRICE_REPLAY_DATA_UNAVAILABLE",
                 context={"error_type": type(exc).__name__},
             ) from exc
-        decisions = pd.to_datetime(frame["decision_as_of_trade_date"]).dt.date
-        selected = frame[
-            (decisions >= request.decision_start_trade_date)
-            & (decisions <= request.decision_end_trade_date)
-        ].copy()
-        selected["decision_as_of_trade_date"] = pd.to_datetime(
-            selected["decision_as_of_trade_date"]
-        ).dt.date
-        selected["target_trade_date"] = pd.to_datetime(selected["target_trade_date"]).dt.date
         if selected.empty:
             raise _replay_error(
                 "historical replay date range has no frozen predictions",
                 "ADVISORY_HISTORICAL_PRICE_REPLAY_DATA_UNAVAILABLE",
-            )
-        rows = tuple(
-            AdvisoryHistoricalPricePredictionRowV1(
-                decision_as_of_trade_date=item.decision_as_of_trade_date,
-                target_trade_date=item.target_trade_date,
-                symbol=str(item.instrument).strip().upper(),
-                calibrated_gap_q10=float(item.entry_gap_calibrated_q10),
-                calibrated_gap_q50=float(item.entry_gap_calibrated_q50),
-                calibrated_gap_q90=float(item.entry_gap_calibrated_q90),
-            )
-            for item in selected.sort_values(
-                ["decision_as_of_trade_date", "instrument"]
-            ).itertuples(index=False)
-        )
-        keys = [(row.decision_as_of_trade_date, row.symbol) for row in rows]
-        per_day = pd.Series([row.decision_as_of_trade_date for row in rows]).value_counts()
-        if len(keys) != len(set(keys)) or set(per_day.tolist()) != {20}:
-            raise _replay_error(
-                "historical replay requires one exact Top20 for every decision date",
-                "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH",
-            )
-        if any(row.target_trade_date >= request.replay_as_of_date for row in rows):
-            raise _replay_error(
-                "historical replay includes an outcome not mature at replay as-of",
-                "ADVISORY_HISTORICAL_PRICE_REPLAY_CLOCK_INVALID",
             )
         digest = canonical_json_sha256([row.model_dump(mode="json") for row in rows])
         payload = {
@@ -472,7 +440,8 @@ class AdvisoryHistoricalPriceReplayService:
             "rows": [row.model_dump(mode="json") for row in rows],
         }
         _publish_directory(target, {"request.json": request.model_dump(mode="json"), "prediction.json": payload})
-        return rows, digest
+        published = _read_json(target / "prediction.json")
+        return _validate_prediction_snapshot(request=request, payload=published)
 
     def _publish_settlement(
         self,
@@ -534,9 +503,7 @@ def prepare_historical_price_replay_request(
     pit_universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
 ) -> tuple[AdvisoryHistoricalPriceReplayRequestV1, Path]:
     bundle_path = Path(model_root).resolve() / "price_range_bundles" / price_range_bundle_id
-    manifest = validate_calibrated_daily_price_envelope_bundle(
-        bundle_path, expected_bundle_id=price_range_bundle_id
-    )
+    manifest = validate_calibrated_daily_price_envelope_bundle(bundle_path, expected_bundle_id=price_range_bundle_id)
     if manifest.get("schema_version") != "advisory_price_range_bundle_v4":
         raise _replay_error(
             "historical price replay requires a frozen v4 bundle",
@@ -562,9 +529,7 @@ def read_historical_price_replay_artifact(
     prediction_path = path / "prediction"
     settlement_path = path / "settlement"
     try:
-        request = AdvisoryHistoricalPriceReplayRequestV1.model_validate(
-            _read_json(prediction_path / "request.json")
-        )
+        request = AdvisoryHistoricalPriceReplayRequestV1.model_validate(_read_json(prediction_path / "request.json"))
         prediction = _read_json(prediction_path / "prediction.json")
         outcome = _read_json(settlement_path / "outcome.json")
         manifest = _read_json(settlement_path / "manifest.json")
@@ -576,28 +541,46 @@ def read_historical_price_replay_artifact(
             "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
             context={"error_type": type(exc).__name__},
         ) from exc
-    prediction_rows = prediction.get("rows") or []
-    prediction_sha256 = canonical_json_sha256(prediction_rows)
+    prediction_rows, prediction_sha256 = _validate_prediction_snapshot(request=request, payload=prediction)
+    try:
+        outcome_rows = tuple(
+            AdvisoryHistoricalPriceOutcomeRowV1.model_validate(item) for item in outcome.get("rows") or ()
+        )
+    except (TypeError, ValidationError) as exc:
+        raise _replay_error(
+            "historical price replay outcome rows are invalid",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    expected_keys = tuple((row.decision_as_of_trade_date, row.target_trade_date, row.symbol) for row in prediction_rows)
+    actual_keys = tuple((row.decision_as_of_trade_date, row.target_trade_date, row.symbol) for row in outcome_rows)
+    if actual_keys != expected_keys:
+        raise _replay_error(
+            "historical price replay outcome identities differ from predictions",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+        )
+    try:
+        recomputed_metrics = _metrics(outcome_rows)
+    except ValidationError as exc:
+        raise _replay_error(
+            "historical price replay outcome metrics are invalid",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+            context={"error_type": type(exc).__name__},
+        ) from exc
     outcome_without_hash = {key: value for key, value in outcome.items() if key != "outcome_sha256"}
     outcome_sha256 = canonical_json_sha256(outcome_without_hash)
     if (
-        prediction.get("schema_version")
-        != "advisory_historical_price_prediction_snapshot_v1"
-        or prediction.get("request_sha256") != request.request_sha256
-        or prediction.get("source_columns") != list(PREDICTION_COLUMNS)
-        or prediction.get("forbidden_source_columns") != ["entry_gap_return"]
-        or prediction.get("realized_outcome_accessed") is not False
-        or prediction.get("prediction_snapshot_sha256") != prediction_sha256
-        or outcome.get("schema_version")
-        != "advisory_historical_price_replay_outcome_v1"
+        outcome.get("schema_version") != "advisory_historical_price_replay_outcome_v1"
         or outcome.get("replay_id") != request.replay_id
         or outcome.get("request_sha256") != request.request_sha256
         or outcome.get("evidence_level") != "HISTORICAL_REPLAY"
         or outcome.get("decision_use") != "NAVIGATION_ONLY"
+        or outcome.get("realized_outcome_accessed") is not True
+        or outcome.get("database_written") is not False
+        or outcome.get("binding_activated") is not False
         or outcome.get("sealed_holdout_consumed") is not False
         or outcome.get("outcome_sha256") != outcome_sha256
-        or manifest.get("schema_version")
-        != "advisory_historical_price_replay_manifest_v1"
+        or manifest.get("schema_version") != "advisory_historical_price_replay_manifest_v1"
         or manifest.get("replay_id") != request.replay_id
         or manifest.get("request_sha256") != request.request_sha256
         or manifest.get("prediction_snapshot_sha256") != prediction_sha256
@@ -608,15 +591,81 @@ def read_historical_price_replay_artifact(
         or receipt.prediction_snapshot_sha256 != prediction_sha256
         or receipt.outcome_sha256 != outcome_sha256
         or receipt.manifest_sha256 != _sha256_file(settlement_path / "manifest.json")
-        or receipt.metrics.model_dump(mode="json") != outcome.get("metrics")
+        or recomputed_metrics.model_dump(mode="json") != outcome.get("metrics")
+        or receipt.metrics != recomputed_metrics
     ):
         raise _replay_error(
             "historical price replay artifact hashes are inconsistent",
             "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
         )
-    return AdvisoryHistoricalPriceReplayArtifact(
-        path=path, request=request, receipt=receipt, outcome=outcome
-    )
+    return AdvisoryHistoricalPriceReplayArtifact(path=path, request=request, receipt=receipt, outcome=outcome)
+
+
+def _validate_prediction_snapshot(
+    *,
+    request: AdvisoryHistoricalPriceReplayRequestV1,
+    payload: Mapping[str, Any],
+) -> tuple[tuple[AdvisoryHistoricalPricePredictionRowV1, ...], str]:
+    if (
+        payload.get("schema_version") != "advisory_historical_price_prediction_snapshot_v1"
+        or payload.get("request_sha256") != request.request_sha256
+        or payload.get("source_columns") != list(PREDICTION_COLUMNS)
+        or payload.get("forbidden_source_columns") != ["entry_gap_return"]
+        or payload.get("realized_outcome_accessed") is not False
+    ):
+        raise _replay_error(
+            "historical prediction snapshot contract is inconsistent",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+        )
+    try:
+        rows = tuple(AdvisoryHistoricalPricePredictionRowV1.model_validate(item) for item in payload.get("rows") or ())
+    except (TypeError, ValidationError) as exc:
+        raise _replay_error(
+            "historical prediction snapshot rows are invalid",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if not rows:
+        raise _replay_error(
+            "historical prediction snapshot is empty",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+        )
+    keys = [(row.decision_as_of_trade_date, row.symbol) for row in rows]
+    per_day: dict[date, list[AdvisoryHistoricalPricePredictionRowV1]] = {}
+    for row in rows:
+        per_day.setdefault(row.decision_as_of_trade_date, []).append(row)
+    if len(keys) != len(set(keys)) or {len(group) for group in per_day.values()} != {20}:
+        raise _replay_error(
+            "historical replay requires one exact Top20 for every represented decision date",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH",
+        )
+    if any(len({row.target_trade_date for row in group}) != 1 for group in per_day.values()):
+        raise _replay_error(
+            "historical replay decision date has multiple target dates",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH",
+        )
+    if any(
+        row.decision_as_of_trade_date < request.decision_start_trade_date
+        or row.decision_as_of_trade_date > request.decision_end_trade_date
+        for row in rows
+    ):
+        raise _replay_error(
+            "historical prediction snapshot exceeds its requested decision window",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_CLOCK_INVALID",
+        )
+    if any(row.target_trade_date >= request.replay_as_of_date for row in rows):
+        raise _replay_error(
+            "historical replay includes an outcome not mature at replay as-of",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_CLOCK_INVALID",
+        )
+    normalized = [row.model_dump(mode="json") for row in rows]
+    digest = canonical_json_sha256(normalized)
+    if payload.get("prediction_snapshot_sha256") != digest:
+        raise _replay_error(
+            "historical prediction snapshot hash is inconsistent",
+            "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT",
+        )
+    return rows, digest
 
 
 def _group_predictions(
@@ -668,9 +717,7 @@ def _settle_day(
                 AdvisoryHistoricalPriceOutcomeRowV1(
                     **base,
                     model_prediction_status="UNAVAILABLE",
-                    model_prediction_reason=snapshot.context_unavailable.get(
-                        symbol, "pit_price_context_unavailable"
-                    ),
+                    model_prediction_reason=snapshot.context_unavailable.get(symbol, "pit_price_context_unavailable"),
                     market_outcome_status="AVAILABLE",
                     market_outcome_reason="target_open_observed",
                     actual_open=actual_open,
@@ -678,9 +725,7 @@ def _settle_day(
             )
             continue
         try:
-            regulatory = resolve_regulatory_price_range(
-                context, target_trade_date=prediction.target_trade_date
-            )
+            regulatory = resolve_regulatory_price_range(context, target_trade_date=prediction.target_trade_date)
             low, mid, high = _entry_band(
                 symbol=symbol,
                 context=context,
@@ -718,36 +763,26 @@ def _settle_day(
                 calibrated_gap_q50=prediction.calibrated_gap_q50,
                 calibrated_gap_q90=prediction.calibrated_gap_q90,
                 actual_entry_gap_return=(
-                    actual_open
-                    / (context.decision_raw_close * context.target_raw_price_multiplier)
-                    - 1.0
+                    actual_open / (context.decision_raw_close * context.target_raw_price_multiplier) - 1.0
                 ),
                 model_space_covered=(
                     prediction.calibrated_gap_q10
-                    <= actual_open
-                    / (context.decision_raw_close * context.target_raw_price_multiplier)
-                    - 1.0
+                    <= actual_open / (context.decision_raw_close * context.target_raw_price_multiplier) - 1.0
                     <= prediction.calibrated_gap_q90
                 ),
                 model_space_lower_miss=(
-                    actual_open
-                    / (context.decision_raw_close * context.target_raw_price_multiplier)
-                    - 1.0
+                    actual_open / (context.decision_raw_close * context.target_raw_price_multiplier) - 1.0
                     < prediction.calibrated_gap_q10
                 ),
                 model_space_upper_miss=(
-                    actual_open
-                    / (context.decision_raw_close * context.target_raw_price_multiplier)
-                    - 1.0
+                    actual_open / (context.decision_raw_close * context.target_raw_price_multiplier) - 1.0
                     > prediction.calibrated_gap_q90
                 ),
                 covered=low <= actual_open <= high,
                 lower_miss=actual_open < low,
                 upper_miss=actual_open > high,
                 interval_width_bps=(high - low) / context.decision_raw_close * 10_000.0,
-                absolute_mid_error_bps=abs(actual_open - mid)
-                / context.decision_raw_close
-                * 10_000.0,
+                absolute_mid_error_bps=abs(actual_open - mid) / context.decision_raw_close * 10_000.0,
             )
         )
     return output
@@ -757,10 +792,7 @@ def _metrics(
     rows: Sequence[AdvisoryHistoricalPriceOutcomeRowV1],
 ) -> AdvisoryHistoricalPriceReplayMetricsV1:
     supported = [
-        row
-        for row in rows
-        if row.model_prediction_status == "AVAILABLE"
-        and row.market_outcome_status == "AVAILABLE"
+        row for row in rows if row.model_prediction_status == "AVAILABLE" and row.market_outcome_status == "AVAILABLE"
     ]
     payload: dict[str, Any] = {
         "decision_date_count": len({row.decision_as_of_trade_date for row in rows}),
@@ -771,12 +803,8 @@ def _metrics(
         "model_available_market_available_count": len(supported),
         "model_unavailable_count": sum(row.model_prediction_status == "UNAVAILABLE" for row in rows),
         "crossing_count": 0,
-        "tick_rounding_rescue_count": sum(
-            not bool(row.model_space_covered) and bool(row.covered) for row in supported
-        ),
-        "tick_rounding_harm_count": sum(
-            bool(row.model_space_covered) and not bool(row.covered) for row in supported
-        ),
+        "tick_rounding_rescue_count": sum(not bool(row.model_space_covered) and bool(row.covered) for row in supported),
+        "tick_rounding_harm_count": sum(bool(row.model_space_covered) and not bool(row.covered) for row in supported),
     }
     if supported:
         widths = [float(row.interval_width_bps) for row in supported if row.interval_width_bps is not None]
@@ -789,15 +817,9 @@ def _metrics(
             median_interval_width_bps=median(widths),
             mean_absolute_mid_error_bps=mean(errors),
             median_absolute_mid_error_bps=median(errors),
-            model_space_coverage=mean(
-                float(bool(row.model_space_covered)) for row in supported
-            ),
-            model_space_lower_miss_rate=mean(
-                float(bool(row.model_space_lower_miss)) for row in supported
-            ),
-            model_space_upper_miss_rate=mean(
-                float(bool(row.model_space_upper_miss)) for row in supported
-            ),
+            model_space_coverage=mean(float(bool(row.model_space_covered)) for row in supported),
+            model_space_lower_miss_rate=mean(float(bool(row.model_space_lower_miss)) for row in supported),
+            model_space_upper_miss_rate=mean(float(bool(row.model_space_upper_miss)) for row in supported),
         )
     return AdvisoryHistoricalPriceReplayMetricsV1(**payload)
 

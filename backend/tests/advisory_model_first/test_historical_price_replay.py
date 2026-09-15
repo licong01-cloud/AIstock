@@ -6,7 +6,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.historical_price_replay import (
     AdvisoryHistoricalPriceReplayService,
     HistoricalPriceDaySnapshot,
@@ -100,21 +102,14 @@ def test_batch_replay_freezes_predictions_before_database_outcomes(tmp_path):
     source_path = _source(tmp_path / "predictions.parquet")
     request = _request(source_path)
     prediction_path = (
-        tmp_path
-        / "out"
-        / "price_range_historical_replays"
-        / request.replay_id
-        / "prediction"
-        / "prediction.json"
+        tmp_path / "out" / "price_range_historical_replays" / request.replay_id / "prediction" / "prediction.json"
     )
     data_source = _Source(prediction_path)
     service = AdvisoryHistoricalPriceReplayService(
         data_source=data_source,
         now_provider=lambda: datetime(2026, 1, 8, 1, tzinfo=timezone.utc),
     )
-    receipt = service.run(
-        request=request, prediction_source_path=source_path, output_root=tmp_path / "out"
-    )
+    receipt = service.run(request=request, prediction_source_path=source_path, output_root=tmp_path / "out")
     assert receipt.status == "PUBLISHED"
     assert receipt.evidence_level == "HISTORICAL_REPLAY"
     assert receipt.metrics.decision_date_count == 2
@@ -146,3 +141,51 @@ def test_batch_replay_exact_retry_is_immutable(tmp_path):
         tmp_path / "out" / "price_range_historical_replays" / request.replay_id
     )
     assert artifact.receipt.receipt_sha256 == first.receipt_sha256
+
+
+def test_batch_replay_rejects_tampered_interrupted_prediction_snapshot(tmp_path):
+    source_path = _source(tmp_path / "predictions.parquet")
+    request = _request(source_path)
+    prediction_path = tmp_path / "out" / "price_range_historical_replays" / request.replay_id / "prediction"
+    service = AdvisoryHistoricalPriceReplayService(data_source=_Source(prediction_path / "prediction.json"))
+    service._freeze_predictions(
+        request=request,
+        prediction_source_path=source_path,
+        target=prediction_path,
+    )
+    payload_path = prediction_path / "prediction.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["realized_outcome_accessed"] = True
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        service.run(
+            request=request,
+            prediction_source_path=source_path,
+            output_root=tmp_path / "out",
+        )
+    assert raised.value.reason_code == "ADVISORY_HISTORICAL_PRICE_REPLAY_ARTIFACT_CONFLICT"
+    assert service._data_source.calls == 0
+
+
+def test_batch_replay_reports_invalid_prediction_source_with_typed_reason(tmp_path):
+    source_path = _source(tmp_path / "predictions.parquet")
+    request = _request(source_path)
+    frame = pd.read_parquet(source_path)
+    frame.loc[0, "entry_gap_calibrated_q10"] = 0.03
+    frame.to_parquet(source_path, index=False)
+    request_payload = request.model_dump(exclude={"replay_id", "request_sha256"})
+    changed_request = build_historical_price_replay_request(
+        **{
+            **request_payload,
+            "prediction_source_sha256": _sha256(source_path),
+        }
+    )
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        AdvisoryHistoricalPriceReplayService().run(
+            request=changed_request,
+            prediction_source_path=source_path,
+            output_root=tmp_path / "out",
+        )
+    assert raised.value.reason_code == "ADVISORY_HISTORICAL_PRICE_REPLAY_DATA_UNAVAILABLE"

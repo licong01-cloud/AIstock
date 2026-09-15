@@ -70,9 +70,7 @@ def test_outcome_contract_recomputes_interval_metrics():
     )
     assert row.covered is True
     with pytest.raises(ValidationError, match="width differs"):
-        AdvisoryHistoricalPriceOutcomeRowV1(
-            **{**row.model_dump(), "interval_width_bps": 399.0}
-        )
+        AdvisoryHistoricalPriceOutcomeRowV1(**{**row.model_dump(), "interval_width_bps": 399.0})
 
 
 def test_receipt_cannot_be_promoted_to_activation_evidence():
@@ -113,3 +111,35 @@ def test_receipt_cannot_be_promoted_to_activation_evidence():
     )
     assert receipt.decision_use == "NAVIGATION_ONLY"
     assert receipt.binding_activated is False
+
+
+def test_metrics_reject_inconsistent_support_and_rate_partitions():
+    from backend.services.advisory_model_first.historical_price_replay_contracts import (
+        AdvisoryHistoricalPriceReplayMetricsV1,
+    )
+
+    common = {
+        "decision_date_count": 1,
+        "candidate_count": 1,
+        "market_available_count": 1,
+        "not_applicable_count": 0,
+        "market_unavailable_count": 0,
+        "model_available_market_available_count": 1,
+        "model_unavailable_count": 0,
+        "calibrated_coverage": 0.8,
+        "lower_miss_rate": 0.1,
+        "upper_miss_rate": 0.1,
+        "mean_interval_width_bps": 400.0,
+        "median_interval_width_bps": 400.0,
+        "mean_absolute_mid_error_bps": 0.0,
+        "median_absolute_mid_error_bps": 0.0,
+        "model_space_coverage": 0.8,
+        "model_space_lower_miss_rate": 0.1,
+        "model_space_upper_miss_rate": 0.1,
+        "tick_rounding_rescue_count": 0,
+        "tick_rounding_harm_count": 0,
+    }
+    with pytest.raises(ValidationError, match="model support"):
+        AdvisoryHistoricalPriceReplayMetricsV1(**{**common, "model_available_market_available_count": 0})
+    with pytest.raises(ValidationError, match="rates do not partition"):
+        AdvisoryHistoricalPriceReplayMetricsV1(**{**common, "calibrated_coverage": 0.7})

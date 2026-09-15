@@ -35,15 +35,9 @@ class AdvisoryHistoricalPriceReplayRequestV1(_FrozenContract):
     objective_contract: Literal["RISK_MANAGED_ADVISORY"] = "RISK_MANAGED_ADVISORY"
     evidence_level: Literal["HISTORICAL_REPLAY"] = "HISTORICAL_REPLAY"
     decision_use: Literal["NAVIGATION_ONLY"] = "NAVIGATION_ONLY"
-    window_usage: Literal["CONSUMED_DEVELOPMENT_WINDOW"] = (
-        "CONSUMED_DEVELOPMENT_WINDOW"
-    )
-    prediction_source: Literal["FROZEN_V4_TEST_PREDICTIONS"] = (
-        "FROZEN_V4_TEST_PREDICTIONS"
-    )
-    metric_semantics_version: Literal["MODEL_SPACE_AND_BUSINESS_PRICE_V1"] = (
-        "MODEL_SPACE_AND_BUSINESS_PRICE_V1"
-    )
+    window_usage: Literal["CONSUMED_DEVELOPMENT_WINDOW"] = "CONSUMED_DEVELOPMENT_WINDOW"
+    prediction_source: Literal["FROZEN_V4_TEST_PREDICTIONS"] = "FROZEN_V4_TEST_PREDICTIONS"
+    metric_semantics_version: Literal["MODEL_SPACE_AND_BUSINESS_PRICE_V1"] = "MODEL_SPACE_AND_BUSINESS_PRICE_V1"
     database_written: Literal[False] = False
     binding_activated: Literal[False] = False
     sealed_holdout_consumed: Literal[False] = False
@@ -108,6 +102,8 @@ class AdvisoryHistoricalPriceOutcomeRowV1(_FrozenContract):
 
     @model_validator(mode="after")
     def validate_outcome(self) -> "AdvisoryHistoricalPriceOutcomeRowV1":
+        if self.target_trade_date <= self.decision_as_of_trade_date:
+            raise ValueError("historical outcome target must follow decision date")
         band = (
             self.decision_reference_price,
             self.calibrated_low,
@@ -133,10 +129,14 @@ class AdvisoryHistoricalPriceOutcomeRowV1(_FrozenContract):
                 raise ValueError("not-applicable outcome requires suspension reason")
             if self.actual_open is not None or any(value is not None for value in (*band, *metrics)):
                 raise ValueError("not-applicable outcome cannot carry prices")
+            if self.model_prediction_status != "AVAILABLE" or self.model_prediction_reason is not None:
+                raise ValueError("not-applicable outcome must preserve the frozen prediction")
             return self
         if self.market_outcome_status == "UNAVAILABLE":
             if self.actual_open is not None or any(value is not None for value in (*band, *metrics)):
                 raise ValueError("unavailable outcome cannot carry prices")
+            if self.model_prediction_status != "AVAILABLE" or self.model_prediction_reason is not None:
+                raise ValueError("unavailable outcome must preserve the frozen prediction")
             return self
         if self.actual_open is None:
             raise ValueError("available outcome requires target open")
@@ -146,9 +146,7 @@ class AdvisoryHistoricalPriceOutcomeRowV1(_FrozenContract):
             if any(value is not None for value in (*band, *metrics)):
                 raise ValueError("unavailable prediction cannot carry interval metrics")
             return self
-        if self.model_prediction_reason is not None or any(
-            value is None for value in (*band, *metrics)
-        ):
+        if self.model_prediction_reason is not None or any(value is None for value in (*band, *metrics)):
             raise ValueError("available prediction requires complete interval metrics")
         assert self.decision_reference_price is not None
         assert self.calibrated_low is not None
@@ -164,9 +162,7 @@ class AdvisoryHistoricalPriceOutcomeRowV1(_FrozenContract):
         if not self.calibrated_gap_q10 <= self.calibrated_gap_q50 <= self.calibrated_gap_q90:
             raise ValueError("historical replay gap interval is crossed")
         expected_model_flags = (
-            self.calibrated_gap_q10
-            <= self.actual_entry_gap_return
-            <= self.calibrated_gap_q90,
+            self.calibrated_gap_q10 <= self.actual_entry_gap_return <= self.calibrated_gap_q90,
             self.actual_entry_gap_return < self.calibrated_gap_q10,
             self.actual_entry_gap_return > self.calibrated_gap_q90,
         )
@@ -183,16 +179,8 @@ class AdvisoryHistoricalPriceOutcomeRowV1(_FrozenContract):
         )
         if (self.covered, self.lower_miss, self.upper_miss) != expected_flags:
             raise ValueError("historical replay coverage flags differ from outcome")
-        expected_width = (
-            (self.calibrated_high - self.calibrated_low)
-            / self.decision_reference_price
-            * 10_000.0
-        )
-        expected_error = (
-            abs(self.actual_open - self.calibrated_mid)
-            / self.decision_reference_price
-            * 10_000.0
-        )
+        expected_width = (self.calibrated_high - self.calibrated_low) / self.decision_reference_price * 10_000.0
+        expected_error = abs(self.actual_open - self.calibrated_mid) / self.decision_reference_price * 10_000.0
         assert self.interval_width_bps is not None
         assert self.absolute_mid_error_bps is not None
         if not math.isclose(self.interval_width_bps, expected_width, rel_tol=1e-12, abs_tol=1e-9):
@@ -227,12 +215,19 @@ class AdvisoryHistoricalPriceReplayMetricsV1(_FrozenContract):
     @model_validator(mode="after")
     def validate_metrics(self) -> "AdvisoryHistoricalPriceReplayMetricsV1":
         if (
-            self.market_available_count
-            + self.not_applicable_count
-            + self.market_unavailable_count
+            self.market_available_count + self.not_applicable_count + self.market_unavailable_count
             != self.candidate_count
         ):
             raise ValueError("historical replay market counts do not add up")
+        if self.decision_date_count > self.candidate_count:
+            raise ValueError("historical replay decision count exceeds candidate count")
+        if self.model_available_market_available_count + self.model_unavailable_count != self.market_available_count:
+            raise ValueError("historical replay model support does not match available market rows")
+        if (
+            self.tick_rounding_rescue_count > self.model_available_market_available_count
+            or self.tick_rounding_harm_count > self.model_available_market_available_count
+        ):
+            raise ValueError("historical replay tick effects exceed supported rows")
         described = (
             self.calibrated_coverage,
             self.lower_miss_rate,
@@ -250,6 +245,27 @@ class AdvisoryHistoricalPriceReplayMetricsV1(_FrozenContract):
                 raise ValueError("empty replay support cannot carry metrics")
         elif any(value is None for value in described):
             raise ValueError("non-empty replay support requires complete metrics")
+        else:
+            assert self.calibrated_coverage is not None
+            assert self.lower_miss_rate is not None
+            assert self.upper_miss_rate is not None
+            assert self.model_space_coverage is not None
+            assert self.model_space_lower_miss_rate is not None
+            assert self.model_space_upper_miss_rate is not None
+            if not math.isclose(
+                self.calibrated_coverage + self.lower_miss_rate + self.upper_miss_rate,
+                1.0,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("historical replay business-space rates do not partition support")
+            if not math.isclose(
+                self.model_space_coverage + self.model_space_lower_miss_rate + self.model_space_upper_miss_rate,
+                1.0,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("historical replay model-space rates do not partition support")
         return self
 
 
@@ -302,9 +318,7 @@ def build_historical_price_replay_request(**values: Any) -> AdvisoryHistoricalPr
 def build_historical_price_replay_receipt(**values: Any) -> AdvisoryHistoricalPriceReplayReceiptV1:
     payload = dict(values)
     payload.setdefault("schema_version", "advisory_historical_price_replay_receipt_v1")
-    seed = AdvisoryHistoricalPriceReplayReceiptV1.model_construct(
-        receipt_sha256="0" * 64, **payload
-    )
+    seed = AdvisoryHistoricalPriceReplayReceiptV1.model_construct(receipt_sha256="0" * 64, **payload)
     return AdvisoryHistoricalPriceReplayReceiptV1(
         receipt_sha256=canonical_json_sha256(seed.functional_payload()), **payload
     )
