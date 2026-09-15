@@ -1914,6 +1914,47 @@ def _prediction_panel_sha256(pred_df: pd.DataFrame) -> str:
     return hashlib.sha256(metadata + b"\n" + values).hexdigest()
 
 
+def _prediction_replay_raw_label_task_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Build a replay-only dataset config without model preprocessing.
+
+    Prediction replay consumes an immutable prediction panel and needs the
+    dataset only for raw test labels and the run-scoped instrument universe.
+    Running inference or learning processors here is both unnecessary and
+    incorrect: those processors are training contracts and may legitimately
+    reject pre-index-inception train segments even when the replay test segment
+    is complete.  Keep the loader, label formula, segments, and instruments
+    unchanged while explicitly disabling all handler processor pipelines.
+    """
+
+    from copy import deepcopy
+
+    task_config = deepcopy(config.get("task"))
+    if not isinstance(task_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_TASK_CONFIG_INVALID")
+    dataset_config = task_config.get("dataset")
+    if not isinstance(dataset_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATASET_CONFIG_INVALID")
+    dataset_kwargs = dataset_config.get("kwargs")
+    if not isinstance(dataset_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATASET_KWARGS_INVALID")
+    handler_config = dataset_kwargs.get("handler")
+    if not isinstance(handler_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_HANDLER_CONFIG_INVALID")
+    handler_kwargs = handler_config.get("kwargs")
+    if not isinstance(handler_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_HANDLER_KWARGS_INVALID")
+
+    for processor_key in ("shared_processors", "infer_processors", "learn_processors"):
+        processors = handler_kwargs.get(processor_key)
+        if processors is not None and not isinstance(processors, (list, tuple)):
+            raise RuntimeError(
+                "QE_PRED_BACKTEST_PROCESSOR_CONFIG_INVALID: "
+                f"{processor_key} must be a list or tuple"
+            )
+        handler_kwargs[processor_key] = []
+    return task_config
+
+
 def _load_prediction_replay_source_ref(pred_path: Path) -> dict[str, Any] | None:
     ref_path = Path.cwd() / "qe_prediction_replay_source_ref.json"
     if not ref_path.exists():
@@ -2085,7 +2126,6 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     4. 执行 SigAnaRecord（IC/ICIR 分析）
     5. 执行 PortAnaRecord（选股+分钟线回测：收益/回撤/Sharpe/换手率/持仓）
     """
-    import copy
     import pandas as pd
     from qlib.utils import init_instance_by_config
     from qlib.workflow import R
@@ -2122,7 +2162,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
           f"{pred_df.index.get_level_values(0).max()}")
 
     # 2. 初始化 dataset（需要 label 用于 SigAnaRecord 计算 IC）
-    task_config = copy.deepcopy(config.get("task"))
+    task_config = _prediction_replay_raw_label_task_config(config)
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
     dataset.config(dump_all=False, recursive=True)
 
