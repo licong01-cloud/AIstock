@@ -40,6 +40,11 @@ def _service_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> t
             "config_json": {
                 "method": "pup",
                 "horizon_weights": {"5": 0.2, "10": 0.3, "20": 0.5},
+                "qe_frozen_input_bundle": {
+                    "schema_version": "qe_hmm_frozen_input_v1",
+                    "dataset_root": "/mnt/x/qe-release",
+                    "files": {"fixture": {"relative_path": "fixture", "sha256": "0" * 64}},
+                },
                 "signal_presets": {
                     "preset_A": {"trending": 1.05, "neutral": 1.0, "fading": 0.96},
                     "preset_nested": {"coefficients": {"1": {"trending": 1.02, "neutral": 1.0, "fading": 0.98}}},
@@ -78,6 +83,26 @@ def test_extract_signal_preset_coefficients_supports_nested_shape() -> None:
     )
 
     assert coeffs == {"trending": 1.02, "neutral": 1.0, "fading": 0.98}
+
+
+def test_qe_frozen_coefficient_bundle_rejects_database_fallback() -> None:
+    with pytest.raises(RuntimeError, match="database-backed market data is not an allowed QE fallback"):
+        HMMTrainingService._qe_frozen_coefficient_bundle({})
+
+
+def test_fill_default_config_preserves_only_explicit_frozen_qe_binding() -> None:
+    frozen = {
+        "schema_version": "qe_hmm_frozen_input_v1",
+        "dataset_root": "/mnt/x/qe-release",
+        "files": {},
+    }
+
+    result = HMMTrainingService._fill_default_config(
+        {"n_states": 3, "qe_frozen_input_bundle": frozen, "unexpected": "discard"}
+    )
+
+    assert result["qe_frozen_input_bundle"] == frozen
+    assert "unexpected" not in result
 
 
 def test_extract_signal_preset_coefficients_ignores_metadata_keys() -> None:
@@ -322,6 +347,38 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     assert captured["params"]["config_json"]["method"] == "pup"
     assert captured["params"]["config_json"]["horizon_weights"]["20"] == pytest.approx(0.5)
     assert captured["params"]["preset_coeffs"]["trending"] == pytest.approx(1.05)
+    assert captured["params"]["frozen_input_bundle"]["dataset_root"] == "/mnt/x/qe-release"
+    assert captured["params"]["model_sha256"] == HMMTrainingService._file_sha256(str(model_path))
+    assert not any(key.startswith("db_") for key in captured["params"])
+
+
+def test_snapshot_precompute_passes_only_frozen_market_inputs(tmp_path: Path, monkeypatch) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text('{"801010.SI": {}}', encoding="utf-8")
+    captured: list[dict[str, Any]] = []
+
+    def fake_run(_cmd, input, **_kwargs):
+        captured.append(json.loads(input))
+        return _Proc()
+
+    monkeypatch.setattr("backend.services.hmm_training_service.subprocess.run", fake_run)
+    HMMTrainingService()._precompute_coefficients_for_snapshot(
+        str(model_path),
+        {
+            "coefficient_start": "2026-06-01",
+            "coefficient_end": "2026-06-30",
+            "qe_frozen_input_bundle": {
+                "schema_version": "qe_hmm_frozen_input_v1",
+                "dataset_root": "/mnt/x/qe-release",
+                "files": {"fixture": {}},
+            },
+        },
+    )
+
+    assert len(captured) == 2
+    assert all(item["model_sha256"] == HMMTrainingService._file_sha256(str(model_path)) for item in captured)
+    assert all(item["frozen_input_bundle"]["dataset_root"] == "/mnt/x/qe-release" for item in captured)
+    assert all(not any(key.startswith("db_") for key in item) for item in captured)
 
 
 def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
