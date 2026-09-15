@@ -64,7 +64,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "factor_research_backend fresh_process_smoke and research runner candidate execution",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "factor_research_backend fresh_process_smoke=2_passed",
