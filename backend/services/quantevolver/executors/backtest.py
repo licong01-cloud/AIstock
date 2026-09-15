@@ -42,6 +42,7 @@ _PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 class BacktestMode(str, Enum):
     FULL_TRAIN = "full_train"        # 完整训练 + 回测（Path 1/2/4）
     BACKTEST_ONLY = "backtest_only"  # 复用已训练模型，仅回测（Path 3）
+    PREDICTION_REPLAY = "prediction_replay"
 
 
 class BacktestExecutor(BaseExecutor):
@@ -92,6 +93,22 @@ class BacktestExecutor(BaseExecutor):
                 "BACKTEST_ONLY requires ctx.model_source; refusing to assume an "
                 f"implicit workspace model for task={ctx.task_id} loop={ctx.loop_index}"
             )
+        if mode == BacktestMode.PREDICTION_REPLAY:
+            source = ctx.prediction_replay_source
+            if source is None:
+                raise ValueError("PREDICTION_REPLAY requires ctx.prediction_replay_source")
+            if ctx.model_source is not None:
+                raise ValueError("PREDICTION_REPLAY forbids a model_source payload")
+            if not ctx.extra_experiment_files or "frozen_prediction.pkl.b64" not in ctx.extra_experiment_files:
+                raise ValueError("PREDICTION_REPLAY requires frozen_prediction.pkl.b64")
+            if not config.prediction_replay:
+                raise ValueError("PREDICTION_REPLAY requires ExperimentConfig.prediction_replay=true")
+            if (
+                config.prediction_source_task_id != source.source_task_id
+                or config.prediction_source_loop_index != source.source_loop_index
+                or config.prediction_source_sha256 != source.sha256
+            ):
+                raise ValueError("PREDICTION_REPLAY config identity does not match the resolved source")
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
@@ -269,6 +286,19 @@ class BacktestExecutor(BaseExecutor):
                 r"\1 --backtest-only",
                 wsl_command,
             )
+        elif mode == BacktestMode.PREDICTION_REPLAY:
+            forbidden_flags = ("--backtest-only", "--train-only", "--pred-backtest")
+            if any(flag in wsl_command for flag in forbidden_flags):
+                raise ValueError("PREDICTION_REPLAY received an incompatible pre-existing runner flag")
+            wsl_command, replacement_count = re.subn(
+                r"(python\s+qrun_limit_minute\.py\s+\S+\.ya?ml)",
+                r"\1 --pred-backtest frozen_prediction.pkl",
+                wsl_command,
+            )
+            if replacement_count != 1:
+                raise ValueError(
+                    "PREDICTION_REPLAY requires exactly one qrun_limit_minute.py YAML command"
+                )
 
         execution_manifest, execution_manifest_sha256 = build_and_audit_execution_manifest(
             config=config,
@@ -321,7 +351,10 @@ class BacktestExecutor(BaseExecutor):
         # 5. Reserve the canonical cross-source slot before the QE Workspace POST.
         source = self._submission_source_for_context(
             ctx,
-            backtest_only=mode == BacktestMode.BACKTEST_ONLY,
+            backtest_only=mode in {
+                BacktestMode.BACKTEST_ONLY,
+                BacktestMode.PREDICTION_REPLAY,
+            },
         )
         submission_outcome = await self.submission_coordinator.submit(
             client=self.client,

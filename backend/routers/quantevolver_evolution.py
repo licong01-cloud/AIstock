@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -67,6 +67,7 @@ from ..services.quantevolver.qe_log_broker import (
 from ..services.quantevolver.experiment_config import (
     LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
+    normalize_prediction_replay_contract,
     normalize_label_horizon,
     normalize_qe_random_seed,
     split_qe_runtime_metadata,
@@ -1510,7 +1511,23 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    prediction_replay: StrictBool = Field(False, description="Replay one immutable completed-loop pred.pkl without training or inference")
+    prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
+    prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
+    prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
     node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
+
+    @model_validator(mode="after")
+    def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        replay = normalize_prediction_replay_contract(
+            self.model_dump(),
+            context="custom_evo_loop",
+        )
+        self.prediction_replay = replay["prediction_replay"]
+        self.prediction_source_task_id = replay["prediction_source_task_id"]
+        self.prediction_source_loop_index = replay["prediction_source_loop_index"]
+        self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        return self
 
 class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
@@ -1691,13 +1708,27 @@ async def _prepare_custom_evo_loop_configs(
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
-        if loop_cfg.backtest_only:
-            if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
-                raise HTTPException(status_code=400, detail=f"Loop {pos}: backtest-only requires model_source")
+        if loop_cfg.backtest_only or loop_cfg.prediction_replay:
+            reuse_mode = "prediction replay" if loop_cfg.prediction_replay else "backtest-only"
+            source_task_id = (
+                loop_cfg.model_source_task_id
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_task_id
+            )
+            source_loop_index = (
+                loop_cfg.model_source_loop_index
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_loop_index
+            )
+            if not source_task_id or source_loop_index is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: {reuse_mode} requires a source task and loop",
+                )
             try:
                 source_label_horizon = scheduler._get_source_loop_label_horizon(
-                    loop_cfg.model_source_task_id,
-                    loop_cfg.model_source_loop_index,
+                    source_task_id,
+                    source_loop_index,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
@@ -1706,38 +1737,38 @@ async def _prepare_custom_evo_loop_configs(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Loop {pos}: backtest-only label_horizon={loop_label_horizon} does not match "
-                        f"source model label_horizon={source_label_horizon}"
+                        f"Loop {pos}: {reuse_mode} label_horizon={loop_label_horizon} does not match "
+                        f"source loop label_horizon={source_label_horizon}"
                     ),
                 )
             source_factors = _get_source_loop_factors(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_factors is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source loop factors cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source loop factors cannot be read; {reuse_mode} is not allowed",
                 )
             current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
             if current_factors != sorted(source_factors):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same factor list as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same factor list as the source loop",
                 )
             source_disable_alpha158 = _get_source_loop_disable_alpha158(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_disable_alpha158 is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; {reuse_mode} is not allowed",
                 )
             if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same Alpha158 baseline setting as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same Alpha158 baseline setting as the source loop",
                 )
 
     loops_config: List[Dict[str, Any]] = []
@@ -1768,7 +1799,7 @@ async def _prepare_custom_evo_loop_configs(
             f"custom_loop[{pos}].execution_algo",
         )
         cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
-        if loop_cfg.backtest_only and pos in loop_source_horizons:
+        if (loop_cfg.backtest_only or loop_cfg.prediction_replay) and pos in loop_source_horizons:
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
 
@@ -2247,6 +2278,20 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
             except ValueError as exc:
                 raise_http_seed_error(exc)
+        if req.force_full_train:
+            replay_loops = [
+                loop.get("loop_index")
+                for loop in config.get("loops") or []
+                if loop.get("prediction_replay")
+            ]
+            if replay_loops:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "force_full_train cannot override immutable prediction replay "
+                        f"loops={replay_loops}"
+                    ),
+                )
         claim = scheduler.claim_custom_evo_start(task_id)
         if not claim.get("claimed"):
             raise HTTPException(
