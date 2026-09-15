@@ -16,7 +16,6 @@ defaults:
     shell: bash
 
 env:
-  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
   GIT_HTTP_LOW_SPEED_LIMIT: '524288'
   GIT_HTTP_LOW_SPEED_TIME: '30'
   GIT_CONFIG_COUNT: '1'
@@ -30,8 +29,45 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 20
     steps:
+      - name: Prepare verified local Git object mirror
+        id: git_mirror
+        shell: powershell
+        run: |
+          $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = ''
+          $mirrorRoot = 'F:\Dev\github-actions-runner\prebuilt\git\AIstock.git'
+          $manifestPath = $mirrorRoot + '.aistock-mirror.json'
+          $objects = ''
+          try {
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            if ($manifest.schema_version -ne 'aistock_git_object_mirror_v1') { throw 'unsupported mirror manifest' }
+            if ($manifest.repository -ne $env:GITHUB_REPOSITORY) { throw 'mirror repository mismatch' }
+            if ((& git -C $mirrorRoot rev-parse --is-bare-repository) -ne 'true') { throw 'mirror is not bare' }
+            $mirrorSha = (& git -C $mirrorRoot rev-parse --verify 'refs/heads/main^{commit}').Trim()
+            if ($LASTEXITCODE -ne 0 -or $mirrorSha -ne $manifest.main_sha) { throw 'mirror main identity mismatch' }
+            $objects = [System.IO.Path]::GetFullPath((Join-Path $mirrorRoot 'objects'))
+            $workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\HEAD'
+            if (-not (Test-Path -LiteralPath $workspaceHead -PathType Leaf)) {
+              & git -C $env:GITHUB_WORKSPACE init --quiet | Out-Null
+              & git -C $env:GITHUB_WORKSPACE remote get-url origin 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { & git -C $env:GITHUB_WORKSPACE remote set-url origin "https://github.com/$env:GITHUB_REPOSITORY" } else { & git -C $env:GITHUB_WORKSPACE remote add origin "https://github.com/$env:GITHUB_REPOSITORY" }
+              & git -C $env:GITHUB_WORKSPACE fetch --quiet --force --no-tags --no-write-fetch-head $mirrorRoot 'refs/heads/main:refs/remotes/aistock-mirror/main' | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw 'local mirror seed fetch failed' }
+              & git -C $env:GITHUB_WORKSPACE checkout --quiet --force --detach refs/remotes/aistock-mirror/main | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw 'local mirror seed checkout failed' }
+            }
+            "git_object_mirror status=ready main_sha=$mirrorSha"
+          } catch {
+            Write-Warning "git_object_mirror status=unavailable fallback=bounded_remote reason=$($_.Exception.Message)"
+            $objects = ''
+          }
+          "objects=$objects" >> $env:GITHUB_OUTPUT
+          "GIT_ALTERNATE_OBJECT_DIRECTORIES=$objects" >> $env:GITHUB_ENV
+          exit 0
+
       - uses: actions/checkout@v7
         timeout-minutes: 5
+        env:
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}
         with:
           fetch-depth: 2
 

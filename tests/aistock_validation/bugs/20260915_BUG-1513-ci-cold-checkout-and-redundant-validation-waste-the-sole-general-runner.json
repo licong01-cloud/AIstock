@@ -1,0 +1,437 @@
+{
+  "actual": "Checkout initializes an empty zero-object repository and retries full HTTPS packs; heavy validations continue after PR-quality failure; HMM full and slice plans both execute.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/dependency-update-validate.yml",
+    "scripts/ci_workflow_policy_scan.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/maintain_aistock_git_mirror.ps1",
+    "tests/aistock_validation/bugs/20260915_BUG-1513-ci-cold-checkout-and-redundant-validation-waste-the-sole-general-runner.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1513",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T02:55:30.260830Z",
+  "description": "Checkout initializes an empty zero-object repository and retries full HTTPS packs; heavy validations continue after PR-quality failure; HMM full and slice plans both execute.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-9cc7733ac172",
+      "timestamp": "2026-09-15T02:55:30.260812Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR-4742-run-34920570319; PR-4716-run-34877737688"
+  ],
+  "expected": "Transient Git EOF recovers from a verified local main object mirror; failed prerequisite gates skip heavy validations; a full validation plan suppresses its covered slice.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260915_BUG-1513-ci-cold-checkout-and-redundant-validation-waste-the-sole-general-runner.json",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "scripts/maintain_aistock_git_mirror.ps1"
+    ],
+    "added_files": [
+      "scripts/maintain_aistock_git_mirror.ps1"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260915_BUG-1513-ci-cold-checkout-and-redundant-validation-waste-the-sole-general-runner.json",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "scripts/maintain_aistock_git_mirror.ps1"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "scripts/maintain_aistock_git_mirror.ps1"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "scripts",
+        "tests.backend",
+        "validation.module_quality",
+        "tests.validation_history",
+        "docs.standards"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/pr-quality.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/semgrep.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/dependency-update-validate.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/test_plans.yaml",
+          "impact_modules": [
+            "validation.center",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_test_plans"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "scripts/maintain_aistock_git_mirror.ps1",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "scripts/maintain_aistock_git_mirror.ps1"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/maintain_aistock_git_mirror.ps1"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/maintain_aistock_git_mirror.ps1"
+    ]
+  },
+  "first_seen_at": "2026-09-15T02:55:30.260830Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4745,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4745",
+  "last_seen_at": "2026-09-15T02:55:30.260830Z",
+  "module": "validation.runner",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "gh run view 34920570319 --log-failed",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "infra_failure",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.runner"
+  ],
+  "title": "CI cold checkout and redundant validation waste the sole general runner",
+  "trigger_condition": {
+    "fingerprint": "9cc7733ac17228b18c76b391",
+    "source_event_id": "FE-20260915-9cc7733ac172"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
