@@ -20,6 +20,7 @@ from backend.services.factor_research.runner import (
     execute,
     load_values,
     validate_spec,
+    write_json,
 )
 
 
@@ -266,12 +267,35 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
 
     def compute(name, frame, _ctx, **kwargs):
         calls.append({"name": name, "rows": len(frame), **kwargs})
-        return {"factor_name": name, "metrics": {"full": {"status": "ok"}}}
+        return {
+            "factor_name": name,
+            "metrics": {
+                "full": {
+                    "status": "unavailable",
+                    "rank_ic_mean": float("nan"),
+                    "rank_ic_std": np.float32("inf"),
+                }
+            },
+        }
 
     result = execute(spec, output, prepare=lambda **_kwargs: ctx, compute=compute)
 
     assert calls[0]["include_horizon_metrics"] is True
     assert "from_2024" in calls[0]["evaluation_windows"]
+    candidate = result["candidates"][0]
+    assert candidate["metrics"]["metrics"]["full"] == {
+        "status": "unavailable",
+        "rank_ic_mean": None,
+        "rank_ic_std": None,
+    }
+    assert candidate["computed_metric_serialization"] == {
+        "nonfinite_values_as_null": 2,
+        "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
+    }
+    stored_candidate = json.loads(
+        (output / "m_candidate" / "metrics.json").read_text(encoding="utf-8")
+    )
+    assert stored_candidate["metrics"]["metrics"]["full"]["rank_ic_mean"] is None
     full = result["full_evaluation"]
     assert full["scope"] == "research_only_not_official_metrics_correlations_or_qe_result"
     assert full["official_database_writes"] == 0
@@ -285,3 +309,12 @@ pd.DataFrame({'m_candidate': values}, index=index).to_hdf(Path(a.output), key='d
         json.loads((output / "execution.json").read_text(encoding="utf-8"))["request"]["full_evaluation"]
         == spec["full_evaluation"]
     )
+
+
+def test_write_json_does_not_leave_zero_byte_file_when_encoding_fails(tmp_path: Path) -> None:
+    output = tmp_path / "result.json"
+
+    with pytest.raises(ValueError, match="Out of range float"):
+        write_json(output, {"invalid_input": float("nan")})
+
+    assert not output.exists()
