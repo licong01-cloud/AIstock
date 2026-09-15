@@ -1295,6 +1295,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_backtest_executor.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
         "backend/tests/unified_engine/test_qe_cleanup_path_policy.py",
+        "backend/tests/unified_engine/test_qe_prediction_replay.py",
         "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
         "backend/tests/test_correlation_compute_independence.py",
         "backend/tests/test_factor_st_pit_metrics_cache.py",

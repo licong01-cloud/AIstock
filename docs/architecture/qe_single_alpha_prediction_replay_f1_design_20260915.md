@@ -134,6 +134,8 @@ intersection, missing minute execution configuration, or no executed trades.
 ## 9. Verification Plan
 
 - `python -m pytest -q backend/tests/unified_engine/test_qe_prediction_replay.py`
+- The focused replay contract is collected by the existing
+  `qe_read_backend` nox plan; no new CI lane or approval gate is introduced.
 - `python -m pytest -q backend/tests/unified_engine/test_backtest_executor.py backend/tests/quantevolver/test_payload_summary.py backend/tests/quantevolver/test_execution_manifest_json_safe.py`
 - `python -m pytest -q backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/test_aistock_qe_mcp_servers.py`
 - `python -m pytest -q backend/tests/multi_alpha/test_qe_submission_coordinator.py`
@@ -154,7 +156,7 @@ intersection, missing minute execution configuration, or no executed trades.
 | F-006 | runner output/readback contract | `backend/tests/unified_engine/test_qe_prediction_replay.py` | verified | - |
 | F-007 | reservation metadata, SQL cohort proof and executor context | `python -m pytest -q backend/tests/multi_alpha/test_qe_submission_coordinator.py` | verified | - |
 | F-008 | unchanged default modes | `python -m pytest -q backend/tests/quantevolver/test_qe_registered_submission.py` | verified | - |
-| F-009 | focused and related QE regression suite | `backend/tests/unified_engine/test_qe_prediction_replay.py` and related QE regression paths: 435 passed; 38 pre-existing optional-import skips unchanged | verified | - |
+| F-009 | focused and related QE regression suite; existing `qe_read_backend` plan collects the replay contract | final-head `qe_read_backend`: 602 passed, 1 pre-existing optional-import skip; focused replay contract: 25 passed | verified | - |
 | F-010 | production gates and runtime boundary | `backend/tests/unified_engine/test_qe_prediction_replay.py`: DDL, DML, dependency installation, candidate writes, process control and experiment submission all noop | verified | - |
 
 ## 11. MA-E23 activation use
