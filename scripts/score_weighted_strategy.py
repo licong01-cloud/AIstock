@@ -332,9 +332,14 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             raise RuntimeError(
                 f"HMM 配置文件 {self.hmm_coefficients_file} 缺少 daily_coefficients 字段"
             )
-        if not self._hmm_config.get("stock_sector_map"):
+        membership_fields = (
+            "stock_sector_membership_spans",
+            "stock_sector_map_by_date",
+            "stock_sector_map",
+        )
+        if not any(self._hmm_config.get(field) for field in membership_fields):
             raise RuntimeError(
-                f"HMM 配置文件 {self.hmm_coefficients_file} 缺少 stock_sector_map 字段"
+                f"HMM config {self.hmm_coefficients_file} has no stock-sector membership"
             )
 
         self._hmm_config_loaded = True
@@ -345,6 +350,50 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
         )
         return self._hmm_config
 
+    @staticmethod
+    def _stock_sector_map_for_date(hmm_config: Dict, trade_date_str: str) -> Dict[str, str]:
+        """Resolve point-in-time membership, retaining static-map legacy compatibility."""
+
+        spans_by_stock = hmm_config.get("stock_sector_membership_spans")
+        if spans_by_stock:
+            resolved: Dict[str, str] = {}
+            for stock_id, spans in spans_by_stock.items():
+                if not isinstance(spans, list):
+                    raise RuntimeError(f"invalid HMM membership spans for {stock_id}")
+                matches = [
+                    span
+                    for span in spans
+                    if isinstance(span, dict)
+                    and str(span.get("start_date") or "") <= trade_date_str
+                    <= str(span.get("end_date") or "")
+                ]
+                if len(matches) > 1:
+                    raise RuntimeError(
+                        f"conflicting HMM membership spans: date={trade_date_str} stock={stock_id}"
+                    )
+                if matches:
+                    sector_code = str(matches[0].get("sector_code") or "").strip()
+                    if not sector_code:
+                        raise RuntimeError(
+                            f"blank HMM membership sector: date={trade_date_str} stock={stock_id}"
+                        )
+                    resolved[str(stock_id)] = sector_code
+            if not resolved:
+                raise RuntimeError(f"HMM membership spans have no coverage for {trade_date_str}")
+            return resolved
+
+        maps_by_date = hmm_config.get("stock_sector_map_by_date")
+        if maps_by_date:
+            day_map = maps_by_date.get(trade_date_str)
+            if not isinstance(day_map, dict) or not day_map:
+                raise RuntimeError(f"HMM membership map is missing trade date {trade_date_str}")
+            return day_map
+
+        legacy_map = hmm_config.get("stock_sector_map")
+        if not isinstance(legacy_map, dict) or not legacy_map:
+            raise RuntimeError("HMM config has no usable stock-sector membership")
+        return legacy_map
+
     def _apply_hmm_adjustment(self, pred_score: pd.Series, trade_date_str: str) -> pd.Series:
         """对 pred_score 乘以行业热度系数。不启用 HMM 时直接返回原值。"""
         if not self.enable_sector_hmm:
@@ -354,7 +403,7 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
 
         hmm_config = self._load_hmm_config()
         daily_coefficients = hmm_config["daily_coefficients"]
-        stock_sector_map = hmm_config["stock_sector_map"]
+        stock_sector_map = self._stock_sector_map_for_date(hmm_config, trade_date_str)
 
         day_coeffs = daily_coefficients.get(trade_date_str)
         if not day_coeffs:
@@ -366,6 +415,11 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
 
         adjusted = pred_score.copy()
         n_adjusted = 0
+        strict_pit_membership = bool(
+            hmm_config.get("stock_sector_membership_spans")
+            or hmm_config.get("stock_sector_map_by_date")
+        )
+        missing_membership = []
         for stock_id in adjusted.index:
             sector_code = stock_sector_map.get(stock_id)
             if sector_code and sector_code in day_coeffs:
@@ -373,6 +427,15 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 if abs(coeff - 1.0) > 1e-6:
                     adjusted[stock_id] *= coeff
                     n_adjusted += 1
+            elif strict_pit_membership:
+                missing_membership.append(str(stock_id))
+
+        if missing_membership:
+            raise RuntimeError(
+                "HMM point-in-time membership or coefficient coverage is incomplete: "
+                f"date={trade_date_str} missing={len(missing_membership)} "
+                f"sample={missing_membership[:5]}"
+            )
 
         if n_adjusted > 0:
             logger.info(

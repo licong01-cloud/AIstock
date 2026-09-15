@@ -1709,7 +1709,14 @@ class ConfigComposer:
     @staticmethod
     def _validate_hmm_coefficients_json(content: str) -> None:
         data = json.loads(content)
-        if "daily_coefficients" not in data or "stock_sector_map" not in data:
+        membership_fields = (
+            "stock_sector_membership_spans",
+            "stock_sector_map_by_date",
+            "stock_sector_map",
+        )
+        if "daily_coefficients" not in data or not any(
+            field in data for field in membership_fields
+        ):
             raise RuntimeError(
                 "precomputed HMM coefficients missing required fields: "
                 f"keys={list(data.keys())}"
@@ -1718,8 +1725,19 @@ class ConfigComposer:
             raise RuntimeError("precomputed HMM coefficients contain no daily_coefficients")
         if not any(isinstance(day, dict) and day for day in data["daily_coefficients"].values()):
             raise RuntimeError("precomputed HMM coefficients contain no non-empty daily sector coefficients")
-        if not isinstance(data.get("stock_sector_map"), dict) or not data["stock_sector_map"]:
-            raise RuntimeError("precomputed HMM coefficients contain no stock_sector_map")
+        memberships = [data.get(field) for field in membership_fields if data.get(field)]
+        if not memberships or not all(isinstance(value, dict) for value in memberships):
+            raise RuntimeError("precomputed HMM coefficients contain no stock-sector membership")
+
+        maps_by_date = data.get("stock_sector_map_by_date")
+        if maps_by_date:
+            coefficient_dates = set(data["daily_coefficients"])
+            missing_dates = sorted(coefficient_dates - set(maps_by_date))
+            if missing_dates:
+                raise RuntimeError(
+                    "precomputed HMM point-in-time membership is missing coefficient dates: "
+                    f"{missing_dates[:5]}"
+                )
 
     def _resolve_hmm_coefficients_json(
         self,
@@ -6643,7 +6661,14 @@ model_cls = {nn_class_name}
                 logger.debug("HMM local coefficient lookup skipped: %s", exc)
         if local_coeff_text:
             data = json.loads(local_coeff_text)
-            if "daily_coefficients" in data and "stock_sector_map" in data:
+            if "daily_coefficients" in data and any(
+                data.get(field)
+                for field in (
+                    "stock_sector_membership_spans",
+                    "stock_sector_map_by_date",
+                    "stock_sector_map",
+                )
+            ):
                 self._validate_hmm_coefficients_json(local_coeff_text)
                 logger.info(
                     f"HMM 系数文件本地命中: {coeff_filename} "
