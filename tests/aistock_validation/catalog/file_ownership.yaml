@@ -441,6 +441,37 @@ rules:
     layer: script
     risk_level: high
     ownership_reason: Validation and guardrail scripts are execution entry points for the local pipeline.
+  - rule_id: validation_workflow_automation_scripts
+    priority: 110
+    include:
+      - scripts/aistock_feature_workflow.py
+      - scripts/aistock_issue_workflow.py
+      - scripts/aistock_runner_health.py
+      - scripts/bug_github_sync.py
+      - scripts/bug_github_webhook.py
+      - scripts/ci/prepare_self_hosted_workspace.py
+      - scripts/ci_failure_issue_summary.py
+      - scripts/code_intelligence_adapter.py
+      - scripts/configure_aistock_github_runner.ps1
+      - scripts/issue_flow.py
+      - scripts/llm_provider_adapter.py
+      - scripts/nightly_active_discovery_summary.py
+      - scripts/nightly_adaptive_scheduler.py
+      - scripts/nightly_bug_candidate_queue.py
+      - scripts/nightly_design_drift_audit.py
+      - scripts/nightly_discovery_input_pack.py
+      - scripts/nightly_discovery_plans.py
+      - scripts/nightly_session_runner.py
+      - scripts/nightly_silent_degradation_audit.py
+      - scripts/start_aistock_github_runner.ps1
+      - scripts/supervise_aistock_github_runner.ps1
+      - scripts/validate_changed_requirements.py
+      - scripts/validation_failure_event_to_bug.py
+    primary_module: validation.workflow_automation
+    impact_modules: [validation.runner, validation.guardrails]
+    layer: script
+    risk_level: high
+    ownership_reason: CI, issue, Nightly, runner and code-intelligence entry points are the production side of workflow automation and must share its test-debt denominator.
   - rule_id: validation_test_debt_audit
     priority: 110
     include:
