@@ -1295,6 +1295,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_backtest_executor.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
         "backend/tests/unified_engine/test_qe_cleanup_path_policy.py",
+        "backend/tests/unified_engine/test_qe_prediction_replay.py",
         "backend/tests/test_aistock_qe_mcp_servers.py::test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_internals",
         "backend/tests/test_correlation_compute_independence.py",
         "backend/tests/test_factor_st_pit_metrics_cache.py",
@@ -3370,6 +3371,8 @@ HMM_RISK_PR_SMOKE_TESTS = (
     "backend/tests/hmm_risk/test_security_identity.py",
 )
 HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
+    "backend/db/init_hmm_risk_schema.py": "backend/tests/hmm_risk/test_schema.py",
+    "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
@@ -3381,10 +3384,9 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
 
 
 def _hmm_risk_pr_test_targets() -> list[str]:
-    selection_root = "backend/tests/hmm_risk"
     summary_value = os.environ.get("AISTOCK_CI_CLASSIFIER_SUMMARY", "").strip()
     if not summary_value:
-        return [selection_root]
+        return list(HMM_RISK_PR_SMOKE_TESTS)
     summary_path = Path(summary_value)
     if not summary_path.is_absolute():
         summary_path = ROOT / summary_path
@@ -3400,6 +3402,8 @@ def _hmm_risk_pr_test_targets() -> list[str]:
     for raw_path in changed_files:
         path = raw_path.replace("\\", "/")
         if path.startswith("backend/tests/hmm_risk/") and path.endswith(".py") and "/test_" in path:
+            if not (ROOT / path).is_file():
+                continue
             targets.append(path)
             continue
         override = HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(path)
@@ -3427,6 +3431,8 @@ def _hmm_risk_pr_test_targets() -> list[str]:
 @nox.session(venv_backend="none")
 def hmm_risk_pr_slice(session: nox.Session) -> None:
     """Run changed HMM tests, direct neighbors and stable isolation smoke."""
+    # The package literal is the classifier's static coverage declaration;
+    # execution always narrows it to posargs or classifier-derived neighbors.
     test_targets = ["backend/tests/hmm_risk"]
     session.run(
         sys.executable,
@@ -3437,11 +3443,14 @@ def hmm_risk_pr_slice(session: nox.Session) -> None:
         "scripts/hmm_risk",
         external=True,
     )
-    try:
-        test_targets = _hmm_risk_pr_test_targets()
-    except (OSError, ValueError) as exc:
-        session.error(str(exc))
-        return
+    if session.posargs:
+        test_targets = list(session.posargs)
+    else:
+        try:
+            test_targets = _hmm_risk_pr_test_targets()
+        except (OSError, ValueError) as exc:
+            session.error(str(exc))
+            return
     session.run(
         sys.executable,
         "-m",
@@ -3458,7 +3467,7 @@ def hmm_risk_pr_slice(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def hmm_risk_backend(session: nox.Session) -> None:
-    """Run the isolated HMM Risk schema and state-model-set contracts."""
+    """Run the complete HMM Risk package in Nightly or explicit diagnostics."""
     evidence_dir = ROOT / "tmp" / "validation" / "hmm_risk"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     coverage_xml = evidence_dir / "coverage.xml"

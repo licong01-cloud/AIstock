@@ -81,7 +81,7 @@ def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: s
     runtime_flags = config.build_runtime_flags()
     custom_params = config.build_custom_params()
     strategy_params = config.build_strategy_params()
-    return {
+    manifest = {
         "schema_version": "qe_execution_manifest_v1",
         "task_id": ctx.task_id,
         "loop_index": ctx.loop_index,
@@ -101,8 +101,12 @@ def _requested_manifest(config: ExperimentConfig, ctx: ExecutionContext, mode: s
         "runtime_flags": runtime_flags,
         "random_seed": runtime_flags.get("random_seed"),
         "backtest_only": bool(config.backtest_only),
+        "prediction_replay": bool(config.prediction_replay),
         "hmm_enabled": bool(config.hmm and config.hmm.enable_sector_hmm),
     }
+    if ctx.prediction_replay_source is not None:
+        manifest["prediction_replay_source"] = ctx.prediction_replay_source.model_dump(mode="json")
+    return manifest
 
 
 def _artifact_manifest(conf: Mapping[str, Any], requested: Mapping[str, Any]) -> dict[str, Any]:

@@ -1275,7 +1275,7 @@ def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
     assert payload["backend_sessions"] == ["hmm_data_source_backend"]
 
 
-def test_hmm_local_change_uses_pr_slice_and_cross_contract_change_escalates(tmp_path: Path) -> None:
+def test_hmm_local_and_cross_contract_changes_use_pr_slice(tmp_path: Path) -> None:
     local = classifier.classify_changed_files(
         [
             "backend/services/hmm_risk/rotation_l1_prediction.py",
@@ -1292,7 +1292,26 @@ def test_hmm_local_change_uses_pr_slice_and_cross_contract_change_escalates(tmp_
     assert local["backend_sessions"] == ["hmm_risk_pr_slice"]
     assert local["unexecuted_test_files"] == []
     assert critical["workflow_gate"] == "passed"
-    assert critical["backend_sessions"] == ["hmm_risk_backend"]
+    assert critical["backend_sessions"] == ["hmm_risk_pr_slice"]
+
+
+def test_hmm_mixed_cross_contract_change_stays_on_pr_slice() -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/hmm_risk/state_model_set.py",
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ],
+        repo_root=Path.cwd(),
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["hmm_risk_pr_slice"]
+    assert payload["suppressed_plan_keys"] == {}
+    assert "hmm_risk_pr_slice" in payload["selected_plan_keys"]
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        "backend/tests/hmm_risk/test_rotation_l1_prediction.py": ["hmm_risk_pr_slice"]
+    }
 
 
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
@@ -1303,6 +1322,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/requirements/pr-quality.txt",
             ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
+            "scripts/maintain_aistock_git_mirror.ps1",
             "scripts/validate_changed_requirements.py",
             "scripts/aistock_validation_catalog_integrity.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
@@ -1320,6 +1340,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["prompt_evaluation_required"] is False
     assert payload["unmapped_code_files"] == []
     assert "backend/tests/scripts/test_validate_changed_requirements.py" in payload["workflow_test_targets"]
+    assert "backend/tests/scripts/test_ci_workflow_policy_scan.py" in payload["workflow_test_targets"]
 
 
 def test_dependency_changes_are_selected_once_for_unified_ci() -> None:
@@ -1685,14 +1706,21 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
     workflow_condition = (
-        "always() && steps.classify.outcome == 'success' && "
+        "always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
         "steps.classify.outputs.workflow_validation_required == 'true' && "
         "steps.classify.outputs.workflow_test_targets != '[]'"
     )
     workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
     workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
+    prerequisite_gate = next(step for step in verdict["steps"] if step.get("id") == "prerequisite_gate")
     assert workflow_validation["if"] == workflow_condition
     assert workflow_policy["if"] == workflow_condition
+    assert "heavy_lanes_allowed=false" in prerequisite_gate["run"]
+    final_verdict = next(
+        step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass"
+    )
+    assert final_verdict["env"]["CLOSE_SYNC_ONLY"] == "${{ steps.classify.outputs.close_sync_metadata_only }}"
+    assert '"${CLOSE_SYNC_ONLY}" != "true"' in final_verdict["run"]
     workflow_runs = "\n".join(str(step.get("run", "")) for step in verdict["steps"])
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs

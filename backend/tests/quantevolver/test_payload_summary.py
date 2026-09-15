@@ -190,6 +190,30 @@ def test_compact_policy_summary_reports_enablement_and_effect_evidence() -> None
     assert summary["sector_blacklist"]["action_count"] == 7
 
 
+def test_compact_policy_summary_uses_materialized_blacklist_diagnostics() -> None:
+    summary = compact_policy_summary(
+        {
+            "sector_blacklist": ["801080.SI"],
+            "_qe_sector_blacklist_policy": {
+                "schema_version": "qe_sector_blacklist_policy_v1",
+                "requested": True,
+                "enabled": True,
+                "effective": True,
+                "blacklist_excluded_count": 19,
+            },
+        },
+        {},
+    )
+
+    assert summary["sector_blacklist"] == {
+        "requested": True,
+        "enabled": True,
+        "effective": True,
+        "action_count": 19,
+        "effective_reason": "action_observed",
+    }
+
+
 def test_compact_enhanced_summary_derives_position_counts_from_stock_trades() -> None:
     metrics = {
         "enhanced_metrics": {

@@ -233,6 +233,55 @@ def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_
     runner._validate_pred_backtest_has_execution(recorder, config, prediction)
 
 
+def test_qrun_pred_backtest_filters_replayed_prediction_to_run_scoped_dataset(
+    monkeypatch,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    prediction_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000001.SZ"),
+            (pd.Timestamp("2026-08-03"), "000002.SZ"),
+            (pd.Timestamp("2026-08-04"), "000002.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    label_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000002.SZ"),
+            (pd.Timestamp("2026-08-04"), "000002.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    prediction = pd.DataFrame({"score": [0.9, 0.8, 0.7]}, index=prediction_index)
+    label = pd.DataFrame({"label": [0.1, 0.2]}, index=label_index)
+
+    filtered = runner._filter_pred_backtest_to_dataset(prediction, label)
+
+    assert filtered.index.tolist() == label_index.tolist()
+    assert prediction.shape[0] == 3
+
+
+def test_qrun_pred_backtest_rejects_empty_run_scoped_prediction(monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    prediction = pd.DataFrame(
+        {"score": [0.9]},
+        index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+            names=["datetime", "instrument"],
+        ),
+    )
+    label = pd.DataFrame(
+        {"label": [0.1]},
+        index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-08-03"), "000002.SZ")],
+            names=["datetime", "instrument"],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="QE_PRED_BACKTEST_UNIVERSE_EMPTY"):
+        runner._filter_pred_backtest_to_dataset(prediction, label)
+
+
 def test_qrun_minute_guards_do_not_change_non_minute_backtests(tmp_path, monkeypatch) -> None:
     runner, _record_temp = _load_runner(monkeypatch)
     config = _minute_config(tmp_path / "missing-minute")

@@ -138,6 +138,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/ci_failure_issue_summary.py",
     "scripts/ci/prepare_self_hosted_workspace.py",
     "scripts/ci_workflow_policy_scan.py",
+    "scripts/maintain_aistock_git_mirror.ps1",
     "scripts/configure_aistock_github_runner.ps1",
     "scripts/start_aistock_github_runner.ps1",
     "scripts/supervise_aistock_github_runner.ps1",
@@ -194,6 +195,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
     "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
     "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
+    "scripts/maintain_aistock_git_mirror.ps1": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
     "scripts/configure_aistock_github_runner.ps1": ("backend/tests/scripts/test_configure_aistock_github_runner.py",),
     "scripts/start_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
     "scripts/supervise_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
@@ -411,6 +413,26 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
             continue
         sessions.append(session)
     return sessions
+
+
+def _apply_plan_subsumption(
+    plan_keys: list[str], plans: dict[str, dict[str, Any]]
+) -> tuple[list[str], dict[str, str]]:
+    """Remove selected plans whose work is explicitly covered by another selected plan."""
+
+    ordered = list(dict.fromkeys(str(plan_key) for plan_key in plan_keys))
+    selected = set(ordered)
+    suppressed: dict[str, str] = {}
+    for covering_key in ordered:
+        plan = plans.get(covering_key) or {}
+        raw_subsumes = plan.get("subsumes") or []
+        if isinstance(raw_subsumes, str):
+            raw_subsumes = [raw_subsumes]
+        for raw_covered_key in raw_subsumes:
+            covered_key = str(raw_covered_key).strip()
+            if covered_key and covered_key != covering_key and covered_key in selected:
+                suppressed.setdefault(covered_key, covering_key)
+    return [plan_key for plan_key in ordered if plan_key not in suppressed], suppressed
 
 
 def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
@@ -636,6 +658,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
             if plan_key not in required_plans:
                 required_plans.append(plan_key)
+        required_plans, _ = _apply_plan_subsumption(required_plans, plans)
         for plan_key in required_plans:
             if plan_key not in selected_plan_keys:
                 selected_plan_keys.append(plan_key)
@@ -660,10 +683,22 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
+    selected_plan_keys, suppressed_plan_keys = _apply_plan_subsumption(selected_plan_keys, plans)
+    for path, path_sessions in file_backend_sessions.items():
+        effective_sessions = list(path_sessions)
+        for covered_key, covering_key in suppressed_plan_keys.items():
+            covered_session = str((plans.get(covered_key) or {}).get("nox_session") or "").strip()
+            covering_session = str((plans.get(covering_key) or {}).get("nox_session") or "").strip()
+            if covered_session in effective_sessions:
+                effective_sessions = [session for session in effective_sessions if session != covered_session]
+                if covering_session and covering_session not in effective_sessions:
+                    effective_sessions.append(covering_session)
+        file_backend_sessions[path] = effective_sessions
     sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
     dev_db_plan_keys = _dev_db_plan_keys({"required_plans": selected_plan_keys}, plans)
     return {
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "backend_sessions": sessions,
         "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
@@ -890,6 +925,7 @@ def classify_changed_files(
     ]
     catalog_selection = _catalog_backend_selection(business_files)
     selected_plan_keys = catalog_selection["selected_plan_keys"]
+    suppressed_plan_keys = catalog_selection["suppressed_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
     dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
@@ -940,6 +976,13 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if suppressed_plan_keys:
+        reasons.append(
+            "redundant validation plans were subsumed: "
+            + ", ".join(
+                f"{covered}->{covering}" for covered, covering in suppressed_plan_keys.items()
+            )
+        )
     if dev_db_plan_keys:
         reasons.append("database validation must use the existing DEV database: " + ", ".join(dev_db_plan_keys))
     if frontend_files:
@@ -1025,6 +1068,7 @@ def classify_changed_files(
         "dependency_files": dependency_files,
         "backend_plan_keys": catalog_selection["required_plans"],
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,

@@ -1128,6 +1128,9 @@ class QEExecutionReservationRepository:
                       COALESCE(evolution_loop.config_json ->> 'backtest_only', 'false')
                   ) <> 'true'
                   AND lower(
+                      COALESCE(evolution_loop.config_json ->> 'prediction_replay', 'false')
+                  ) <> 'true'
+                  AND lower(
                       COALESCE(
                           evolution_loop.config_json ->> 'parallel_training_eligible',
                           'false'
@@ -1160,6 +1163,9 @@ class QEExecutionReservationRepository:
                       AND evolution_loop.loop_id IS NOT NULL
                       AND lower(
                           COALESCE(evolution_loop.config_json ->> 'backtest_only', 'false')
+                      ) <> 'true'
+                      AND lower(
+                          COALESCE(evolution_loop.config_json ->> 'prediction_replay', 'false')
                       ) <> 'true'
                       AND lower(
                           COALESCE(
@@ -1198,9 +1204,14 @@ class QEExecutionReservationRepository:
                   reservation.source_kind = 'qe_evolution_loop'
                   AND reservation.qe_task_id = %s
                   AND evolution_loop.loop_id IS NOT NULL
-                  AND lower(
-                      COALESCE(evolution_loop.config_json ->> 'backtest_only', '')
-                  ) = 'true'
+                  AND (
+                      lower(
+                          COALESCE(evolution_loop.config_json ->> 'backtest_only', '')
+                      ) = 'true'
+                      OR lower(
+                          COALESCE(evolution_loop.config_json ->> 'prediction_replay', '')
+                      ) = 'true'
+                  )
               )
             """,
             (

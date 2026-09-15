@@ -131,6 +131,36 @@ def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
     assert noxfile._hmm_risk_pr_test_targets() == targets
 
 
+def test_hmm_risk_pr_targets_default_to_smoke_without_classifier_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
+
+    assert noxfile._hmm_risk_pr_test_targets() == list(noxfile.HMM_RISK_PR_SMOKE_TESTS)
+
+
+def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    targets = [
+        *noxfile.HMM_RISK_PR_SMOKE_TESTS,
+        "backend/tests/hmm_risk/test_rotation_l1_api.py",
+    ]
+    for relative in targets:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# test fixture\n", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"changed_files": ["backend/routers/hmm_risk.py"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
+
+    assert noxfile._hmm_risk_pr_test_targets() == targets
+
+
 def test_hmm_risk_pr_targets_fail_closed_without_neighbor_mapping(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
