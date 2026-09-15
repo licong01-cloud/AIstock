@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 from datetime import date, datetime, timezone
+from math import isfinite
+from numbers import Integral, Real
 from pathlib import Path
 
 from .models import ResearchError, encode, identifier, json_object
@@ -100,10 +102,37 @@ def validate_spec(value):
     return spec, output
 
 
+def _normalize_computed_metrics(value):
+    """Represent undefined computed numbers as JSON null, never as zero."""
+    if value is None or isinstance(value, (str, bool, date, datetime, Path)):
+        return value, 0
+    if isinstance(value, Integral):
+        return int(value), 0
+    if isinstance(value, Real):
+        number = float(value)
+        return (number, 0) if isfinite(number) else (None, 1)
+    if isinstance(value, dict):
+        result, replaced = {}, 0
+        for key, item in value.items():
+            normalized, count = _normalize_computed_metrics(item)
+            result[key] = normalized
+            replaced += count
+        return result, replaced
+    if isinstance(value, (list, tuple)):
+        result, replaced = [], 0
+        for item in value:
+            normalized, count = _normalize_computed_metrics(item)
+            result.append(normalized)
+            replaced += count
+        return result, replaced
+    return value, 0
+
+
 def write_json(path, payload):
     """Exclusive immutable result creation, not a dataset identity/hash operation."""
+    rendered = encode(payload)
     with Path(path).open("x", encoding="utf-8") as stream:
-        stream.write(encode(payload))
+        stream.write(rendered)
 
 
 def load_values(path, name):
@@ -207,7 +236,7 @@ def execute(spec, output, *, prepare=None, compute=None):
                     signal_start=spec["signal_start"],
                     signal_end=spec["signal_end"],
                 )
-            metrics = compute_candidate_metrics(
+            raw_metrics = compute_candidate_metrics(
                 name,
                 selected,
                 ctx,
@@ -215,12 +244,17 @@ def execute(spec, output, *, prepare=None, compute=None):
                 compute=compute,
             )
         else:
-            metrics = compute(name, selected, ctx)
+            raw_metrics = compute(name, selected, ctx)
+        metrics, nonfinite_count = _normalize_computed_metrics(raw_metrics)
         result = {"factor_name": name, "scope": "research_candidate", "metrics": metrics,
                   "rows": len(frame), "nan_rows": int(frame[name].isna().sum()),
                   "signal_rows": len(selected), "source_script": str(script),
                   "values": str(result_path), "actual_signal_start": ctx["data_start"],
-                  "actual_signal_end": ctx["data_end"], "correlation_status": "not_computed"}
+                  "actual_signal_end": ctx["data_end"], "correlation_status": "not_computed",
+                  "computed_metric_serialization": {
+                      "nonfinite_values_as_null": nonfinite_count,
+                      "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
+                  }}
         if spec.get("full_evaluation") is not None:
             finite = selected.loc[selected[name].notna()]
             result["actual_factor_value_range"] = (
