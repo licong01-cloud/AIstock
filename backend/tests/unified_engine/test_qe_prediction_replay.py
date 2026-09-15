@@ -498,6 +498,78 @@ def test_runner_replay_receipt_distinguishes_source_bytes_and_executable_panel(
     assert executable_sha != source_sha
 
 
+def test_runner_replay_dataset_uses_raw_labels_without_training_processors() -> None:
+    helpers = _load_runner_replay_helpers()
+    original = {
+        "task": {
+            "dataset": {
+                "class": "DatasetH",
+                "kwargs": {
+                    "handler": {
+                        "class": "DataHandlerLP",
+                        "kwargs": {
+                            "start_time": "2018-08-01",
+                            "end_time": "2026-08-31",
+                            "instruments": "index_pool__star100",
+                            "data_loader": {
+                                "class": "DynamicFactorsOnlyLoader",
+                                "kwargs": {"label_horizon": 60},
+                            },
+                            "shared_processors": [{"class": "SharedModelProcessor"}],
+                            "infer_processors": [{"class": "RobustZScoreNorm"}],
+                            "learn_processors": [
+                                {"class": "LongHorizonLabelMaturityPurge"},
+                                {"class": "DropnaLabel"},
+                            ],
+                        },
+                    },
+                    "segments": {
+                        "train": ["2018-08-01", "2022-12-30"],
+                        "valid": ["2023-01-03", "2024-06-28"],
+                        "test": ["2024-07-01", "2026-08-31"],
+                    },
+                },
+            }
+        }
+    }
+
+    replay = helpers["_prediction_replay_raw_label_task_config"](original)
+    replay_handler = replay["dataset"]["kwargs"]["handler"]["kwargs"]
+    original_handler = original["task"]["dataset"]["kwargs"]["handler"]["kwargs"]
+
+    assert replay_handler["shared_processors"] == []
+    assert replay_handler["infer_processors"] == []
+    assert replay_handler["learn_processors"] == []
+    assert replay_handler["instruments"] == "index_pool__star100"
+    assert replay_handler["data_loader"]["kwargs"]["label_horizon"] == 60
+    assert replay["dataset"]["kwargs"]["segments"] == (
+        original["task"]["dataset"]["kwargs"]["segments"]
+    )
+    assert original_handler["shared_processors"] == [{"class": "SharedModelProcessor"}]
+    assert original_handler["infer_processors"] == [{"class": "RobustZScoreNorm"}]
+    assert original_handler["learn_processors"][0]["class"] == "LongHorizonLabelMaturityPurge"
+
+
+@pytest.mark.parametrize(
+    ("config", "reason_code"),
+    [
+        ({}, "QE_PRED_BACKTEST_TASK_CONFIG_INVALID"),
+        ({"task": {}}, "QE_PRED_BACKTEST_DATASET_CONFIG_INVALID"),
+        (
+            {"task": {"dataset": {"kwargs": {"handler": {"kwargs": {"learn_processors": "bad"}}}}}},
+            "QE_PRED_BACKTEST_PROCESSOR_CONFIG_INVALID",
+        ),
+    ],
+)
+def test_runner_replay_dataset_config_fails_closed(
+    config: dict[str, object],
+    reason_code: str,
+) -> None:
+    helpers = _load_runner_replay_helpers()
+    with pytest.raises(RuntimeError, match=reason_code):
+        helpers["_prediction_replay_raw_label_task_config"](config)
+
+
 def test_frontend_exposes_replay_without_manual_identity_input() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     page = (

@@ -1,0 +1,281 @@
+{
+  "actual": "_run_pred_backtest initializes the full handler processor pipeline; h60 LongHorizonLabelMaturityPurge rejects an empty pre-index-inception train segment and blocks valid STAR100 replay.",
+  "allowed_write_scope": [
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qe_prediction_replay.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1521-qe-prediction-replay-executes-irrelevant-long-horizon-train-processors-f.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1521",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T08:47:18.441930Z",
+  "description": "_run_pred_backtest initializes the full handler processor pipeline; h60 LongHorizonLabelMaturityPurge rejects an empty pre-index-inception train segment and blocks valid STAR100 replay.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-ee91afd524ba",
+      "timestamp": "2026-09-15T08:47:18.441909Z"
+    },
+    {
+      "action": "root_cause_and_fix_validated",
+      "actor": "codex",
+      "note": "Prediction replay now deep-copies the generated task dataset and disables shared, inference, and learning processor pipelines before Qlib dataset construction. The loader, raw label formula, run-scoped instruments, segments, and immutable prediction remain unchanged; malformed handler processor configuration fails closed.",
+      "timestamp": "2026-09-15T08:56:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "task=qe_20260915_160543_31ee loop=3 node=rdagent-node1"
+  ],
+  "expected": "Prediction replay must validate and load raw test labels for the run-scoped universe without executing training/inference processors, while preserving label semantics and fail-closed checks.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260915_BUG-1521-qe-prediction-replay-executes-irrelevant-long-horizon-train-processors-f.json",
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "scripts/qrun_limit_minute.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260915_BUG-1521-qe-prediction-replay-executes-irrelevant-long-horizon-train-processors-f.json",
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "scripts/qrun_limit_minute.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/qrun_limit_minute.py",
+        "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation",
+        "qe.single_experiment",
+        "qe.custom_evolution"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/qrun_limit_minute.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_prediction_replay.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/qrun_limit_minute.py",
+        "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+    ]
+  },
+  "first_seen_at": "2026-09-15T08:47:18.441930Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4769,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4769",
+  "last_seen_at": "2026-09-15T08:47:18.441930Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python qrun_limit_minute.py conf.yaml --pred-backtest pred.pkl",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu final HEAD fresh-process qrun TSDatasetH STAR100 h60 helper smoke -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE prediction replay executes irrelevant long-horizon train processors for pre-inception index pools",
+  "trigger_condition": {
+    "fingerprint": "ee91afd524ba2134028e7805",
+    "source_event_id": "FE-20260915-ee91afd524ba"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_sector_risk_overlay",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_sector_risk_overlay",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
