@@ -113,7 +113,7 @@
   },
   "first_seen_at": "2026-09-14T19:33:20.480710Z",
   "fix_branch": "bug/BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-20260914",
-  "fix_commit": "0a5be1c14",
+  "fix_commit": "7207f4450b351307135dc2dc309a89401767d07e",
   "fixed_at": "2026-09-14T21:17:00Z",
   "github_issue_number": 4733,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4733",
@@ -122,6 +122,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -146,7 +147,8 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -158,6 +160,27 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1508",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a312d180a59c81f5",
+    "recorded_at": "2026-09-15T05:14:47.098744Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c09098fd18e1f26b55d787b8f5cacb4036e25125",
+    "source_merge_commit": "7207f4450b351307135dc2dc309a89401767d07e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
+    "validation_evidence": [
+      "final head c09098fd1: qe_sector_risk_overlay_backend 100 passed; l0 passed; diff-check clean; CI verdict success"
+    ],
+    "validation_evidence_digest": "be062156362eb71a51ec2ae8ffd66fbf6e60980008d27c0b4997cc2e0d8a7d68"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
@@ -193,6 +216,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 75 passed",
+    "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/quantevolver/test_qe_universe_comparison.py backend/tests/unified_engine/test_qe_config_truth.py -> 196 passed, 38 skipped",
+    "python -m nox -s qe_sector_risk_overlay_backend qe_read_backend validation_module_registry_l0 -> 676 passed, 1 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m ruff check changed Python files and python -m py_compile runtime entrypoints -> passed",
+    "git diff --check -> passed",
+    "final head c09098fd1: qe_sector_risk_overlay_backend 100 passed; l0 passed; diff-check clean; CI verdict success"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -236,15 +268,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 75 passed",
-    "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/quantevolver/test_qe_universe_comparison.py backend/tests/unified_engine/test_qe_config_truth.py -> 196 passed, 38 skipped",
-    "python -m nox -s qe_sector_risk_overlay_backend qe_read_backend validation_module_registry_l0 -> 676 passed, 1 skipped",
-    "python -m nox -s l0 -> passed",
-    "python -m ruff check changed Python files and python -m py_compile runtime entrypoints -> passed",
-    "git diff --check -> passed"
-  ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
