@@ -1957,14 +1957,6 @@ def prepare_c010_observation_eligibility_diagnostic(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def prepare(request: dict[str, Any], *, artifact_root: Path, output_root: Path, db_prefix: str) -> dict[str, Any]:
-    del request, artifact_root, output_root, db_prefix
-    raise StateModelSetError(
-        "legacy fixed-seed preparation is disabled because it cannot satisfy the approved B3 D3-D7 contracts; "
-        "use --b3-preparation-output"
-    )
-
-
 def _diagnose_c008(request: dict[str, Any], *, db_prefix: str, include_b1_evidence: bool) -> dict[str, Any]:
     """Load one immutable PIT input and run the requested non-selecting C-008 diagnostic."""
 

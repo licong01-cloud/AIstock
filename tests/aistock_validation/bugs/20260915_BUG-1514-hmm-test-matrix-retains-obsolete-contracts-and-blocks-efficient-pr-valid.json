@@ -2,7 +2,18 @@
   "actual": "The HMM module collects 862 non-integration pytest nodes and about 32k test LOC. Historical contract versions, offline experiment paths, per-field rejection variants, and cross-layer duplicate assertions make the PR matrix take about 18 minutes. Consolidate current-contract coverage, retire demonstrably unused legacy code/tests, move slow full-fit coverage to Nightly, and split precise PR test plans without weakening current runtime/PIT/fail-closed guarantees.",
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
     "noxfile.py",
+    "backend/services/hmm_risk/canonical_stock_fact_source.py",
+    "backend/services/hmm_risk/state_model_set.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "tests/aistock_validation/bugs/20260915_BUG-1514-hmm-test-matrix-retains-obsolete-contracts-and-blocks-efficient-pr-valid.json"
   ],
   "assigned_agent": null,
@@ -21,6 +32,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260915-f6cfcabd6750",
       "timestamp": "2026-09-15T04:39:47.350854Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Add exact HMM dead-source retirement and CI/Nightly routing contract files after live reachability and plan-selection audit.",
+      "timestamp": "2026-09-15T04:55:00Z"
     }
   ],
   "evidence_uris": [],
