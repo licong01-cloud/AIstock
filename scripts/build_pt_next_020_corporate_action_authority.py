@@ -1,9 +1,10 @@
-"""Build the immutable PT-NEXT-020 corporate-action resolution authority.
+"""Build the immutable PT-NEXT-020 corporate-action authorities.
 
 The operator reads ``market.dividend`` in a repeatable, read-only transaction,
 verifies the two known ambiguous source groups against pinned official
-documents, and emits a v6 snapshot consumable by the existing position-timing
-reader.  It never mutates the database, a dataset candidate, or runtime state.
+documents, emits the existing v6 snapshot, and binds the complete r5
+factor-preflight failures into a separate typed full-scope authority.  It never
+mutates the database, a dataset candidate, or runtime state.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from backend.services.position_timing.contracts import canonical_json_bytes, can
 
 
 AUTHORITY_SCHEMA = "local_data_corporate_action_resolution_authority_v1"
+FULL_SCOPE_AUTHORITY_SCHEMA = "local_data_corporate_action_full_scope_authority_v1"
 RECEIPT_SCHEMA = "pt_next_020_corporate_action_authority_receipt_v1"
 REQUEST_ID = "PT-NEXT-020"
 EXPECTED_CANDIDATE_MANIFEST_SHA256 = (
@@ -51,6 +53,182 @@ SOURCE_COLUMNS = (
     "record_date", "pay_date", "div_listdate", "base_date", "base_share",
 )
 TARGET_KEYS = (("002352.SZ", "2024-11-07"), ("600989.SH", "2024-07-24"))
+
+# These groups are the complete fail-closed result of the r5 source-only
+# preflight after the two economic conflicts above are resolved.  The source
+# group hashes bind the exact market.dividend rows; the factor evidence binds
+# the immutable r5 candidate.  Account economics are never inferred from the
+# factor ratio.  In particular, restructuring conversion shares belong to the
+# restructuring plan rather than ordinary holders, while 300234 has separate
+# eligible-account and exchange reference-price bases because treasury shares
+# do not participate in the distribution.
+FULL_SCOPE_RESOLUTION_SPECS: Mapping[tuple[str, str], Mapping[str, Any]] = {
+    ("000528.SZ", "2018-10-26"): {
+        "classification": "DUPLICATE_SOURCE_RECORD",
+        "source_row_count": 3,
+        "source_rows_sha256": "ae4e21231cb21b541833b1f65eba443075dd9018ff29631673b21e2372b294d7",
+        "accumulation_policy": "ONE_CANONICAL_ACCOUNT_ACTION",
+        "replay_application": "APPLY_ACCOUNT_ACTION",
+        "account_economics": {"quantity_multiplier": "1.3", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.299628440464188329331616537"},
+        "factor_boundary": {"previous": "2018-10-25", "current": "2018-10-26"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/000528/AN201810181216185374.html",
+    },
+    ("000615.SZ", "2025-12-29"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "e1d18fe42fea3fa7d3c24ff219650cddc0a8e7fa9aa5d991ffc246397a53da34",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.184130609682135285696358729"},
+        "factor_boundary": {"previous": "2025-12-25", "current": "2025-12-29"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/000615/AN202512221805948985.html",
+    },
+    ("000797.SZ", "2018-08-01"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "8ec2795e53b977cda0771e205d8498e7ed7a8fb3828d8a8c1a39055cdd82d877",
+        "accumulation_policy": "RETAIN_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "1.3000595", "cash_yuan_per_share": "0.0600119"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-08-01", "first_pit_eligible": "2018-08-01"},
+        "announcement_url": None,
+    },
+    ("000908.SZ", "2026-03-11"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "1b011f82443586ca0f4ec26c059f615fae07cb4f5ad24f6b6f59e47b528af73f",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.460954009756403478383762977"},
+        "factor_boundary": {"previous": "2026-03-10", "current": "2026-03-11"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/000908/AN202603031820229997.html",
+    },
+    ("002602.SZ", "2018-10-31"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "65651bc81d2d7e48a88d032fe05994d0abc348a9f32165e9a0bc306e53e781ae",
+        "accumulation_policy": "RETAIN_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "1.6", "cash_yuan_per_share": "0.1"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-11-07", "first_pit_eligible": "2018-11-07"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/002602/AN201810241220510217.html",
+    },
+    ("002713.SZ", "2025-12-30"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "2db6a966933a75d737b58ffa2f2ae168c8e023dedaf3e189222d38d8a3a5b0eb",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.050359510448741950063936389"},
+        "factor_boundary": {"previous": "2025-12-26", "current": "2025-12-30"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/002713/AN202512231806622901.html",
+    },
+    ("002739.SZ", "2018-08-08"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "017673f37493e6dce47900933ea2293a12fdcb7a9916b25c3eff1b5b8cdc3526",
+        "accumulation_policy": "RETAIN_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "1.5", "cash_yuan_per_share": "0.2"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-11-05", "first_pit_eligible": "2018-11-05"},
+        "announcement_url": None,
+    },
+    ("002742.SZ", "2025-12-10"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "17bcf5b017c8b8e00ac9411e84b5c95bc15da140372d055661e692b1e8cccca0",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.045255289274430692363587398"},
+        "factor_boundary": {"previous": "2025-12-08", "current": "2025-12-10"},
+        "announcement_url": "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=002742&announcementId=1224850420&orgId=9900022970&announcementTime=2025-12-05",
+    },
+    ("300125.SZ", "2025-12-29"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "234d0ae5755a207e5059e7fd1c2a8a69dffb7f3ebec13bca48aa9c94fe56f1d5",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.263672105375504714094000955"},
+        "factor_boundary": {"previous": "2025-12-25", "current": "2025-12-29"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/300125/AN202512221805987762.html",
+    },
+    ("300234.SZ", "2020-04-21"): {
+        "classification": "TREASURY_SHARE_EXCLUDED_DUAL_BASIS_DISTRIBUTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "a50737f86d3b9043637767e7cf698cb7bcc8778356cf26c392da23da2973ac82",
+        "accumulation_policy": "APPLY_ELIGIBLE_ACCOUNT_BASIS_ONCE",
+        "replay_application": "APPLY_ACCOUNT_ACTION_WITH_DISTINCT_REFERENCE_BASIS",
+        "account_economics": {"quantity_multiplier": "1.8125392", "cash_yuan_per_share": "0.0629717"},
+        "reference_price_economics": {"quantity_multiplier": "1.766366", "cash_yuan_per_share": "0.059393", "factor_ratio": "1.774970332611693357568878109"},
+        "factor_boundary": {"previous": "2020-04-20", "current": "2020-04-21"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/300234/AN202004141377997624.html",
+    },
+    ("300506.SZ", "2025-12-22"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "de8808fdaeaaae3175c31d2fb32f1bc66708594c8943c4069b49dd2fa8cbfc6a",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.325949671464771899736514322"},
+        "factor_boundary": {"previous": "2025-12-18", "current": "2025-12-22"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/300506/AN202512151801046991.html",
+    },
+    ("300510.SZ", "2018-11-08"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "72f8e9c712229d2c0087549820218e50fe6d16205aa22fc081939d796c789fdc",
+        "accumulation_policy": "RETAIN_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "1.8", "cash_yuan_per_share": "0.056"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-12-03", "first_pit_eligible": "2018-12-03"},
+        "announcement_url": None,
+    },
+    ("600375.SH", "2024-12-26"): {
+        "classification": "SPECIAL_RESTRUCTURING_NON_PRO_RATA",
+        "source_row_count": 2,
+        "source_rows_sha256": "a39fe1fb379eb782d440a1fc0e0abf67a3069af7f105a7ba0229c5f7e0e25993",
+        "accumulation_policy": "DO_NOT_CREDIT_CONVERSION_SHARES_TO_ORDINARY_ACCOUNT",
+        "replay_application": "REFERENCE_PRICE_ONLY",
+        "account_economics": {"quantity_multiplier": "1", "cash_yuan_per_share": "0"},
+        "reference_price_economics": {"factor_ratio": "1.064114195482434551158691969"},
+        "factor_boundary": {"previous": "2024-12-24", "current": "2024-12-26"},
+        "announcement_url": "http://dataclouds.cninfo.com.cn/shgonggao/2024/2024-12-20/56a87f46bde811ef9f64fa163e26e5de.pdf",
+    },
+    ("600423.SH", "2018-12-18"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 1,
+        "source_rows_sha256": "3f54082fd4323946abe1feab7c9a465a80652bb25c370bde6b05559baa5d269d",
+        "accumulation_policy": "RETAIN_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "2", "cash_yuan_per_share": "0"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-12-26", "first_pit_eligible": "2021-05-20"},
+        "announcement_url": "https://data.eastmoney.com/notices/detail/600423/AN201812111267469927.html",
+    },
+    ("600733.SH", "2018-09-19"): {
+        "classification": "PREHISTORY_BOUNDARY_ACTION",
+        "source_row_count": 3,
+        "source_rows_sha256": "80ea1bbf652cb9499fe99c7c4ed6bffc4a687009713fd2b48c6fb2a47176afe5",
+        "accumulation_policy": "RETAIN_ONE_CANONICAL_SOURCE_DO_NOT_REPLAY",
+        "replay_application": "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION",
+        "account_economics": {"quantity_multiplier": "3.5", "cash_yuan_per_share": "0"},
+        "reference_price_economics": None,
+        "factor_boundary": {"first_valid": "2018-09-27", "first_pit_eligible": "2018-09-27"},
+        "announcement_url": "https://static.cninfo.com.cn/finalpage/2018-09-13/1205432898.PDF",
+    },
+}
 
 
 class AuthorityBuildError(RuntimeError):
@@ -287,6 +465,172 @@ def resolution_payloads(classified: Sequence[Mapping[str, Any]]) -> tuple[dict[s
     )
 
 
+def _stable_portable_rows(rows: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        (portable_row(row) for row in rows),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def _factor_boundary_evidence(
+    candidate: DailyCandidate,
+    *,
+    symbol: str,
+    effective_trade_date: dt.date,
+    expected: Mapping[str, str],
+) -> dict[str, Any]:
+    bars = candidate.bars(symbol)
+    factors = bars["factor"]
+    valid = factors.notna() & factors.map(lambda value: Decimal(str(value)).is_finite()) & factors.gt(0)
+    valid_dates = tuple(item.date() for item in bars.index[valid])
+    valid_values = tuple(Decimal(str(item)) for item in factors.loc[valid].tolist())
+    if not valid_dates:
+        raise AuthorityBuildError(f"full-scope factor history unavailable: {symbol}")
+    pit_rows = candidate.spans.loc[candidate.spans.symbol.eq(symbol)]
+    if pit_rows.empty:
+        raise AuthorityBuildError(f"full-scope PIT span unavailable: {symbol}")
+    first_pit_eligible = min(item.date() for item in pit_rows.start)
+    evidence: dict[str, Any] = {
+        "factor_file": candidate.references[f"{symbol}:factor"],
+        "first_valid_factor_date": valid_dates[0].isoformat(),
+        "first_pit_eligible_date": first_pit_eligible.isoformat(),
+    }
+    if "first_valid" in expected:
+        if (
+            valid_dates[0].isoformat() != expected["first_valid"]
+            or first_pit_eligible.isoformat() != expected["first_pit_eligible"]
+            or any(day < effective_trade_date for day in valid_dates)
+        ):
+            raise AuthorityBuildError(f"full-scope prehistory boundary drifted: {symbol}")
+        evidence.update(
+            {
+                "boundary_type": "NO_PRE_ACTION_FACTOR_IN_CANDIDATE",
+                "previous_factor_date": None,
+                "current_factor_date": valid_dates[0].isoformat(),
+                "observed_factor_ratio": None,
+            }
+        )
+        return evidence
+
+    previous = [index for index, day in enumerate(valid_dates) if day < effective_trade_date]
+    following = [index for index, day in enumerate(valid_dates) if day >= effective_trade_date]
+    if not previous or not following:
+        raise AuthorityBuildError(f"full-scope factor interval unavailable: {symbol}")
+    previous_index, current_index = previous[-1], following[0]
+    observed = valid_values[current_index] / valid_values[previous_index]
+    if (
+        valid_dates[previous_index].isoformat() != expected["previous"]
+        or valid_dates[current_index].isoformat() != expected["current"]
+    ):
+        raise AuthorityBuildError(f"full-scope factor interval drifted: {symbol}")
+    evidence.update(
+        {
+            "boundary_type": "MATERIAL_FACTOR_INTERVAL",
+            "previous_factor_date": valid_dates[previous_index].isoformat(),
+            "current_factor_date": valid_dates[current_index].isoformat(),
+            "observed_factor_ratio": str(observed),
+        }
+    )
+    return evidence
+
+
+def build_full_scope_authority(
+    rows: Sequence[Sequence[Any]],
+    *,
+    candidate: DailyCandidate,
+    candidate_manifest: Mapping[str, Any],
+    captured_at: dt.datetime,
+    specs: Mapping[tuple[str, str], Mapping[str, Any]] = FULL_SCOPE_RESOLUTION_SPECS,
+) -> dict[str, Any]:
+    if captured_at.tzinfo is None:
+        raise AuthorityBuildError("captured_at must be timezone-aware")
+    grouped: dict[tuple[str, str], list[Sequence[Any]]] = {key: [] for key in specs}
+    for row in rows:
+        key = (str(row[0]).upper(), str(_date_text(row[4])))
+        if key in grouped:
+            grouped[key].append(row)
+    resolutions: list[dict[str, Any]] = []
+    for key, spec in sorted(specs.items()):
+        symbol, effective_text = key
+        stable_rows = _stable_portable_rows(grouped[key])
+        source_rows_sha256 = canonical_sha256(stable_rows)
+        if (
+            len(stable_rows) != int(spec["source_row_count"])
+            or source_rows_sha256 != spec["source_rows_sha256"]
+        ):
+            raise AuthorityBuildError(f"full-scope source rows drifted: {symbol}/{effective_text}")
+        factor_evidence = _factor_boundary_evidence(
+            candidate,
+            symbol=symbol,
+            effective_trade_date=dt.date.fromisoformat(effective_text),
+            expected=spec["factor_boundary"],
+        )
+        reference = spec.get("reference_price_economics")
+        if reference is not None and reference.get("factor_ratio") is not None:
+            if factor_evidence["observed_factor_ratio"] != reference["factor_ratio"]:
+                raise AuthorityBuildError(f"full-scope factor ratio drifted: {symbol}")
+        row_classifications = [
+            {
+                "source_row": row,
+                "source_row_sha256": canonical_sha256(row),
+                "classification": spec["classification"],
+                "may_accumulate_as_separate_account_action": False,
+            }
+            for row in stable_rows
+        ]
+        resolutions.append(
+            {
+                "symbol": symbol,
+                "effective_trade_date": effective_text,
+                "classification": spec["classification"],
+                "accumulation_policy": spec["accumulation_policy"],
+                "replay_application": spec["replay_application"],
+                "account_class": ACCOUNT_CLASS,
+                "account_economics": spec["account_economics"],
+                "reference_price_economics": reference,
+                "source_row_count": len(stable_rows),
+                "source_rows_sha256": source_rows_sha256,
+                "row_classifications": row_classifications,
+                "factor_boundary_evidence": factor_evidence,
+                "announcement_url": spec.get("announcement_url"),
+                "source_record_key": f"market.dividend:{symbol}:{effective_text}",
+            }
+        )
+    classification_counts: dict[str, int] = {}
+    for resolution in resolutions:
+        classification = resolution["classification"]
+        classification_counts[classification] = classification_counts.get(classification, 0) + 1
+    identity = {
+        "schema_version": FULL_SCOPE_AUTHORITY_SCHEMA,
+        "request_id": REQUEST_ID,
+        "candidate_manifest": dict(candidate_manifest),
+        "account_class": ACCOUNT_CLASS,
+        "scope": {
+            "resolution_count": len(resolutions),
+            "symbols": sorted({item["symbol"] for item in resolutions}),
+            "start": candidate.calendar[0].date().isoformat(),
+            "end": candidate.calendar[-1].date().isoformat(),
+        },
+        "classification_counts": classification_counts,
+        "resolutions": resolutions,
+        "captured_at": captured_at.isoformat(),
+        "consumer_contract": {
+            "legacy_snapshot_schema": SNAPSHOT_SCHEMA,
+            "typed_authority_reader_required": True,
+            "account_economics_must_not_be_inferred_from_factor": True,
+            "prehistory_actions_must_not_be_applied_to_new_window_positions": True,
+        },
+        "safety": {
+            "database_write_performed": False,
+            "candidate_write_performed": False,
+            "adj_factor_write_performed": False,
+            "outcomes_read": False,
+            "runtime_action_performed": False,
+        },
+    }
+    return {**identity, "canonical_sha256": canonical_sha256(identity)}
+
+
 def _synthetic_rows() -> tuple[tuple[Any, ...], ...]:
     return (
         ("002352.SZ", dt.date(2024, 6, 30), dt.date(2024, 10, 31), dt.date(2024, 10, 31), dt.date(2024, 11, 7), Decimal("0"), None, None, Decimal("1.4"), Decimal("1.3939620"), dt.date(2024, 11, 6), dt.date(2024, 11, 7), None, dt.date(2024, 11, 6), Decimal("479541.5625")),
@@ -324,13 +668,27 @@ def build_snapshot(rows: Sequence[Sequence[Any]], *, symbols: Sequence[str], sta
     return payload
 
 
-def download_documents(folder: Path) -> tuple[dict[str, Any], ...]:
+def download_documents(
+    folder: Path,
+    *,
+    source_document_root: Path | None = None,
+) -> tuple[dict[str, Any], ...]:
     folder.mkdir()
+    if source_document_root is not None:
+        source_document_root = source_document_root.resolve(strict=True)
+        if not source_document_root.is_dir():
+            raise AuthorityBuildError("source document root is not a directory")
     references: list[dict[str, Any]] = []
     for spec in DOCUMENTS:
-        request = Request(str(spec["capture_url"]), headers={"User-Agent": "AIstock-local-data-authority/1.0"})
-        with urlopen(request, timeout=60) as response:
-            body = response.read()
+        if source_document_root is None:
+            request = Request(str(spec["capture_url"]), headers={"User-Agent": "AIstock-local-data-authority/1.0"})
+            with urlopen(request, timeout=60) as response:
+                body = response.read()
+        else:
+            source_path = source_document_root / str(spec["filename"])
+            if not source_path.is_file() or source_path.is_symlink():
+                raise AuthorityBuildError(f"pinned source document unavailable: {spec['document_id']}")
+            body = source_path.read_bytes()
         if not body.startswith(b"%PDF-"):
             raise AuthorityBuildError(f"source document is not PDF: {spec['document_id']}")
         if len(body) != spec["source_file_size"] or sha256_bytes(body) != spec["source_content_sha256"]:
@@ -347,7 +705,15 @@ def _write_canonical_exclusive(path: Path, payload: Mapping[str, Any]) -> None:
         handle.write(canonical_json_bytes(payload) + b"\n")
 
 
-def build_artifact(*, connection: Any, target: str, candidate_root: Path, output_root: Path, captured_at: dt.datetime | None = None) -> Mapping[str, Any]:
+def build_artifact(
+    *,
+    connection: Any,
+    target: str,
+    candidate_root: Path,
+    output_root: Path,
+    source_document_root: Path | None = None,
+    captured_at: dt.datetime | None = None,
+) -> Mapping[str, Any]:
     candidate_root = candidate_root.resolve(strict=True)
     output_root = output_root.absolute()
     if not candidate_root.is_dir() or not output_root.is_absolute() or output_root.is_relative_to(REPOSITORY_ROOT.resolve()):
@@ -374,7 +740,10 @@ def build_artifact(*, connection: Any, target: str, candidate_root: Path, output
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.staging-", dir=parent))
     try:
-        documents = download_documents(staging / "sources")
+        documents = download_documents(
+            staging / "sources",
+            source_document_root=source_document_root,
+        )
         unsigned_authority = {
             "schema_version": AUTHORITY_SCHEMA,
             "request_id": REQUEST_ID,
@@ -398,6 +767,14 @@ def build_artifact(*, connection: Any, target: str, candidate_root: Path, output
         authority = {**unsigned_authority, "canonical_sha256": authority_sha256}
         authority_path = staging / "corporate_action_resolution_authority.json"
         _write_canonical_exclusive(authority_path, authority)
+        full_scope_authority = build_full_scope_authority(
+            rows,
+            candidate=candidate,
+            candidate_manifest=manifest_reference,
+            captured_at=captured,
+        )
+        full_scope_authority_path = staging / "corporate_action_full_scope_authority.json"
+        _write_canonical_exclusive(full_scope_authority_path, full_scope_authority)
         snapshot = build_snapshot(rows, symbols=symbols, start=start, end=end, authority_sha256=authority_sha256, resolutions=resolutions)
         snapshot_path = staging / "corporate_action_snapshot_v6.json"
         _write_canonical_exclusive(snapshot_path, snapshot)
@@ -413,6 +790,12 @@ def build_artifact(*, connection: Any, target: str, candidate_root: Path, output
             "candidate_manifest_sha256": manifest_reference["sha256"],
             "authority_canonical_sha256": authority_sha256,
             "authority_file_sha256": sha256_file(authority_path),
+            "full_scope_authority_schema_version": FULL_SCOPE_AUTHORITY_SCHEMA,
+            "full_scope_authority_canonical_sha256": full_scope_authority["canonical_sha256"],
+            "full_scope_authority_file_sha256": sha256_file(full_scope_authority_path),
+            "full_scope_resolution_count": len(full_scope_authority["resolutions"]),
+            "full_scope_classification_counts": full_scope_authority["classification_counts"],
+            "position_timing_typed_authority_reader_required": True,
             "snapshot_sha256": snapshot["snapshot_sha256"],
             "snapshot_file_sha256": sha256_file(snapshot_path),
             "source_document_count": len(documents),
@@ -443,6 +826,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--env-file", type=Path, default=REPOSITORY_ROOT / ".env")
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--source-document-root",
+        type=Path,
+        help="Optional directory of pinned official PDFs; every file is reverified by size and SHA-256.",
+    )
     return parser.parse_args(argv)
 
 
@@ -452,7 +840,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     connection = psycopg2.connect(**config)
     try:
         connection.set_session(readonly=True, isolation_level="REPEATABLE READ", autocommit=False)
-        receipt = build_artifact(connection=connection, target=args.target, candidate_root=args.candidate_root, output_root=args.output_root)
+        receipt = build_artifact(
+            connection=connection,
+            target=args.target,
+            candidate_root=args.candidate_root,
+            output_root=args.output_root,
+            source_document_root=args.source_document_root,
+        )
         connection.rollback()
     finally:
         connection.close()
