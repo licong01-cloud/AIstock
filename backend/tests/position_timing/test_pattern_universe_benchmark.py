@@ -231,7 +231,22 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "adj_factor_restatement_audit": {},
         "repository_commit": "1" * 40,
         "candidate_data_references_sha256": "2" * 64,
-        "corporate_action_snapshot_sha256": "3" * 64,
+        "corporate_action_snapshot": {
+            "path": (tmp_path / "corporate-action-snapshot.json").as_posix(),
+            "sha256": benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256,
+            "size_bytes": 1,
+        },
+        "corporate_action_snapshot_sha256": (
+            benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256
+        ),
+        "corporate_action_full_scope_authority": {
+            "path": (tmp_path / "full-scope-authority.json").as_posix(),
+            "sha256": benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256,
+            "size_bytes": 1,
+        },
+        "corporate_action_full_scope_authority_canonical_sha256": (
+            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        ),
         "combined_corporate_action_source_sha256": "5" * 64,
         "corporate_action_application_policy": (
             benchmark.CORPORATE_ACTION_APPLICATION_POLICY
@@ -286,6 +301,43 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
             "pool_sidecars": request["pool_sidecars"],
         }
     )
+    request["corporate_action_full_scope_resolution_audit"] = {
+        "authority_canonical_sha256": (
+            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        ),
+        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "scope": {"resolution_count": 15},
+        "classification_counts": dict(benchmark.EXPECTED_CLASSIFICATION_COUNTS),
+        "unresolved_typed_resolution_count": 0,
+        "outcomes_read": False,
+        "factor_account_participation_inference": False,
+    }
+    request["corporate_action_full_scope_resolution_audit"]["audit_sha256"] = (
+        canonical_sha256(request["corporate_action_full_scope_resolution_audit"])
+    )
+    request["corporate_action_full_scope_resolution_audit_sha256"] = request[
+        "corporate_action_full_scope_resolution_audit"
+    ]["audit_sha256"]
+    request["corporate_action_full_scope_application_audit"] = {
+        "authority_canonical_sha256": (
+            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        ),
+        "resolution_audit_sha256": request[
+            "corporate_action_full_scope_resolution_audit_sha256"
+        ],
+        "resolution_count": 15,
+        "classification_counts": dict(benchmark.EXPECTED_CLASSIFICATION_COUNTS),
+        "unresolved_typed_resolution_count": 0,
+        "duplicate_economic_accumulation_count": 0,
+        "outcomes_read": False,
+        "factor_account_participation_inference": False,
+    }
+    request["corporate_action_full_scope_application_audit"][
+        "application_sha256"
+    ] = canonical_sha256(request["corporate_action_full_scope_application_audit"])
+    request["corporate_action_full_scope_application_audit_sha256"] = request[
+        "corporate_action_full_scope_application_audit"
+    ]["application_sha256"]
     request["corporate_action_application_audit"] = {
         "policy_sha256": benchmark.CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
     }
@@ -331,6 +383,41 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
     request["factor_action_coverage_audit_sha256"] = request[
         "factor_action_coverage_audit"
     ]["audit_sha256"]
+    request["source_preflight_audit"] = {
+        "schema_version": "position_timing_pattern_source_preflight_audit_v1",
+        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "corporate_action_snapshot_file_sha256": (
+            benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+        ),
+        "full_scope_authority_canonical_sha256": (
+            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        ),
+        "full_scope_resolution_audit_sha256": request[
+            "corporate_action_full_scope_resolution_audit_sha256"
+        ],
+        "full_scope_application_audit_sha256": request[
+            "corporate_action_full_scope_application_audit_sha256"
+        ],
+        "corporate_action_application_sha256": request[
+            "corporate_action_application_sha256"
+        ],
+        "factor_action_coverage_audit_sha256": request[
+            "factor_action_coverage_audit_sha256"
+        ],
+        "pattern_corporate_action_factor_mismatch_count": 0,
+        "pattern_corporate_action_factor_unverifiable_count": 0,
+        "unbound_material_factor_change_count": 0,
+        "unresolved_typed_resolution_count": 0,
+        "duplicate_economic_accumulation_count": 0,
+        "outcomes_read": False,
+        "factor_account_participation_inference": False,
+    }
+    request["source_preflight_audit"]["audit_sha256"] = canonical_sha256(
+        request["source_preflight_audit"]
+    )
+    request["source_preflight_audit_sha256"] = request[
+        "source_preflight_audit"
+    ]["audit_sha256"]
     request["adj_factor_restatement_audit"]["audit_sha256"] = canonical_sha256(
         request["adj_factor_restatement_audit"]
     )
@@ -356,6 +443,10 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
                 "candidate_data_references_sha256",
                 "parent_manifest_sha256",
                 "corporate_action_snapshot_sha256",
+                "corporate_action_full_scope_authority",
+                "corporate_action_full_scope_authority_canonical_sha256",
+                "corporate_action_full_scope_resolution_audit_sha256",
+                "corporate_action_full_scope_application_audit_sha256",
                 "corporate_action_application_sha256",
                 "combined_corporate_action_source_sha256",
                 "rights_issue_authority_canonical_sha256",
@@ -363,8 +454,11 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
                 "adj_factor_restatement_authority_canonical_sha256",
                 "adj_factor_restatement_audit_sha256",
                 "factor_action_coverage_audit_sha256",
+                "source_preflight_audit_sha256",
             )
         },
+        "source_preflight_outcomes_read": False,
+        "outcomes_read_after_source_preflight": True,
         **benchmark.EXTERNAL_WRITE_RECEIPT_FLAGS,
     }
     receipt["receipt_sha256"] = canonical_sha256(receipt)
