@@ -28,12 +28,18 @@
   ],
   "expected": "Every incremental adj_factor schedule and retry routes through the dedicated full-history reconciliation handler, records non-null reconciliation evidence, and never silently falls back to date-only writes.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1530-adj-factor-scheduler-bypasses-mandatory-full-history-reconciliation.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1530-adj-factor-scheduler-bypasses-mandatory-full-history-reconciliation.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -113,11 +119,22 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -I fresh process imported backend.ingestion.tdx_scheduler and resolved adj_factor to ingest_tushare_adj_factor.py -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
