@@ -58,8 +58,8 @@
   },
   "first_seen_at": "2026-09-01T17:47:52.911495Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "064ec9281e78228a7aebfe1e87afd3249f1fa14e",
+  "fixed_at": "2026-09-01T19:17:42Z",
   "github_issue_number": 4150,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4150",
   "last_seen_at": "2026-09-01T17:47:52.911495Z",
@@ -67,6 +67,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4159",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -92,6 +93,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -103,7 +105,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1311",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f0f3ab87d5f49923",
+    "recorded_at": "2026-09-01T19:34:23.303062Z",
+    "runtime_contract_digest": "78d70a7b14acc79920da9c0c100ac9a3a3bd1a1c12a7d29dfea523d8edbae145",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9532e949dac7efe0423273da1b6987becdc6c3d8",
+    "source_merge_commit": "064ec9281e78228a7aebfe1e87afd3249f1fa14e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4159",
+    "validation_evidence": [
+      "validation-receipt: id=69eb43ced252e6c5 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`passed`",
+      "validation-receipt: id=715a041e862a7091 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=1ff76a6284fb42a3 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py` result=`passed`",
+      "validation-receipt: id=dcb2b9c6042f70d5 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=ruff plan=direct status=passed command=`rtk ruff check and rtk ruff format --check and compileall and git diff --check` result=`passed`",
+      "validation-receipt: id=d63122e54405aced commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_independent_strategy_package_alpha_audit_f2_detailed_design_20260831.md --tier F2 --format summary` result=`passed`"
+    ],
+    "validation_evidence_digest": "754af9a8da6863220a757a0c6f966324dff6b2fa1f21e1a010feb6649b9974f6"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -112,6 +139,13 @@
     "fingerprint": "b9c7f86e9375680a7764b553",
     "source_event_id": "FE-20260901-b9c7f86e9375"
   },
+  "validation_evidence": [
+    "validation-receipt: id=69eb43ced252e6c5 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=nox plan=advisory_modeling_backend status=passed command=`python -m nox -s advisory_modeling_backend` result=`passed`",
+    "validation-receipt: id=715a041e862a7091 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=1ff76a6284fb42a3 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py` result=`passed`",
+    "validation-receipt: id=dcb2b9c6042f70d5 commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=ruff plan=direct status=passed command=`rtk ruff check and rtk ruff format --check and compileall and git diff --check` result=`passed`",
+    "validation-receipt: id=d63122e54405aced commit=9532e949dac7efe0423273da1b6987becdc6c3d8 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_independent_strategy_package_alpha_audit_f2_detailed_design_20260831.md --tier F2 --format summary` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
