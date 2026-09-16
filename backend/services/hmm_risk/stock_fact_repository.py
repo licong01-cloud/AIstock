@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from backend.services.industry_pit.candidate_builder import FrozenDenominator, UniverseSpan
 from backend.services.industry_pit.contracts import IndustryPitContractError
 
-from .state_model_set import StateModelSetError, canonical_json_bytes
+from .contracts import StateModelSetError, canonical_json_bytes
 from .security_identity import SecuritySourceIdentityManifest
 from .provider_absence import ProviderAbsenceManifest
 from .stock_fact_observation import (

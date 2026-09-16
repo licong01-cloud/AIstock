@@ -29,7 +29,7 @@ from backend.services.hmm_risk.risk_l1_prediction import (  # noqa: E402
     predict_single_date_from_assets,
 )
 from backend.services.hmm_risk.risk_l1_g2b import close_processes  # noqa: E402
-from backend.services.hmm_risk.state_model_set import canonical_sha256  # noqa: E402
+from backend.services.hmm_risk.contracts import canonical_sha256  # noqa: E402
 
 RECEIPT_SCHEMA_VERSION = "hmm_risk_risk_l1_product_execution_v1"
 FAILURE_SCHEMA_VERSION = "hmm_risk_risk_l1_product_execution_failure_v1"

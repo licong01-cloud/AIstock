@@ -16,6 +16,12 @@ RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit_minute.py"
 DAY_RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit.py"
 
 
+class _FakeQlibConfig(dict):
+    def get_kernels(self, freq: str) -> int:
+        del freq
+        return int(self["kernels"])
+
+
 def _load_runner(monkeypatch: pytest.MonkeyPatch, runner_path: Path = RUNNER_PATH):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
@@ -37,7 +43,15 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch, runner_path: Path = RUNNER_PAT
     qlib_record_temp = types.ModuleType("qlib.workflow.record_temp")
     qlib_workflow.record_temp = qlib_record_temp
     qlib_config = types.ModuleType("qlib.config")
-    qlib_config.C = {"exp_manager": {"kwargs": {}}}
+    qlib_config.C = _FakeQlibConfig(kernels=26, exp_manager={"kwargs": {}})
+    qlib.init_calls = []
+
+    def fake_init(**kwargs) -> None:
+        qlib.init_calls.append(dict(kwargs))
+        # Model QlibConfig.set(): qlib.init resets C before applying kwargs.
+        qlib_config.C["kernels"] = kwargs.get("kernels", 26)
+
+    qlib.init = fake_init
 
     for name, module in {
         "qlib": qlib,
@@ -661,3 +675,73 @@ def test_qrun_installs_mlflow_retry_after_init_before_task_train(runner_path: Pa
     install_index = run_main.index("_install_mlflow_metric_read_retry()")
     train_index = run_main.index("recorder = _task_train_with_gats_industry_provider(")
     assert init_index < install_index < train_index
+
+
+@pytest.mark.parametrize(
+    ("runner_path", "freq"),
+    [(RUNNER_PATH, "1min"), (DAY_RUNNER_PATH, "day")],
+)
+def test_qrun_passes_four_kernel_limit_through_qlib_init(
+    monkeypatch: pytest.MonkeyPatch,
+    runner_path: Path,
+    freq: str,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch, runner_path)
+    config = {
+        "qlib_init": {
+            "provider_uri": {"day": "/data/day", "1min": "/data/minute"},
+            "kernels": 99,
+        }
+    }
+    exp_manager = {"kwargs": {"uri": "file:/tmp/mlruns"}}
+
+    qlib_init_config = runner._qlib_init_config_with_kernel_limit(config)
+    runner.qlib.init(**qlib_init_config, exp_manager=exp_manager)
+    runner._verify_qlib_kernel_limit(freq)
+
+    assert len(runner.qlib.init_calls) == 1
+    assert runner.qlib.init_calls[0]["kernels"] == 4
+    assert runner.qlib.init_calls[0]["provider_uri"] == config["qlib_init"]["provider_uri"]
+    assert runner.qlib.init_calls[0]["exp_manager"] is exp_manager
+    assert runner.C.get_kernels(freq) == 4
+    assert config["qlib_init"]["kernels"] == 99
+
+
+@pytest.mark.parametrize(
+    ("runner_path", "freq"),
+    [(RUNNER_PATH, "1min"), (DAY_RUNNER_PATH, "day")],
+)
+def test_qrun_fails_closed_when_effective_kernel_limit_does_not_stick(
+    monkeypatch: pytest.MonkeyPatch,
+    runner_path: Path,
+    freq: str,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch, runner_path)
+
+    def ignore_requested_kernels(**_kwargs) -> None:
+        runner.C["kernels"] = 26
+
+    monkeypatch.setattr(runner.qlib, "init", ignore_requested_kernels)
+    qlib_init_config = runner._qlib_init_config_with_kernel_limit(
+        {"qlib_init": {"provider_uri": "/data/day"}}
+    )
+    runner.qlib.init(**qlib_init_config, exp_manager={"kwargs": {}})
+
+    with pytest.raises(RuntimeError, match="QE_QLIB_KERNEL_LIMIT_NOT_EFFECTIVE"):
+        runner._verify_qlib_kernel_limit(freq)
+
+    assert runner.C.get_kernels(freq) == 26
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_verifies_kernel_limit_before_provider_read(runner_path: Path) -> None:
+    source = runner_path.read_text(encoding="utf-8")
+    run_main = source[source.index("def _run_main") :]
+
+    build_at = run_main.index("_qlib_init_config_with_kernel_limit(config)")
+    init_at = run_main.index("qlib.init(**qlib_init_config")
+    verify_at = run_main.index("_verify_qlib_kernel_limit(")
+    provider_read_at = run_main.index("load_benchmark_series(config)")
+
+    assert build_at < init_at < verify_at < provider_read_at
+    assert 'C["kernels"] = 4' not in run_main

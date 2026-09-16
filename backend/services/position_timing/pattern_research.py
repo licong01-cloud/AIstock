@@ -252,6 +252,7 @@ def apply_pattern_corporate_action_policy(
     start: date,
     end: date,
     candidate_source_sha256: str,
+    prevalidated_action_keys: Sequence[tuple[str, date]] = (),
 ) -> tuple[CorporateActionBook, Mapping[str, Any]]:
     """Validate stock distributions against qfq factors and normalize exceptions.
 
@@ -273,6 +274,17 @@ def apply_pattern_corporate_action_policy(
     tolerance = Decimal(
         str(CORPORATE_ACTION_APPLICATION_POLICY["stock_factor_relative_tolerance"])
     )
+    prevalidated = tuple(
+        sorted({(str(symbol).upper(), action_date) for symbol, action_date in prevalidated_action_keys})
+    )
+    if len(prevalidated) != len(tuple(prevalidated_action_keys)):
+        raise ActionValueError("PATTERN_CORPORATE_ACTION_PREVALIDATED_KEYS_INVALID")
+    available_keys = {
+        (action.symbol, action.effective_trade_date) for action in corporate_actions.actions
+    }
+    if any(key not in available_keys for key in prevalidated):
+        raise ActionValueError("PATTERN_CORPORATE_ACTION_PREVALIDATED_KEYS_INVALID")
+    prevalidated_set = set(prevalidated)
     ignored_keys: set[tuple[str, date]] = set()
     replacements: dict[tuple[str, date], CorporateAction] = {}
     normalized: list[dict[str, Any]] = []
@@ -288,6 +300,7 @@ def apply_pattern_corporate_action_policy(
                 end_inclusive=end,
             )
             if action.quantity_multiplier > 1
+            and (action.symbol, action.effective_trade_date) not in prevalidated_set
         )
         if not scoped_actions:
             continue
@@ -394,6 +407,27 @@ def apply_pattern_corporate_action_policy(
             [_corporate_action_identity(action) for action in retained]
         ),
     }
+    if prevalidated:
+        audit_identity.update(
+            {
+                "factor_mismatch_count": 0,
+                "factor_unverifiable_count": 0,
+                "prevalidated_action_count": len(prevalidated),
+                "prevalidated_action_keys": [
+                    f"{symbol}/{action_date.isoformat()}"
+                    for symbol, action_date in prevalidated
+                ],
+                "prevalidated_action_keys_sha256": canonical_sha256(
+                    [
+                        {
+                            "symbol": symbol,
+                            "effective_trade_date": action_date.isoformat(),
+                        }
+                        for symbol, action_date in prevalidated
+                    ]
+                ),
+            }
+        )
     audit = {
         **audit_identity,
         "application_sha256": canonical_sha256(audit_identity),

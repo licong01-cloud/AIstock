@@ -35,36 +35,8 @@ from backend.services.advisory_model_first.margin_information_set_pipeline impor
     inspect_margin_source_bundle,
     run_margin_information_set_mve,
 )
-from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
-
-
-def _refs() -> tuple[EvidenceReferenceV1, ...]:
-    roles = (
-        "n3_margin_generator_manifest",
-        "n3_margin_generator_receipt",
-        "n3_margin_n2b_manifest",
-        "n3_margin_n2b_request",
-        "n3_margin_n2b_outcomes",
-        "n3_margin_n1_manifest",
-        "n3_margin_n1_cpcv",
-        "n3_margin_n1_regime_daily",
-        "n3_margin_source_manifest",
-        "n3_margin_source_receipt",
-        "n3_margin_source_projection",
-        "n3_margin_source_coverage",
-        "n3_margin_cross_snapshot_parity",
-        "n3_margin_candidate_state_snapshot",
-    )
-    return tuple(
-        EvidenceReferenceV1(
-            role=role,
-            artifact_uri=f"/tmp/evidence-{index}",
-            sha256=f"{index + 1:064x}",
-            size_bytes=index + 1,
-        )
-        for index, role in enumerate(roles)
-    )
+from backend.tests.advisory_model_first._test_support import margin_evidence_refs as _refs
 
 
 def _request(tmp_path: Path) -> FrozenMarginInformationSetRequestV1:

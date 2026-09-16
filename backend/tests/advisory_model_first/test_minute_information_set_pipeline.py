@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from itertools import combinations
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -20,6 +18,7 @@ from backend.services.advisory_model_first.minute_information_set_pipeline impor
     evaluate_minute_models,
     run_minute_crossfit,
 )
+from backend.tests.advisory_model_first._test_support import eight_block_cpcv_paths as _paths
 
 
 def _request() -> FrozenMinuteInformationSetRequestV1:
@@ -93,20 +92,6 @@ def _loader(
         frame.loc[instrument, "$limit_up"] = 0.0
         frame.loc[instrument, "$limit_down"] = 0.0
     return frame
-
-
-def _paths(dates: list[str]) -> list[dict[str, object]]:
-    paths: list[dict[str, object]] = []
-    for index, validation in enumerate(combinations(range(8), 2)):
-        paths.append(
-            {
-                "path_id": f"path-{index:02d}",
-                "status": "READY",
-                "train_dates": [day for offset, day in enumerate(dates) if offset not in validation],
-                "validation_dates": [day for offset, day in enumerate(dates) if offset in validation],
-            }
-        )
-    return paths
 
 
 def test_aggregate_preserves_whole_day_and_partial_missing_and_market_slot_gap() -> None:

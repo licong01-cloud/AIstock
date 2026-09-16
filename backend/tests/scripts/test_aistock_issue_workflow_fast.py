@@ -94,6 +94,79 @@ def test_repository_runtime_catalog_preserves_representative_roles(
     assert payload["target_ids"] == expected_targets
 
 
+def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
+    catalog = workflow._load_runtime_target_catalog()
+
+    retired = {
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/b3_mixed_dimension.py",
+        "backend/services/hmm_risk/b3_training.py",
+        "backend/services/hmm_risk/state_model_set.py",
+    }
+
+    assert retired.isdisjoint(catalog["non_runtime_source_paths"])
+
+
+def test_runtime_classifier_surfaces_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = "runtime target catalog contains one stale source"
+
+    def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
+        raise workflow.WorkflowError(message)
+
+    monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
+
+    payload = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/contracts.py"]
+    )
+
+    assert payload["runtime_impact"] == "unknown"
+    assert payload["target_ids"] == ["backend-main"]
+    assert payload["catalog_error"] == message
+
+
+def test_runtime_contract_blocks_on_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = "runtime target catalog contains one stale source"
+
+    def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
+        raise workflow.WorkflowError(message)
+
+    monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
+
+    contract = workflow.build_runtime_contract(
+        record={
+            "runtime_contract": {
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+                "target_ids": [],
+            }
+        },
+        changed_files=["backend/services/hmm_risk/contracts.py"],
+    )
+
+    assert contract["runtime_impact"] == "unknown"
+    assert contract["catalog_validation_error"] == message
+    assert f"runtime target catalog validation failed: {message}" in contract["blocking"]
+    assert contract["pre_pr_ready"] is False
+
+
+def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
+    payload = workflow._classify_runtime_impact(
+        [
+            "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+            "backend/services/hmm_risk/b3_mixed_dimension.py",
+            "backend/services/hmm_risk/b3_training.py",
+            "backend/services/hmm_risk/contracts.py",
+            "backend/services/hmm_risk/risk_l1_prediction.py",
+            "backend/services/hmm_risk/state_model_set.py",
+            "backend/services/hmm_risk/stock_fact_observation.py",
+        ]
+    )
+
+    assert payload["runtime_impact"] == "backend"
+    assert payload["target_ids"] == ["backend-main"]
+    assert payload["catalog_error"] is None
+
+
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

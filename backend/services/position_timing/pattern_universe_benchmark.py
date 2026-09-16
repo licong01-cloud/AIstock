@@ -46,6 +46,11 @@ from .pattern_adj_factor_restatement import (
     audit_candidate_adj_factor_restatement,
     open_adj_factor_restatement_authority,
 )
+from .pattern_full_scope_authority import (
+    EXPECTED_CLASSIFICATION_COUNTS,
+    apply_full_scope_corporate_action_authority,
+    open_full_scope_corporate_action_authority,
+)
 from .pattern_rights_issue import (
     RIGHTS_ISSUE_PARTICIPATION_POLICY,
     RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
@@ -59,9 +64,9 @@ from .pattern_strategy import PATTERN_FEATURE_COLUMNS, pattern_feature_frame
 
 PIPELINE_ID = "POSITION_TIMING_PATTERN_UNIVERSE_BENCHMARK_V1"
 ARTIFACT_FOLDER = "pattern_universe_benchmark_v1"
-REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v2"
-RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v2"
-BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v2"
+REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v3"
+RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v3"
+BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v3"
 CHUNK_SCHEMA = "position_timing_pattern_universe_benchmark_chunk_v1"
 MEMBERSHIP_SCHEMA = "position_timing_candidate_bound_pool_membership_v1"
 RESULT_CLASS = "EXPLORATORY_CROSS_SYMBOL_EXTERNAL_VALIDITY_NOT_TEMPORAL_HOLDOUT"
@@ -80,6 +85,18 @@ EXPECTED_RIGHTS_AUTHORITY_SHA256 = (
 )
 EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256 = (
     "c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd"
+)
+EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256 = (
+    "8d9a7b6bca857344276ab11f8a3fa04e8e6956bbccb0d60ba6a8bbaad29e01ee"
+)
+EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256 = (
+    "9a6e4c5737da9f903a06894a48e2665295a72f35109cd46208ccd7aff0a8f415"
+)
+EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256 = (
+    "3c10a9633bfe217b5c214e0e473509c9c36ad676d35d9baff46f1576a9ca3d85"
+)
+EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256 = (
+    "7198fc52af5d744a2e4144035a6306b7492a6226ecaa3cc7a6d57c22e40a42fd"
 )
 POOL_IDS = (
     "stock_universe",
@@ -135,6 +152,7 @@ SOURCE_CODE_FILES: Mapping[str, str] = {
     "pattern_strategy": "pattern_strategy.py",
     "rights_issue": "pattern_rights_issue.py",
     "adj_factor_restatement": "pattern_adj_factor_restatement.py",
+    "full_scope_authority": "pattern_full_scope_authority.py",
     "daily_candidate": "action_value_data.py",
     "corporate_actions": "action_value_corporate_actions.py",
     "cost_and_fill": "action_value.py",
@@ -147,6 +165,10 @@ EXTERNAL_WRITE_RECEIPT_FLAGS: Mapping[str, bool] = {
     "alert_written": False,
     "order_written": False,
     "database_written": False,
+    "database_read": False,
+    "network_accessed": False,
+    "live_market_read": False,
+    "runtime_action_performed": False,
     "runtime_written": False,
 }
 
@@ -157,6 +179,12 @@ BENCHMARK_CONTRACT: Mapping[str, Any] = {
     "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
     "adj_factor_restatement_authority_canonical_sha256": (
         EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+    ),
+    "corporate_action_snapshot_file_sha256": (
+        EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+    ),
+    "full_scope_authority_canonical_sha256": (
+        EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
     ),
     "pool_ids": POOL_IDS,
     "effective_index_population": "INDEX_MEMBERSHIP_AND_STOCK_UNIVERSE_PIT",
@@ -404,6 +432,7 @@ def prepare_request(
     parent_pattern_bundle: Path,
     candidate_root: Path,
     corporate_action_snapshot: Path,
+    corporate_action_full_scope_authority: Path,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Path:
     if not timing_root.is_absolute() or not repository_root.is_absolute():
@@ -412,6 +441,9 @@ def prepare_request(
     root = timing_root.resolve()
     candidate_root = candidate_root.resolve()
     corporate_action_snapshot = corporate_action_snapshot.resolve()
+    corporate_action_full_scope_authority = (
+        corporate_action_full_scope_authority.resolve()
+    )
     if (
         not root.is_absolute()
         or root == repository
@@ -437,6 +469,11 @@ def prepare_request(
         raise ActionValueError("PATTERN_BENCHMARK_CALENDAR_IDENTITY_MISMATCH")
 
     corporate_snapshot_reference = file_reference(corporate_action_snapshot)
+    if (
+        corporate_snapshot_reference["sha256"]
+        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED")
     corporate_scope = _snapshot_scope(
         corporate_action_snapshot,
         expected_symbols=symbols,
@@ -444,6 +481,19 @@ def prepare_request(
         end=end,
     )
     source_actions = CorporateActionBook.open(corporate_action_snapshot)
+    if source_actions.snapshot_sha256 != EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256:
+        raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED")
+    full_scope_authority = open_full_scope_corporate_action_authority(
+        corporate_action_full_scope_authority,
+        candidate=candidate,
+        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        expected_authority_canonical_sha256=(
+            EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        ),
+        expected_authority_file_sha256=EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256,
+        expected_start=start,
+        expected_end=end,
+    )
     rights_authority = open_rights_issue_authority(
         candidate_root=candidate_root,
         expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
@@ -491,13 +541,26 @@ def prepare_request(
             "pool_sidecars": memberships.references,
         }
     )
+    typed_actions, full_scope_application = (
+        apply_full_scope_corporate_action_authority(
+            source_actions,
+            full_scope_authority,
+            candidate_source_sha256=candidate_identity_sha256,
+        )
+    )
     applied_actions, action_application = apply_pattern_corporate_action_policy(
         candidate,
         symbols=symbols,
-        corporate_actions=source_actions,
+        corporate_actions=typed_actions,
         start=start,
         end=end,
         candidate_source_sha256=candidate_identity_sha256,
+        prevalidated_action_keys=tuple(
+            resolution.key
+            for resolution in full_scope_authority.resolutions
+            if resolution.replay_application
+            != "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION"
+        ),
     )
     factor_coverage = audit_pattern_factor_action_coverage(
         candidate,
@@ -510,6 +573,43 @@ def prepare_request(
         combined_corporate_action_snapshot_sha256=combined_source["snapshot_sha256"],
         rights_issue_application_sha256=rights_application["application_sha256"],
     )
+    source_preflight_identity = {
+        "schema_version": "position_timing_pattern_source_preflight_audit_v1",
+        "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "corporate_action_snapshot_file_sha256": (
+            EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+        ),
+        "full_scope_authority_canonical_sha256": (
+            full_scope_authority.authority_canonical_sha256
+        ),
+        "full_scope_resolution_audit_sha256": (
+            full_scope_authority.resolution_audit_sha256
+        ),
+        "full_scope_application_audit_sha256": full_scope_application[
+            "application_sha256"
+        ],
+        "corporate_action_application_sha256": action_application[
+            "application_sha256"
+        ],
+        "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
+        "pattern_corporate_action_factor_mismatch_count": 0,
+        "pattern_corporate_action_factor_unverifiable_count": 0,
+        "unbound_material_factor_change_count": factor_coverage[
+            "unbound_material_factor_change_count"
+        ],
+        "unresolved_typed_resolution_count": full_scope_application[
+            "unresolved_typed_resolution_count"
+        ],
+        "duplicate_economic_accumulation_count": full_scope_application[
+            "duplicate_economic_accumulation_count"
+        ],
+        "outcomes_read": False,
+        "factor_account_participation_inference": False,
+    }
+    source_preflight = {
+        **source_preflight_identity,
+        "audit_sha256": canonical_sha256(source_preflight_identity),
+    }
     candidate.bars(BENCHMARK)
     candidate_data_references_sha256 = canonical_sha256(candidate.references)
     if factor_coverage.get("coverage_complete") is not True:
@@ -521,6 +621,15 @@ def prepare_request(
                 "candidate_manifest": memberships.candidate_manifest_reference,
                 "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
                 "corporate_action_snapshot": corporate_snapshot_reference,
+                "corporate_action_full_scope_authority": (
+                    full_scope_authority.authority_reference
+                ),
+                "corporate_action_full_scope_resolution_audit": (
+                    full_scope_authority.resolution_audit
+                ),
+                "corporate_action_full_scope_application_audit": (
+                    full_scope_application
+                ),
                 "corporate_action_application": action_application,
                 "rights_issue_authority": rights_authority.authority_reference,
                 "adj_factor_restatement_authority": (
@@ -576,6 +685,22 @@ def prepare_request(
         "parent_request_sha256": parent.request_sha256,
         "corporate_action_snapshot": corporate_snapshot_reference,
         "corporate_action_snapshot_sha256": source_actions.snapshot_sha256,
+        "corporate_action_full_scope_authority": (
+            full_scope_authority.authority_reference
+        ),
+        "corporate_action_full_scope_authority_canonical_sha256": (
+            full_scope_authority.authority_canonical_sha256
+        ),
+        "corporate_action_full_scope_resolution_audit": (
+            full_scope_authority.resolution_audit
+        ),
+        "corporate_action_full_scope_resolution_audit_sha256": (
+            full_scope_authority.resolution_audit_sha256
+        ),
+        "corporate_action_full_scope_application_audit": full_scope_application,
+        "corporate_action_full_scope_application_audit_sha256": (
+            full_scope_application["application_sha256"]
+        ),
         "corporate_action_scope": corporate_scope,
         "corporate_action_application_policy": CORPORATE_ACTION_APPLICATION_POLICY,
         "corporate_action_application_policy_sha256": CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
@@ -616,6 +741,8 @@ def prepare_request(
         "factor_action_coverage_policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
         "factor_action_coverage_audit": factor_coverage,
         "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
+        "source_preflight_audit": source_preflight,
+        "source_preflight_audit_sha256": source_preflight["audit_sha256"],
         "benchmark_contract": BENCHMARK_CONTRACT,
         "benchmark_contract_sha256": BENCHMARK_CONTRACT_SHA256,
         "chunk_size": chunk_size,
@@ -701,7 +828,51 @@ def _load_request(path: Path) -> dict[str, Any]:
         if isinstance(factor_audit, Mapping)
         else {}
     )
+    full_scope_resolution_audit = request.get(
+        "corporate_action_full_scope_resolution_audit"
+    )
+    full_scope_resolution_audit_identity = (
+        {
+            key: value
+            for key, value in full_scope_resolution_audit.items()
+            if key != "audit_sha256"
+        }
+        if isinstance(full_scope_resolution_audit, Mapping)
+        else {}
+    )
+    full_scope_application_audit = request.get(
+        "corporate_action_full_scope_application_audit"
+    )
+    full_scope_application_audit_identity = (
+        {
+            key: value
+            for key, value in full_scope_application_audit.items()
+            if key != "application_sha256"
+        }
+        if isinstance(full_scope_application_audit, Mapping)
+        else {}
+    )
+    source_preflight_audit = request.get("source_preflight_audit")
+    source_preflight_audit_identity = (
+        {
+            key: value
+            for key, value in source_preflight_audit.items()
+            if key != "audit_sha256"
+        }
+        if isinstance(source_preflight_audit, Mapping)
+        else {}
+    )
+    full_scope_resolution_scope = (
+        full_scope_resolution_audit.get("scope")
+        if isinstance(full_scope_resolution_audit, Mapping)
+        and isinstance(full_scope_resolution_audit.get("scope"), Mapping)
+        else {}
+    )
     candidate_manifest = request.get("candidate_manifest")
+    corporate_snapshot_reference = request.get("corporate_action_snapshot")
+    full_scope_authority_reference = request.get(
+        "corporate_action_full_scope_authority"
+    )
     pool_sidecars = request.get("pool_sidecars")
     source_code = request.get("source_code")
     policy_artifact = request.get("rights_issue_participation_policy_artifact")
@@ -728,6 +899,87 @@ def _load_request(path: Path) -> dict[str, Any]:
         != EXPECTED_CANDIDATE_MANIFEST_SHA256
         or request.get("candidate_dataset_manifest_sha256")
         != EXPECTED_CANDIDATE_DATASET_SHA256
+        or not isinstance(corporate_snapshot_reference, Mapping)
+        or corporate_snapshot_reference.get("sha256")
+        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+        or request.get("corporate_action_snapshot_sha256")
+        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256
+        or request.get("corporate_action_full_scope_authority_canonical_sha256")
+        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        or not isinstance(full_scope_authority_reference, Mapping)
+        or full_scope_authority_reference.get("sha256")
+        != EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256
+        or not isinstance(full_scope_resolution_audit, Mapping)
+        or full_scope_resolution_audit.get("audit_sha256")
+        != canonical_sha256(full_scope_resolution_audit_identity)
+        or request.get("corporate_action_full_scope_resolution_audit_sha256")
+        != full_scope_resolution_audit.get("audit_sha256")
+        or full_scope_resolution_audit.get("authority_canonical_sha256")
+        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        or full_scope_resolution_audit.get("candidate_manifest_sha256")
+        != EXPECTED_CANDIDATE_MANIFEST_SHA256
+        or full_scope_resolution_scope.get("resolution_count") != 15
+        or full_scope_resolution_audit.get("classification_counts")
+        != EXPECTED_CLASSIFICATION_COUNTS
+        or full_scope_resolution_audit.get("unresolved_typed_resolution_count")
+        != 0
+        or full_scope_resolution_audit.get("outcomes_read") is not False
+        or full_scope_resolution_audit.get("factor_account_participation_inference")
+        is not False
+        or not isinstance(full_scope_application_audit, Mapping)
+        or full_scope_application_audit.get("application_sha256")
+        != canonical_sha256(full_scope_application_audit_identity)
+        or request.get("corporate_action_full_scope_application_audit_sha256")
+        != full_scope_application_audit.get("application_sha256")
+        or full_scope_application_audit.get("authority_canonical_sha256")
+        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        or full_scope_application_audit.get("resolution_audit_sha256")
+        != full_scope_resolution_audit.get("audit_sha256")
+        or full_scope_application_audit.get("resolution_count") != 15
+        or full_scope_application_audit.get("classification_counts")
+        != EXPECTED_CLASSIFICATION_COUNTS
+        or full_scope_application_audit.get("unresolved_typed_resolution_count")
+        != 0
+        or full_scope_application_audit.get("duplicate_economic_accumulation_count")
+        != 0
+        or full_scope_application_audit.get("outcomes_read") is not False
+        or full_scope_application_audit.get("factor_account_participation_inference")
+        is not False
+        or not isinstance(source_preflight_audit, Mapping)
+        or source_preflight_audit.get("schema_version")
+        != "position_timing_pattern_source_preflight_audit_v1"
+        or source_preflight_audit.get("audit_sha256")
+        != canonical_sha256(source_preflight_audit_identity)
+        or request.get("source_preflight_audit_sha256")
+        != source_preflight_audit.get("audit_sha256")
+        or source_preflight_audit.get("candidate_manifest_sha256")
+        != EXPECTED_CANDIDATE_MANIFEST_SHA256
+        or source_preflight_audit.get("corporate_action_snapshot_file_sha256")
+        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
+        or source_preflight_audit.get("full_scope_authority_canonical_sha256")
+        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
+        or source_preflight_audit.get("full_scope_resolution_audit_sha256")
+        != full_scope_resolution_audit.get("audit_sha256")
+        or source_preflight_audit.get("full_scope_application_audit_sha256")
+        != full_scope_application_audit.get("application_sha256")
+        or source_preflight_audit.get("corporate_action_application_sha256")
+        != request.get("corporate_action_application_sha256")
+        or source_preflight_audit.get("factor_action_coverage_audit_sha256")
+        != request.get("factor_action_coverage_audit_sha256")
+        or source_preflight_audit.get("pattern_corporate_action_factor_mismatch_count")
+        != 0
+        or source_preflight_audit.get(
+            "pattern_corporate_action_factor_unverifiable_count"
+        )
+        != 0
+        or source_preflight_audit.get("unbound_material_factor_change_count")
+        != 0
+        or source_preflight_audit.get("unresolved_typed_resolution_count") != 0
+        or source_preflight_audit.get("duplicate_economic_accumulation_count")
+        != 0
+        or source_preflight_audit.get("outcomes_read") is not False
+        or source_preflight_audit.get("factor_account_participation_inference")
+        is not False
         or request.get("parent_manifest_sha256") != EXPECTED_PARENT_MANIFEST_SHA256
         or request.get("rights_issue_authority_canonical_sha256")
         != EXPECTED_RIGHTS_AUTHORITY_SHA256
@@ -1647,6 +1899,10 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         "alert_written",
         "order_written",
         "database_written",
+        "database_read",
+        "network_accessed",
+        "live_market_read",
+        "runtime_action_performed",
         "runtime_written",
     )
     request_bound_receipt_fields = (
@@ -1657,6 +1913,10 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         "candidate_data_references_sha256",
         "parent_manifest_sha256",
         "corporate_action_snapshot_sha256",
+        "corporate_action_full_scope_authority",
+        "corporate_action_full_scope_authority_canonical_sha256",
+        "corporate_action_full_scope_resolution_audit_sha256",
+        "corporate_action_full_scope_application_audit_sha256",
         "corporate_action_application_sha256",
         "combined_corporate_action_source_sha256",
         "rights_issue_authority_canonical_sha256",
@@ -1664,6 +1924,7 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         "adj_factor_restatement_authority_canonical_sha256",
         "adj_factor_restatement_audit_sha256",
         "factor_action_coverage_audit_sha256",
+        "source_preflight_audit_sha256",
     )
     actual_files = {
         path.relative_to(root).as_posix()
@@ -1753,6 +2014,10 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         request["corporate_action_snapshot"],
         code="PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED",
     )
+    full_scope_authority_path = _assert_file_reference(
+        request["corporate_action_full_scope_authority"],
+        code="PATTERN_BENCHMARK_FULL_SCOPE_AUTHORITY_CHANGED",
+    )
     _assert_file_reference(
         request["rights_issue_participation_policy_artifact"],
         code="PATTERN_BENCHMARK_RIGHTS_POLICY_CHANGED",
@@ -1837,19 +2102,52 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
             "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_AUTHORITY_DRIFT"
         )
     source_actions = CorporateActionBook.open(corporate_snapshot)
+    full_scope_authority = open_full_scope_corporate_action_authority(
+        full_scope_authority_path,
+        candidate=candidate,
+        expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
+        expected_authority_canonical_sha256=request[
+            "corporate_action_full_scope_authority_canonical_sha256"
+        ],
+        expected_authority_file_sha256=request[
+            "corporate_action_full_scope_authority"
+        ]["sha256"],
+        expected_start=candidate.calendar[0].date(),
+        expected_end=candidate.calendar[-1].date(),
+    )
     combined_source = combined_corporate_action_source_snapshot(
         dividend_snapshot_sha256=source_actions.snapshot_sha256,
         authority=rights_authority,
     )
     if combined_source != request["combined_corporate_action_source"]:
         raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_SOURCE_DRIFT")
+    typed_actions, full_scope_application = (
+        apply_full_scope_corporate_action_authority(
+            source_actions,
+            full_scope_authority,
+            candidate_source_sha256=request["candidate_identity_sha256"],
+        )
+    )
+    if (
+        full_scope_authority.resolution_audit
+        != request["corporate_action_full_scope_resolution_audit"]
+        or full_scope_application
+        != request["corporate_action_full_scope_application_audit"]
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_FULL_SCOPE_AUTHORITY_DRIFT")
     applied_actions, application_audit = apply_pattern_corporate_action_policy(
         candidate,
         symbols=memberships.symbols,
-        corporate_actions=source_actions,
+        corporate_actions=typed_actions,
         start=candidate.calendar[0].date(),
         end=candidate.calendar[-1].date(),
         candidate_source_sha256=request["candidate_identity_sha256"],
+        prevalidated_action_keys=tuple(
+            resolution.key
+            for resolution in full_scope_authority.resolutions
+            if resolution.replay_application
+            != "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION"
+        ),
     )
     if (
         application_audit != request["corporate_action_application_audit"]
@@ -1858,6 +2156,44 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
     ):
         raise ActionValueError("PATTERN_BENCHMARK_ACTION_APPLICATION_DRIFT")
 
+    factor_coverage = audit_pattern_factor_action_coverage(
+        candidate,
+        symbols=memberships.symbols,
+        corporate_actions=applied_actions,
+        start=candidate.calendar[0].date(),
+        end=candidate.calendar[-1].date(),
+        candidate_source_sha256=request["candidate_identity_sha256"],
+        rights_issues=rights_authority,
+        combined_corporate_action_snapshot_sha256=combined_source[
+            "snapshot_sha256"
+        ],
+        rights_issue_application_sha256=rights_application[
+            "application_sha256"
+        ],
+    )
+    source_preflight_identity = {
+        key: value
+        for key, value in request["source_preflight_audit"].items()
+        if key != "audit_sha256"
+    }
+    observed_source_preflight = {
+        **source_preflight_identity,
+        "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
+        "unbound_material_factor_change_count": factor_coverage[
+            "unbound_material_factor_change_count"
+        ],
+    }
+    observed_source_preflight["audit_sha256"] = canonical_sha256(
+        observed_source_preflight
+    )
+    if (
+        factor_coverage != request["factor_action_coverage_audit"]
+        or observed_source_preflight != request["source_preflight_audit"]
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_SOURCE_PREFLIGHT_DRIFT")
+
+    # Strategy return materialization starts only after the complete source
+    # preflight above has been recomputed and matched to the frozen request.
     benchmark_close = candidate.bars(BENCHMARK)["close"]
     observed_candidate_references = dict(candidate.references)
     symbols = tuple(request["population_symbols"])
@@ -1943,6 +2279,18 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "corporate_action_snapshot_sha256": request[
             "corporate_action_snapshot_sha256"
         ],
+        "corporate_action_full_scope_authority": request[
+            "corporate_action_full_scope_authority"
+        ],
+        "corporate_action_full_scope_authority_canonical_sha256": request[
+            "corporate_action_full_scope_authority_canonical_sha256"
+        ],
+        "corporate_action_full_scope_resolution_audit_sha256": request[
+            "corporate_action_full_scope_resolution_audit_sha256"
+        ],
+        "corporate_action_full_scope_application_audit_sha256": request[
+            "corporate_action_full_scope_application_audit_sha256"
+        ],
         "corporate_action_application_sha256": request[
             "corporate_action_application_sha256"
         ],
@@ -1964,6 +2312,11 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "factor_action_coverage_audit_sha256": request[
             "factor_action_coverage_audit_sha256"
         ],
+        "source_preflight_audit_sha256": request[
+            "source_preflight_audit_sha256"
+        ],
+        "source_preflight_outcomes_read": False,
+        "outcomes_read_after_source_preflight": True,
         "pool_sidecars": request["pool_sidecars"],
         "main_family_size": FAMILY_SIZE,
         "primary_comparisons": comparisons,
@@ -2005,6 +2358,9 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--parent-pattern-bundle", required=True, type=Path)
     prepare.add_argument("--candidate-root", required=True, type=Path)
     prepare.add_argument("--corporate-action-snapshot", required=True, type=Path)
+    prepare.add_argument(
+        "--corporate-action-full-scope-authority", required=True, type=Path
+    )
     prepare.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     run = commands.add_parser("run")
     run.add_argument("--request", required=True, type=Path)
@@ -2023,6 +2379,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parent_pattern_bundle=arguments.parent_pattern_bundle,
                 candidate_root=arguments.candidate_root,
                 corporate_action_snapshot=arguments.corporate_action_snapshot,
+                corporate_action_full_scope_authority=(
+                    arguments.corporate_action_full_scope_authority
+                ),
                 chunk_size=arguments.chunk_size,
             )
             output: Mapping[str, Any] = {

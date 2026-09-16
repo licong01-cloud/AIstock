@@ -29,7 +29,7 @@ from backend.services.hmm_risk.risk_l1_g2b import (  # noqa: E402
 from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
     build_rotation_l1_inputs_from_assets,
 )
-from backend.services.hmm_risk.state_model_set import canonical_sha256  # noqa: E402
+from backend.services.hmm_risk.contracts import canonical_sha256  # noqa: E402
 
 
 def _load_object(path: Path) -> dict[str, Any]:

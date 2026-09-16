@@ -164,6 +164,7 @@ MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV = "QE_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC"
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS = 3
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC = 0.1
 DEFAULT_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC = 30.0
+QE_QLIB_KERNEL_LIMIT = 4
 _MLFLOW_EMPTY_METRIC_RE = re.compile(r"Metric '([^']+)' is malformed\. No data found\.")
 
 
@@ -173,6 +174,24 @@ class QEMlflowMetricReadRaceError(RuntimeError):
 
 class QEMlflowAsyncDrainError(RuntimeError):
     """Raised when queued Qlib MLflow writes cannot reach a read barrier."""
+
+
+def _qlib_init_config_with_kernel_limit(config: dict) -> dict:
+    """Return an isolated Qlib init config with the per-Loop worker limit."""
+    qlib_init_config = dict(config.get("qlib_init") or {})
+    qlib_init_config["kernels"] = QE_QLIB_KERNEL_LIMIT
+    return qlib_init_config
+
+
+def _verify_qlib_kernel_limit(freq: str) -> None:
+    """Fail closed when Qlib did not apply the requested worker limit."""
+    effective_kernels = C.get_kernels(freq)
+    if effective_kernels != QE_QLIB_KERNEL_LIMIT:
+        raise RuntimeError(
+            "QE_QLIB_KERNEL_LIMIT_NOT_EFFECTIVE: "
+            f"expected={QE_QLIB_KERNEL_LIMIT} actual={effective_kernels}"
+        )
+    print(f"[INFO] Qlib kernels limited to {effective_kernels} per Loop")
 
 
 def _env_int(name: str, default_value: int) -> int:
@@ -2045,11 +2064,6 @@ def _run_main(args):
     apply_qe_fixed_seed(config)
     sys_config(config, config_path=args.yaml_path)
 
-    # 限制 qlib 并行度（必须在 qlib.init 之前！）
-    # 默认 kernels=28 会导致 28 个子进程各自继承父进程内存
-    C["kernels"] = 4
-    print("[INFO] Limited qlib kernels to 4")
-
     isolation_manifest = None
     if args.backtest_only:
         isolation_manifest = _prepare_backtest_recorder_isolation(config.get("experiment_name", "workflow"))
@@ -2063,7 +2077,9 @@ def _run_main(args):
     exp_manager["kwargs"]["uri"] = "file:" + tracking_uri
     if args.backtest_only:
         _validate_backtest_recorder_isolation_manifest(isolation_manifest)
-    qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
+    qlib_init_config = _qlib_init_config_with_kernel_limit(config)
+    qlib.init(**qlib_init_config, exp_manager=exp_manager)
+    _verify_qlib_kernel_limit("1min")
     _install_mlflow_metric_read_retry()
 
     # 注入 benchmark Series（在 qlib init 之后，fallback 需要 D.features）

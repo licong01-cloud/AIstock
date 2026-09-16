@@ -176,6 +176,26 @@ def test_direct_neighbor_pr_targets_falls_back_for_unmapped_live_source(
     ) is None
 
 
+def test_direct_neighbor_pr_targets_skip_deleted_tests_without_hiding_live_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    smoke = "backend/tests/example/test_contract.py"
+    deleted_test = "backend/tests/example/test_retired.py"
+    changed_test = "backend/tests/example/test_reader.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[deleted_test, changed_test],
+        existing_paths=[smoke, changed_test],
+    )
+
+    assert noxfile._direct_neighbor_pr_targets(
+        smoke_tests=(smoke,),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",),
+    ) == [smoke, changed_test]
+
+
 def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -220,21 +240,28 @@ def test_direct_neighbor_sessions_execute_selected_pr_slice(
     assert selected[0] in pytest_args
 
 
-def test_factor_research_session_executes_selected_pr_slice(
+def test_factor_research_session_executes_compact_full_suite_with_dev_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selected = "backend/tests/factor_research/test_selected.py"
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     class DummySession:
-        def run(self, *args: object, **_kwargs: object) -> None:
-            calls.append(args)
+        def run(self, *args: object, **kwargs: object) -> None:
+            calls.append((args, kwargs))
 
     monkeypatch.setattr(noxfile, "_direct_neighbor_pr_targets", lambda **_kwargs: [selected])
 
     noxfile.factor_research_backend(DummySession())
 
-    assert selected in calls[0]
+    pytest_args, pytest_kwargs = calls[0]
+    assert selected not in pytest_args
+    assert "backend/tests/factor_research/test_contracts.py" in pytest_args
+    assert "backend/tests/factor_research/test_repository_dev.py" in pytest_args
+    pytest_env = pytest_kwargs["env"]
+    assert isinstance(pytest_env, dict)
+    assert pytest_env["AISTOCK_DEV_DB_E2E"] == "0"
+    assert pytest_env["FACTOR_RESEARCH_DEV_ENV_FILE"] == ""
 
 
 def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(

@@ -638,7 +638,7 @@ def _direct_neighbor_pr_targets(
         if any(fnmatchcase(path, pattern) for pattern in test_globs):
             relevant = True
             if not (ROOT / path).is_file():
-                return None
+                continue
             targets.append(path)
             continue
         override = override_map.get(path)
@@ -680,6 +680,14 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_source_authority.py",
+        "backend/tests/dataset_release/test_build_processor.py",
+        "backend/tests/dataset_release/test_component_artifact_manifest.py",
+        "backend/tests/dataset_release/test_build_stage.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
@@ -704,9 +712,12 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         },
     )
+    selected_targets = list(full_targets)
+    if pr_targets is not None:
+        selected_targets = pr_targets
     _run_pytest(
         session,
-        *(pr_targets or full_targets),
+        *selected_targets,
         "-q",
         "-p",
         "no:cacheprovider",
@@ -798,11 +809,6 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
-    full_targets = [
-        "backend/tests/advisory_phase0b",
-        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
-        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
-    ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
         source_test_roots=(
@@ -813,9 +819,14 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
             "scripts/advisory_phase0b_candidate_quality_audit.py": "backend/tests/advisory_phase0b/test_cli.py",
         },
     )
+    if pr_targets:
+        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
+        return
     _run_pytest(
         session,
-        *(pr_targets or full_targets),
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -954,6 +965,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/services/industry_pit",
         "backend/services/sector_data_builder.py",
         "scripts/build_industry_pit_candidates.py",
+        "scripts/build_pt_next_020_corporate_action_authority.py",
         "scripts/build_sector_data_candidate.py",
         "scripts/repair_pt_next_018_source_data.py",
         "scripts/ingest_tushare_adj_factor.py",
@@ -975,6 +987,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_data_quality_smoke_env.py",
         "backend/tests/industry_pit",
         "backend/tests/scripts/test_build_industry_pit_candidates.py",
+        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
         "backend/tests/services/test_sector_data_builder.py",
         "backend/tests/scripts/test_build_sector_data_candidate.py",
         "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
@@ -1401,7 +1414,11 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+        "backend/tests/multi_alpha/test_durable_router.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+        "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+        "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
         "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
         "backend/tests/unified_engine/test_backtest_executor.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
@@ -1436,13 +1453,7 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
-    _run_pytest(
-        session,
-        *(pr_targets or targets),
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    _run_pytest(session, *(pr_targets or targets), "-q", "-p", "no:cacheprovider")
 
 
 @nox.session(venv_backend="none")
@@ -2806,23 +2817,9 @@ def factor_research_backend(session: nox.Session) -> None:
         "backend/tests/factor_research/test_quality.py",
         "backend/tests/factor_research/test_repository_dev.py",
     ]
-    pr_targets = _direct_neighbor_pr_targets(
-        smoke_tests=(
-            "backend/tests/factor_research/test_contracts.py",
-            "backend/tests/factor_research/test_repository_dev.py",
-        ),
-        source_test_roots=(
-            ("backend/services/factor_research/", "backend/tests/factor_research/"),
-        ),
-        test_globs=("backend/tests/factor_research/test_*.py",),
-        overrides={
-            "scripts/factor_research.py": "backend/tests/factor_research/test_full_evaluation.py",
-            "backend/services/factor_research/repository.py": "backend/tests/factor_research/test_repository_dev.py",
-        },
-    )
     session.run(
         "python", "-m", "pytest",
-        *(pr_targets or full_targets), "-q",
+        *full_targets, "-q",
         env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
     )
     session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
