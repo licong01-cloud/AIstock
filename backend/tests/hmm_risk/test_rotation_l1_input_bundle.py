@@ -21,7 +21,7 @@ from backend.services.canonical_equity_pit import (
 from backend.services.hmm_risk import rotation_l1_input_bundle as subject
 from backend.services.dataset_release.copy_on_write import tree_merkle
 from backend.services.dataset_release.stock_schema import qlib_stock_schema_digest
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 from scripts.hmm_risk import build_rotation_l1_input_bundle as cli
 
 

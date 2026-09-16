@@ -32,7 +32,7 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (
     fold_slices,
     require_deterministic_runtime,
 )
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 
 CONTRACT_VERSION = "hmm_risk_risk_l1_g2b_v1"
 INPUT_SCHEMA_VERSION = "hmm_risk_risk_l1_g2b_input_bundle_v1"

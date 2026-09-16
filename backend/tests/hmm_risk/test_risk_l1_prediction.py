@@ -12,7 +12,7 @@ import pytest
 
 from backend.services.hmm_risk import risk_l1_prediction as subject
 from backend.services.hmm_risk import risk_l1_g2b
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 
 
 def _rows() -> list[dict[str, object]]:

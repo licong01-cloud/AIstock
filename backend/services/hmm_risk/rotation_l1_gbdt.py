@@ -29,7 +29,7 @@ from backend.services.hmm_risk.jump_model import (
     causal_states,
     fit_jump_model,
 )
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 
 V14_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_4"
