@@ -1805,6 +1805,22 @@ class TDXScheduler:
                 self._run_targeted_tushare_refresh,
                 run_id, schedule_id, ds_lower, mode, triggered_by, options,
             )
+        # adj_factor owns a mandatory full-history reconciliation contract in
+        # its dedicated ingestion script.  Do not let registry membership
+        # silently downgrade scheduled/retry runs to the generic date-only
+        # TushareSyncEngine path.
+        elif ds_lower == "adj_factor":
+            cmd_opts = options.copy()
+            cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
+            future = self._executor.submit(
+                self._run_ingestion_process,
+                run_id,
+                schedule_id,
+                dataset,
+                mode,
+                triggered_by,
+                cmd,
+            )
         # Route engine-supported datasets through TushareSyncEngine
         elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
             future = self._executor.submit(

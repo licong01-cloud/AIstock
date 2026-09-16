@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+from concurrent.futures import Future
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +14,32 @@ from backend.ingestion.tdx_scheduler import TDXScheduler
 
 def _argument_value(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
+
+
+class _Tracker:
+    def __init__(self) -> None:
+        self.added: list[tuple[str, Future[None]]] = []
+        self.removed: list[str] = []
+
+    def is_running(self, key: str) -> bool:
+        return False
+
+    def add(self, key: str, future: Future[None]) -> None:
+        self.added.append((key, future))
+
+    def remove(self, key: str) -> None:
+        self.removed.append(key)
+
+
+class _Executor:
+    def __init__(self) -> None:
+        self.submissions: list[tuple[object, tuple[object, ...]]] = []
+
+    def submit(self, function, *args):
+        self.submissions.append((function, args))
+        future: Future[None] = Future()
+        future.set_result(None)
+        return future
 
 
 def test_incremental_adj_factor_scheduler_uses_reconciliation_mode_without_truncate() -> None:
@@ -32,6 +60,43 @@ def test_incremental_adj_factor_scheduler_uses_reconciliation_mode_without_trunc
     assert _argument_value(args, "--start-date") == "2026-09-13"
     assert _argument_value(args, "--end-date") == "2026-09-14"
     assert _argument_value(args, "--job-id") == "job-1"
+
+
+def test_submit_ingestion_routes_adj_factor_to_dedicated_reconciliation_script(
+    monkeypatch,
+) -> None:
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._executor = _Executor()
+    scheduler._tracker = _Tracker()
+    process_calls: list[tuple[object, ...]] = []
+    engine_calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "_run_ingestion_process",
+        lambda *args: process_calls.append(args),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_run_tushare_engine_sync",
+        lambda *args: engine_calls.append(args),
+    )
+
+    scheduler._submit_ingestion(
+        schedule_id="schedule-1",
+        dataset="adj_factor",
+        mode="incremental",
+        triggered_by="schedule",
+        options={"end_date": "2026-09-15", "job_id": "job-1"},
+    )
+
+    assert len(scheduler._executor.submissions) == 1
+    submitted_function, submitted_args = scheduler._executor.submissions[0]
+    assert submitted_function == scheduler._run_ingestion_process
+    assert engine_calls == []
+    command = submitted_args[-1]
+    assert Path(command[1]).name == "ingest_tushare_adj_factor.py"
+    assert _argument_value(command, "--mode") == "incremental"
+    assert _argument_value(command, "--job-id") == "job-1"
 
 
 def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> None:
