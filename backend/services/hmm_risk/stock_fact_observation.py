@@ -2535,4 +2535,3 @@ def build_c010_feature_domain_panel(
     }
     evidence = {**evidence_body, "receipt_sha256": canonical_sha256(evidence_body)}
     return panel, feature_definition, evidence
-
