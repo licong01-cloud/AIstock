@@ -1453,10 +1453,7 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
-    if pr_targets:
-        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
-    else:
-        _run_pytest(session, *targets, "-q", "-p", "no:cacheprovider")
+    _run_pytest(session, *(pr_targets or targets), "-q", "-p", "no:cacheprovider")
 
 
 @nox.session(venv_backend="none")
