@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from itertools import combinations
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +25,7 @@ from backend.services.advisory_model_first.margin_information_set_pipeline impor
     run_margin_crossfit,
     validate_margin_feature_support,
 )
+from backend.tests.advisory_model_first._test_support import eight_block_cpcv_paths as _paths
 
 
 def _request() -> FrozenMarginInformationSetRequestV1:
@@ -47,20 +47,6 @@ def _request() -> FrozenMarginInformationSetRequestV1:
         bootstrap_repetitions=100,
         bootstrap_seed=20260904,
     )
-
-
-def _paths(dates: list[str]) -> list[dict[str, object]]:
-    paths: list[dict[str, object]] = []
-    for index, validation in enumerate(combinations(range(8), 2)):
-        paths.append(
-            {
-                "path_id": f"path-{index:02d}",
-                "status": "READY",
-                "train_dates": [day for offset, day in enumerate(dates) if offset not in validation],
-                "validation_dates": [day for offset, day in enumerate(dates) if offset in validation],
-            }
-        )
-    return paths
 
 
 def _margin_rows(dates: pd.DatetimeIndex, instruments: tuple[str, ...]) -> pd.DataFrame:
