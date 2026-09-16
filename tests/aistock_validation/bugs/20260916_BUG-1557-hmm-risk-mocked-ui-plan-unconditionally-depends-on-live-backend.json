@@ -27,11 +27,16 @@
   ],
   "expected": "The default HMM Risk UI plan uses deterministic mocked rotation responses; any real backend/browser contract remains explicit and opt-in.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1557-hmm-risk-mocked-ui-plan-unconditionally-depends-on-live-backend.json",
       "frontend/tests/hmm-risk/hmm-risk.spec.ts"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1557-hmm-risk-mocked-ui-plan-unconditionally-depends-on-live-backend.json",
+      "frontend/tests/hmm-risk/hmm-risk.spec.ts"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/tests/hmm-risk/hmm-risk.spec.ts"
@@ -88,10 +93,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
