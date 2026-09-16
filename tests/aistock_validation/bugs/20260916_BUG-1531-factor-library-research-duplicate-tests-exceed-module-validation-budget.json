@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1531",
-  "closed_at": null,
+  "closed_at": "2026-09-16T02:41:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -175,8 +175,8 @@
   },
   "first_seen_at": "2026-09-16T02:13:25.834728Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1d59c2817ec646d2c28fbf3c222dfa7051c1ac64",
+  "fixed_at": "2026-09-16T02:41:56Z",
   "github_issue_number": 4802,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4802",
   "last_seen_at": "2026-09-16T02:13:25.834728Z",
@@ -184,6 +184,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4807",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -202,6 +203,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -211,7 +213,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1531",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cfd7cd27838e1c65",
+    "recorded_at": "2026-09-16T02:43:14.533982Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f",
+    "source_merge_commit": "1d59c2817ec646d2c28fbf3c222dfa7051c1ac64",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4807",
+    "validation_evidence": [
+      "validation-receipt: id=271596799ba44682 commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 26 passed, 9 skipped; fresh-process 2 passed`",
+      "validation-receipt: id=3a32636214a74caa commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_noxfile_validation_env.py -q -p no:cacheprovider` result=`passed: 36 passed`",
+      "validation-receipt: id=665b54e350f99d2b commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 16 passed; findings=0`",
+      "validation-receipt: id=95e3f692c9fb627a commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: blocking=0`"
+    ],
+    "validation_evidence_digest": "6a90f0af12b663d1e2d4578264b2c0ed0651c4c4d9e612785461fc911fa78bf7"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -220,6 +246,12 @@
     "fingerprint": "92e72dff6d6b78e73fcaf21b",
     "source_event_id": "FE-20260916-92e72dff6d6b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=271596799ba44682 commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 26 passed, 9 skipped; fresh-process 2 passed`",
+    "validation-receipt: id=3a32636214a74caa commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_noxfile_validation_env.py -q -p no:cacheprovider` result=`passed: 36 passed`",
+    "validation-receipt: id=665b54e350f99d2b commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 16 passed; findings=0`",
+    "validation-receipt: id=95e3f692c9fb627a commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: blocking=0`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
