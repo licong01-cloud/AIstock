@@ -29,13 +29,20 @@
   ],
   "expected": "Preserve all factor research contracts while removing duplicate assertions and repeated I/O, leaving measurable SLOC headroom below 30 percent.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/factor_research/test_contracts.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1537-factor-research-residual-duplicate-tests-consume-validation-budget.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/tests/factor_research/test_contracts.py",
       "backend/tests/factor_research/test_comparison.py",
-      "backend/tests/factor_research/test_full_evaluation.py"
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1537-factor-research-residual-duplicate-tests-consume-validation-budget.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/factor_research/test_contracts.py",
@@ -114,10 +121,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
