@@ -32,16 +32,20 @@
   ],
   "expected": "Reduce position_timing effective test SLOC by at least 979 lines to below 30 percent while retaining corporate actions, PIT, suspension/ex-rights, holding isolation, strategy identity, artifact/API contracts, and fail-closed coverage.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/position_timing/test_action_value_incremental.py",
+      "backend/tests/position_timing/test_action_value_open_only.py",
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1532-position-timing-offline-research-tests-exceed-module-test-budget.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/tests/position_timing/test_action_value_incremental.py",
-      "backend/tests/position_timing/test_action_value_state_matched_add.py",
       "backend/tests/position_timing/test_action_value_open_only.py",
-      "backend/tests/position_timing/test_action_value_entry_only_policy.py",
-      "backend/tests/position_timing/test_action_value_heldout.py",
-      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1532-position-timing-offline-research-tests-exceed-module-test-budget.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/position_timing/test_action_value_incremental.py",
@@ -187,10 +191,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
