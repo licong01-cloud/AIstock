@@ -1,122 +1,128 @@
 {
-  "actual": "factor_library.research remains at 755/2519 SLOC (29.97 percent), with duplicate validation work on every ordinary plan run.",
+  "actual": "The module reports 747 test SLOC (29.65 percent), including backend/tests/factor_research/dev_cases.py which has zero tests and is not executed by any current test plan.",
   "allowed_write_scope": [
-    "backend/tests/factor_research/test_contracts.py",
-    "backend/tests/factor_research/test_comparison.py",
-    "backend/tests/factor_research/test_full_evaluation.py",
-    "tests/aistock_validation/bugs/20260916_BUG-1537-factor-research-residual-duplicate-tests-consume-validation-budget.json"
+    "backend/tests/factor_research/dev_cases.py",
+    "backend/tests/factor_research/test_repository_dev.py",
+    "docs/architecture/factor_research_p1_detailed_design_20260908.md",
+    "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1537",
-  "closed_at": "2026-09-16T03:02:54Z",
+  "bug_id": "BUG-1546",
+  "closed_at": "2026-09-16T05:30:38Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-16T02:53:52.288585Z",
-  "description": "factor_library.research remains at 755/2519 SLOC (29.97 percent), with duplicate validation work on every ordinary plan run.",
+  "created_at": "2026-09-16T05:21:31.860911Z",
+  "description": "The module reports 747 test SLOC (29.65 percent), including backend/tests/factor_research/dev_cases.py which has zero tests and is not executed by any current test plan.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260916-8a3c886eccfb",
-      "timestamp": "2026-09-16T02:53:52.288572Z"
+      "note": "Promoted from IC-20260916-5d000eafc3f0",
+      "timestamp": "2026-09-16T05:21:31.860892Z"
     }
   ],
   "evidence_uris": [
-    "factor_library.research production_sloc=2519 test_sloc=755 ratio=29.97"
+    "docs/architecture/factor_research_p1_detailed_design_20260908.md#F-111"
   ],
-  "expected": "Preserve all factor research contracts while removing duplicate assertions and repeated I/O, leaving measurable SLOC headroom below 30 percent.",
+  "expected": "Only recurring and unique contract tests remain; ordinary and DEV plans keep their required semantics; test debt falls materially below the 30 percent ceiling.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/tests/factor_research/test_contracts.py",
-      "backend/tests/factor_research/test_comparison.py",
-      "backend/tests/factor_research/test_full_evaluation.py",
-      "tests/aistock_validation/bugs/20260916_BUG-1537-factor-research-residual-duplicate-tests-consume-validation-budget.json"
+      "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/factor_research/test_contracts.py",
-      "backend/tests/factor_research/test_comparison.py",
-      "backend/tests/factor_research/test_full_evaluation.py",
-      "tests/aistock_validation/bugs/20260916_BUG-1537-factor-research-residual-duplicate-tests-consume-validation-budget.json"
+      "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/tests/factor_research/test_contracts.py",
-        "backend/tests/factor_research/test_comparison.py",
-        "backend/tests/factor_research/test_full_evaluation.py"
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "docs/architecture/factor_research_p1_detailed_design_20260908.md"
       ],
       "impacted_modules": [
-        "factor_library.research"
+        "factor_library.research",
+        "docs.architecture",
+        "validation.module_quality"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/factor_research/test_contracts.py",
+          "file": "backend/tests/factor_research/dev_cases.py",
           "impact_modules": [],
           "primary_module": "factor_library.research",
           "risk_level": "high",
           "rule_id": "factor_research_p1"
         },
         {
-          "file": "backend/tests/factor_research/test_comparison.py",
+          "file": "backend/tests/factor_research/test_repository_dev.py",
           "impact_modules": [],
           "primary_module": "factor_library.research",
           "risk_level": "high",
           "rule_id": "factor_research_p1"
         },
         {
-          "file": "backend/tests/factor_research/test_full_evaluation.py",
-          "impact_modules": [],
-          "primary_module": "factor_library.research",
-          "risk_level": "high",
-          "rule_id": "factor_research_p1"
+          "file": "docs/architecture/factor_research_p1_detailed_design_20260908.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
         }
       ],
       "risk_levels": [
-        "high"
+        "high",
+        "low"
       ],
       "suggested_scope": [
-        "backend/tests/factor_research/test_contracts.py",
-        "backend/tests/factor_research/test_comparison.py",
-        "backend/tests/factor_research/test_full_evaluation.py"
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "docs/architecture/factor_research_p1_detailed_design_20260908.md"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/factor_research/test_contracts.py",
-      "backend/tests/factor_research/test_comparison.py",
-      "backend/tests/factor_research/test_full_evaluation.py"
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/factor_research/test_contracts.py",
-      "backend/tests/factor_research/test_comparison.py",
-      "backend/tests/factor_research/test_full_evaluation.py"
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
     ]
   },
-  "first_seen_at": "2026-09-16T02:53:52.288585Z",
+  "first_seen_at": "2026-09-16T05:21:31.860911Z",
   "fix_branch": null,
-  "fix_commit": "3bdc9101aa1a0c4fab4b852d0293a981d535c020",
-  "fixed_at": "2026-09-16T03:02:54Z",
-  "github_issue_number": 4821,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4821",
-  "last_seen_at": "2026-09-16T02:53:52.288585Z",
+  "fix_commit": "8c27d3919b8bc8f2582a648f9866228472c388c5",
+  "fixed_at": "2026-09-16T05:30:38Z",
+  "github_issue_number": 4844,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4844",
+  "last_seen_at": "2026-09-16T05:21:31.860911Z",
   "module": "factor_library.research",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4823",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4849",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json",
   "required_verification": [
     "l0",
-    "factor_research_backend"
+    "factor_research_backend",
+    "factor_research_dev_db"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -137,39 +143,45 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1537",
+    "bug_id": "BUG-1546",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "a6c7fca056a45b2f",
-    "recorded_at": "2026-09-16T03:04:20.367731Z",
+    "receipt_id": "ad10600235904225",
+    "recorded_at": "2026-09-16T05:32:01.028662Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "3912c1b01d32be3dc105baabf8741dcb62335548",
-    "source_merge_commit": "3bdc9101aa1a0c4fab4b852d0293a981d535c020",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4823",
+    "source_head_oid": "986b2f16a431bb3408597407547b1d0278fc8493",
+    "source_merge_commit": "8c27d3919b8bc8f2582a648f9866228472c388c5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4849",
     "validation_evidence": [
-      "validation-receipt: id=6951f415d73efc99 commit=3912c1b01d32be3dc105baabf8741dcb62335548 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 9 skipped; fresh-process 2 passed`",
-      "validation-receipt: id=84b77cafaeb8d7eb commit=3912c1b01d32be3dc105baabf8741dcb62335548 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: findings=0 blocking=0`"
+      "validation-receipt: id=144a150933643a63 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 8 skipped, fresh-process 2 passed`",
+      "validation-receipt: id=f71483aa149003a4 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 8 passed on existing aistock_dev`",
+      "validation-receipt: id=9640a8b95d0c159c commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed, unmapped=0 ambiguous=0`",
+      "validation-receipt: id=4b1698e9d74597c7 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking=0`",
+      "validation-receipt: id=700ea27c5e3d3cfc commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/factor_research/test_repository_dev.py; git diff --check` result=`passed`"
     ],
-    "validation_evidence_digest": "034166fca0cfe08b6da07442c04d960c01dcc3313ef62f9508b45b413d0e407b"
+    "validation_evidence_digest": "782fde4f4825021599d8f37f0b3d4de4c973c8f5a7e6f1720419392a616a5d00"
   },
   "status": "fixed",
   "suspected_modules": [
     "factor_library.research"
   ],
-  "title": "Factor research residual duplicate tests consume validation budget",
+  "title": "Reduce residual factor research test debt without weakening contracts",
   "trigger_condition": {
-    "fingerprint": "8a3c886eccfb09b8a7da63df",
-    "source_event_id": "FE-20260916-8a3c886eccfb"
+    "fingerprint": "5d000eafc3f029071b490cb2",
+    "source_event_id": "FE-20260916-5d000eafc3f0"
   },
   "validation_evidence": [
-    "validation-receipt: id=6951f415d73efc99 commit=3912c1b01d32be3dc105baabf8741dcb62335548 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 9 skipped; fresh-process 2 passed`",
-    "validation-receipt: id=84b77cafaeb8d7eb commit=3912c1b01d32be3dc105baabf8741dcb62335548 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: findings=0 blocking=0`"
+    "validation-receipt: id=144a150933643a63 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 8 skipped, fresh-process 2 passed`",
+    "validation-receipt: id=f71483aa149003a4 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 8 passed on existing aistock_dev`",
+    "validation-receipt: id=9640a8b95d0c159c commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed, unmapped=0 ambiguous=0`",
+    "validation-receipt: id=4b1698e9d74597c7 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking=0`",
+    "validation-receipt: id=700ea27c5e3d3cfc commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/factor_research/test_repository_dev.py; git diff --check` result=`passed`"
   ],
   "verification_budget": {
     "budget": "light",
@@ -177,10 +189,12 @@
     "deferred_nightly_verification": {
       "modules": [
         "factor_library.research",
-        "factor_research"
+        "factor_research",
+        "factor_research_dev_db"
       ],
       "plans": [
-        "factor_research_backend"
+        "factor_research_backend",
+        "factor_research_dev_db"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -237,10 +251,12 @@
       "deferred_nightly_verification": {
         "modules": [
           "factor_library.research",
-          "factor_research"
+          "factor_research",
+          "factor_research_dev_db"
         ],
         "plans": [
-          "factor_research_backend"
+          "factor_research_backend",
+          "factor_research_dev_db"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
