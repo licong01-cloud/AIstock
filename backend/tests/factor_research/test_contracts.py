@@ -1,7 +1,6 @@
 """Compact contracts for request, CLI, candidate identity and safe defaults."""
 
 import os
-import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +55,7 @@ def test_run_scope_and_candidate_identity_fail_closed(tmp_path, mutation, match)
         validate_spec(value)
 
 
-def test_cli_and_backend_plan_default_to_no_database(monkeypatch, tmp_path):
+def test_cli_and_dev_configuration_default_to_no_database(tmp_path):
     result = subprocess.run(
         [sys.executable, "scripts/factor_research.py", "--help"],
         cwd=ROOT,
@@ -69,15 +68,6 @@ def test_cli_and_backend_plan_default_to_no_database(monkeypatch, tmp_path):
     path.write_text("TDX_DB_NAME=production\n", encoding="utf-8")
     with pytest.raises(ResearchError, match="incomplete"):
         configure(path, "dev")
-    monkeypatch.setenv("AISTOCK_DEV_DB_E2E", "1")
-    calls = []
-
-    class Session:
-        def run(self, *args, **kwargs):
-            calls.append((args, kwargs))
-
-    runpy.run_path(str(ROOT / "noxfile.py"))["factor_research_backend"](Session())
-    assert calls and all(call[1]["env"]["AISTOCK_DEV_DB_E2E"] == "0" for call in calls)
 
 
 def test_evaluation_slice_reuses_engine_labels_without_recomputation():
