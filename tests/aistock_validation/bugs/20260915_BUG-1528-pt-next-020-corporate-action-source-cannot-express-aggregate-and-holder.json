@@ -4,6 +4,7 @@
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/build_pt_next_020_corporate_action_authority.py",
     "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
   ],
   "assigned_agent": null,
@@ -34,6 +35,12 @@
       "actor": "codex",
       "note": "DEV market.dividend contains zero rows for the two target symbol/date groups; the producer failed closed without creating an artifact. Production evidence remains a repeatable-read read-only snapshot, with no DDL or DML.",
       "timestamp": "2026-09-16T02:38:00Z"
+    },
+    {
+      "action": "ci_test_plan_scope_expansion",
+      "actor": "codex",
+      "note": "PR CI failed closed because the new direct test was not executed by data_sync_autonomy_backend; noxfile.py was added to scope solely to compile the producer and execute that test in the existing local_data plan.",
+      "timestamp": "2026-09-16T02:43:00Z"
     }
   ],
   "evidence_uris": [
@@ -45,6 +52,7 @@
     "actual_changed_files": [
       "scripts/build_pt_next_020_corporate_action_authority.py",
       "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
     ],
@@ -55,6 +63,7 @@
     "changed_files": [
       "scripts/build_pt_next_020_corporate_action_authority.py",
       "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
     ],
@@ -63,7 +72,8 @@
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "scripts/build_pt_next_020_corporate_action_authority.py",
-        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+        "noxfile.py"
       ],
       "impacted_modules": [
         "validation.module_quality",
@@ -105,20 +115,23 @@
       "suggested_scope": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "scripts/build_pt_next_020_corporate_action_authority.py",
-        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+        "noxfile.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "scripts/build_pt_next_020_corporate_action_authority.py",
-      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "scripts/build_pt_next_020_corporate_action_authority.py",
-      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py"
     ]
   },
   "first_seen_at": "2026-09-15T18:30:32.777958Z",
