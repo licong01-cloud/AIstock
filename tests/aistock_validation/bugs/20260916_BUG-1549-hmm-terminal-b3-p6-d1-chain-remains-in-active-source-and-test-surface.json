@@ -599,7 +599,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python process at HEAD 4b018c99a imported backend.routers.hmm_risk, backend.routers.health, and the active HMM dependency chain from the BUG-1549 worktree; retired state_model_set, b3_training, b3_d1_inactive_dimension, and b3_mixed_dimension imports were absent"
+      "fresh Python process at HEAD 4b018c99a imported backend.routers.hmm_risk, backend.routers.health, and the active HMM dependency chain from the BUG-1549 worktree; retired state_model_set, b3_training, b3_d1_inactive_dimension, and b3_mixed_dimension imports were absent",
+      "fresh Python process at final HEAD fbe47f7412e0995c8f07d78c280e5b17caad95cd imported backend.routers.hmm_risk, backend.routers.health, and 11 active HMM services from the BUG-1549 worktree; four retired B3/P6/D1 modules were absent"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
