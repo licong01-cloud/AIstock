@@ -28,20 +28,34 @@
       "actor": "codex",
       "note": "Registry-only PR validated with nox l0 and zero findings; BUG remains open and no fix is claimed.",
       "timestamp": "2026-09-16T02:55:00Z"
+    },
+    {
+      "action": "fix_validation",
+      "actor": "codex",
+      "note": "Built immutable r2 authority from a read-only production snapshot: 15 typed resolutions, pinned r5 factor evidence, canonical hash readback, 8 targeted tests, l0, and data_sync_autonomy_backend passed; no database, candidate, profile, outcome, or runtime mutation.",
+      "timestamp": "2026-09-16T06:56:14.5783207Z"
     }
   ],
   "evidence_uris": [
     "X:/AIstock_dataset_candidates/corporate_action_authorities/pt-next-020-20260916-r1/receipt.json",
+    "X:/AIstock_dataset_candidates/corporate_action_authorities/pt-next-020-20260916-r2/receipt.json",
+    "X:/AIstock_dataset_candidates/corporate_action_authorities/pt-next-020-20260916-r2/corporate_action_full_scope_authority.json",
     "https://github.com/licong01-cloud/AIstock/issues/4795"
   ],
   "expected": "A typed immutable data authority classifies duplicate/revision/special-restructuring and prehistory-boundary actions without rewriting adj_factor, and leaves position_timing a separate read-only consumer task.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1536-pt-next-020-full-scope-action-authority-lacks-restructuring-and-prehisto.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
       "scripts/build_pt_next_020_corporate_action_authority.py",
-      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+      "tests/aistock_validation/bugs/20260916_BUG-1536-pt-next-020-full-scope-action-authority-lacks-restructuring-and-prehisto.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/build_pt_next_020_corporate_action_authority.py",
@@ -114,10 +128,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
