@@ -48,6 +48,10 @@ from ..services.data_completeness import DATASET_TABLE_MAP
 from ..services.data_refresh_audit import DataRefreshAuditRepository
 from ..services.data_health_alerter import DataHealthAlerter, classify_retry_alert
 from ..services.data_sync_targets import DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository
+from ..services.suspend_d_coverage import (
+    SCHEMA_VERSION as SUSPEND_D_COVERAGE_SCHEMA_VERSION,
+    audit_suspend_d_coverage,
+)
 
 _logger = logging.getLogger(__name__)
 _SCHEDULE_TZ_NAME = "Asia/Shanghai"
@@ -3514,8 +3518,39 @@ class TDXScheduler:
                     stale.append(r.dataset)
 
             expected_date = check_results[0].expected_date if check_results else None
-            overall = "ok" if not stale else "partial"
-            job_status = "success" if overall == "ok" else "partial"
+            suspend_coverage: Dict[str, Any]
+            coverage_failed = False
+            try:
+                coverage_end = self._latest_completed_trading_day()
+                if coverage_end is None:
+                    raise RuntimeError("trading calendar has no completed trading day")
+                full_history = self._suspend_d_full_history_due(
+                    _now().astimezone(_CN_TZ).date()
+                )
+                with _get_conn(self._db_cfg) as conn:
+                    suspend_coverage = audit_suspend_d_coverage(
+                        conn,
+                        start_date=dt.date(2018, 8, 1) if full_history else None,
+                        end_date=coverage_end,
+                        lookback_trading_days=None if full_history else 60,
+                        max_findings=500 if full_history else 200,
+                        statement_timeout_ms=600_000 if full_history else 300_000,
+                    )
+                coverage_failed = not suspend_coverage["summary"]["coverage_complete"]
+            except Exception as exc:  # noqa: BLE001 - retain structured fail-closed evidence.
+                coverage_failed = True
+                suspend_coverage = {
+                    "schema_version": SUSPEND_D_COVERAGE_SCHEMA_VERSION,
+                    "summary": {"coverage_complete": False},
+                    "error": str(exc),
+                    "database_write_performed": False,
+                }
+                _logger.exception("suspend_d coverage audit failed during freshness check: %s", exc)
+            if coverage_failed:
+                stale.append("suspend_d_coverage")
+
+            overall = "ok" if not stale else ("failed" if coverage_failed else "partial")
+            job_status = "success" if overall == "ok" else overall
 
             target_ids = self._record_freshness_retry_targets(check_results)
 
@@ -3524,6 +3559,7 @@ class TDXScheduler:
                 "expected_date": str(expected_date) if expected_date else None,
                 "results": results, "overall": overall,
                 "stale_datasets": stale,
+                "suspend_d_coverage": suspend_coverage,
                 "retry_target_ids": target_ids,
                 "alert_gate": "deferred_until_retry_final_state",
             }
@@ -3572,6 +3608,12 @@ class TDXScheduler:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=job_status, last_error=None,
             )
+
+    @staticmethod
+    def _suspend_d_full_history_due(today: Optional[dt.date] = None) -> bool:
+        """Use Saturday's existing freshness run for the weekly historical pass."""
+
+        return (today or dt.datetime.now(_CN_TZ).date()).weekday() == 5
 
     def _record_freshness_retry_targets(self, check_results: Iterable[Any]) -> List[str]:
         target_ids: List[str] = []

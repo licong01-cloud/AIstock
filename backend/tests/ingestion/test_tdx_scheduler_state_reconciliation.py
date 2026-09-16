@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import re
 from typing import Any
@@ -2085,6 +2086,71 @@ def test_suspend_d_current_trading_day_rejects_non_trading_day():
         assert "non-trading day" in str(exc)
     else:
         raise AssertionError("expected current_trading_day to reject non-trading day")
+
+
+@pytest.mark.parametrize(
+    ("today", "expected_start", "expected_lookback", "expected_max_findings"),
+    [
+        (dt.date(2026, 9, 13), None, 60, 200),
+        (dt.date(2026, 9, 12), dt.date(2018, 8, 1), None, 500),
+    ],
+)
+def test_freshness_check_runs_daily_or_weekly_suspend_coverage_fail_closed(
+    monkeypatch, today, expected_start, expected_lookback, expected_max_findings
+):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 8, 31)
+    scheduler._record_freshness_retry_targets = lambda _results: []
+    scheduler._execute = lambda *_args, **_kwargs: None
+    updates = []
+    scheduler._update_ingestion_schedule = lambda schedule_id, **kwargs: updates.append(
+        (schedule_id, kwargs)
+    )
+    conn = object()
+    monkeypatch.setattr(scheduler_module, "_get_conn", lambda _cfg: nullcontext(conn))
+
+    class _Checker:
+        def __init__(self, _cfg):
+            pass
+
+        def check_all(self):
+            return []
+
+    monkeypatch.setattr(scheduler_module, "AuditBackedDataHealthChecker", _Checker)
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime.combine(today, dt.time(12, 0), tzinfo=dt.timezone.utc),
+    )
+    calls = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "audit_suspend_d_coverage",
+        lambda observed_conn, **kwargs: calls.append((observed_conn, kwargs))
+        or {
+            "summary": {"coverage_complete": False, "unresolved_run_count": 2},
+            "database_write_performed": False,
+        },
+    )
+
+    scheduler._run_data_freshness_check(
+        uuid.uuid4(),
+        "freshness",
+        "schedule",
+        {},
+    )
+
+    assert calls[0][0] is conn
+    assert calls[0][1]["start_date"] == expected_start
+    assert calls[0][1]["lookback_trading_days"] == expected_lookback
+    assert calls[0][1]["max_findings"] == expected_max_findings
+    assert updates[0][1]["last_status"] == "failed"
+
+
+def test_suspend_d_full_history_due_only_on_saturday():
+    assert TDXScheduler._suspend_d_full_history_due(dt.date(2026, 9, 12)) is True
+    assert TDXScheduler._suspend_d_full_history_due(dt.date(2026, 9, 13)) is False
 
 
 def test_bug_1106_migration_is_idempotent_and_contains_no_business_dml():
