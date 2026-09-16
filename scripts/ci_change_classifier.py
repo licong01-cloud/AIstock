@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from fnmatch import fnmatchcase
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
+DIRECT_NEIGHBOR_GLOB_PREFIX = "direct-neighbor-glob:"
 CLOSE_SYNC_STATUSES = {
     "fixed",
     "fixed_source_pending_user_restart",
@@ -502,8 +504,40 @@ def _normalize_nox_test_target(value: str) -> str | None:
     return None
 
 
+def _is_direct_neighbor_target_call(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_direct_neighbor_pr_targets"
+    )
+
+
+def _resolve_direct_neighbor_fallback(
+    node: ast.AST,
+    values: dict[str, list[str]],
+    direct_neighbor_variables: dict[str, list[str]],
+) -> list[str]:
+    """Return declared test globs only when a trusted slice has a fallback."""
+
+    if not isinstance(node, ast.Starred) or not isinstance(node.value, ast.BoolOp):
+        return []
+    expression = node.value
+    if not isinstance(expression.op, ast.Or) or len(expression.values) < 2:
+        return []
+    selected = expression.values[0]
+    if not isinstance(selected, ast.Name) or selected.id not in direct_neighbor_variables:
+        return []
+    fallback_targets: list[str] = []
+    for fallback in expression.values[1:]:
+        fallback_targets.extend(_resolve_nox_literal(fallback, values))
+    if not any(_normalize_nox_test_target(target) for target in fallback_targets):
+        return []
+    return [f"{DIRECT_NEIGHBOR_GLOB_PREFIX}{pattern}" for pattern in direct_neighbor_variables[selected.id]]
+
+
 def _session_test_targets(function: ast.FunctionDef) -> set[str]:
     values: dict[str, list[str]] = {}
+    direct_neighbor_variables: dict[str, list[str]] = {}
     nodes = sorted(ast.walk(function), key=lambda item: (getattr(item, "lineno", -1), getattr(item, "col_offset", -1)))
     for node in nodes:
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
@@ -514,7 +548,22 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             resolved = _resolve_nox_literal(node.value, values) if node.value is not None else []
             for target in targets:
-                if isinstance(target, ast.Name) and resolved:
+                if not isinstance(target, ast.Name):
+                    continue
+                if _is_direct_neighbor_target_call(node.value):
+                    test_globs = next(
+                        (
+                            _resolve_nox_literal(keyword.value, values)
+                            for keyword in node.value.keywords
+                            if keyword.arg == "test_globs"
+                        ),
+                        [],
+                    )
+                    if test_globs:
+                        direct_neighbor_variables[target.id] = test_globs
+                else:
+                    direct_neighbor_variables.pop(target.id, None)
+                if resolved:
                     values[target.id] = resolved
         elif (
             isinstance(node, ast.Call)
@@ -534,7 +583,14 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
         call_name = _nox_call_name(node)
         resolved_args: list[str] = []
         for argument in node.args:
-            resolved_args.extend(_resolve_nox_literal(argument, values))
+            resolved = _resolve_nox_literal(argument, values)
+            if not resolved:
+                resolved = _resolve_direct_neighbor_fallback(
+                    argument,
+                    values,
+                    direct_neighbor_variables,
+                )
+            resolved_args.extend(resolved)
         is_pytest_call = call_name == "_run_pytest" or (
             call_name in {"run", "run_always"} and "pytest" in {item.casefold() for item in resolved_args}
         )
@@ -544,6 +600,8 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             target = _normalize_nox_test_target(value)
             if target:
                 targets.add(target)
+            elif value.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+                targets.add(value)
     return targets
 
 
@@ -567,6 +625,9 @@ def _selected_nox_test_targets(*, repo_root: Path, sessions: list[str]) -> tuple
 def _test_target_covers_path(target: str, path: str) -> bool:
     normalized_target = _normalize_path(target).rstrip("/")
     normalized_path = _normalize_path(path)
+    if normalized_target.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+        pattern = normalized_target.removeprefix(DIRECT_NEIGHBOR_GLOB_PREFIX)
+        return fnmatchcase(normalized_path, pattern)
     if any(token in normalized_target for token in "*?["):
         return False
     if normalized_target.endswith(".py"):
