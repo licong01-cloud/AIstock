@@ -24,7 +24,7 @@ from backend.services.hmm_risk.industry_pit_adapter import (
     build_l1_code_projection_authority,
     build_l2_code_projection_authority,
 )
-from backend.services.hmm_risk.state_model_set import StateModelSetError
+from backend.services.hmm_risk.contracts import StateModelSetError
 from backend.services.hmm_risk.stock_fact_repository import PostgresStockFactReader
 
 

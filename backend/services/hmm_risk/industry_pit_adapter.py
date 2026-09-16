@@ -37,7 +37,7 @@ from backend.services.industry_pit.contracts import (
 )
 from backend.services.industry_pit.resolver import IndustryPitResolver, resolve_dual_authority
 
-from .state_model_set import StateModelSetError
+from .contracts import StateModelSetError
 
 
 HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA = "hmm_risk_industry_pit_authority_v1"

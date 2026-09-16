@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .state_model_set import StateModelSetError, canonical_sha256
+from .contracts import StateModelSetError, canonical_sha256
 
 SECURITY_IDENTITY_SCHEMA = "hmm_risk_security_source_identity_manifest_v1"
 DEFAULT_RESOLUTION = "canonical_same_code"

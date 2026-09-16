@@ -45,7 +45,7 @@ from backend.services.dataset_release.stock_schema import (
 from backend.services.hmm_risk.industry_pit_adapter import HMMIndustryPitAdapter, HMM_MAPPING_MANIFEST_SCHEMA
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
 from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.hmm_risk.stock_fact_observation import (
     C010_APPROVED_TRAIN_END,
     C010_APPROVED_TRAIN_START,
