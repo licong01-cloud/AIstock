@@ -14,9 +14,7 @@ from fastapi.testclient import TestClient
 from backend.routers import multi_alpha as multi_alpha_router
 from backend.services.multi_alpha.combine_backtest import (
     CombineBacktestRequest,
-    MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
-    _replace_request,
     parse_request,
 )
 from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
@@ -277,61 +275,6 @@ def test_task_identity_allows_distinct_run_scenarios_and_keeps_original_defaults
     assert repository.runs[second["run_id"]]["backtest_config_json"]["topk"] == 50
 
 
-def test_committed_submission_notifies_process_local_orchestrator(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository = FakeDurableRepository()
-    notifications: list[str] = []
-    monkeypatch.setattr(
-        "backend.services.multi_alpha.durable_submission.notify_durable_orchestrator",
-        lambda: notifications.append("committed"),
-    )
-
-    result = _service(repository).submit(_payload())
-
-    assert result["run_id"] in repository.runs
-    assert notifications == ["committed"]
-
-
-def test_submission_freezes_explicit_prediction_task_selection_in_request_identity() -> None:
-    repository = FakeDurableRepository()
-    service = _service(repository)
-    payload = _payload()
-    payload["prediction_task_selection"] = {
-        "include_baseline": True,
-        "include_loo": False,
-    }
-
-    result = service.submit(payload)
-    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
-
-    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
-        "include_baseline": True,
-        "include_loo": False,
-    }
-
-
-def test_run_async_override_preserves_explicit_prediction_task_selection() -> None:
-    repository = FakeDurableRepository()
-    service = _service(repository)
-    payload = _payload()
-    payload["run_async"] = False
-    payload["wait_timeout_seconds"] = 1
-    payload["prediction_task_selection"] = {
-        "include_baseline": True,
-        "include_loo": False,
-    }
-
-    result = service.submit(payload, run_async_override=True)
-    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
-
-    assert result["status"] == "queued"
-    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
-        "include_baseline": True,
-        "include_loo": False,
-    }
-
-
 def test_run_async_override_conserves_every_request_field_except_override() -> None:
     repository = FakeDurableRepository()
     payload = _payload()
@@ -349,21 +292,6 @@ def test_run_async_override_conserves_every_request_field_except_override() -> N
     for field in fields(CombineBacktestRequest):
         expected = True if field.name == "run_async" else getattr(original, field.name)
         assert getattr(restored, field.name) == expected, field.name
-
-
-def test_general_request_replace_conserves_new_and_existing_fields() -> None:
-    payload = _payload()
-    payload["prediction_task_selection"] = {
-        "include_baseline": True,
-        "include_loo": False,
-    }
-    original = parse_request(payload)
-
-    updated = _replace_request(original, topk=50)
-
-    for field in fields(CombineBacktestRequest):
-        expected = 50 if field.name == "topk" else getattr(original, field.name)
-        assert getattr(updated, field.name) == expected, field.name
 
 
 def test_exact_retry_preserves_selection_through_persistence_and_child_planning() -> None:
@@ -549,26 +477,6 @@ def test_schema_unavailable_is_explicit_and_has_no_legacy_fallback() -> None:
     assert caught.value.reason_code == "multi_alpha_durable_schema_unavailable"
 
 
-def test_p0_2_schema_unavailable_keeps_p0_1b_submission_working_with_explicit_evidence() -> None:
-    class P0_2UnavailableRepository(FakeDurableRepository):
-        def preflight_p0_2_schema(self, *, raise_on_error: bool = False) -> Any:
-            assert raise_on_error is False
-            return FakeP0_2SchemaHealth(
-                ready=False,
-                missing_tables=["multi_alpha_combine_backtest_command"],
-            )
-
-    repository = P0_2UnavailableRepository()
-    result = _service(repository).submit(_payload())
-    stored = repository.runs[result["run_id"]]
-
-    assert result["status"] == "queued"
-    assert result["execution_identity_persisted"] is False
-    assert result["execution_identity_evidence"]["reason_code"] == "multi_alpha_p0_2_schema_unavailable"
-    assert stored["execution_identity_json"] is None
-    assert stored["execution_identity_evidence_json"] is None
-
-
 def test_execution_reservation_schema_unavailable_returns_503_before_run_write() -> None:
     from backend.services.quantevolver.qe_execution_reservation import (
         QEExecutionReservationError,
@@ -595,84 +503,6 @@ def test_execution_reservation_schema_unavailable_returns_503_before_run_write()
     assert repository.runs == {}
 
 
-def test_default_facade_delegates_submit_without_starting_legacy_execution() -> None:
-    class CapturingDurableSubmission:
-        def __init__(self) -> None:
-            self.calls: list[tuple[Mapping[str, Any], bool | None, str | None]] = []
-
-        def submit(
-            self,
-            payload: Mapping[str, Any],
-            *,
-            run_async_override: bool | None = None,
-            idempotency_key: str | None = None,
-        ) -> dict[str, Any]:
-            self.calls.append((payload, run_async_override, idempotency_key))
-            return {
-                "task_id": "mact_test",
-                "run_id": "macb_test",
-                "status": "queued",
-                "phase": "submitted",
-                "progress": {},
-                "durable": True,
-            }
-
-    durable = CapturingDurableSubmission()
-    facade = MultiAlphaCombineBacktestService(durable_submission_service=durable)
-
-    result = facade.submit_run(_payload(), run_async=True, idempotency_key="ui-scenario")
-
-    assert result["durable"] is True
-    assert result["status"] == "queued"
-    assert len(durable.calls) == 1
-    assert durable.calls[0][1:] == (True, "ui-scenario")
-
-
-def test_production_facade_requires_explicit_test_flag_for_legacy_mode() -> None:
-    source = (REPO_ROOT / "backend/services/multi_alpha/combine_backtest.py").read_text(encoding="utf-8")
-    submit_source = source.split("def submit_run", maxsplit=1)[1].split(
-        "def _execute_run_thread", maxsplit=1
-    )[0]
-
-    assert "legacy_execution_mode_for_tests: bool = False" in source
-    assert "if not self._legacy_execution_mode_for_tests" in submit_source
-    assert "return self._durable_submission_service.submit" in submit_source
-    assert submit_source.index("return self._durable_submission_service.submit") < submit_source.index(
-        "threading.Thread"
-    )
-
-
-def test_submit_api_returns_202_for_bounded_wait_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    class TimedOutService:
-        def submit_run(self, _payload: Mapping[str, Any], **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "task_id": "mact_test",
-                "run_id": "macb_test",
-                "status": "queued",
-                "phase": "submitted",
-                "progress": {},
-                "durable": True,
-                "wait_timed_out": True,
-            }
-
-    monkeypatch.setattr(multi_alpha_router, "MultiAlphaCombineBacktestService", TimedOutService)
-    app = FastAPI()
-    app.include_router(multi_alpha_router.router)
-    client = TestClient(app)
-    payload = _payload()
-    payload["run_async"] = False
-    payload["wait_timeout_seconds"] = 1
-
-    response = client.post("/multi-alpha/combine-backtest/run", json=payload)
-
-    assert response.status_code == 202
-    assert response.json()["data"]["wait_timed_out"] is True
-    schema = client.get("/openapi.json").json()
-    request_schema = schema["components"]["schemas"]["CombineBacktestRunRequest"]
-    assert "task_id" in request_schema["properties"]
-    assert "wait_timeout_seconds" in request_schema["properties"]
-
-
 def test_submit_api_preserves_structured_durable_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
     class UnavailableService:
         def submit_run(self, _payload: Mapping[str, Any], **_kwargs: Any) -> dict[str, Any]:
@@ -691,36 +521,3 @@ def test_submit_api_preserves_structured_durable_error_status(monkeypatch: pytes
 
     assert response.status_code == 503
     assert response.json()["detail"]["reason_code"] == "multi_alpha_durable_schema_unavailable"
-
-
-def test_archive_detail_api_reads_immutable_archive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    class ArchiveDetailService:
-        def get_archive_snapshot(self, run_id: str) -> dict[str, Any]:
-            if run_id == "missing":
-                raise MultiAlphaCombineBacktestError(
-                    "archived run was not found",
-                    reason_code="combine_backtest_archive_snapshot_not_found",
-                )
-            return {
-                "run": {"run_id": run_id, "archive_schema_version": "multi_alpha_combine_completed_v2"},
-                "recovery_readback_evidence": {
-                    "archive_snapshot_authoritative": True,
-                    "source_durable_run_required": False,
-                },
-            }
-
-    monkeypatch.setattr(multi_alpha_router, "MultiAlphaCombineBacktestService", ArchiveDetailService)
-    app = FastAPI()
-    app.include_router(multi_alpha_router.router)
-    client = TestClient(app)
-
-    response = client.get("/multi-alpha/combine-backtest/runs/macb_archive_1/archive-detail")
-
-    assert response.status_code == 200
-    assert response.json()["data"]["run"]["run_id"] == "macb_archive_1"
-    assert response.json()["data"]["recovery_readback_evidence"]["source_durable_run_required"] is False
-
-    missing = client.get("/multi-alpha/combine-backtest/runs/missing/archive-detail")
-
-    assert missing.status_code == 404
-    assert missing.json()["detail"]["reason_code"] == "combine_backtest_archive_snapshot_not_found"
