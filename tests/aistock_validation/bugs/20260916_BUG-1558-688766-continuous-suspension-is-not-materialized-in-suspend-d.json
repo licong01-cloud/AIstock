@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/repair_suspend_688766.py",
     "backend/tests/scripts/test_repair_suspend_688766.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260916_BUG-1558-688766-continuous-suspension-is-not-materialized-in-suspend-d.json"
   ],
   "assigned_agent": null,
@@ -21,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260916-2ec67b2a3494",
       "timestamp": "2026-09-16T14:09:02.435695Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "Map the two new local_data operator paths to qlib_data_backend after fail-closed PR CI reported unmapped_code_files.",
+      "timestamp": "2026-09-16T14:28:00Z"
     }
   ],
   "evidence_uris": [
@@ -32,7 +40,10 @@
       "scripts/repair_suspend_688766.py",
       "backend/tests/scripts/test_repair_suspend_688766.py"
     ],
-    "changed_files": [],
+    "changed_files": [
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
@@ -70,12 +81,16 @@
     },
     "planned_files": [
       "scripts/repair_suspend_688766.py",
-      "backend/tests/scripts/test_repair_suspend_688766.py"
+      "backend/tests/scripts/test_repair_suspend_688766.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/repair_suspend_688766.py",
-      "backend/tests/scripts/test_repair_suspend_688766.py"
+      "backend/tests/scripts/test_repair_suspend_688766.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-09-16T14:09:02.435712Z",
@@ -95,7 +110,9 @@
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "python scripts/repair_suspend_688766.py audit --target-db production",
   "required_verification": [
-    "l0"
+    "l0",
+    "data_sync_autonomy_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -158,7 +175,9 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "data_sync_autonomy_backend",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -213,7 +232,9 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "data_sync_autonomy_backend",
+        "validation_module_registry_l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
