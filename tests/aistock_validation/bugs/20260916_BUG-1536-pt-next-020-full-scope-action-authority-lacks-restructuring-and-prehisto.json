@@ -22,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260916-6ad2da608c09",
       "timestamp": "2026-09-16T02:51:50.170788Z"
+    },
+    {
+      "action": "registry_pr_validation",
+      "actor": "codex",
+      "note": "Registry-only PR validated with nox l0 and zero findings; BUG remains open and no fix is claimed.",
+      "timestamp": "2026-09-16T02:55:00Z"
     }
   ],
   "evidence_uris": [
