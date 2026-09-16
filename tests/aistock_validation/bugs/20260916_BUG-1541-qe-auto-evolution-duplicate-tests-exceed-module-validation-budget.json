@@ -1,6 +1,20 @@
 {
   "actual": "production_sloc=30173 test_sloc=19139 ratio=63.43% allowed_test_sloc=9051 over_budget_sloc=10088",
   "allowed_write_scope": [
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "backend/tests/multi_alpha/test_active_execution_import.py",
+    "backend/tests/multi_alpha/test_durable_router.py",
+    "backend/tests/strategy_package/test_multi_alpha_live_preflight.py",
+    "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+    "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+    "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+    "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
     "tests/aistock_validation/bugs/20260916_BUG-1541-qe-auto-evolution-duplicate-tests-exceed-module-validation-budget.json"
   ],
   "assigned_agent": null,
@@ -37,9 +51,39 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/multi_alpha/test_active_execution_import.py",
+      "backend/tests/multi_alpha/test_durable_router.py",
+      "backend/tests/strategy_package/test_multi_alpha_live_preflight.py",
+      "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+      "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+      "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+      "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+      "backend/tests/multi_alpha/test_active_execution_import.py",
+      "backend/tests/multi_alpha/test_durable_router.py",
+      "backend/tests/strategy_package/test_multi_alpha_live_preflight.py",
+      "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+      "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+      "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+      "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/test_multi_alpha_combine_ui_adapter.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py"
+    ]
   },
   "first_seen_at": "2026-09-16T03:07:53.453161Z",
   "fix_branch": null,
