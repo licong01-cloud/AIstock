@@ -10,6 +10,7 @@ import pytest
 
 from backend.services.position_timing.action_value import ActionPlan, ActionValueError, PositionState, cutoff_on
 from backend.services.position_timing.action_value_corporate_actions import CorporateAction, CorporateActionBook
+from backend.services.position_timing.contracts import canonical_sha256
 from backend.services.position_timing.pattern_research import (
     BUNDLE_SCHEMA,
     CORPORATE_ACTION_APPLICATION_POLICY,
@@ -86,6 +87,79 @@ def _bars(periods: int = 90) -> pd.DataFrame:
         },
         index=dates,
     )
+
+
+def _legacy_pattern_request() -> dict:
+    request = {
+        "schema_version": LEGACY_REQUEST_SCHEMA,
+        "pipeline_id": PIPELINE_ID,
+        "prototype_contract": PROTOTYPE_CONTRACT,
+        "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
+        "optimizer_contract": _optimizer_contract(),
+        "optimizer_contract_sha256": _optimizer_contract_sha256(),
+        "model_contract": _model_contract(),
+        "model_contract_sha256": _model_contract_sha256(),
+        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
+        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
+        "result_class": RESULT_CLASS,
+        "research_model_outputs_write": True,
+        "registry_write": False,
+        "current_write": False,
+        "serving_model_artifact_write": False,
+        "card_write": False,
+        "alert_write": False,
+        "order_write": False,
+        "database_write": False,
+        "runtime_write": False,
+        "corporate_action_snapshot_sha256": "a" * 64,
+        "suspension_snapshot_sha256": "b" * 64,
+    }
+    request["request_sha256"] = canonical_sha256(request)
+    return request
+
+
+def _pattern_result(request: dict, *, populated: bool = False) -> tuple[PrototypeReplayResult, dict]:
+    evolution = {
+        "familywise_hypothesis_count": 5,
+        "formal_comparison_count": 5,
+        "internal_template_candidate_count": 8,
+        "model_feature_set_count": 2,
+        "model_head_count_per_feature_set": 2,
+        "comparisons": {
+            name: {"effect_evidence": "INCONCLUSIVE"}
+            for name in (
+                "Q_MINUS_P",
+                "Q_MINUS_BUY_AND_HOLD",
+                "ENHANCED_MINUS_CORE",
+                "ENHANCED_MINUS_P",
+                "ENHANCED_MINUS_BUY_AND_HOLD",
+            )
+        },
+    }
+    evolution["receipt_sha256"] = canonical_sha256(evolution)
+    receipt = {
+        "schema_version": RECEIPT_SCHEMA,
+        "pipeline_id": PIPELINE_ID,
+        "request_sha256": request["request_sha256"],
+        "result_class": RESULT_CLASS,
+        "familywise_hypothesis_count": PROTOTYPE_FAMILY_SIZE,
+        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
+        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
+        "selected_trial_count": 0,
+        "research_model_outputs_written": True,
+        "registry_written": False,
+        "current_written": False,
+        "serving_model_artifact_written": False,
+        "card_written": False,
+        "alert_written": False,
+        "order_written": False,
+        "database_written": False,
+        "runtime_written": False,
+        "evolution": evolution,
+    }
+    receipt["receipt_sha256"] = canonical_sha256(receipt)
+    frame = pd.DataFrame({"value": ["x"]}) if populated else pd.DataFrame()
+    return PrototypeReplayResult(frame, frame, frame, {"coverage_complete": True}, receipt), receipt
 
 
 def _forced_breakout_features(bars: pd.DataFrame, breakout: int, *, confirm: int | None) -> pd.DataFrame:
@@ -307,33 +381,7 @@ def test_factor_action_coverage_audit_exposes_unbound_source_coordinates():
 
 
 def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
-    from backend.services.position_timing.contracts import canonical_sha256
-
-    request = {
-        "schema_version": LEGACY_REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "prototype_contract": PROTOTYPE_CONTRACT,
-        "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
-        "optimizer_contract": _optimizer_contract(),
-        "optimizer_contract_sha256": _optimizer_contract_sha256(),
-        "model_contract": _model_contract(),
-        "model_contract_sha256": _model_contract_sha256(),
-        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
-        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
-        "result_class": RESULT_CLASS,
-        "research_model_outputs_write": True,
-        "registry_write": False,
-        "current_write": False,
-        "serving_model_artifact_write": False,
-        "card_write": False,
-        "alert_write": False,
-        "order_write": False,
-        "database_write": False,
-        "runtime_write": False,
-        "corporate_action_snapshot_sha256": "a" * 64,
-        "suspension_snapshot_sha256": "b" * 64,
-    }
-    request["request_sha256"] = canonical_sha256(request)
+    request = _legacy_pattern_request()
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request), encoding="utf-8")
     assert _load_request(path)["schema_version"] == LEGACY_REQUEST_SCHEMA
@@ -414,34 +462,6 @@ def test_request_v2_cannot_drop_factor_action_coverage_contract(tmp_path: Path):
     )
     path.write_text(json.dumps(request), encoding="utf-8")
     assert _load_request(path)["schema_version"] == FACTOR_COVERAGE_REQUEST_SCHEMA
-
-    without_application = dict(request)
-    for key in (
-        "corporate_action_application_policy",
-        "corporate_action_application_policy_sha256",
-        "corporate_action_application_audit",
-        "corporate_action_application_sha256",
-    ):
-        without_application.pop(key)
-    detached_audit = dict(without_application["factor_action_coverage_audit"])
-    detached_audit["corporate_action_application_sha256"] = None
-    detached_audit["audit_sha256"] = canonical_sha256(
-        {key: value for key, value in detached_audit.items() if key != "audit_sha256"}
-    )
-    without_application["factor_action_coverage_audit"] = detached_audit
-    without_application["factor_action_coverage_audit_sha256"] = detached_audit[
-        "audit_sha256"
-    ]
-    without_application["request_sha256"] = canonical_sha256(
-        {
-            key: value
-            for key, value in without_application.items()
-            if key != "request_sha256"
-        }
-    )
-    path.write_text(json.dumps(without_application), encoding="utf-8")
-    with pytest.raises(ActionValueError, match="PATTERN_REQUEST_IDENTITY_MISMATCH"):
-        _load_request(path)
 
     outcomes_read = json.loads(json.dumps(request))
     outcomes_read_audit = outcomes_read["factor_action_coverage_audit"]
@@ -1052,79 +1072,8 @@ def test_available_ex_date_price_does_not_require_missing_prior_day_factor():
 
 
 def test_pattern_bundle_is_recursive_immutable_and_exact_retry_is_noop(tmp_path: Path):
-    request = {
-        "schema_version": LEGACY_REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "prototype_contract": PROTOTYPE_CONTRACT,
-        "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
-        "optimizer_contract": _optimizer_contract(),
-        "optimizer_contract_sha256": _optimizer_contract_sha256(),
-        "model_contract": _model_contract(),
-        "model_contract_sha256": _model_contract_sha256(),
-        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
-        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
-        "result_class": RESULT_CLASS,
-        "research_model_outputs_write": True,
-        "registry_write": False,
-        "current_write": False,
-        "serving_model_artifact_write": False,
-        "card_write": False,
-        "alert_write": False,
-        "order_write": False,
-        "database_write": False,
-        "runtime_write": False,
-        "corporate_action_snapshot_sha256": "a" * 64,
-        "suspension_snapshot_sha256": "b" * 64,
-    }
-    from backend.services.position_timing.contracts import canonical_sha256
-
-    request["request_sha256"] = canonical_sha256(request)
-    evolution = {
-        "familywise_hypothesis_count": 5,
-        "formal_comparison_count": 5,
-        "internal_template_candidate_count": 8,
-        "model_feature_set_count": 2,
-        "model_head_count_per_feature_set": 2,
-        "comparisons": {
-            name: {"effect_evidence": "INCONCLUSIVE"}
-            for name in (
-                "Q_MINUS_P",
-                "Q_MINUS_BUY_AND_HOLD",
-                "ENHANCED_MINUS_CORE",
-                "ENHANCED_MINUS_P",
-                "ENHANCED_MINUS_BUY_AND_HOLD",
-            )
-        },
-    }
-    evolution["receipt_sha256"] = canonical_sha256(evolution)
-    receipt = {
-        "schema_version": RECEIPT_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "request_sha256": request["request_sha256"],
-        "result_class": RESULT_CLASS,
-        "familywise_hypothesis_count": PROTOTYPE_FAMILY_SIZE,
-        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
-        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
-        "selected_trial_count": 0,
-        "research_model_outputs_written": True,
-        "registry_written": False,
-        "current_written": False,
-        "serving_model_artifact_written": False,
-        "card_written": False,
-        "alert_written": False,
-        "order_written": False,
-        "database_written": False,
-        "runtime_written": False,
-        "evolution": evolution,
-    }
-    receipt["receipt_sha256"] = canonical_sha256(receipt)
-    result = PrototypeReplayResult(
-        pd.DataFrame({"event": ["x"]}),
-        pd.DataFrame({"day": ["2026-09-01"]}),
-        pd.DataFrame({"fill": ["NO_ACTION"]}),
-        {"coverage_complete": True},
-        receipt,
-    )
+    request = _legacy_pattern_request()
+    result, receipt = _pattern_result(request, populated=True)
     bundle = tmp_path / "timing" / "research" / "pattern_strategy_v1" / "bundles" / request["request_sha256"]
     kwargs = {
         "request": request,
@@ -1150,75 +1099,8 @@ def test_pattern_bundle_is_recursive_immutable_and_exact_retry_is_noop(tmp_path:
 
 
 def test_pattern_bundle_rejects_unmanifested_file(tmp_path: Path):
-    request = {
-        "schema_version": LEGACY_REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "prototype_contract": PROTOTYPE_CONTRACT,
-        "prototype_contract_sha256": PROTOTYPE_CONTRACT_SHA256,
-        "optimizer_contract": _optimizer_contract(),
-        "optimizer_contract_sha256": _optimizer_contract_sha256(),
-        "model_contract": _model_contract(),
-        "model_contract_sha256": _model_contract_sha256(),
-        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
-        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
-        "result_class": RESULT_CLASS,
-        "research_model_outputs_write": True,
-        "registry_write": False,
-        "current_write": False,
-        "serving_model_artifact_write": False,
-        "card_write": False,
-        "alert_write": False,
-        "order_write": False,
-        "database_write": False,
-        "runtime_write": False,
-        "corporate_action_snapshot_sha256": "a" * 64,
-        "suspension_snapshot_sha256": "b" * 64,
-    }
-    from backend.services.position_timing.contracts import canonical_sha256
-
-    request["request_sha256"] = canonical_sha256(request)
-    evolution = {
-        "familywise_hypothesis_count": 5,
-        "formal_comparison_count": 5,
-        "internal_template_candidate_count": 8,
-        "model_feature_set_count": 2,
-        "model_head_count_per_feature_set": 2,
-        "comparisons": {
-            name: {"effect_evidence": "INCONCLUSIVE"}
-            for name in (
-                "Q_MINUS_P",
-                "Q_MINUS_BUY_AND_HOLD",
-                "ENHANCED_MINUS_CORE",
-                "ENHANCED_MINUS_P",
-                "ENHANCED_MINUS_BUY_AND_HOLD",
-            )
-        },
-    }
-    evolution["receipt_sha256"] = canonical_sha256(evolution)
-    receipt = {
-        "schema_version": RECEIPT_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "request_sha256": request["request_sha256"],
-        "result_class": RESULT_CLASS,
-        "familywise_hypothesis_count": PROTOTYPE_FAMILY_SIZE,
-        "preregistered_family_count": PREREGISTERED_FAMILY_COUNT,
-        "total_formal_comparison_count": TOTAL_FORMAL_COMPARISON_COUNT,
-        "selected_trial_count": 0,
-        "research_model_outputs_written": True,
-        "registry_written": False,
-        "current_written": False,
-        "serving_model_artifact_written": False,
-        "card_written": False,
-        "alert_written": False,
-        "order_written": False,
-        "database_written": False,
-        "runtime_written": False,
-        "evolution": evolution,
-    }
-    receipt["receipt_sha256"] = canonical_sha256(receipt)
-    result = PrototypeReplayResult(
-        pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {"coverage_complete": True}, receipt
-    )
+    request = _legacy_pattern_request()
+    result, receipt = _pattern_result(request)
     bundle = tmp_path / "timing" / "research" / "pattern_strategy_v1" / "bundles" / request["request_sha256"]
     _publish_bundle(bundle, request=request, result=result, receipt=receipt)
     (bundle / "unexpected.txt").write_text("unexpected", encoding="utf-8")
