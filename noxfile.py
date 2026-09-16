@@ -638,7 +638,7 @@ def _direct_neighbor_pr_targets(
         if any(fnmatchcase(path, pattern) for pattern in test_globs):
             relevant = True
             if not (ROOT / path).is_file():
-                return None
+                continue
             targets.append(path)
             continue
         override = override_map.get(path)
@@ -680,6 +680,14 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_source_authority.py",
+        "backend/tests/dataset_release/test_build_processor.py",
+        "backend/tests/dataset_release/test_component_artifact_manifest.py",
+        "backend/tests/dataset_release/test_build_stage.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
@@ -704,9 +712,12 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         },
     )
+    selected_targets = list(full_targets)
+    if pr_targets is not None:
+        selected_targets = pr_targets
     _run_pytest(
         session,
-        *(pr_targets or full_targets),
+        *selected_targets,
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1442,10 +1453,7 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
-    if pr_targets:
-        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
-    else:
-        _run_pytest(session, *targets, "-q", "-p", "no:cacheprovider")
+    _run_pytest(session, *(pr_targets or targets), "-q", "-p", "no:cacheprovider")
 
 
 @nox.session(venv_backend="none")

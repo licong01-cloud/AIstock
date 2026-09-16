@@ -1172,6 +1172,100 @@ def model_registry_backend(session):
     }
 
 
+def test_nox_target_resolver_accepts_direct_neighbor_explicit_fallback(tmp_path: Path) -> None:
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=("backend/tests/position_timing/test_isolation.py",),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    targets, error = classifier._selected_nox_test_targets(  # noqa: SLF001
+        repo_root=tmp_path,
+        sessions=["position_timing_backend"],
+    )
+
+    assert error is None
+    assert targets == {
+        "position_timing_backend": {
+            "direct-neighbor-glob:backend/tests/position_timing/test_*.py"
+        }
+    }
+
+
+def test_direct_neighbor_fallback_covers_changed_test(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unexecuted_test_files"] == []
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["position_timing_backend"]
+    }
+
+
+def test_arbitrary_dynamic_fallback_does_not_claim_test_coverage(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    runtime_targets = choose_runtime_targets()
+    _run_pytest(session, *(runtime_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
+def test_direct_neighbor_glob_does_not_cover_unmatched_nested_test(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/nested/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
 def test_nox_wildcard_does_not_claim_changed_test_execution(tmp_path: Path) -> None:
     test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
     _write_test_file(tmp_path, test_path)

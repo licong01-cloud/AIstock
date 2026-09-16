@@ -2184,8 +2184,12 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
     runtime_files: list[str] = []
     target_ids: set[str] = set()
     catalog: dict[str, Any] = {}
-    with contextlib.suppress(WorkflowError):
+    catalog_error: str | None = None
+    try:
         catalog = _load_runtime_target_catalog(root)
+    except WorkflowError as exc:
+        catalog_error = str(exc)
+        impacts.add("unknown")
     catalog_targets = catalog.get("targets") or {}
     catalog_non_runtime_files = set(flow._as_list(catalog.get("non_runtime_source_paths")))
     catalog_source_role_rules = flow._as_list(catalog.get("source_role_rules"))
@@ -2297,6 +2301,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "observed_impacts": sorted(impacts),
         "runtime_files": runtime_files,
         "target_ids": sorted(target_ids),
+        "catalog_error": catalog_error,
     }
 
 
@@ -2494,6 +2499,9 @@ def build_runtime_contract(
     inferred = _classify_runtime_impact(changed_files, root=root)
     explicit = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
     blocking: list[str] = []
+    catalog_error = str(inferred.get("catalog_error") or "").strip()
+    if catalog_error:
+        blocking.append(f"runtime target catalog validation failed: {catalog_error}")
     explicit_impact = str(explicit.get("runtime_impact") or "").strip()
     inferred_impact = str(inferred["runtime_impact"])
     if explicit and explicit.get("schema_version") != RUNTIME_CONTRACT_SCHEMA:
@@ -2550,7 +2558,7 @@ def build_runtime_contract(
         )
     target: dict[str, Any] | None = None
     catalog_ref = _repo_rel(root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml", root)
-    if backend_restart_required:
+    if backend_restart_required and not catalog_error:
         try:
             catalog = _load_runtime_target_catalog(root)
             raw_target = (catalog.get("targets") or {}).get(target_id)
@@ -2694,6 +2702,7 @@ def build_runtime_contract(
             "database_migration": "required" if runtime_impact == "database" else "not_required",
         },
         "target": target,
+        "catalog_validation_error": catalog_error or None,
         "blocking": flow._unique_strings(blocking),
         "pre_pr_ready": not blocking,
     }
@@ -12498,6 +12507,7 @@ def _build_resume_runtime_preflight(root: Path, state: dict[str, Any]) -> dict[s
         inference = _classify_runtime_impact(ordered_files, root=root)
         payload["runtime_impact"] = inference["runtime_impact"]
         payload["target_ids"] = inference["target_ids"]
+        payload["catalog_error"] = inference.get("catalog_error")
         issue_path = _state_issue_json_path(root, state)
         if issue_path and issue_path.is_file():
             contract = build_runtime_contract(
