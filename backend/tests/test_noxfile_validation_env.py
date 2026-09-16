@@ -220,21 +220,28 @@ def test_direct_neighbor_sessions_execute_selected_pr_slice(
     assert selected[0] in pytest_args
 
 
-def test_factor_research_session_executes_selected_pr_slice(
+def test_factor_research_session_executes_compact_full_suite_with_dev_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selected = "backend/tests/factor_research/test_selected.py"
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     class DummySession:
-        def run(self, *args: object, **_kwargs: object) -> None:
-            calls.append(args)
+        def run(self, *args: object, **kwargs: object) -> None:
+            calls.append((args, kwargs))
 
     monkeypatch.setattr(noxfile, "_direct_neighbor_pr_targets", lambda **_kwargs: [selected])
 
     noxfile.factor_research_backend(DummySession())
 
-    assert selected in calls[0]
+    pytest_args, pytest_kwargs = calls[0]
+    assert selected not in pytest_args
+    assert "backend/tests/factor_research/test_contracts.py" in pytest_args
+    assert "backend/tests/factor_research/test_repository_dev.py" in pytest_args
+    pytest_env = pytest_kwargs["env"]
+    assert isinstance(pytest_env, dict)
+    assert pytest_env["AISTOCK_DEV_DB_E2E"] == "0"
+    assert pytest_env["FACTOR_RESEARCH_DEV_ENV_FILE"] == ""
 
 
 def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
