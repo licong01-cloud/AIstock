@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
     "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
+    "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+    "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md",
     "tests/aistock_validation/bugs/20260916_BUG-1550-advisory-historical-range-retains-redundant-source-snapshot-tests.json"
   ],
   "assigned_agent": null,
@@ -26,16 +28,28 @@
   "evidence_uris": [],
   "expected": "Retain PIT, transaction, isolation and fail-closed coverage while removing only tests that cannot detect a real regression or duplicate stronger behavioral coverage.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1550-advisory-historical-range-retains-redundant-source-snapshot-tests.json",
+      "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+      "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
+      "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
+      "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1550-advisory-historical-range-retains-redundant-source-snapshot-tests.json",
+      "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+      "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
       "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
-      "backend/tests/advisory_historical_range/test_r5_route_isolation.py"
+      "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
-        "backend/tests/advisory_historical_range/test_r5_route_isolation.py"
+        "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
+        "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+        "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md"
       ],
       "impacted_modules": [
         "advisory.historical_range",
@@ -72,12 +86,16 @@
     },
     "planned_files": [
       "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
-      "backend/tests/advisory_historical_range/test_r5_route_isolation.py"
+      "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
+      "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+      "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/tests/advisory_historical_range/test_r5_service_boundaries.py",
-      "backend/tests/advisory_historical_range/test_r5_route_isolation.py"
+      "backend/tests/advisory_historical_range/test_r5_route_isolation.py",
+      "backend/tests/advisory_historical_range/test_r5_api_contracts.py",
+      "docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md"
     ]
   },
   "first_seen_at": "2026-09-16T05:27:03.422392Z",
@@ -104,10 +122,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
