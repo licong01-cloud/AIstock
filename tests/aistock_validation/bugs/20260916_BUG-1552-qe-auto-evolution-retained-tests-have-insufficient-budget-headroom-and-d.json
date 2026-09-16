@@ -38,22 +38,36 @@
   ],
   "expected": "Reduce qe.auto_evolution retained test SLOC to a durable 25-27% range while preserving all named behavioral boundaries and avoiding production-code or ownership changes.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/tests/multi_alpha/test_durable_parity.py",
-      "backend/tests/multi_alpha/test_durable_parent_finalization.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+    "actual_changed_files": [
+      "backend/tests/multi_alpha/test_durable_backfill.py",
       "backend/tests/multi_alpha/test_durable_capacity.py",
+      "backend/tests/multi_alpha/test_durable_contract.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+      "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+      "backend/tests/multi_alpha/test_durable_parity.py",
+      "backend/tests/multi_alpha/test_durable_plan.py",
+      "backend/tests/multi_alpha/test_durable_retry.py",
+      "backend/tests/multi_alpha/test_durable_schema.py",
       "backend/tests/multi_alpha/test_durable_submission.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
-      "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
-      "backend/tests/multi_alpha/test_durable_backfill.py",
-      "backend/tests/multi_alpha/test_durable_contract.py",
-      "backend/tests/multi_alpha/test_durable_plan.py",
-      "backend/tests/multi_alpha/test_durable_schema.py"
+      "tests/aistock_validation/bugs/20260916_BUG-1552-qe-auto-evolution-retained-tests-have-insufficient-budget-headroom-and-d.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/multi_alpha/test_durable_backfill.py",
+      "backend/tests/multi_alpha/test_durable_capacity.py",
+      "backend/tests/multi_alpha/test_durable_contract.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+      "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+      "backend/tests/multi_alpha/test_durable_parity.py",
+      "backend/tests/multi_alpha/test_durable_plan.py",
+      "backend/tests/multi_alpha/test_durable_retry.py",
+      "backend/tests/multi_alpha/test_durable_schema.py",
+      "backend/tests/multi_alpha/test_durable_submission.py",
+      "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1552-qe-auto-evolution-retained-tests-have-insufficient-budget-headroom-and-d.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/multi_alpha/test_durable_parity.py",
@@ -247,10 +261,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
