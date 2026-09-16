@@ -39,7 +39,7 @@ from backend.services.advisory_phase1.snapshot_writer import (
     _load_persisted_capture_request_read_only,
 )
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
-from backend.tests.advisory_historical_range.test_r4_bridge_maturity_dedup import (
+from backend.tests.advisory_historical_range.r4_bridge_support import (
     _lineage_for,
     _policy_with_projections,
 )
