@@ -1,6 +1,7 @@
 {
   "actual": "advisory.candidate_quality test-to-production ratio is 42.45% with 782 excess effective test SLOC.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/tests/advisory_phase0b/test_audit_service.py",
     "backend/tests/advisory_phase0b/test_cli.py",
     "backend/tests/advisory_phase0b/test_contracts.py",

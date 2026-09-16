@@ -801,7 +801,7 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
     full_targets = [
         "backend/tests/advisory_phase0b",
         "backend/tests/advisory_historical_range/test_r4_summary_service.py",
-        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
+        "backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
