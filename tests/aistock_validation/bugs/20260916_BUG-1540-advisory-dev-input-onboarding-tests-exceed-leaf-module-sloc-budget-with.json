@@ -1,0 +1,538 @@
+{
+  "actual": "advisory.dev_input_onboarding test-to-production ratio is 52.26% with 5479 excess effective test SLOC.",
+  "allowed_write_scope": [
+    "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+    "backend/tests/advisory_phase0a/test_audit_service.py",
+    "backend/tests/advisory_phase1/test_readiness_plan.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+    "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+    "backend/tests/advisory_phase0a/test_evidence_projection.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+    "backend/tests/advisory_phase0a/test_historical_research.py",
+    "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+    "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+    "backend/tests/advisory_phase1/test_source_observer.py",
+    "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+    "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+    "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+    "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+    "backend/tests/advisory_phase0a/test_historical_research_dev_db.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1540-advisory-dev-input-onboarding-tests-exceed-leaf-module-sloc-budget-with.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1540",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T03:01:05.534020Z",
+  "description": "advisory.dev_input_onboarding test-to-production ratio is 52.26% with 5479 excess effective test SLOC.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-8cb7d7b6b9f5",
+      "timestamp": "2026-09-16T03:01:05.533999Z"
+    }
+  ],
+  "evidence_uris": [
+    "validation-budget:advisory.dev_input_onboarding=52.26%,excess=5479"
+  ],
+  "expected": "Advisory dev-input-onboarding remains behaviorally covered and falls at or below the 30% tracked effective-SLOC budget without production-source or ownership changes.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+      "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+      "backend/tests/advisory_phase0a/test_audit_service.py",
+      "backend/tests/advisory_phase0a/test_evidence_projection.py",
+      "backend/tests/advisory_phase1/test_readiness_plan.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1540-advisory-dev-input-onboarding-tests-exceed-leaf-module-sloc-budget-with.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+      "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+      "backend/tests/advisory_phase0a/test_audit_service.py",
+      "backend/tests/advisory_phase0a/test_evidence_projection.py",
+      "backend/tests/advisory_phase1/test_readiness_plan.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1540-advisory-dev-input-onboarding-tests-exceed-leaf-module-sloc-budget-with.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+        "backend/tests/advisory_phase0a/test_audit_service.py",
+        "backend/tests/advisory_phase1/test_readiness_plan.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+        "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+        "backend/tests/advisory_phase0a/test_evidence_projection.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+        "backend/tests/advisory_phase0a/test_historical_research.py",
+        "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+        "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+        "backend/tests/advisory_phase1/test_source_observer.py",
+        "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+        "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+        "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+        "backend/tests/advisory_phase0a/test_historical_research_dev_db.py"
+      ],
+      "impacted_modules": [
+        "advisory.dev_input_onboarding",
+        "tests.backend",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase0a/test_audit_service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase1/test_readiness_plan.py",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_phase1_onboarding_test_override"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase0a/test_evidence_projection.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase0a/test_historical_research.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_phase1_onboarding_test_override"
+        },
+        {
+          "file": "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase1/test_source_observer.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        },
+        {
+          "file": "backend/tests/advisory_phase0a/test_historical_research_dev_db.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.dev_input_onboarding",
+          "risk_level": "high",
+          "rule_id": "advisory_dev_input_onboarding"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+        "backend/tests/advisory_phase0a/test_audit_service.py",
+        "backend/tests/advisory_phase1/test_readiness_plan.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+        "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+        "backend/tests/advisory_phase0a/test_evidence_projection.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+        "backend/tests/advisory_phase0a/test_historical_research.py",
+        "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+        "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+        "backend/tests/advisory_phase1/test_source_observer.py",
+        "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+        "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+        "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+        "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+        "backend/tests/advisory_phase0a/test_historical_research_dev_db.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+      "backend/tests/advisory_phase0a/test_audit_service.py",
+      "backend/tests/advisory_phase1/test_readiness_plan.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+      "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+      "backend/tests/advisory_phase0a/test_evidence_projection.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+      "backend/tests/advisory_phase0a/test_historical_research.py",
+      "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+      "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+      "backend/tests/advisory_phase1/test_source_observer.py",
+      "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+      "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+      "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+      "backend/tests/advisory_phase0a/test_historical_research_dev_db.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
+      "backend/tests/advisory_phase0a/test_audit_service.py",
+      "backend/tests/advisory_phase1/test_readiness_plan.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o3_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_contracts_and_plan.py",
+      "backend/tests/advisory_dev_input_onboarding/test_production_projection.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_postgres_integration.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o2_exporter.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
+      "backend/tests/advisory_phase0a/test_evidence_projection.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_program_readiness.py",
+      "backend/tests/advisory_phase0a/test_historical_research.py",
+      "backend/tests/advisory_phase1/test_source_observer_dev_db.py",
+      "backend/tests/advisory_phase0a/test_cli_and_source_probe.py",
+      "backend/tests/advisory_phase1/test_source_observer.py",
+      "backend/tests/advisory_dev_input_onboarding/o2_fixtures.py",
+      "backend/tests/advisory_dev_input_onboarding/test_cli_and_isolation.py",
+      "backend/tests/advisory_dev_input_onboarding/test_contracts.py",
+      "backend/tests/advisory_dev_input_onboarding/test_o4_phase1e_compile.py",
+      "backend/tests/advisory_phase0a/test_historical_research_dev_db.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T03:01:05.534020Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4824,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4824",
+  "last_seen_at": "2026-09-16T03:01:05.534020Z",
+  "module": "advisory_dev_input_onboarding",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json",
+  "required_verification": [
+    "l0",
+    "advisory_dev_input_onboarding_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_dev_input_onboarding"
+  ],
+  "title": "Advisory dev-input-onboarding tests exceed leaf-module SLOC budget with duplicated scenarios and implementation snapshots",
+  "trigger_condition": {
+    "fingerprint": "8cb7d7b6b9f5af1d4b80695f",
+    "source_event_id": "FE-20260916-8cb7d7b6b9f5"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_dev_input_onboarding"
+      ],
+      "plans": [
+        "advisory_dev_input_onboarding_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_dev_input_onboarding"
+        ],
+        "plans": [
+          "advisory_dev_input_onboarding_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
