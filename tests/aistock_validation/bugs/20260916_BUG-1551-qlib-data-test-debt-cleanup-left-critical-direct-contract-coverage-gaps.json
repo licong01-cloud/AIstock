@@ -40,6 +40,18 @@
   "evidence_uris": [],
   "expected": "Critical dataset-release modules retain direct fail-closed contract tests, qlib_data remains below the 30 percent SLOC cap, and selected validation runtime is reduced without changing production ownership or behavior.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_build_processor.py",
+      "backend/tests/dataset_release/test_build_stage.py",
+      "backend/tests/dataset_release/test_candidate_validator.py",
+      "backend/tests/dataset_release/test_component_artifact_manifest.py",
+      "backend/tests/dataset_release/test_resolution_processor.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1551-qlib-data-test-debt-cleanup-left-critical-direct-contract-coverage-gaps.json"
+    ],
     "added_files": [
       "backend/tests/dataset_release/test_candidate_validator.py",
       "backend/tests/dataset_release/test_artifact_ready_source.py",
@@ -49,18 +61,18 @@
       "backend/tests/dataset_release/test_build_stage.py"
     ],
     "changed_files": [
-      "backend/tests/dataset_release/test_worker.py",
-      "backend/tests/dataset_release/test_state_machine.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_build_processor.py",
+      "backend/tests/dataset_release/test_build_stage.py",
+      "backend/tests/dataset_release/test_candidate_validator.py",
+      "backend/tests/dataset_release/test_component_artifact_manifest.py",
       "backend/tests/dataset_release/test_resolution_processor.py",
-      "backend/tests/dataset_release/test_resolution.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+      "backend/tests/dataset_release/test_source_authority.py",
       "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
-      "backend/tests/dataset_release/test_qlib_batched_dump.py",
-      "backend/tests/dataset_release/test_reattest_existing.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1551-qlib-data-test-debt-cleanup-left-critical-direct-contract-coverage-gaps.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/dataset_release/test_worker.py",
@@ -361,10 +373,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
