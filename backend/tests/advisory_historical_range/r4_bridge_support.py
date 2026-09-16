@@ -59,4 +59,3 @@ def _lineage_for(candidate_ref: HistoricalRangeArtifactRefV1, *, day_run_id: str
         signal_source_revision_set_hash="3" * 64,
         oos_interval_hash="4" * 64,
     )
-

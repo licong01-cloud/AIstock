@@ -30,4 +30,3 @@ def _bridge_builder_hash(repository_root: Path) -> str:
         digest.update((repository_root / relative_path).read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
-
