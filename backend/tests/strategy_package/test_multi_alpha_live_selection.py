@@ -258,3 +258,26 @@ def _make_parent(*, live_weight_policy: bool = True):  # noqa: ANN202
         )
     )
     return package_repo, package_repo.save_manifest(updated)
+
+
+def test_live_input_contract_is_pit_bound_and_reproducible() -> None:
+    provider = FakeProvider({A1_LEG: _score_rows(count=3)})
+    workspace = SimpleNamespace(leg_id=A1_LEG, seed_run_id="qe_seed")
+
+    first = provider.run(
+        workspace=workspace, cutoff_date=TRADE_DATE, trade_date=TRADE_DATE
+    )
+    second = provider.run(
+        workspace=workspace, cutoff_date=TRADE_DATE, trade_date=TRADE_DATE
+    )
+
+    assert first.scores == second.scores
+    assert first.input_context["pit_mode"] == "stock_universe_pit_v1"
+    assert first.input_context["calendar_identity_hash"]
+    assert first.input_context["universe_input_hash"]
+    assert {item["source_role"] for item in first.source_read_receipts} == {
+        "pit_universe",
+        "market_history",
+        "fundamental_moneyflow",
+        "trading_calendar",
+    }

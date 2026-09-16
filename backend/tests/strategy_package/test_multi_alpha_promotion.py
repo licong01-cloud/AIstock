@@ -402,3 +402,21 @@ def _promote(service, child_a1, child_fund):  # noqa: ANN001, ANN202
         },
         confirmation=MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
     )
+
+
+def test_promotion_contract_freezes_reproducible_parent_package() -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    service = _service(combine_repo, package_repo)
+
+    first = _promote(service, child_a1, child_fund).package
+    second = _promote(service, child_a1, child_fund).package
+
+    assert first.package_id == second.package_id
+    assert first.manifest_sha256 == second.manifest_sha256
+    manifest = first.current_manifest()
+    assert {item.alpha_id for item in manifest.alpha_components} == {
+        A1_LEG,
+        FUND_LEG,
+    }
+    assert manifest.backtest_context["execution"]["execution_algo"] == "TWAP"
+    assert manifest.source_evidence["multi_alpha"]["combine_backtest_run_id"] == RUN_ID
