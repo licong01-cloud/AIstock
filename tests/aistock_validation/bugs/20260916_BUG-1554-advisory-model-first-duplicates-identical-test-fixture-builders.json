@@ -32,19 +32,32 @@
   "evidence_uris": [],
   "expected": "Keep every PIT, policy identity, coverage, calibration, transaction and fail-closed assertion while using one shared test-support implementation for identical fixtures.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/advisory_model_first/_test_support.py",
+      "backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py",
+      "backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py",
+      "backend/tests/advisory_model_first/test_margin_information_set_contracts.py",
+      "backend/tests/advisory_model_first/test_margin_information_set_delivery.py",
+      "backend/tests/advisory_model_first/test_margin_information_set_pipeline.py",
+      "backend/tests/advisory_model_first/test_minute_information_set_pipeline.py",
+      "backend/tests/advisory_model_first/test_selection_prior_residual_contracts.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1554-advisory-model-first-duplicates-identical-test-fixture-builders.json"
+    ],
     "added_files": [
       "backend/tests/advisory_model_first/_test_support.py"
     ],
     "changed_files": [
+      "backend/tests/advisory_model_first/_test_support.py",
       "backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py",
-      "backend/tests/advisory_model_first/test_selection_prior_residual_contracts.py",
       "backend/tests/advisory_model_first/test_leg_disagreement_pipeline.py",
+      "backend/tests/advisory_model_first/test_margin_information_set_contracts.py",
+      "backend/tests/advisory_model_first/test_margin_information_set_delivery.py",
       "backend/tests/advisory_model_first/test_margin_information_set_pipeline.py",
       "backend/tests/advisory_model_first/test_minute_information_set_pipeline.py",
-      "backend/tests/advisory_model_first/test_margin_information_set_contracts.py",
-      "backend/tests/advisory_model_first/test_margin_information_set_delivery.py"
+      "backend/tests/advisory_model_first/test_selection_prior_residual_contracts.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1554-advisory-model-first-duplicates-identical-test-fixture-builders.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py",
@@ -178,10 +191,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
