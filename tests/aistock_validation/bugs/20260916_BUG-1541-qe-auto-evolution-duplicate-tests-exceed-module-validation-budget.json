@@ -15,6 +15,7 @@
     "backend/tests/test_multi_alpha_combine_ui_adapter.py",
     "backend/tests/test_multi_alpha_remote_dispatch.py",
     "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260916_BUG-1541-qe-auto-evolution-duplicate-tests-exceed-module-validation-budget.json"
   ],
   "assigned_agent": null,
@@ -55,6 +56,7 @@
       "backend/tests/test_multi_alpha_combine_ui_adapter.py",
       "backend/tests/test_multi_alpha_remote_dispatch.py",
       "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260916_BUG-1541-qe-auto-evolution-duplicate-tests-exceed-module-validation-budget.json"
     ],
     "added_files": [],
@@ -73,6 +75,7 @@
       "backend/tests/test_multi_alpha_combine_ui_adapter.py",
       "backend/tests/test_multi_alpha_remote_dispatch.py",
       "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260916_BUG-1541-qe-auto-evolution-duplicate-tests-exceed-module-validation-budget.json"
     ],
     "changed_files_source": "git_finish",
@@ -98,7 +101,8 @@
       "backend/tests/test_multi_alpha_combine_backtest.py",
       "backend/tests/test_multi_alpha_combine_ui_adapter.py",
       "backend/tests/test_multi_alpha_remote_dispatch.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py"
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+      "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -115,7 +119,8 @@
       "backend/tests/test_multi_alpha_combine_backtest.py",
       "backend/tests/test_multi_alpha_combine_ui_adapter.py",
       "backend/tests/test_multi_alpha_remote_dispatch.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py"
+      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
+      "noxfile.py"
     ]
   },
   "first_seen_at": "2026-09-16T03:07:53.453161Z",
