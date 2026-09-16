@@ -1403,7 +1403,11 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+        "backend/tests/multi_alpha/test_durable_router.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+        "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
+        "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+        "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
         "backend/tests/trading_core/test_tail_twap_substitute_depth.py",
         "backend/tests/unified_engine/test_backtest_executor.py",
         "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
@@ -1438,13 +1442,10 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
         },
     )
-    _run_pytest(
-        session,
-        *(pr_targets or targets),
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    if pr_targets:
+        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
+    else:
+        _run_pytest(session, *targets, "-q", "-p", "no:cacheprovider")
 
 
 @nox.session(venv_backend="none")
