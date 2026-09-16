@@ -2536,9 +2536,3 @@ def build_c010_feature_domain_panel(
     evidence = {**evidence_body, "receipt_sha256": canonical_sha256(evidence_body)}
     return panel, feature_definition, evidence
 
-
-def _future_sum(series: pd.Series, horizon: int) -> pd.Series:
-    pieces = [series.groupby(level="l1_code").shift(-offset) for offset in range(1, horizon + 1)]
-    return pd.concat(pieces, axis=1).sum(axis=1, min_count=horizon)
-
-
