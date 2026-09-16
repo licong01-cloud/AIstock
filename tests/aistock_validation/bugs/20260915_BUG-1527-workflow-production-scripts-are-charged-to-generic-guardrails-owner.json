@@ -1,64 +1,57 @@
 {
-  "actual": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "actual": "30,807 workflow test SLOC has zero production denominator while validation.guardrails absorbs unrelated workflow production.",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "backend/services/validation/catalog_integrity.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json"
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1527-workflow-production-scripts-are-charged-to-generic-guardrails-owner.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1523",
-  "closed_at": "2026-09-15T16:06:34Z",
+  "bug_id": "BUG-1527",
+  "closed_at": "2026-09-15T17:34:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-15T15:53:39.419058Z",
-  "description": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "created_at": "2026-09-15T17:28:21.963463Z",
+  "description": "30,807 workflow test SLOC has zero production denominator while validation.guardrails absorbs unrelated workflow production.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260915-c78676d5100b",
-      "timestamp": "2026-09-15T15:53:39.419033Z"
+      "note": "Promoted from IC-20260915-064024c4786a",
+      "timestamp": "2026-09-15T17:28:21.963463Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Authoritative validation catalogs reject duplicate YAML mapping keys fail-closed, and qe.enhanced_metrics recommends both intended plans in one list.",
+  "expected": "Workflow automation production entry points and their tests share one honest primary owner; guardrail and runner production remain separately owned.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1527-workflow-production-scripts-are-charged-to-generic-guardrails-owner.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1527-workflow-production-scripts-are-charged-to-generic-guardrails-owner.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "impacted_modules": [
         "validation.module_quality",
         "validation.guardrails",
         "tests.validation_history",
-        "validation.runner",
-        "tests.backend",
-        "validation.center",
-        "validation.coverage"
+        "validation.runner"
       ],
       "matched_rules": [
         {
-          "file": "tests/aistock_validation/catalog/module_registry.yaml",
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
           "impact_modules": [
             "validation.guardrails",
             "tests.validation_history"
@@ -68,68 +61,52 @@
           "rule_id": "validation_catalog_module_quality"
         },
         {
-          "file": "backend/services/validation/catalog_integrity.py",
+          "file": "backend/tests/scripts/test_aistock_validation_budget.py",
           "impact_modules": [
+            "validation.guardrails",
             "validation.module_quality"
           ],
           "primary_module": "validation.runner",
           "risk_level": "high",
-          "rule_id": "validation_plan_catalog_services"
-        },
-        {
-          "file": "backend/tests/test_validation_catalog_integrity.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.coverage",
-            "validation.guardrails",
-            "validation.module_quality"
-          ],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "validation_backend_tests"
+          "rule_id": "validation_test_debt_audit"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ]
   },
-  "first_seen_at": "2026-09-15T15:53:39.419058Z",
+  "first_seen_at": "2026-09-15T17:28:21.963463Z",
   "fix_branch": null,
-  "fix_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-  "fixed_at": "2026-09-15T16:06:34Z",
-  "github_issue_number": 4777,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4777",
-  "last_seen_at": "2026-09-15T15:53:39.419058Z",
+  "fix_commit": "b8fffd91234b1f3ac4f25c41f141d4b26f17e84a",
+  "fixed_at": "2026-09-15T17:34:51Z",
+  "github_issue_number": 4792,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4792",
+  "last_seen_at": "2026-09-15T17:28:21.963463Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4793",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/test_validation_catalog_integrity.py -q",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json",
   "required_verification": [
     "l0",
     "validation_module_registry_l0",
@@ -152,44 +129,50 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
+  "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1523",
+    "bug_id": "BUG-1527",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "2ce22bb696ee92d9",
-    "recorded_at": "2026-09-15T16:08:27.848153Z",
+    "receipt_id": "499cf5037dd4aa75",
+    "recorded_at": "2026-09-15T17:36:47.037359Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "95e2cdd65c16b09edbee1fac38d27e701f2b1ddd",
-    "source_merge_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+    "source_head_oid": "b9ec4e2306150a06f9f7988af014e63facb57b1c",
+    "source_merge_commit": "b8fffd91234b1f3ac4f25c41f141d4b26f17e84a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4793",
     "validation_evidence": [
-      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-      "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed",
+      "python -m nox -s validation_catalog_integrity -> 15 passed",
+      "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py backend/tests/test_validation_module_ownership.py -q -> 15 passed",
+      "git diff --check -> passed"
     ],
-    "validation_evidence_digest": "aa074185978dcb07bd2d19857b147d85554735e69bbafec051129fb1a38373fe"
+    "validation_evidence_digest": "98a1169f723060578cdbb916c6814b800c38b462f959b29791fd0e748c1707b0"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Validation catalogs silently accept duplicate YAML mapping keys",
+  "title": "Workflow production scripts are charged to generic guardrails owner",
   "trigger_condition": {
-    "fingerprint": "c78676d5100b6b01aa7672e8",
-    "source_event_id": "FE-20260915-c78676d5100b"
+    "fingerprint": "064024c4786ad855cdb89af6",
+    "source_event_id": "FE-20260915-064024c4786a"
   },
   "validation_evidence": [
-    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-    "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s validation_catalog_integrity -> 15 passed",
+    "python -m pytest backend/tests/scripts/test_aistock_validation_budget.py backend/tests/test_validation_module_ownership.py -q -> 15 passed",
+    "git diff --check -> passed"
   ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "light",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [],
@@ -230,7 +213,7 @@
       "validation_catalog_integrity"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -247,7 +230,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "light",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [],
@@ -288,7 +271,7 @@
         "validation_catalog_integrity"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "25-35%"
     }
   }
 }

@@ -1,91 +1,82 @@
 {
-  "actual": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "actual": "Any change in these module families reacquires the runner and executes the same broad session regardless of the touched source, while some broad lists omit the most relevant direct neighbor.",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "backend/services/validation/catalog_integrity.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json"
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1526-active-module-pr-plans-ignore-direct-neighbor-test-slices.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1523",
-  "closed_at": "2026-09-15T16:06:34Z",
+  "bug_id": "BUG-1526",
+  "closed_at": "2026-09-15T17:22:44Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-15T15:53:39.419058Z",
-  "description": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "created_at": "2026-09-15T17:07:08.425450Z",
+  "description": "Any change in these module families reacquires the runner and executes the same broad session regardless of the touched source, while some broad lists omit the most relevant direct neighbor.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260915-c78676d5100b",
-      "timestamp": "2026-09-15T15:53:39.419033Z"
+      "note": "Promoted from IC-20260915-f718b13c3f7b",
+      "timestamp": "2026-09-15T17:07:08.425450Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Authoritative validation catalogs reject duplicate YAML mapping keys fail-closed, and qe.enhanced_metrics recommends both intended plans in one list.",
+  "expected": "Selected active-module CI sessions use deterministic changed-file neighbors when available and safely fall back to their existing complete target set when mapping is unavailable; local and Nightly invocations keep the complete plan.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1526-active-module-pr-plans-ignore-direct-neighbor-test-slices.json"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1526-active-module-pr-plans-ignore-direct-neighbor-test-slices.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "noxfile.py",
+        "backend/tests/test_noxfile_validation_env.py"
       ],
       "impacted_modules": [
-        "validation.module_quality",
-        "validation.guardrails",
-        "tests.validation_history",
         "validation.runner",
-        "tests.backend",
         "validation.center",
-        "validation.coverage"
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "validation.coverage",
+        "validation.workflow_automation"
       ],
       "matched_rules": [
         {
-          "file": "tests/aistock_validation/catalog/module_registry.yaml",
+          "file": "noxfile.py",
           "impact_modules": [
+            "validation.center",
             "validation.guardrails",
-            "tests.validation_history"
-          ],
-          "primary_module": "validation.module_quality",
-          "risk_level": "high",
-          "rule_id": "validation_catalog_module_quality"
-        },
-        {
-          "file": "backend/services/validation/catalog_integrity.py",
-          "impact_modules": [
-            "validation.module_quality"
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
           ],
           "primary_module": "validation.runner",
           "risk_level": "high",
-          "rule_id": "validation_plan_catalog_services"
+          "rule_id": "noxfile_validation_runner"
         },
         {
-          "file": "backend/tests/test_validation_catalog_integrity.py",
+          "file": "backend/tests/test_noxfile_validation_env.py",
           "impact_modules": [
-            "validation.center",
             "validation.runner",
             "validation.coverage",
             "validation.guardrails",
-            "validation.module_quality"
+            "validation.module_quality",
+            "validation.workflow_automation"
           ],
-          "primary_module": "tests.backend",
+          "primary_module": "validation.center",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
         }
@@ -95,45 +86,42 @@
         "medium"
       ],
       "suggested_scope": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "noxfile.py",
+        "backend/tests/test_noxfile_validation_env.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ]
   },
-  "first_seen_at": "2026-09-15T15:53:39.419058Z",
+  "first_seen_at": "2026-09-15T17:07:08.425450Z",
   "fix_branch": null,
-  "fix_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-  "fixed_at": "2026-09-15T16:06:34Z",
-  "github_issue_number": 4777,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4777",
-  "last_seen_at": "2026-09-15T15:53:39.419058Z",
+  "fix_commit": "863b67ea309ac8c44c1610b78310ad54a074420d",
+  "fixed_at": "2026-09-15T17:22:44Z",
+  "github_issue_number": 4788,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4788",
+  "last_seen_at": "2026-09-15T17:07:08.425450Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4790",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/test_validation_catalog_integrity.py -q",
+  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/test_noxfile_validation_env.py -q",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0",
-    "validation_catalog_integrity"
+    "validation_catalog_integrity",
+    "validation_center_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -154,47 +142,56 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1523",
+    "bug_id": "BUG-1526",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "2ce22bb696ee92d9",
-    "recorded_at": "2026-09-15T16:08:27.848153Z",
+    "receipt_id": "5691c41b313edcd6",
+    "recorded_at": "2026-09-15T17:24:23.871353Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "95e2cdd65c16b09edbee1fac38d27e701f2b1ddd",
-    "source_merge_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+    "source_head_oid": "063f3e370ff70fd42e72c5ec145a9c66a7eb519f",
+    "source_merge_commit": "863b67ea309ac8c44c1610b78310ad54a074420d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4790",
     "validation_evidence": [
-      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-      "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> 14 passed",
+      "python -m pytest backend/tests/test_noxfile_validation_env.py -q -> 36 passed",
+      "git diff --check -> passed"
     ],
-    "validation_evidence_digest": "aa074185978dcb07bd2d19857b147d85554735e69bbafec051129fb1a38373fe"
+    "validation_evidence_digest": "627de41be28ed1a57c23540b51ae49850b0514b98737a90dae9e600de73e70b3"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Validation catalogs silently accept duplicate YAML mapping keys",
+  "title": "Active module PR plans ignore direct-neighbor test slices",
   "trigger_condition": {
-    "fingerprint": "c78676d5100b6b01aa7672e8",
-    "source_event_id": "FE-20260915-c78676d5100b"
+    "fingerprint": "f718b13c3f7b722f41eb100e",
+    "source_event_id": "FE-20260915-f718b13c3f7b"
   },
   "validation_evidence": [
-    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-    "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> 14 passed",
+    "python -m pytest backend/tests/test_noxfile_validation_env.py -q -> 36 passed",
+    "git diff --check -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -226,7 +223,6 @@
     ],
     "premerge_required_plans": [
       "l0",
-      "validation_module_registry_l0",
       "validation_catalog_integrity"
     ],
     "schema_version": "aistock_verification_budget_v1",
@@ -243,6 +239,7 @@
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
       "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -250,9 +247,14 @@
       "budget": "standard",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -284,7 +286,6 @@
       ],
       "premerge_required_plans": [
         "l0",
-        "validation_module_registry_l0",
         "validation_catalog_integrity"
       ],
       "schema_version": "aistock_verification_budget_v1",

@@ -117,6 +117,126 @@ def _configure_hmm_pr_targets(
     monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
 
 
+def _configure_direct_neighbor_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    changed_files: list[str],
+    existing_paths: list[str],
+) -> None:
+    for relative in existing_paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture\n", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"changed_files": changed_files}), encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
+
+
+def test_direct_neighbor_pr_targets_select_smoke_changed_test_source_neighbor_and_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    smoke = "backend/tests/example/test_contract.py"
+    changed_test = "backend/tests/example/test_reader.py"
+    source = "backend/services/example/writer.py"
+    source_neighbor = "backend/tests/example/test_writer.py"
+    router = "backend/routers/example.py"
+    router_neighbor = "backend/tests/example/test_api.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[changed_test, source, router],
+        existing_paths=[smoke, changed_test, source, source_neighbor, router, router_neighbor],
+    )
+
+    assert noxfile._direct_neighbor_pr_targets(
+        smoke_tests=(smoke,),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",),
+        overrides={router: router_neighbor},
+    ) == [smoke, changed_test, source_neighbor, router_neighbor]
+
+
+def test_direct_neighbor_pr_targets_falls_back_for_unmapped_live_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = "backend/services/example/unmapped.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[source],
+        existing_paths=[source],
+    )
+
+    assert noxfile._direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",),
+    ) is None
+
+
+def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
+
+    assert noxfile._direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(),
+        test_globs=(),
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "session_name",
+    [
+        "qlib_data_backend",
+        "advisory_phase0b_backend",
+        "qe_read_backend",
+        "position_timing_backend",
+    ],
+)
+def test_direct_neighbor_sessions_execute_selected_pr_slice(
+    monkeypatch: pytest.MonkeyPatch,
+    session_name: str,
+) -> None:
+    selected = ["backend/tests/example/test_selected.py"]
+    pytest_args: list[str] = []
+
+    class DummySession:
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(noxfile, "_direct_neighbor_pr_targets", lambda **_kwargs: selected)
+    monkeypatch.setattr(
+        noxfile,
+        "_run_pytest",
+        lambda _session, *args: pytest_args.extend(args),
+    )
+
+    getattr(noxfile, session_name)(DummySession())
+
+    assert selected[0] in pytest_args
+
+
+def test_factor_research_session_executes_selected_pr_slice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = "backend/tests/factor_research/test_selected.py"
+    calls: list[tuple[object, ...]] = []
+
+    class DummySession:
+        def run(self, *args: object, **_kwargs: object) -> None:
+            calls.append(args)
+
+    monkeypatch.setattr(noxfile, "_direct_neighbor_pr_targets", lambda **_kwargs: [selected])
+
+    noxfile.factor_research_backend(DummySession())
+
+    assert selected in calls[0]
+
+
 def test_hmm_risk_pr_targets_use_changed_tests_and_direct_neighbors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

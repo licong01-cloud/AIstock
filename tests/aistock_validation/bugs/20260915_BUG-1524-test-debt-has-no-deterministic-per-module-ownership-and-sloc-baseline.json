@@ -1,64 +1,85 @@
 {
-  "actual": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "actual": "Current audits only validate file ownership presence and test-plan reachability; test volume and ratio are reconstructed ad hoc.",
   "allowed_write_scope": [
-    "tests/aistock_validation/catalog/module_registry.yaml",
-    "backend/services/validation/catalog_integrity.py",
-    "backend/tests/test_validation_catalog_integrity.py",
-    "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json"
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/aistock_validation_budget.py",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1524-test-debt-has-no-deterministic-per-module-ownership-and-sloc-baseline.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1523",
-  "closed_at": "2026-09-15T16:06:34Z",
+  "bug_id": "BUG-1524",
+  "closed_at": "2026-09-15T16:34:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-15T15:53:39.419058Z",
-  "description": "The first recommended plan is silently lost during YAML parsing, so selected validation differs from the visible source.",
+  "created_at": "2026-09-15T16:13:45.623268Z",
+  "description": "Current audits only validate file ownership presence and test-plan reachability; test volume and ratio are reconstructed ad hoc.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260915-c78676d5100b",
-      "timestamp": "2026-09-15T15:53:39.419033Z"
+      "note": "Promoted from IC-20260915-6ea61cf8ec9e",
+      "timestamp": "2026-09-15T16:13:45.623248Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Authoritative validation catalogs reject duplicate YAML mapping keys fail-closed, and qe.enhanced_metrics recommends both intended plans in one list.",
+  "expected": "A deterministic tracked-file audit assigns each executable source/test file to one primary module, reports honest effective SLOC ratios and test-only buckets, and can enforce explicit budgets without path or denominator gaming.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "noxfile.py",
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1524-test-debt-has-no-deterministic-per-module-ownership-and-sloc-baseline.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "added_files": [],
+    "added_files": [
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
+    ],
     "changed_files": [
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py",
-      "tests/aistock_validation/bugs/20260915_BUG-1523-validation-catalogs-silently-accept-duplicate-yaml-mapping-keys.json",
-      "tests/aistock_validation/catalog/module_registry.yaml"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "noxfile.py",
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1524-test-debt-has-no-deterministic-per-module-ownership-and-sloc-baseline.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/aistock_validation_budget.py",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "impacted_modules": [
-        "validation.module_quality",
-        "validation.guardrails",
-        "tests.validation_history",
         "validation.runner",
-        "tests.backend",
         "validation.center",
-        "validation.coverage"
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "tests.validation_history",
+        "scripts"
       ],
       "matched_rules": [
         {
-          "file": "tests/aistock_validation/catalog/module_registry.yaml",
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
           "impact_modules": [
             "validation.guardrails",
             "tests.validation_history"
@@ -68,26 +89,18 @@
           "rule_id": "validation_catalog_module_quality"
         },
         {
-          "file": "backend/services/validation/catalog_integrity.py",
-          "impact_modules": [
-            "validation.module_quality"
-          ],
-          "primary_module": "validation.runner",
-          "risk_level": "high",
-          "rule_id": "validation_plan_catalog_services"
+          "file": "scripts/aistock_validation_budget.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
         },
         {
-          "file": "backend/tests/test_validation_catalog_integrity.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.coverage",
-            "validation.guardrails",
-            "validation.module_quality"
-          ],
+          "file": "backend/tests/scripts/test_aistock_validation_budget.py",
+          "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
-          "rule_id": "validation_backend_tests"
+          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
@@ -95,41 +108,44 @@
         "medium"
       ],
       "suggested_scope": [
-        "tests/aistock_validation/catalog/module_registry.yaml",
-        "backend/services/validation/catalog_integrity.py",
-        "backend/tests/test_validation_catalog_integrity.py"
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/aistock_validation_budget.py",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "backend/services/validation/catalog_integrity.py",
-      "backend/tests/test_validation_catalog_integrity.py"
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/aistock_validation_budget.py",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
     ]
   },
-  "first_seen_at": "2026-09-15T15:53:39.419058Z",
+  "first_seen_at": "2026-09-15T16:13:45.623268Z",
   "fix_branch": null,
-  "fix_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-  "fixed_at": "2026-09-15T16:06:34Z",
-  "github_issue_number": 4777,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4777",
-  "last_seen_at": "2026-09-15T15:53:39.419058Z",
+  "fix_commit": "4ca4f3ceeb138549cf9a552702569b3b9abf9375",
+  "fixed_at": "2026-09-15T16:34:11Z",
+  "github_issue_number": 4781,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4781",
+  "last_seen_at": "2026-09-15T16:13:45.623268Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4782",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/test_validation_catalog_integrity.py -q",
+  "reproduce_command": "C:\\Users\\lc999\\miniconda3\\envs\\AIstock-CI\\python.exe -m pytest backend/tests/scripts/test_aistock_validation_budget.py -q",
   "required_verification": [
     "l0",
     "validation_module_registry_l0",
@@ -152,44 +168,46 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
+  "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1523",
+    "bug_id": "BUG-1524",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "2ce22bb696ee92d9",
-    "recorded_at": "2026-09-15T16:08:27.848153Z",
+    "receipt_id": "cca4b5b72c6c6fa3",
+    "recorded_at": "2026-09-15T16:36:09.477313Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "95e2cdd65c16b09edbee1fac38d27e701f2b1ddd",
-    "source_merge_commit": "a8b473b0343907fe9958e019d1f4f26429a142e3",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4778",
+    "source_head_oid": "c4c77eb18a0a4864b49dfbd41e27c8f389520a0a",
+    "source_merge_commit": "4ca4f3ceeb138549cf9a552702569b3b9abf9375",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4782",
     "validation_evidence": [
-      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-      "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 tests passed; ownership 14/14 mapped",
+      "python -m nox -s validation_catalog_integrity -> passed: 12 tests passed; findings=0",
+      "python -m nox -s guardrail_changed_files -> passed: files=5 blocking=0 mapped=5"
     ],
-    "validation_evidence_digest": "aa074185978dcb07bd2d19857b147d85554735e69bbafec051129fb1a38373fe"
+    "validation_evidence_digest": "d0214de609f69235588fb68b44d2c0446e32bfd40bf5db1a131e221e607ee8d2"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Validation catalogs silently accept duplicate YAML mapping keys",
+  "title": "Test debt has no deterministic per-module ownership and SLOC baseline",
   "trigger_condition": {
-    "fingerprint": "c78676d5100b6b01aa7672e8",
-    "source_event_id": "FE-20260915-c78676d5100b"
+    "fingerprint": "6ea61cf8ec9eea5e1a3c2c4a",
+    "source_event_id": "FE-20260915-6ea61cf8ec9e"
   },
   "validation_evidence": [
-    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed: 8 passed, 14/14 mapped",
-    "python -m nox -s validation_catalog_integrity (same combined run) -> passed: 8 passed, findings=0"
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests passed; ownership 14/14 mapped",
+    "python -m nox -s validation_catalog_integrity -> passed: 12 tests passed; findings=0",
+    "python -m nox -s guardrail_changed_files -> passed: files=5 blocking=0 mapped=5"
   ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "light",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [],
@@ -230,7 +248,7 @@
       "validation_catalog_integrity"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -247,7 +265,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "light",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [],
@@ -288,7 +306,7 @@
         "validation_catalog_integrity"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "25-35%"
     }
   }
 }
