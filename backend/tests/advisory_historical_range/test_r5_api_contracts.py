@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from backend.routers.advisory import router
+from backend.routers.advisory import AdvisoryReplayRequest, router, run_replay
 from backend.services.advisory_historical_range.api_models import (
     HistoricalRangeBuildBridgeRequest,
     HistoricalRangeCreateRequest,
@@ -77,3 +77,20 @@ def test_all_r5_routes_are_registered() -> None:
         "/advisory/historical-range-operations/{operation_id}",
     }
     assert expected <= paths
+
+
+def test_legacy_replay_response_advertises_historical_range_replacement() -> None:
+    class Service:
+        @staticmethod
+        def run_replay(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+            return {"summary": {"win_rate": 1.0}}
+
+    response = run_replay(
+        "advp_legacy",
+        AdvisoryReplayRequest(start_date=date(2026, 6, 1), end_date=date(2026, 6, 2)),
+        Service(),  # type: ignore[arg-type]
+    )
+
+    assert response["deprecated"] is True
+    assert response["replacement"] == "/api/v1/advisory/historical-range-batches"
+    assert response["replay"]["summary"]["win_rate"] == 1.0
