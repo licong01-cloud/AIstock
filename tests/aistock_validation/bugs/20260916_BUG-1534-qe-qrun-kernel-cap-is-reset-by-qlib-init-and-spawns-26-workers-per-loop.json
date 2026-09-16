@@ -29,14 +29,22 @@
   ],
   "expected": "Every new QE day or minute runner initializes Qlib with kernels=4 and verifies the effective post-init value before any provider read.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/unified_engine/test_qrun_kernel_limit.py",
+      "scripts/qrun_limit.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1534-qe-qrun-kernel-cap-is-reset-by-qlib-init-and-spawns-26-workers-per-loop.json"
+    ],
     "added_files": [
       "backend/tests/unified_engine/test_qrun_kernel_limit.py"
     ],
     "changed_files": [
+      "backend/tests/unified_engine/test_qrun_kernel_limit.py",
+      "scripts/qrun_limit.py",
       "scripts/qrun_limit_minute.py",
-      "scripts/qrun_limit.py"
+      "tests/aistock_validation/bugs/20260916_BUG-1534-qe-qrun-kernel-cap-is-reset-by-qlib-init-and-spawns-26-workers-per-loop.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/qrun_limit_minute.py",
@@ -136,13 +144,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu fresh Python imported the task-branch qrun_limit.py and qrun_limit_minute.py, initialized active r5 day/1min providers, and read back C.get_kernels(day/1min)=4"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
