@@ -9,6 +9,10 @@
     "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
     "backend/tests/multi_alpha/test_durable_retry.py",
     "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "backend/tests/multi_alpha/test_durable_backfill.py",
+    "backend/tests/multi_alpha/test_durable_contract.py",
+    "backend/tests/multi_alpha/test_durable_plan.py",
+    "backend/tests/multi_alpha/test_durable_schema.py",
     "tests/aistock_validation/bugs/20260916_BUG-1552-qe-auto-evolution-retained-tests-have-insufficient-budget-headroom-and-d.json"
   ],
   "assigned_agent": null,
@@ -43,7 +47,11 @@
       "backend/tests/multi_alpha/test_durable_submission.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
       "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_backfill.py",
+      "backend/tests/multi_alpha/test_durable_contract.py",
+      "backend/tests/multi_alpha/test_durable_plan.py",
+      "backend/tests/multi_alpha/test_durable_schema.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -55,7 +63,11 @@
         "backend/tests/multi_alpha/test_durable_submission.py",
         "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
         "backend/tests/multi_alpha/test_durable_retry.py",
-        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "backend/tests/multi_alpha/test_durable_backfill.py",
+        "backend/tests/multi_alpha/test_durable_contract.py",
+        "backend/tests/multi_alpha/test_durable_plan.py",
+        "backend/tests/multi_alpha/test_durable_schema.py"
       ],
       "impacted_modules": [
         "qe.auto_evolution",
@@ -173,7 +185,11 @@
         "backend/tests/multi_alpha/test_durable_submission.py",
         "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
         "backend/tests/multi_alpha/test_durable_retry.py",
-        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "backend/tests/multi_alpha/test_durable_backfill.py",
+        "backend/tests/multi_alpha/test_durable_contract.py",
+        "backend/tests/multi_alpha/test_durable_plan.py",
+        "backend/tests/multi_alpha/test_durable_schema.py"
       ],
       "unmatched_files": []
     },
@@ -185,7 +201,11 @@
       "backend/tests/multi_alpha/test_durable_submission.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
       "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_backfill.py",
+      "backend/tests/multi_alpha/test_durable_contract.py",
+      "backend/tests/multi_alpha/test_durable_plan.py",
+      "backend/tests/multi_alpha/test_durable_schema.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -196,7 +216,11 @@
       "backend/tests/multi_alpha/test_durable_submission.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
       "backend/tests/multi_alpha/test_durable_retry.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py"
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_backfill.py",
+      "backend/tests/multi_alpha/test_durable_contract.py",
+      "backend/tests/multi_alpha/test_durable_plan.py",
+      "backend/tests/multi_alpha/test_durable_schema.py"
     ]
   },
   "first_seen_at": "2026-09-16T05:28:04.247870Z",

@@ -85,38 +85,15 @@ def test_scrubbed_qe_subprocess_env_removes_credentials_and_preserves_control_pl
         assert env.get(name) == value, f"control-plane/file-path variable lost: {name}"
 
 
-def test_is_db_credential_key() -> None:
-    assert is_db_credential_key("TDX_DB_HOST")
-    assert is_db_credential_key("TDX_DB_PASSWORD")
-    assert is_db_credential_key("DATABASE_URL")
-    assert is_db_credential_key("PGHOST")
-    assert is_db_credential_key("PGPASSWORD")
-    assert is_db_credential_key("PGHOSTADDR")
-    assert is_db_credential_key("PGSERVICEFILE")
-    assert is_db_credential_key("PGSSLKEY")
-    assert is_db_credential_key("pgsslcert")
-    assert is_db_credential_key("pgoptions")
-    assert is_db_credential_key("POSTGRES_PASSWORD")
-    assert is_db_credential_key("DB_PASSWORD")
-    assert is_db_credential_key("SQLALCHEMY_DATABASE_URL")
-    assert not is_db_credential_key("AISTOCK_PREDICTION_STORE_BASE_URL")
-    assert not is_db_credential_key("QLIB_DATA_PATH")
-    assert not is_db_credential_key("AISTOCK_TASK_ID")
-
-
-def test_is_qe_subprocess_credential_key_covers_non_database_secrets() -> None:
-    assert is_qe_subprocess_credential_key("OPENAI_API_KEY")
-    assert is_qe_subprocess_credential_key("SERVICE_AUTH_TOKEN")
-    assert is_qe_subprocess_credential_key("GITHUB_TOKEN")
-    assert is_qe_subprocess_credential_key("AWS_ACCESS_KEY_ID")
-    assert is_qe_subprocess_credential_key("AZURE_CLIENT_SECRET")
-    assert is_qe_subprocess_credential_key("SERVICE_ACCESS_KEY_ID")
-    assert is_qe_subprocess_credential_key("BASH_ENV")
-    assert is_qe_subprocess_credential_key("BASH_FUNC_evil%%")
-    assert is_qe_subprocess_credential_key("LD_PRELOAD")
-    assert not is_qe_subprocess_credential_key("AISTOCK_PREDICTION_STORE_BASE_URL")
-    assert not is_qe_subprocess_credential_key("QE_RESOURCE_SESSION_ID")
-    assert not is_qe_subprocess_credential_key("FACTOR_CACHE_DIR")
+def test_qe_subprocess_credential_classification_contract() -> None:
+    for name in [*DB_VARS, "pgsslcert", "pgoptions"]:
+        assert is_db_credential_key(name), name
+        assert is_qe_subprocess_credential_key(name), name
+    for name in [*SECRET_VARS, "SERVICE_AUTH_TOKEN", "BASH_ENV", "BASH_FUNC_evil%%", "LD_PRELOAD"]:
+        assert is_qe_subprocess_credential_key(name), name
+    for name in PRESERVED_VARS:
+        assert not is_db_credential_key(name), name
+        assert not is_qe_subprocess_credential_key(name), name
 
 
 def test_launched_isolated_subprocess_sees_no_db_credentials(_poison_db_env: None) -> None:
@@ -262,105 +239,62 @@ def test_remote_wsl_command_scrubs_db_credentials(_poison_db_env: None) -> None:
     assert command.count("reason_code=qe_subprocess_bash_required") >= 4
 
 
-def test_db_credential_scrub_command_runs_in_bash(_poison_db_env: None) -> None:
-    """The generated bash fragment actually unsets the credential variables when
-    executed inside a real shell."""
-    if sys.platform == "win32" and not _bash_available():
-        pytest.skip("bash is unavailable on this host")
-    probe = (
-        "export TDX_DB_HOST=fake PGHOST=fake DATABASE_URL=postgresql://fake OPENAI_API_KEY=fake GITHUB_TOKEN=fake; "
-        + db_credential_scrub_command()
-        + '; test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" '
-        + '&& test -z "${DATABASE_URL+x}" && test -z "${OPENAI_API_KEY+x}" '
-        + '&& test -z "${GITHUB_TOKEN+x}" && echo SCRUBBED'
-    )
-    child = subprocess.run(
-        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert child.returncode == 0, child.stderr
-    assert "SCRUBBED" in child.stdout
-
-
-def test_db_credential_scrub_command_is_errexit_safe_with_bash_readonly_vars() -> None:
-    """Bash creates readonly BASHOPTS/SHELLOPTS itself; defense-in-depth
-    scrubbing must not try to unset them and abort the qrun command chain."""
-
+@pytest.mark.parametrize(
+    ("setup", "checks", "sentinel"),
+    [
+        (
+            "export TDX_DB_HOST=fake PGHOST=fake DATABASE_URL=postgresql://fake "
+            "OPENAI_API_KEY=fake GITHUB_TOKEN=fake",
+            'test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" '
+            '&& test -z "${DATABASE_URL+x}" && test -z "${OPENAI_API_KEY+x}" '
+            '&& test -z "${GITHUB_TOKEN+x}"',
+            "SCRUBBED",
+        ),
+        ("set -e", "true", "QRUN_CAN_START"),
+        (
+            "export tdx_db_password=fake pgsslkey=fake PgServiceFile=fake "
+            "OpenAI_Api_Key=fake ld_preload=fake",
+            'test -z "${tdx_db_password+x}" && test -z "${pgsslkey+x}" '
+            '&& test -z "${PgServiceFile+x}" && test -z "${OpenAI_Api_Key+x}" '
+            '&& test -z "${ld_preload+x}"',
+            "MIXED_CASE_SCRUBBED",
+        ),
+    ],
+    ids=("credential-set", "errexit-readonly-vars", "mixed-case"),
+)
+def test_db_credential_scrub_command_bash_contract(
+    setup: str,
+    checks: str,
+    sentinel: str,
+) -> None:
     if not _bash_available():
         pytest.skip("bash is unavailable on this host")
-    probe = "set -e; " + db_credential_scrub_command() + "; echo QRUN_CAN_START"
-    child = subprocess.run(
-        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    child = _run_shell("bash", f"{setup}; {db_credential_scrub_command()}; {checks}; echo {sentinel}")
     assert child.returncode == 0, child.stderr
-    assert child.stdout.strip() == "QRUN_CAN_START"
+    assert child.stdout.strip() == sentinel
 
 
-def test_db_credential_scrub_command_removes_mixed_case_exports() -> None:
-    """Shell-side defense matches Python's case-insensitive classifier."""
-
-    if not _bash_available():
-        pytest.skip("bash is unavailable on this host")
-    probe = (
-        "export tdx_db_password=fake pgsslkey=fake PgServiceFile=fake OpenAI_Api_Key=fake ld_preload=fake; "
-        + db_credential_scrub_command()
-        + '; test -z "${tdx_db_password+x}"; '
-        + 'test -z "${pgsslkey+x}"; test -z "${PgServiceFile+x}"; '
-        + 'test -z "${OpenAI_Api_Key+x}"; test -z "${ld_preload+x}"; '
-        + "echo MIXED_CASE_SCRUBBED"
-    )
-    child = subprocess.run(
-        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert child.returncode == 0, child.stderr
-    assert child.stdout.strip() == "MIXED_CASE_SCRUBBED"
-
-
-def test_db_credential_scrub_command_fails_closed_under_posix_sh(_poison_db_env: None) -> None:
-    """The real RD-Agent legacy /bin/sh boundary must stop, never skip scrub."""
-
-    if not _shell_available("sh"):
-        pytest.skip("sh is unavailable on this host")
-    probe = (
-        "export TDX_DB_PASSWORD=fake OPENAI_API_KEY=fake; "
-        + db_credential_scrub_command()
-        + "; echo SHOULD_NOT_RUN"
-    )
-    child = subprocess.run(
-        [*_shell_command("sh"), "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
+@pytest.mark.parametrize(
+    ("shell", "setup", "reason_code"),
+    [
+        ("sh", "export TDX_DB_PASSWORD=fake OPENAI_API_KEY=fake", "qe_subprocess_bash_required"),
+        ("bash", "compgen() { return 127; }; set -e", "qe_subprocess_bash_compgen_missing"),
+    ],
+    ids=("posix-sh", "missing-compgen"),
+)
+def test_db_credential_scrub_command_fails_closed(
+    shell: str,
+    setup: str,
+    reason_code: str,
+) -> None:
+    if not _shell_available(shell):
+        pytest.skip(f"{shell} is unavailable on this host")
+    child = _run_shell(
+        shell,
+        f"{setup}; {db_credential_scrub_command()}; echo SHOULD_NOT_RUN",
     )
     assert child.returncode == 70
-    assert "reason_code=qe_subprocess_bash_required" in child.stderr
-    assert "SHOULD_NOT_RUN" not in child.stdout
-
-
-def test_db_credential_scrub_command_fails_closed_when_compgen_is_unusable() -> None:
-    if not _bash_available():
-        pytest.skip("bash is unavailable on this host")
-    probe = (
-        "compgen() { return 127; }; set -e; "
-        + db_credential_scrub_command()
-        + "; echo SHOULD_NOT_RUN"
-    )
-    child = subprocess.run(
-        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert child.returncode == 70
-    assert "reason_code=qe_subprocess_bash_compgen_missing" in child.stderr
+    assert f"reason_code={reason_code}" in child.stderr
     assert "SHOULD_NOT_RUN" not in child.stdout
 
 
@@ -401,6 +335,16 @@ def _bash_available() -> bool:
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _run_shell(shell: str, script: str) -> subprocess.CompletedProcess[str]:
+    clean_bash = ["--noprofile", "--norc"] if shell == "bash" else []
+    return subprocess.run(
+        [*_shell_command(shell), *clean_bash, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _shell_available(name: str) -> bool:
@@ -448,26 +392,3 @@ def test_qe_subprocess_env_never_emits_values(_poison_db_env: None) -> None:
     assert qe_subprocess_credential_scrub_command() == scrub
     for name in QE_SECRET_CREDENTIAL_KEYS:
         assert name in scrub
-
-
-def test_market_database_access_impossible_without_credentials(_poison_db_env: None) -> None:
-    """Without credentials the QE subprocess cannot open any PostgreSQL cursor,
-    so it cannot access market.* tables. This is the fail-closed isolation."""
-    code = (
-        "import os\n"
-        "def _has_cred():\n"
-        "    for k in os.environ:\n"
-        "        if k.startswith(('TDX_DB_',)) or k in ('DATABASE_URL','PGHOST','PGPORT','PGUSER','PGPASSWORD','PGDATABASE','PGSERVICE','PGPASSFILE'):\n"
-        "            return True\n"
-        "    return False\n"
-        "print('FAIL_CLOSED' if not _has_cred() else 'LEAK')\n"
-    )
-    child = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env=scrubbed_qe_subprocess_env(),
-        check=False,
-    )
-    assert child.returncode == 0, child.stderr
-    assert "FAIL_CLOSED" in child.stdout
