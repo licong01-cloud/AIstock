@@ -1287,6 +1287,8 @@ rules:
       - frontend/src/app/local-data/**
       - frontend/src/app/qlib/**
       - scripts/repair_minute_via_minute_api.py
+      - scripts/repair_suspend_688766.py
+      - backend/tests/scripts/test_repair_suspend_688766.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]
     layer: data_pipeline
