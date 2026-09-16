@@ -227,7 +227,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/schedules",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python process at implementation HEAD fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 imported backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler, classified a partial authority gap fail-closed, and resolved the Saturday full-history cadence"
+      "fresh Python process at implementation HEAD fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 imported backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler, classified a partial authority gap fail-closed, and resolved the Saturday full-history cadence",
+      "python -c fresh process import backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler at fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 -> passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -236,6 +237,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
