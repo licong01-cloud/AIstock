@@ -343,7 +343,7 @@ F-101 三阶段快速落地；F-102 独立方法与客户端入口；F-103 复�
 | F-108 | backend/services/factor_research/service.py | test: backend/tests/factor_research/test_recovery.py；backend/tests/factor_research/test_repository_dev.py | 文件/数据库登记失败可恢复，已验证不重算 | 无 |
 | F-109 | 精确 ownership/module/test plan/nox/runtime catalog；§9 handoff | test: backend/tests/factor_research/test_contracts.py::test_runtime_registration_is_exact_cli_only；artifact: tmp/handoff/factor-research-p1/ci-selection-all.json | 本地测试路由和 runtime 精确登记验证通过 | 无 |
 | F-110 | 三个精确 SQL 文件；repository.py | test: backend/tests/factor_research/test_repository_dev.py | DEV 验证通过 | 用户批准范围：生产另授权；有历史保留，不执行删除型回滚 |
-| F-111 | backend/tests/factor_research/dev_cases.py | artifact: X:/AIstock_factor_research/p1-validation-20260908/cases-7cfe6914-a26b-4735-9be0-b267e81adff8.json | 两案例入 DEV 并读回通过 | 用户批准范围：仅功能验证；40 股无停牌样本不证明全市场 alpha |
+| F-111 | 历史一次性脚本 `backend/tests/factor_research/dev_cases.py`（BUG-1546 退役；源码由 Git 历史保留） | artifact: X:/AIstock_factor_research/p1-validation-20260908/cases-7cfe6914-a26b-4735-9be0-b267e81adff8.json | 两案例入 DEV 并读回通过；退役不改变原验收事实 | 用户批准范围：仅功能验证；40 股无停牌样本不证明全市场 alpha |
 | F-112 | 本文边界、方法正文和全部 changed files | artifact: docs/architecture/factor_research_p1_detailed_design_20260908.md#risks | 已验证未引入复杂平台或新业务门禁；准确记录交付状态 | 无 |
 
 ## 13. Production gates 与本次状态
