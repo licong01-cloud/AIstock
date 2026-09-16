@@ -576,8 +576,8 @@
   },
   "first_seen_at": "2026-09-16T05:26:08.270724Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "aefbe421ff9979d7349e6a45ace925cbfb9a597d",
+  "fixed_at": "2026-09-16T07:06:28Z",
   "github_issue_number": 4845,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4845",
   "last_seen_at": "2026-09-16T05:26:08.270724Z",
@@ -585,6 +585,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4867",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -611,6 +612,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -622,7 +624,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1549",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a1d29b2a29538758",
+    "recorded_at": "2026-09-16T07:09:37.268803Z",
+    "runtime_contract_digest": "19aef19c1fac6fd14c39c1006a55f383b49776621d952b30facbb01b0f0dada3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2c3a0f81152eeb1fa8fc1ffa3297099108bf90f8",
+    "source_merge_commit": "aefbe421ff9979d7349e6a45ace925cbfb9a597d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4867",
+    "validation_evidence": [
+      "PR #4867 CI verdict -> passed",
+      "python -m nox -s hmm_risk_pr_slice with CI changed-file classifier -> passed (228 passed)",
+      "python -m nox -s l0 -> passed (0 blocking findings)"
+    ],
+    "validation_evidence_digest": "fe91e51906fe150ea5080b152b5764462dd168e95b7e9368836d5bbd757ed429"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -631,6 +656,11 @@
     "fingerprint": "3ae31c4d8f95fd41d197721d",
     "source_event_id": "FE-20260916-3ae31c4d8f95"
   },
+  "validation_evidence": [
+    "PR #4867 CI verdict -> passed",
+    "python -m nox -s hmm_risk_pr_slice with CI changed-file classifier -> passed (228 passed)",
+    "python -m nox -s l0 -> passed (0 blocking findings)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
