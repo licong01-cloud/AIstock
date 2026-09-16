@@ -76,4 +76,3 @@ def test_checkpoint_failure_never_fakes_success_and_exact_resume_seals(
     assert failed.checkpoint is expected_checkpoint
     assert failed.current_attempt_id is None
     assert pipeline.run(build_id=build.build_id, actor="test").checkpoint is BuildCheckpoint.SEALED
-
