@@ -39,6 +39,13 @@ def comparison_spec():
     }
 
 
+def test_comparison_spec_accepts_declared_contract():
+    actual = validate_comparison_spec(
+        comparison_spec(), candidate_names={"base", "candidate", "style"}, repo_root=Path.cwd()
+    )
+    assert actual["candidate"] == "candidate"
+
+
 @pytest.mark.parametrize(
     "mutation,match",
     [
@@ -52,12 +59,6 @@ def test_comparison_identity_and_timing_are_strict(mutation, match):
     mutation(value)
     with pytest.raises(ResearchError, match=match):
         validate_comparison_spec(value, candidate_names={"base", "candidate", "style"}, repo_root=Path.cwd())
-    assert (
-        validate_comparison_spec(
-            comparison_spec(), candidate_names={"base", "candidate", "style"}, repo_root=Path.cwd()
-        )["candidate"]
-        == "candidate"
-    )
 
 
 def test_partial_rank_residualizes_both_sides_and_never_fills_zero():
@@ -66,9 +67,7 @@ def test_partial_rank_residualizes_both_sides_and_never_fills_zero():
     result = _partial_rank_daily(values, values * 2, [values], [], values.notna())
     assert result["status"] == "unavailable"
     assert result["mean"] is None and result["unavailable_by_reason"]["zero_residual_variation"] == 2
-    assert _spearman(
-        pd.Series([1.0, 2.0, 4.0, 8.0, 16.0, 32.0]), pd.Series([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
-    ) == pytest.approx(1)
+    assert _spearman(pd.Series(range(6)), pd.Series(range(5, -1, -1))) == pytest.approx(-1)
 
 
 @pytest.mark.parametrize(

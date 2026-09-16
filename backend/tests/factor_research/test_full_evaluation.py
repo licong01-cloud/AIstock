@@ -28,7 +28,7 @@ def values(path, column, dates, symbols, *, parquet=False):
         (lambda frame: pd.concat([frame, frame.iloc[[0]]]), "duplicate"),
     ],
 )
-def test_reference_schema_is_strict_but_nonfinite_is_explicit(tmp_path, mutation, match):
+def test_reference_schema_is_strict(tmp_path, mutation, match):
     dates, symbols = pd.bdate_range("2026-01-01", periods=2), ["000001.SZ", "000002.SZ"]
     path = tmp_path / "reference.parquet"
     values(path, "value", dates, symbols, parquet=True)
@@ -36,6 +36,11 @@ def test_reference_schema_is_strict_but_nonfinite_is_explicit(tmp_path, mutation
     mutation(frame).to_parquet(path)
     with pytest.raises(ResearchError, match=match):
         load_reference_values(path, "m_reference")
+
+
+def test_reference_nonfinite_values_are_explicit(tmp_path):
+    dates, symbols = pd.bdate_range("2026-01-01", periods=2), ["000001.SZ", "000002.SZ"]
+    path = tmp_path / "reference.parquet"
     values(path, "value", dates, symbols, parquet=True)
     frame = pd.read_parquet(path)
     frame.iloc[:2, 0] = [np.inf, np.nan]
