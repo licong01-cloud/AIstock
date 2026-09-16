@@ -41,6 +41,7 @@
     "backend/tests/hmm_risk/test_stock_fact_observation.py",
     "backend/tests/hmm_risk/test_stock_fact_repository.py",
     "backend/services/hmm_risk/contracts.py",
+    "backend/tests/hmm_risk/test_contracts.py",
     "tests/aistock_validation/bugs/20260916_BUG-1549-hmm-terminal-b3-p6-d1-chain-remains-in-active-source-and-test-surface.json"
   ],
   "assigned_agent": null,
@@ -67,7 +68,8 @@
   "expected": "Atomically retire the terminal B3/P6/D1 production and test chain, move only current V16/G2C-neutral contracts to a semantic-neutral module, preserve active PIT/schema/security/fail-closed behavior, and keep stock_fact_gap_repair unchanged.",
   "file_scope_contract": {
     "added_files": [
-      "backend/services/hmm_risk/contracts.py"
+      "backend/services/hmm_risk/contracts.py",
+      "backend/tests/hmm_risk/test_contracts.py"
     ],
     "changed_files": [
       "backend/services/hmm_risk/state_model_set.py",
