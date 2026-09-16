@@ -40,25 +40,28 @@
   ],
   "expected": "Reduce qlib_data effective test SLOC by at least 9327 lines to below 30 percent without ownership transfer, while retaining PIT universe, provider isolation, stock-pool identity, manifest/hash, atomic publish, resume, daily/minute consistency and fail-closed contracts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_build_processor.py",
+      "backend/tests/dataset_release/test_build_stage.py",
+      "backend/tests/dataset_release/test_candidate_validator.py",
+      "backend/tests/dataset_release/test_component_artifact_manifest.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1544-qlib-data-duplicate-exporter-and-release-tests-exceed-module-validation.json"
+    ],
     "added_files": [
       "backend/tests/dataset_release/test_critical_contracts.py"
     ],
     "changed_files": [
-      "backend/tests/dataset_release/test_candidate_validator.py",
       "backend/tests/dataset_release/test_artifact_ready_source.py",
-      "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_worker.py",
       "backend/tests/dataset_release/test_build_processor.py",
-      "backend/tests/dataset_release/test_component_artifact_manifest.py",
       "backend/tests/dataset_release/test_build_stage.py",
-      "backend/tests/dataset_release/test_direct_monthly.py",
-      "backend/tests/dataset_release/test_index_pool_sidecar.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
-      "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
-      "backend/tests/core_index_membership/test_universe_resolver.py"
+      "backend/tests/dataset_release/test_candidate_validator.py",
+      "backend/tests/dataset_release/test_component_artifact_manifest.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1544-qlib-data-duplicate-exporter-and-release-tests-exceed-module-validation.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/dataset_release/test_candidate_validator.py",
@@ -326,10 +329,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
