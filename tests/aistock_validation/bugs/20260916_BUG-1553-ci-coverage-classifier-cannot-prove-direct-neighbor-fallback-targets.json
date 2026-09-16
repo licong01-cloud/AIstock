@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "scripts/ci_change_classifier.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260916_BUG-1553-ci-coverage-classifier-cannot-prove-direct-neighbor-fallback-targets.json"
   ],
   "assigned_agent": null,
@@ -28,16 +29,25 @@
   ],
   "expected": "The classifier recognizes the explicit fallback contract only for _direct_neighbor_pr_targets while arbitrary dynamic targets and truly uncovered tests remain fail-closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1553-ci-coverage-classifier-cannot-prove-direct-neighbor-fallback-targets.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/ci_change_classifier.py",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "tests/aistock_validation/bugs/20260916_BUG-1553-ci-coverage-classifier-cannot-prove-direct-neighbor-fallback-targets.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ci_change_classifier.py",
-        "backend/tests/scripts/test_ci_change_classifier.py"
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -67,6 +77,16 @@
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
         }
       ],
       "risk_levels": [
@@ -74,18 +94,21 @@
       ],
       "suggested_scope": [
         "scripts/ci_change_classifier.py",
-        "backend/tests/scripts/test_ci_change_classifier.py"
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/ci_change_classifier.py",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/ci_change_classifier.py",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-09-16T05:31:04.128995Z",
@@ -112,10 +135,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
