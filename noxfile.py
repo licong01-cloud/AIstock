@@ -798,11 +798,6 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
-    full_targets = [
-        "backend/tests/advisory_phase0b",
-        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
-        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
-    ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
         source_test_roots=(
@@ -813,9 +808,14 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
             "scripts/advisory_phase0b_candidate_quality_audit.py": "backend/tests/advisory_phase0b/test_cli.py",
         },
     )
+    if pr_targets:
+        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
+        return
     _run_pytest(
         session,
-        *(pr_targets or full_targets),
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py",
         "-q",
         "-p",
         "no:cacheprovider",
