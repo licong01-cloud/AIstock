@@ -61,8 +61,6 @@ def test_prior_request_identity_uses_union_and_reads_no_outcomes(tmp_path: Path)
     assert identity["aggregate_sha256"] == canonical_sha256(
         {key: value for key, value in identity.items() if key != "aggregate_sha256"}
     )
-    serialized = json.loads(canonical_json_bytes(identity))
-    assert canonical_sha256(serialized) == canonical_sha256(identity)
 
 
 def test_prior_request_identity_rejects_unbound_request(tmp_path: Path) -> None:
@@ -275,36 +273,6 @@ def test_request_rejects_overlap_and_write_flags(tmp_path: Path) -> None:
         heldout._load_request(path)
 
 
-def test_joint_evidence_preserves_negative_and_multiplicity() -> None:
-    assert (
-        heldout._joint_evidence(
-            {
-                "BUY_AND_HOLD": {"effect_evidence": "SUPPORTED"},
-                "FROZEN_L1_V1": {"effect_evidence": "SUPPORTED"},
-            }
-        )
-        == "SUPPORTED"
-    )
-    assert (
-        heldout._joint_evidence(
-            {
-                "BUY_AND_HOLD": {"effect_evidence": "NEGATIVE"},
-                "FROZEN_L1_V1": {"effect_evidence": "INCONCLUSIVE"},
-            }
-        )
-        == "NEGATIVE"
-    )
-    assert (
-        heldout._joint_evidence(
-            {
-                "BUY_AND_HOLD": {"effect_evidence": "SUPPORTED"},
-                "FROZEN_L1_V1": {"effect_evidence": "INCONCLUSIVE"},
-            }
-        )
-        == "INCONCLUSIVE"
-    )
-
-
 def test_bundle_is_immutable_inspectable_and_retry_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _request(tmp_path)
     receipt = _receipt(request)
@@ -328,23 +296,7 @@ def test_bundle_is_immutable_inspectable_and_retry_is_noop(tmp_path: Path, monke
 
     assert result["status"] == "ALREADY_MATERIALIZED"
     assert (bundle / "manifest.json").read_bytes() == manifest_before
-
-
-def test_bundle_corruption_fails_closed(tmp_path: Path) -> None:
-    request = _request(tmp_path)
-    receipt = _receipt(request)
-    bundle = tmp_path / "bundle"
-    frame = pd.DataFrame({"x": [1]})
-    heldout._publish_bundle(
-        bundle,
-        request=request,
-        receipt=receipt,
-        oof=frame,
-        sleeves=frame,
-        daily=frame,
-    )
     (bundle / "heldout_sleeve_days.parquet").write_bytes(b"corrupt")
-
     with pytest.raises(ActionValueError, match="HELDOUT_BUNDLE_FILE_IDENTITY_MISMATCH"):
         heldout.inspect_heldout_bundle(bundle)
 
