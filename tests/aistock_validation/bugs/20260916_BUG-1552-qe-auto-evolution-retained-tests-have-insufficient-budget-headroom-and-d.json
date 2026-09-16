@@ -13,6 +13,7 @@
     "backend/tests/multi_alpha/test_durable_contract.py",
     "backend/tests/multi_alpha/test_durable_plan.py",
     "backend/tests/multi_alpha/test_durable_schema.py",
+    "backend/tests/test_noxfile_validation_env.py",
     "noxfile.py",
     "tests/aistock_validation/bugs/20260916_BUG-1552-qe-auto-evolution-retained-tests-have-insufficient-budget-headroom-and-d.json"
   ],
@@ -221,6 +222,7 @@
       "backend/tests/multi_alpha/test_durable_contract.py",
       "backend/tests/multi_alpha/test_durable_plan.py",
       "backend/tests/multi_alpha/test_durable_schema.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
@@ -237,6 +239,7 @@
       "backend/tests/multi_alpha/test_durable_contract.py",
       "backend/tests/multi_alpha/test_durable_plan.py",
       "backend/tests/multi_alpha/test_durable_schema.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py"
     ]
   },

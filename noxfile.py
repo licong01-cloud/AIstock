@@ -638,7 +638,7 @@ def _direct_neighbor_pr_targets(
         if any(fnmatchcase(path, pattern) for pattern in test_globs):
             relevant = True
             if not (ROOT / path).is_file():
-                return None
+                continue
             targets.append(path)
             continue
         override = override_map.get(path)

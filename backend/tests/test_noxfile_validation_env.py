@@ -176,6 +176,26 @@ def test_direct_neighbor_pr_targets_falls_back_for_unmapped_live_source(
     ) is None
 
 
+def test_direct_neighbor_pr_targets_skip_deleted_tests_without_hiding_live_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    smoke = "backend/tests/example/test_contract.py"
+    deleted_test = "backend/tests/example/test_retired.py"
+    changed_test = "backend/tests/example/test_reader.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[deleted_test, changed_test],
+        existing_paths=[smoke, changed_test],
+    )
+
+    assert noxfile._direct_neighbor_pr_targets(
+        smoke_tests=(smoke,),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",),
+    ) == [smoke, changed_test]
+
+
 def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
