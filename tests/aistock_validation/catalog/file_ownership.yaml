@@ -561,6 +561,15 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: ci_change_classifier_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_change_classifier.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, validation.workflow_automation, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: The classifier regression suite belongs to the same guardrail subsystem as its production classifier and overrides broader workflow-test catch-alls.
   - rule_id: mcp_gateway_platform
     priority: 90
     include:
