@@ -2806,23 +2806,9 @@ def factor_research_backend(session: nox.Session) -> None:
         "backend/tests/factor_research/test_quality.py",
         "backend/tests/factor_research/test_repository_dev.py",
     ]
-    pr_targets = _direct_neighbor_pr_targets(
-        smoke_tests=(
-            "backend/tests/factor_research/test_contracts.py",
-            "backend/tests/factor_research/test_repository_dev.py",
-        ),
-        source_test_roots=(
-            ("backend/services/factor_research/", "backend/tests/factor_research/"),
-        ),
-        test_globs=("backend/tests/factor_research/test_*.py",),
-        overrides={
-            "scripts/factor_research.py": "backend/tests/factor_research/test_full_evaluation.py",
-            "backend/services/factor_research/repository.py": "backend/tests/factor_research/test_repository_dev.py",
-        },
-    )
     session.run(
         "python", "-m", "pytest",
-        *(pr_targets or full_targets), "-q",
+        *full_targets, "-q",
         env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
     )
     session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",

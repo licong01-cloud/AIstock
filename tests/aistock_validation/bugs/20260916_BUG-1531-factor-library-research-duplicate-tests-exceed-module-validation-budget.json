@@ -1,0 +1,367 @@
+{
+  "actual": "Test SLOC is 1,851 against 2,519 production SLOC; repeated setup and scenario bodies obscure the required contracts.",
+  "allowed_write_scope": [
+    "backend/tests/factor_research/test_comparison.py",
+    "backend/tests/factor_research/test_contracts.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "backend/tests/factor_research/test_quality.py",
+    "backend/tests/factor_research/test_recovery.py",
+    "backend/tests/factor_research/test_repository_dev.py",
+    "backend/tests/factor_research/dev_cases.py",
+    "backend/tests/factor_research/fresh_process_smoke.py",
+    "backend/tests/factor_research/fixtures/trend_pullback.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1531-factor-library-research-duplicate-tests-exceed-module-validation-budget.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1531",
+  "closed_at": "2026-09-16T02:41:56Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T02:13:25.834728Z",
+  "description": "Test SLOC is 1,851 against 2,519 production SLOC; repeated setup and scenario bodies obscure the required contracts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-92e72dff6d6b",
+      "timestamp": "2026-09-16T02:13:25.834700Z"
+    }
+  ],
+  "evidence_uris": [
+    "factor_library.research: production_sloc=2519 test_sloc=1851 ratio=73.48 allowed_test_sloc=755"
+  ],
+  "expected": "Test SLOC is below 30% of production SLOC while causal isolation, stock isolation, metric reuse, candidate uniqueness, failure recovery, DEV-write-disabled defaults and repository transaction boundaries remain explicitly covered.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_contracts.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_quality.py",
+      "backend/tests/factor_research/test_recovery.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_contracts.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_quality.py",
+      "backend/tests/factor_research/test_recovery.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/factor_research/test_comparison.py",
+        "backend/tests/factor_research/test_contracts.py",
+        "backend/tests/factor_research/test_full_evaluation.py",
+        "backend/tests/factor_research/test_quality.py",
+        "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/fresh_process_smoke.py",
+        "backend/tests/factor_research/fixtures/trend_pullback.py"
+      ],
+      "impacted_modules": [
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/factor_research/test_comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_contracts.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_quality.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_recovery.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_repository_dev.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/dev_cases.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/fresh_process_smoke.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/fixtures/trend_pullback.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/factor_research/test_comparison.py",
+        "backend/tests/factor_research/test_contracts.py",
+        "backend/tests/factor_research/test_full_evaluation.py",
+        "backend/tests/factor_research/test_quality.py",
+        "backend/tests/factor_research/test_recovery.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/fresh_process_smoke.py",
+        "backend/tests/factor_research/fixtures/trend_pullback.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_contracts.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_quality.py",
+      "backend/tests/factor_research/test_recovery.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/fresh_process_smoke.py",
+      "backend/tests/factor_research/fixtures/trend_pullback.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_contracts.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_quality.py",
+      "backend/tests/factor_research/test_recovery.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/fresh_process_smoke.py",
+      "backend/tests/factor_research/fixtures/trend_pullback.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T02:13:25.834728Z",
+  "fix_branch": null,
+  "fix_commit": "1d59c2817ec646d2c28fbf3c222dfa7051c1ac64",
+  "fixed_at": "2026-09-16T02:41:56Z",
+  "github_issue_number": 4802,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4802",
+  "last_seen_at": "2026-09-16T02:13:25.834728Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4807",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json --max-ratio 0.30",
+  "required_verification": [
+    "l0",
+    "factor_research_backend",
+    "factor_research_dev_db"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1531",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cfd7cd27838e1c65",
+    "recorded_at": "2026-09-16T02:43:14.533982Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f",
+    "source_merge_commit": "1d59c2817ec646d2c28fbf3c222dfa7051c1ac64",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4807",
+    "validation_evidence": [
+      "validation-receipt: id=271596799ba44682 commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 26 passed, 9 skipped; fresh-process 2 passed`",
+      "validation-receipt: id=3a32636214a74caa commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_noxfile_validation_env.py -q -p no:cacheprovider` result=`passed: 36 passed`",
+      "validation-receipt: id=665b54e350f99d2b commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 16 passed; findings=0`",
+      "validation-receipt: id=95e3f692c9fb627a commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: blocking=0`"
+    ],
+    "validation_evidence_digest": "6a90f0af12b663d1e2d4578264b2c0ed0651c4c4d9e612785461fc911fa78bf7"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "factor_library.research duplicate tests exceed module validation budget",
+  "trigger_condition": {
+    "fingerprint": "92e72dff6d6b78e73fcaf21b",
+    "source_event_id": "FE-20260916-92e72dff6d6b"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=271596799ba44682 commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 26 passed, 9 skipped; fresh-process 2 passed`",
+    "validation-receipt: id=3a32636214a74caa commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_noxfile_validation_env.py -q -p no:cacheprovider` result=`passed: 36 passed`",
+    "validation-receipt: id=665b54e350f99d2b commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 16 passed; findings=0`",
+    "validation-receipt: id=95e3f692c9fb627a commit=4f067bfdb82ab0bd6f775dfa7e6fcb732c2f8a9f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed files` result=`passed: blocking=0`"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "factor_research",
+        "factor_research_dev_db"
+      ],
+      "plans": [
+        "factor_research_backend",
+        "factor_research_dev_db"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "factor_research",
+          "factor_research_dev_db"
+        ],
+        "plans": [
+          "factor_research_backend",
+          "factor_research_dev_db"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
