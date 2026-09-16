@@ -680,6 +680,14 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py",
+        "backend/tests/dataset_release/test_source_authority.py",
+        "backend/tests/dataset_release/test_build_processor.py",
+        "backend/tests/dataset_release/test_component_artifact_manifest.py",
+        "backend/tests/dataset_release/test_build_stage.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
@@ -704,9 +712,12 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         },
     )
+    selected_targets = list(full_targets)
+    if pr_targets is not None:
+        selected_targets = pr_targets
     _run_pytest(
         session,
-        *(pr_targets or full_targets),
+        *selected_targets,
         "-q",
         "-p",
         "no:cacheprovider",
