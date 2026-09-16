@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "scripts/qrun_limit_minute.py",
     "scripts/qrun_limit.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
     "backend/tests/unified_engine/test_qrun_kernel_limit.py",
     "tests/aistock_validation/bugs/20260916_BUG-1534-qe-qrun-kernel-cap-is-reset-by-qlib-init-and-spawns-26-workers-per-loop.json"
   ],
