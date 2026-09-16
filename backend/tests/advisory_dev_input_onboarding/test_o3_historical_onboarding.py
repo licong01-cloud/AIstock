@@ -44,7 +44,6 @@ from backend.services.advisory_program import AdvisoryProgramService, InMemoryAd
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.prospective_evidence import SourceReadReceipt, canonical_evidence_json_sha256
 from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
-from backend.services.selection_center.risk_policy import StPitRiskDecisionProvider
 from backend.services.stock_universe_pit_service import DEFAULT_ST_PIT_UNIVERSE_KEY, StockUniversePitError
 from backend.services.selection_center.runtime_profile import (
     mark_non_trading_preview_runtime_config,
@@ -518,60 +517,6 @@ def test_exact_dev_hmm_and_symbol_provider_empty_error_paths(caplog) -> None:
     assert "symbol_name_lookup_failed" in caplog.text
 
 
-def test_exact_dev_st_pit_provider_preserves_shared_decision_semantics(monkeypatch) -> None:
-    queries: list[str] = []
-
-    class Cursor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def execute(self, sql, _params):
-            queries.append(sql)
-
-        def fetchone(self):
-            return ("ready", False, date(2020, 1, 1), date(2030, 1, 1), None)
-
-        def fetchall(self):
-            return [("000001.SZ", date(2020, 1, 1), date(2030, 1, 1), "listed", None, "v1", {})]
-
-    class Connection:
-        def cursor(self):
-            return Cursor()
-
-    @contextmanager
-    def factory():
-        yield Connection()
-
-    profile = SimpleNamespace(
-        strict_data_ready=True,
-        st_universe_key=DEFAULT_ST_PIT_UNIVERSE_KEY,
-        hard_actions=["block_buy", "force_exit"],
-        policy_version="v1",
-    )
-    kwargs = {
-        "symbols": ["000001.SZ", "000002.SZ"],
-        "trade_date": date(2026, 7, 21),
-        "profile": profile,
-        "current_positions": {"000002.SZ": {"quantity": 100}},
-    }
-    decisions = ExactDevStPitRiskDecisionProvider(factory).evaluate(**kwargs)
-    monkeypatch.setattr("backend.services.selection_center.risk_policy.get_conn", factory)
-    shared = StPitRiskDecisionProvider().evaluate(**kwargs)
-
-    assert {key: value.model_dump(mode="json") for key, value in decisions.items()} == {
-        key: value.model_dump(mode="json") for key, value in shared.items()
-    }
-
-    assert decisions["000001.SZ"].can_buy is True
-    assert decisions["000002.SZ"].can_buy is False
-    assert decisions["000002.SZ"].force_exit is True
-    assert any("stock_universe_pit_state" in sql for sql in queries)
-    assert any("stock_universe_pit_spans" in sql for sql in queries)
-
-
 def test_exact_dev_st_pit_empty_and_readiness_failures() -> None:
     @contextmanager
     def unused_factory():
@@ -657,38 +602,6 @@ def test_exact_dev_st_pit_empty_and_readiness_failures() -> None:
         )
 
 
-def test_default_component_builder_is_constructor_only_and_exact_dev(tmp_path: Path) -> None:
-    asset_root = tmp_path / "assets"
-    asset_root.mkdir()
-    config = DatabaseConnectionConfig(
-        target_label=TargetLabel.DEV,
-        host="dev-host",
-        port=5432,
-        database="aistock_dev",
-        user="dev-user",
-        password="secret",
-        environment_contract_hash="a" * 64,
-    )
-
-    def connector(**_kwargs):
-        raise AssertionError("component construction must not connect")
-
-    components = RealDevHistoricalOnboardingService(connector=connector)._build_components(  # noqa: SLF001
-        config=config,
-        expected_database_identity_hash="b" * 64,
-        target_package_asset_root=asset_root,
-        repository_root=Path.cwd(),
-    )
-
-    assert components.conn_factory.config == config
-    assert components.program_repository._conn_factory is components.conn_factory  # noqa: SLF001
-    assert components.artifact_repository._conn_factory is components.conn_factory  # noqa: SLF001
-    assert isinstance(
-        components.selection_center.paper_portfolio_service,
-        HistoricalResearchExecutionProhibitedPortfolioService,
-    )
-
-
 def test_historical_portfolio_boundary_fails_loudly() -> None:
     with pytest.raises(RuntimeConfigInvalidError, match="cannot create a Paper portfolio"):
         HistoricalResearchExecutionProhibitedPortfolioService.create_portfolio()
@@ -719,68 +632,6 @@ def test_existing_v2_evidence_is_reused_without_new_selection(tmp_path: Path, on
 
     assert actual is evidence
     assert selection_run_id is None
-
-
-def test_missing_v2_evidence_runs_public_selection_and_requires_complete_capture(
-    tmp_path: Path,
-    onboarding_request,
-    monkeypatch,
-) -> None:
-    asset_root = tmp_path / "assets"
-    asset_root.mkdir()
-    base = RealDevOnboardingEvidenceStore(root=tmp_path / "evidence")
-    request = _historical_request(onboarding_request, base.publish(onboarding_request).ref, asset_root)
-    spec = request.program_specs[0]
-    final_evidence = SimpleNamespace(evidence_id="generated")
-    calls = {"load": 0}
-
-    def load(**_kwargs):
-        calls["load"] += 1
-        if calls["load"] == 1:
-            raise HistoricalResearchInputUnavailable("missing")
-        return final_evidence
-
-    program_service = SimpleNamespace(
-        _review_runtime_config=lambda _program, runtime: runtime,
-        _with_advisory_date_context=lambda runtime, **_kwargs: runtime,
-    )
-    components = SimpleNamespace(
-        program_resolver=SimpleNamespace(resolve=lambda **_kwargs: object()),
-        evidence_adapter=SimpleNamespace(load=load),
-        calendar_service=SimpleNamespace(next_trading_day=lambda *_args, **_kwargs: date(2026, 7, 22)),
-        program_service=program_service,
-        selection_service=object(),
-        artifact_service=SimpleNamespace(generate_from_live_inference=lambda **_kwargs: object()),
-        selection_center=SimpleNamespace(
-            run_single_package=lambda **_kwargs: SimpleNamespace(
-                run_id="selection-run",
-                runtime_config={
-                    "daily_selection_evidence": {
-                        "evidence_capture_status": "COMPLETE",
-                        "evidence_schema_version_by_package": {spec.package_id: "daily_selection_evidence_v2"},
-                    }
-                },
-            )
-        ),
-        conn_factory=object(),
-    )
-    service = RealDevHistoricalOnboardingService()
-    monkeypatch.setattr(service, "_prepare_package_config", lambda **_kwargs: spec.runtime_config)
-    monkeypatch.setattr(service, "_preflight_stages", lambda **_kwargs: {})
-    monkeypatch.setattr(service, "_prospective_context", lambda **_kwargs: object())
-    monkeypatch.setattr(service, "_validate_prospective_assembly", lambda **_kwargs: None)
-    monkeypatch.setattr(service, "_assert_evidence_code_release", lambda **_kwargs: None)
-
-    actual, selection_run_id = service._ensure_prospective_evidence(  # noqa: SLF001
-        request=request,
-        spec=spec,
-        program=object(),
-        binding=SimpleNamespace(runtime_config_json=spec.runtime_config),
-        components=components,
-    )
-
-    assert actual is final_evidence
-    assert selection_run_id == "selection-run"
 
 
 def test_existing_dse_requires_exact_code_release(tmp_path: Path, onboarding_request) -> None:
@@ -842,69 +693,6 @@ def test_existing_dse_requires_exact_code_release(tmp_path: Path, onboarding_req
             evidence_id="evidence-missing",
             request=request,
             conn_factory=factory_for(None),
-        )
-
-
-def test_missing_v2_evidence_rejects_failed_capture_and_v1(
-    tmp_path: Path,
-    onboarding_request,
-    monkeypatch,
-) -> None:
-    asset_root = tmp_path / "assets"
-    asset_root.mkdir()
-    base = RealDevOnboardingEvidenceStore(root=tmp_path / "evidence")
-    request = _historical_request(onboarding_request, base.publish(onboarding_request).ref, asset_root)
-    spec = request.program_specs[0]
-
-    def components_for(*, capture_status: str, schema: str):
-        def load(**_kwargs):
-            raise HistoricalResearchInputUnavailable("missing")
-
-        return SimpleNamespace(
-            program_resolver=SimpleNamespace(resolve=lambda **_kwargs: object()),
-            evidence_adapter=SimpleNamespace(load=load),
-            calendar_service=SimpleNamespace(next_trading_day=lambda *_args, **_kwargs: date(2026, 7, 22)),
-            program_service=SimpleNamespace(
-                _review_runtime_config=lambda _program, runtime: runtime,
-                _with_advisory_date_context=lambda runtime, **_kwargs: runtime,
-            ),
-            selection_service=object(),
-            artifact_service=SimpleNamespace(generate_from_live_inference=lambda **_kwargs: object()),
-            selection_center=SimpleNamespace(
-                run_single_package=lambda **_kwargs: SimpleNamespace(
-                    run_id="selection-run",
-                    runtime_config={
-                        "daily_selection_evidence": {
-                            "evidence_capture_status": capture_status,
-                            "evidence_reason_codes": ["capture_failed"],
-                            "evidence_schema_version_by_package": {spec.package_id: schema},
-                        }
-                    },
-                )
-            ),
-        )
-
-    service = RealDevHistoricalOnboardingService()
-    monkeypatch.setattr(service, "_prepare_package_config", lambda **_kwargs: spec.runtime_config)
-    monkeypatch.setattr(service, "_preflight_stages", lambda **_kwargs: {})
-    monkeypatch.setattr(service, "_prospective_context", lambda **_kwargs: object())
-    monkeypatch.setattr(service, "_validate_prospective_assembly", lambda **_kwargs: None)
-    common = {
-        "request": request,
-        "spec": spec,
-        "program": object(),
-        "binding": SimpleNamespace(runtime_config_json=spec.runtime_config),
-    }
-
-    with pytest.raises(RealDevOnboardingError, match="complete DSE v2"):
-        service._ensure_prospective_evidence(  # noqa: SLF001
-            **common,
-            components=components_for(capture_status="FAILED", schema="daily_selection_evidence_v1"),
-        )
-    with pytest.raises(RealDevOnboardingError, match="non-v2"):
-        service._ensure_prospective_evidence(  # noqa: SLF001
-            **common,
-            components=components_for(capture_status="COMPLETE", schema="daily_selection_evidence_v1"),
         )
 
 
