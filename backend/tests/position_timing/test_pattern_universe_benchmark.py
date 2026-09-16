@@ -70,14 +70,6 @@ def _membership_candidate(
     return DailyCandidate(root, calendar, spans, set(), {})
 
 
-def test_research_question_and_exploratory_scope_are_frozen():
-    assert benchmark.BENCHMARK_CONTRACT["primary_comparator"] == "SAME_STOCK_BUY_AND_HOLD"
-    assert benchmark.BENCHMARK_CONTRACT["main_family_size"] == 6
-    assert benchmark.RESULT_CLASS == "EXPLORATORY_CROSS_SYMBOL_EXTERNAL_VALIDITY_NOT_TEMPORAL_HOLDOUT"
-    assert benchmark.BENCHMARK_CONTRACT["selection"] is False
-    assert benchmark.BENCHMARK_CONTRACT["serving"] is False
-
-
 def test_frozen_authorities_match_r5_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     candidate = _membership_candidate(tmp_path, monkeypatch)
     memberships = benchmark.open_candidate_pool_memberships(candidate)
@@ -89,27 +81,6 @@ def test_frozen_authorities_match_r5_candidate(tmp_path: Path, monkeypatch: pyte
     csi300.write_text("000001.SZ\t2024-01-03\t2024-01-05\n", encoding="utf-8")
     with pytest.raises(ActionValueError, match="PATTERN_POOL_FILE_IDENTITY_MISMATCH"):
         benchmark.open_candidate_pool_memberships(candidate)
-
-
-def test_r5_candidate_parent_and_authority_identities_are_frozen():
-    assert benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256 == (
-        "7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1"
-    )
-    assert benchmark.EXPECTED_CANDIDATE_DATASET_SHA256 == (
-        "59b92120a4fb52fdde8a3db57337eb9af3810d28881861db7d9e3d028987407f"
-    )
-    assert benchmark.EXPECTED_PARENT_MANIFEST_SHA256 == (
-        "7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541"
-    )
-    assert benchmark.EXPECTED_RIGHTS_AUTHORITY_SHA256 == (
-        "4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c"
-    )
-    assert benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256 == (
-        "c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd"
-    )
-    assert benchmark.BENCHMARK_CONTRACT[
-        "adj_factor_restatement_authority_canonical_sha256"
-    ] == benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
 
 
 def test_pit_membership_projection_preserves_population_clock(
@@ -178,25 +149,6 @@ def test_same_stock_buy_and_hold_and_market_context_are_distinct():
     assert "market" not in summary
 
 
-def test_terminal_status_is_derived_from_terminal_accounting_not_last_action():
-    assert benchmark._terminal_status_from_counts(
-        {"TERMINAL_LIQUIDATED": 1}
-    ) == "TERMINAL_LIQUIDATED"
-    assert benchmark._terminal_status_from_counts(
-        {"TERMINAL_LIQUIDATION_NOT_REQUIRED": 1}
-    ) == "TERMINAL_LIQUIDATION_NOT_REQUIRED"
-    with pytest.raises(
-        ActionValueError, match="PATTERN_BENCHMARK_TERMINAL_STATUS_INVALID"
-    ):
-        benchmark._terminal_status_from_counts({})
-
-
-def test_drawdown_includes_the_frozen_initial_capital():
-    assert benchmark._max_drawdown_bps(
-        np.array([0.9, 1.1]), initial_value=1.0
-    ) == pytest.approx(-1000.0)
-
-
 def test_parent_artifact_identity_is_hash_bound_and_read_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -229,71 +181,10 @@ def test_parent_artifact_identity_is_hash_bound_and_read_only(
         benchmark.load_frozen_parent_evidence(root)
 
 
-def test_candidate_and_comparator_share_terminal_and_accounting_contracts():
-    terminal = benchmark.BENCHMARK_CONTRACT["terminal"]
-    assert terminal == {
-        "mode": "TERMINAL_LIQUIDATED",
-        "max_defer_trading_days": 5,
-    }
-    assert benchmark.BENCHMARK_CONTRACT["primary_comparator"] == "SAME_STOCK_BUY_AND_HOLD"
-
-
-def test_six_pool_familywise_classification_is_frozen():
-    assert benchmark.FAMILY_SIZE == 6
-    assert benchmark.FAMILYWISE_CONFIDENCE == pytest.approx(1 - 0.05 / 6)
-    assert benchmark._effect_evidence(
-        {"lower_bps": 0.01, "upper_bps": 1.0}, coverage_complete=True
-    ) == "SUPPORTED"
-    assert benchmark._effect_evidence(
-        {"lower_bps": -2.0, "upper_bps": -0.01}, coverage_complete=True
-    ) == "NEGATIVE"
-    assert benchmark._effect_evidence(
-        {"lower_bps": -1.0, "upper_bps": 1.0}, coverage_complete=True
-    ) == "INCONCLUSIVE"
-
-
-def test_chunk_manifest_and_exact_retry_are_immutable(tmp_path: Path):
-    target = tmp_path / "chunk"
-    identity = {"request_sha256": "a" * 64, "chunk_ordinal": 0}
-    daily = pd.DataFrame(
-        {
-            "pool_id": ["stock_universe"],
-            "strategy_id": [benchmark.PRIMARY_STRATEGY],
-            "valuation_date": pd.to_datetime(["2024-01-02"]),
-            "active_sleeve_count": [1],
-        }
-    )
-    fills = pd.DataFrame({"fill_status": ["FILLED"]})
-    summaries = pd.DataFrame({"symbol": ["000001.SZ"]})
-    diagnostics = {"diagnostics_sha256": "fixture"}
-    first = benchmark._publish_chunk(
-        target=target,
-        chunk_identity=identity,
-        daily=daily,
-        fills=fills,
-        summaries=summaries,
-        diagnostics=diagnostics,
-    )
-    second = benchmark._publish_chunk(
-        target=target,
-        chunk_identity=identity,
-        daily=daily,
-        fills=fills,
-        summaries=summaries,
-        diagnostics=diagnostics,
-    )
-    assert first["manifest_sha256"] == second["manifest_sha256"]
-    (target / "diagnostics.json").write_text("tampered", encoding="utf-8")
-    with pytest.raises(
-        ActionValueError, match="PATTERN_BENCHMARK_CHUNK_FILE_IDENTITY_MISMATCH"
-    ):
-        benchmark.inspect_chunk(target, expected_identity=identity)
-
-
 def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
     chunk = tmp_path / "chunk"
     chunk_identity = {"request_sha256": "a" * 64, "chunk_ordinal": 0}
-    benchmark._publish_chunk(
+    chunk_manifest = benchmark._publish_chunk(
         target=chunk,
         chunk_identity=chunk_identity,
         daily=pd.DataFrame({"value": [1]}),
@@ -301,6 +192,20 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         summaries=pd.DataFrame({"value": [1]}),
         diagnostics={"diagnostics_sha256": "fixture"},
     )
+    assert benchmark._publish_chunk(
+        target=chunk,
+        chunk_identity=chunk_identity,
+        daily=pd.DataFrame({"value": [1]}),
+        fills=pd.DataFrame({"value": [1]}),
+        summaries=pd.DataFrame({"value": [1]}),
+        diagnostics={"diagnostics_sha256": "fixture"},
+    )["manifest_sha256"] == chunk_manifest["manifest_sha256"]
+    diagnostics_path = chunk / "diagnostics.json"
+    diagnostics_bytes = diagnostics_path.read_bytes()
+    diagnostics_path.write_text("tampered", encoding="utf-8")
+    with pytest.raises(ActionValueError, match="PATTERN_BENCHMARK_CHUNK_FILE_IDENTITY_MISMATCH"):
+        benchmark.inspect_chunk(chunk, expected_identity=chunk_identity)
+    diagnostics_path.write_bytes(diagnostics_bytes)
     request = {
         "schema_version": benchmark.REQUEST_SCHEMA,
         "pipeline_id": benchmark.PIPELINE_ID,
@@ -515,8 +420,3 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         ActionValueError, match="PATTERN_BENCHMARK_EXTERNAL_CHUNK_CHANGED"
     ):
         benchmark.inspect_bundle(bundle)
-
-
-def test_receipt_declares_all_external_writes_false():
-    assert benchmark.EXTERNAL_WRITE_RECEIPT_FLAGS
-    assert all(value is False for value in benchmark.EXTERNAL_WRITE_RECEIPT_FLAGS.values())

@@ -61,33 +61,35 @@ def _request(root: Path, historical: Path) -> dict:
     }
 
 
+def _deliver(root: Path, historical: Path, receipt: dict) -> tuple[dict, Path]:
+    request = _request(root, historical)
+    request["request_sha256"] = receipt["request_sha256"]
+    bundle = root / "research" / "action_value_v2" / "bundles" / request["request_sha256"]
+    PositionTimingArtifactStore._publish_immutable(
+        bundle / "receipt.json", canonical_json_bytes(receipt) + b"\n"
+    )
+    return (
+        _deliver_completed_bundle(
+            request=request,
+            bundle=bundle,
+            receipt=receipt,
+            global_before=file_reference(historical),
+        ),
+        bundle,
+    )
+
+
 def test_delivery_retry_repairs_own_pointer_without_mutating_global_registry(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     historical = tmp_path / "global-n0.jsonl"
     historical.write_text('{"historical":true}\n', encoding="utf-8")
     global_before = file_reference(historical)
-    request = _request(root, historical)
     receipt = _receipt()
-    bundle = root / "research" / "action_value_v2" / "bundles" / request["request_sha256"]
-    PositionTimingArtifactStore._publish_immutable(
-        bundle / "receipt.json", canonical_json_bytes(receipt) + b"\n"
-    )
-
-    first = _deliver_completed_bundle(
-        request=request,
-        bundle=bundle,
-        receipt=receipt,
-        global_before=global_before,
-    )
+    first, _ = _deliver(root, historical, receipt)
     registry_path = root / "research_registry" / "timing_trial_registry_v1.jsonl"
     registry_bytes = registry_path.read_bytes()
     current_bytes = (root / "research" / "action_value_v2" / "current.json").read_bytes()
-    second = _deliver_completed_bundle(
-        request=request,
-        bundle=bundle,
-        receipt=receipt,
-        global_before=global_before,
-    )
+    second, _ = _deliver(root, historical, receipt)
     assert first["registry"]["appended_count"] == 2
     assert second["registry"]["duplicate_noop_count"] == 2
     assert first["current_research_delivery_status"] == "CURRENT_ADVANCED"
@@ -104,19 +106,8 @@ def test_joint_supported_policy_is_selected_only_once(tmp_path: Path) -> None:
     root = tmp_path / "timing"
     historical = tmp_path / "global-n0.jsonl"
     historical.write_text('{"historical":true}\n', encoding="utf-8")
-    request = _request(root, historical)
     receipt = _supported_receipt()
-    bundle = root / "research" / "action_value_v2" / "bundles" / request["request_sha256"]
-    PositionTimingArtifactStore._publish_immutable(
-        bundle / "receipt.json", canonical_json_bytes(receipt) + b"\n"
-    )
-
-    _deliver_completed_bundle(
-        request=request,
-        bundle=bundle,
-        receipt=receipt,
-        global_before=file_reference(historical),
-    )
+    _deliver(root, historical, receipt)
 
     records = [
         json.loads(line)
@@ -140,17 +131,7 @@ def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp
     legacy["schema_version"] = "position_timing_action_value_receipt_v2"
     legacy.pop("receipt_sha256")
     legacy["receipt_sha256"] = canonical_sha256(legacy)
-    legacy_request = _request(root, historical)
-    legacy_bundle = root / "research" / "action_value_v2" / "bundles" / legacy_request["request_sha256"]
-    PositionTimingArtifactStore._publish_immutable(
-        legacy_bundle / "receipt.json", canonical_json_bytes(legacy) + b"\n"
-    )
-    _deliver_completed_bundle(
-        request=legacy_request,
-        bundle=legacy_bundle,
-        receipt=legacy,
-        global_before=global_before,
-    )
+    _deliver(root, historical, legacy)
 
     current = _receipt()
     current["request_sha256"] = "4" * 64
@@ -158,19 +139,7 @@ def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp
     current["completed_at"] = "2026-09-08T20:30:00+08:00"
     current.pop("receipt_sha256")
     current["receipt_sha256"] = canonical_sha256(current)
-    current_request = _request(root, historical)
-    current_request["request_sha256"] = current["request_sha256"]
-    current_bundle = root / "research" / "action_value_v2" / "bundles" / current_request["request_sha256"]
-    PositionTimingArtifactStore._publish_immutable(
-        current_bundle / "receipt.json", canonical_json_bytes(current) + b"\n"
-    )
-
-    result = _deliver_completed_bundle(
-        request=current_request,
-        bundle=current_bundle,
-        receipt=current,
-        global_before=global_before,
-    )
+    result, _ = _deliver(root, historical, current)
 
     assert result["registry"]["appended_count"] == 2
     retry_attempt = _receipt()
@@ -178,18 +147,7 @@ def test_v4_delivery_uses_new_stable_experiment_identity_without_drifting_v2(tmp
     retry_attempt["source_sha256"] = current["source_sha256"]
     retry_attempt.pop("receipt_sha256")
     retry_attempt["receipt_sha256"] = canonical_sha256(retry_attempt)
-    retry_request = _request(root, historical)
-    retry_request["request_sha256"] = retry_attempt["request_sha256"]
-    retry_bundle = root / "research" / "action_value_v2" / "bundles" / retry_request["request_sha256"]
-    PositionTimingArtifactStore._publish_immutable(
-        retry_bundle / "receipt.json", canonical_json_bytes(retry_attempt) + b"\n"
-    )
-    second_attempt = _deliver_completed_bundle(
-        request=retry_request,
-        bundle=retry_bundle,
-        receipt=retry_attempt,
-        global_before=global_before,
-    )
+    second_attempt, _ = _deliver(root, historical, retry_attempt)
     assert second_attempt["registry"]["appended_count"] == 2
     assert result["current_research_delivery_status"] == "CURRENT_ADVANCED"
     assert second_attempt["current_research_delivery_status"] == "RETAINED_NEWER_CURRENT"
