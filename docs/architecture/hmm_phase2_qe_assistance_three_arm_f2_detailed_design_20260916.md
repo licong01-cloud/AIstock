@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2：QE 场景三臂历史回放 F2 详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.3
+> **文档版本**：v1.4
 > **日期**：2026-09-16
 > **状态**：`D1_D2_D3B_D4_D5_D6_USER_APPROVED_IMPLEMENTATION_AUTHORIZED`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.58
@@ -388,7 +388,7 @@ D1-D6 已获批，只按以下三个连续步骤实施，不拆成平台项目�
 | 禁止简化、subset、POC | 三臂、同场景、同原始预测和正式 QE 回放均为必要项；Phase 1 诊断不冒充结果 |
 | 禁止静默错误 | 新 schema 对 date/stock/sector/state/coefficient/identity 全部 fail closed，不允许默认系数 |
 | 禁止业务逻辑迁移 | 旧 QE HMM、v1.6 独立预测和新版 QE adapter 三个身份分离；不自动替换旧配置，不外推其他场景 |
-| 禁止私增门禁/审批 | D1/D2/D4-D6 已按用户批准记录；D3 applicability 明确保留 pending，不由实现自行裁决；不新增人工运行门 |
+| 禁止私增门禁/审批 | D1/D2/D3-B/D4-D6 已按用户批准记录；源码仅实现批准后的 explicit non-applicable 语义，不保留运行时 A/B/C 开关，也不新增人工运行门 |
 
 ## 13. Design Acceptance Index
 
@@ -424,9 +424,9 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 |---|---|---|---|---|
 | F-001 | proposed HMM three-arm request/validator; existing QE prediction replay | `backend/tests/unified_engine/test_qe_prediction_replay.py`; artifact:`qe_20260502_131502_9b54/Loop2/pred.pkl#sha256=0957ae8a6527fb28ba337a449ce0f72dfe9f43513003492329d7e770aa9da8e2` | design_ready_for_user_decision | - |
 | F-002 | `backend/services/quantevolver/experiment_config_builders.py`; existing snapshot asset | `backend/tests/hmm_evolution/test_candidate_artifact.py`; artifact:`snapshot:bbec3863-fb67-445f-938e-66f092d18696` | design_ready_for_user_decision | - |
-| F-003 | proposed HMM adapter pure function | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_sign_safe_adjustment_handles_positive_negative_and_zero_scores` | design_ready_for_user_decision | - |
-| F-004 | proposed canonical coefficient artifact builder | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_artifact_binds_model_mapping_source_window_and_formula_hashes`; artifact:`bundle=203effb6..., mapping=e478722f...` | design_ready_for_user_decision | - |
-| F-005 | proposed adapter plus RD-Agent consumer-owner change | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_missing_pit_mapping_fails_closed`; preflight:`1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes`; artifact:`rdagent-consumer-owner-test-required` | design_ready_for_user_decision | - |
+| F-003 | `backend/services/hmm_risk/qe_assistance_adapter.py::apply_sign_safe_adjustment`、`apply_artifact_entry` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_sign_safe_adjustment_handles_positive_negative_and_zero_scores`、`test_applied_entry_uses_sign_safe_formula_and_missing_entry_fails` | implemented_direct_test_passed | - |
+| F-004 | `backend/services/hmm_risk/qe_assistance_adapter.py::build_qe_assistance_artifact`；`scripts/hmm_risk/build_qe_assistance_artifact.py` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_artifact_binds_model_mapping_source_window_and_formula_hashes`；artifact authority:`bundle=203effb6..., mapping=e478722f...` | source_implementation_passed | - |
+| F-005 | HMM side:`backend/services/hmm_risk/qe_assistance_adapter.py`；RD-Agent consumer owner boundary | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_explicit_authority_unavailable_is_not_missing_or_neutral`、`test_unknown_unavailable_reason_fails_closed`；preflight:`1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes` | source_implementation_passed | approved_by_user: D4 将 RD-Agent consumer 实施明确分配给独立 worktree/PR，不属于本 HMM-owned source commit |
 | F-006 | `backend/services/hmm_evolution/evaluator.py`; proposed three-arm CLI | `backend/tests/hmm_evolution/test_evaluator.py`; `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_only_zero_adjusted_score_change_stops_before_qe_replay` | design_ready_for_user_decision | - |
 | F-007 | proposed three-arm result comparator | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_result_requires_all_three_arms_and_cost_after_metrics` | design_ready_for_user_decision | - |
 | F-008 | proposed result state machine | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_compounded_return_is_only_primary_comparison_and_does_not_auto_select` | design_ready_for_user_decision | - |
@@ -465,10 +465,10 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 
 ## 18. 当前状态
 
-- intended changed files：仅本设计文档（当前为 untracked，未提交）；
+- changed files：本设计文档、`backend/services/hmm_risk/qe_assistance_adapter.py`、`scripts/hmm_risk/build_qe_assistance_artifact.py`、`backend/tests/hmm_risk/test_qe_assistance_adapter.py`；
 - approved decisions：D1、D2、D3-B、D4 及其澄清、D5、D6（2026-09-16）；
 - D3 preflight：exact `e478...` authority；1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes；476 stocks；
-- adapter/consumer source：未实施；
+- adapter source：HMM-owned builder/validator/CLI 已实施并通过直接测试；Phase 1 evaluator 与 RD-Agent consumer 独立实现仍 pending；
 - QE replay：未执行；
 - training/fits：0；
 - tail accessed：false；
