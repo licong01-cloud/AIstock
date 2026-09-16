@@ -1,5 +1,5 @@
 {
-  "actual": "CORPORATE_ACTION_ECONOMIC_CONFLICT blocks snapshot generation; 002352 exposes 0.4/1.0/1.4 same-day rows and 600989 exposes mutually exclusive 0.3158/0.265 holder-class rates.",
+  "actual": "The typed authority resolves the 002352 aggregate/components and 600989 mutually exclusive holder-class rates, but the required full-scope consumer preflight remains fail-closed: 15 additional stock-action factor mismatches or unverifiable boundaries were discovered across the r5 population.",
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/build_pt_next_020_corporate_action_authority.py",
@@ -22,10 +22,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260915-181478f43cc7",
       "timestamp": "2026-09-15T18:30:32.777938Z"
+    },
+    {
+      "action": "full_scope_consumer_preflight_blocked",
+      "actor": "codex",
+      "note": "Initial two economic conflicts resolved in immutable authority; existing consumer found 15 additional stock-action factor mismatch or boundary-unverifiable symbols, so no full PT-NEXT-020 consumer readiness is claimed and a follow-up BUG is required.",
+      "timestamp": "2026-09-15T19:01:29.409417Z"
+    },
+    {
+      "action": "dev_readonly_source_validation",
+      "actor": "codex",
+      "note": "DEV market.dividend contains zero rows for the two target symbol/date groups; the producer failed closed without creating an artifact. Production evidence remains a repeatable-read read-only snapshot, with no DDL or DML.",
+      "timestamp": "2026-09-16T02:38:00Z"
     }
   ],
   "evidence_uris": [
-    "docs/architecture/position_timing_universe_benchmark_validation_f1_20260914.md"
+    "docs/architecture/position_timing_universe_benchmark_validation_f1_20260914.md",
+    "X:/AIstock_dataset_candidates/corporate_action_authorities/pt-next-020-20260916-r1/receipt.json"
   ],
   "expected": "A content-addressed authority classifies the five source rows, produces one non-duplicated account action per symbol/date, and supports a full-scope read-only source audit with zero economic conflicts.",
   "file_scope_contract": {

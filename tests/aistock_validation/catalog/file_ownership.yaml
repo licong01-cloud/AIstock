@@ -1206,6 +1206,16 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The content-addressed PT-NEXT-018 adj-factor and rights-issue migration plus its direct tests form a bounded local_data repair boundary; position_timing remains a read-only downstream consumer.
+  - rule_id: local_data_pt_next_020_corporate_action_authority
+    priority: 97
+    include:
+      - scripts/build_pt_next_020_corporate_action_authority.py
+      - backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py
+    primary_module: local_data
+    impact_modules: [position_timing]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The PT-NEXT-020 corporate-action lineage authority resolves aggregate/component and mutually exclusive holder-class source rows into one account-safe immutable snapshot; position_timing remains an unchanged read-only consumer.
   - rule_id: local_data_industry_pit_authority
     priority: 98
     include:
