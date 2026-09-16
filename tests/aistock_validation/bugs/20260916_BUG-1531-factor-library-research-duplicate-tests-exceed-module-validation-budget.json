@@ -10,6 +10,8 @@
     "backend/tests/factor_research/dev_cases.py",
     "backend/tests/factor_research/fresh_process_smoke.py",
     "backend/tests/factor_research/fixtures/trend_pullback.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260916_BUG-1531-factor-library-research-duplicate-tests-exceed-module-validation-budget.json"
   ],
   "assigned_agent": null,
