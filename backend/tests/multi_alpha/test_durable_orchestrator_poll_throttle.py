@@ -55,13 +55,11 @@ def test_idle_worker_uses_only_coalesced_due_reads_and_never_enters_claim_cycle(
         active_import_service=_Noop(),  # type: ignore[arg-type]
         recovery_worker=_Noop(),  # type: ignore[arg-type]
         config=DurableOrchestratorConfig(
-            poll_seconds=0.2,
             lease_seconds=600,
             heartbeat_seconds=60,
             items_per_pass=1,
             archive_batch_size=1,
-            remote_poll_seconds=60,
-            safety_sweep_seconds=0.01,
+            safety_sweep_seconds=60,
         ),
         owner_id="idle-worker",
     )
@@ -74,14 +72,20 @@ def test_idle_worker_uses_only_coalesced_due_reads_and_never_enters_claim_cycle(
     orchestrator.run_cycle = forbidden_cycle  # type: ignore[method-assign]
 
     async def scenario() -> None:
+        async def wait_for_due_reads(expected: int) -> None:
+            async with asyncio.timeout(1):
+                while repository.due_reads < expected:
+                    await asyncio.sleep(0)
+
         stop_event = asyncio.Event()
         worker = asyncio.create_task(orchestrator.run_forever(stop_event))
-        await asyncio.sleep(0.025)
+        await wait_for_due_reads(1)
         # A burst of commits coalesces; no work in PostgreSQL still means no
         # claim cycle and therefore no DML/event/remote side effect.
         for _ in range(20):
             notify_durable_orchestrator()
-        await asyncio.sleep(0.01)
+        await wait_for_due_reads(2)
+        await asyncio.sleep(0)
         stop_event.set()
         notify_durable_orchestrator()
         await worker
@@ -89,7 +93,7 @@ def test_idle_worker_uses_only_coalesced_due_reads_and_never_enters_claim_cycle(
     asyncio.run(scenario())
 
     assert DurableOrchestratorConfig().safety_sweep_seconds == 60.0
-    assert 2 <= repository.due_reads <= 6
+    assert repository.due_reads == 2
 
 
 def test_runtime_config_rejects_database_heartbeat_faster_than_once_per_minute(
