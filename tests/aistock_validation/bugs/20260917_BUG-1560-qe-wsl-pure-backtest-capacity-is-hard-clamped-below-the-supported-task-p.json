@@ -126,9 +126,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process loaded the task-worktree capacity service and read back WSL pure-backtest default=2 plus explicit 1/2/3/4 exactly; WSL baseline remained 1, non-GAT parallel training remained 2, and rdagent-node1 remained 4.",
-      "fresh Python process -> WSL pure-backtest default=2 and explicit 1/2/3/4 exact; baseline=1, training=2, remote=4",
-      "fresh Python process -> passed: WSL pure-backtest default=2 and explicit 1/2/3/4 exact; baseline=1, training=2, remote=4"
+      "Fresh Python process loaded the task-worktree capacity service and read back WSL pure-backtest default=2 plus explicit 1/2/3/4 exactly; WSL baseline remained 1, non-GAT parallel training remained 2, and rdagent-node1 remained 4."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
