@@ -22,7 +22,7 @@ def test_cli_filters_frozen_pickle_and_v16_rows_to_approved_window(tmp_path, mon
     pd.DataFrame({"score": [1.0, -1.0, 3.0]}, index=index).to_pickle(prediction_path)
     monkeypatch.setattr(cli, "EXPECTED_SOURCE_FILE_SHA256", hashlib.sha256(prediction_path.read_bytes()).hexdigest())
 
-    rows = cli._prediction_rows(
+    rows = cli.load_prediction_rows(
         prediction_path,
         ["2024-07-01", "2024-07-02", "2024-07-03", "2026-04-01", "2026-04-02"],
     )
