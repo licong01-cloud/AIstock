@@ -99,7 +99,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Windows fresh process full-history/full-universe salvage-precheck completed 1/1 candidate with 5,144 instruments and 7,970,157 rows"
+      "Windows fresh process full-history/full-universe salvage-precheck completed 1/1 candidate with 5,144 instruments and 7,970,157 rows",
+      "python scripts/factor_research.py salvage-precheck with 5,144 instruments -> passed 1/1 candidate, 7,970,157 rows"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
