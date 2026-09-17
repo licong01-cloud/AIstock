@@ -2,7 +2,7 @@
 
 状态：IMPLEMENTING；用户已确认实验方向，尚无收益结论。不改变在线策略，不覆盖 PT-NEXT-020 旧产物。
 
-## Feature Card
+## Background / Feature Card
 
 目标是检验同一股票择时相对长期持有的成本后收益，分离股票池选择和择时贡献。每股两账户各 1000 万元，无杠杆、追加资金或跨股票资金流动，现金不计息，自然复投。只运行冻结 R0，不搜索止盈、退出或基础筛选参数。
 
@@ -21,6 +21,22 @@
 
 r5 index_context 有 000300.SH、000905.SH、000852.SH、000688.SH，尚未发现科创100指数价格序列。科创100择时/持有照常计算，指数收益标 UNAVAILABLE，不自行补数。各指数仅在其存在的共同日期比较，起始前不回填。所有未知估值和不足指标历史的股票仍保留诊断人口。
 
+## Scope / Non-goals
+
+只增加 `backend/services/position_timing/pattern_close_cash_{replay,report,benchmark}.py`、`backend/tests/position_timing/test_pattern_close_cash_benchmark.py` 和本设计。未改变在线 API、其他模块、共享默认值、数据生产或既有研究合同。使用模块现有纯计算，不新增训练、选股、多 agent 或通知系统。
+
+## Risks
+
+复权虚拟单位不是券商股份；官方价格指数不含现金股息，不能与复权股票口径伪称完全相同。日收盘且无冲击是研究假设，不是实盘可成交承诺。无授权无涨跌幅限制标志的缺失限制数据记 UNKNOWN。非停牌缺失持仓价格保留未知终值，不利用未来退市信息提前卖出。动态 PIT 等权指数不代表可实现共享组合。未知成员日使 full_population 指标不可用；另报的 paired_observed_only 仅为条件样本诊断，不包装成全市场完整结论。
+
+## Verification Plan
+
+`python -m pytest backend/tests/position_timing/test_pattern_close_cash_benchmark.py -q`：两轮修复后 17 项通过，覆盖现金费率/手数、复权缩放、自然复投、T+1、方向涨跌停、未来数据不改变既往路径、停牌/未知估值、PIT 滞后分组、指数缺失、空人口以及不可变 artifact。另做 changed-file Ruff、compileall 和 git diff --check。全市场 prepare/run/inspect/exact retry 为实验验收证据，尚未完成前不得标为实验完成。
+
+## Production Gates
+
+不涉及生产变更；database_read/write、行情 network、runtime/process control 均为 false。不需要用户重启。只写 timing-owned 研究产物。没有模型效果准入门槛，负结果照常交付；真实数据不足只标记相关比较不可用，不补造数据、不挡住其他比较。
+
 ## Implementation Plan
 
 1. 实现最小离线收盘现金 replay 与分组报告，冻结合同和定向测试；不新增 API、调度或模型平台。
@@ -29,13 +45,17 @@ r5 index_context 有 000300.SH、000905.SH、000852.SH、000688.SH，尚未发�
 
 ## Design Acceptance Index
 
+F-001～F-008 的定义见 Contracts；下表 DESIGN_VERIFIED 仅表示设计闭合，不表示全市场实验已完成或收益有效。
+
+## Design Acceptance Matrix
+
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | pattern_close_cash_benchmark.py | source receipt | IN_PROGRESS | 待验证 |
-| F-002 | pattern_close_cash_replay.py | 定向账户测试 | IN_PROGRESS | 待验证 |
-| F-003 | pattern_close_cash_replay.py | 因果与限制测试 | IN_PROGRESS | 待验证 |
-| F-004 | pattern_close_cash_replay.py | 冻结策略测试 | IN_PROGRESS | 待验证 |
-| F-005 | pattern_close_cash_replay.py | source/valuation diagnostics | IN_PROGRESS | 待验证 |
-| F-006 | pattern_close_cash_report.py | PIT 聚合测试 | IN_PROGRESS | 待验证 |
-| F-007 | pattern_close_cash_report.py | report | IN_PROGRESS | 待验证 |
-| F-008 | pattern_close_cash_benchmark.py | immutable retry | IN_PROGRESS | 待验证 |
+| F-001 | backend/services/position_timing/pattern_close_cash_benchmark.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-002 | backend/services/position_timing/pattern_close_cash_replay.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-003 | backend/services/position_timing/pattern_close_cash_replay.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-004 | backend/services/position_timing/pattern_close_cash_replay.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-005 | backend/services/position_timing/pattern_close_cash_replay.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-006 | backend/services/position_timing/pattern_close_cash_report.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-007 | backend/services/position_timing/pattern_close_cash_report.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
+| F-008 | backend/services/position_timing/pattern_close_cash_benchmark.py | backend/tests/position_timing/test_pattern_close_cash_benchmark.py | DESIGN_VERIFIED | none |
