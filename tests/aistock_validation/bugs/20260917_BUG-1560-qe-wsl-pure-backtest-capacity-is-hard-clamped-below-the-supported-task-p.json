@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1560",
-  "closed_at": null,
+  "closed_at": "2026-09-17T13:08:10.310923Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -137,10 +137,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1560-close-sync-20260917\\tmp\\issue_workflow\\BUG-1560\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1560",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "c71b7b6f5f18f809c0bddd1b56b9c5b2fcb41a9d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-17T13:07:34.226627Z",
+      "mode": "read_only",
+      "observed_identity": "1881b01a04073bf512907097275c8b3d500397e3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "db38baa6c1fd441bf9a1c21c63a78adaaeae5dcc55a26ab03147fde23c4defc2",
+      "receipt_sha256": "4cd14a2e148247fa5d4d6f2288e9a734d8e6434c3cdfcb5dc30b50c3c2057671",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5150864caaa6c338d71b212d169bac50228e50ddd063cf5fbccee8e329669103",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -174,7 +196,7 @@
     ],
     "validation_evidence_digest": "59a043724663dccc4bb19248a866907871c10f79a7be08b97cb06016f6699deb"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -187,7 +209,8 @@
     "validation-receipt: id=6f132a83e843aecb commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/unified_engine/test_backtest_executor.py -q` result=`47 passed`",
     "validation-receipt: id=e76ce93bb5be7c0e commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha -q` result=`142 passed, 13 skipped`",
     "validation-receipt: id=1bd162ca9d0acf43 commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=qe_read_backend status=passed command=`rtk nox -s qe_read_backend` result=`603 passed, 1 skipped`",
-    "validation-receipt: id=06ecf9343b2b8baa commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=l0 status=passed command=`rtk nox -s l0; validation_module_registry_l0; guardrail_changed_files` result=`passed`"
+    "validation-receipt: id=06ecf9343b2b8baa commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=l0 status=passed command=`rtk nox -s l0; validation_module_registry_l0; guardrail_changed_files` result=`passed`",
+    "post-restart-verify BUG-1560 backend-main expected=c71b7b6f5 observed=1881b01a0 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
