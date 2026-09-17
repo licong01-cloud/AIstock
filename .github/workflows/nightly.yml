@@ -1262,9 +1262,23 @@ jobs:
                 || (legacyMarker && (issue.body || "").includes(legacyMarker))
                 || issue.title === payload.title
               ));
+              const existingBody = existing ? (existing.body || "") : "";
+              const promotedBugLink = existingBody.match(/- BUG ID: `BUG-\d+`[^\n]*/);
+              const existingBugDraft = existingBody.match(/\n\n## Nightly BUG Draft\n[\s\S]*$/);
               let issueNumber;
+              let issueBody = payload.body.replaceAll('--issue <issue-number>', '--issue __ISSUE_NUMBER__');
+              if (promotedBugLink) {
+                issueBody = issueBody.replace(
+                  "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
+                  promotedBugLink[0],
+                );
+                if (existingBugDraft && !issueBody.includes("## Nightly BUG Draft")) {
+                  issueBody += existingBugDraft[0];
+                }
+              }
               if (existing) {
                 issueNumber = existing.number;
+                issueBody = issueBody.replaceAll('__ISSUE_NUMBER__', `${issueNumber}`);
                 await github.rest.issues.createComment({
                   owner,
                   repo,
@@ -1275,8 +1289,8 @@ jobs:
                   owner,
                   repo,
                   issue_number: issueNumber,
-                  title: payload.title,
-                  body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
+                  title: promotedBugLink ? existing.title : payload.title,
+                  body: issueBody,
                 };
                 if (labels.length > 0) {
                   updateParams.labels = labels;
@@ -1296,7 +1310,7 @@ jobs:
                 }
                 const created = await github.rest.issues.create(createParams);
                 issueNumber = created.data.number;
-                const issueBody = payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`);
+                issueBody = issueBody.replaceAll('__ISSUE_NUMBER__', `${issueNumber}`);
                 await github.rest.issues.update({
                   owner,
                   repo,
@@ -1310,6 +1324,7 @@ jobs:
                 fingerprint: payload.dedupe.fingerprint,
                 nightly_marker: marker,
                 title: payload.title,
+                promotion_status: promotedBugLink ? 'already_linked' : 'pending',
               });
             }
             fs.writeFileSync(
@@ -1317,10 +1332,11 @@ jobs:
               `${JSON.stringify({schema_version: 'aistock_nightly_issue_numbers_v1', issues: issueRecords}, null, 2)}\n`,
               'utf8',
             );
-            if (issueRecords.length === 1) {
+            const promotionCandidate = issueRecords.find((item) => item.promotion_status === 'pending');
+            if (promotionCandidate) {
               fs.writeFileSync(
                 singleIssueNumberPath,
-                `${issueRecords[0].issue_number}\n`,
+                `${promotionCandidate.issue_number}\n`,
                 'utf8',
               );
             }
@@ -1335,17 +1351,9 @@ jobs:
         run: |
           mkdir -p "${AISTOCK_WORKTREE_ROOT}"
           ISSUE_NUMBER_FILE="tmp/validation/nightly_failure_issue/github-issue-number.txt"
-          ISSUE_NUMBERS_FILE="tmp/validation/nightly_failure_issue/github-issue-numbers.json"
           PROMOTION_STATUS="tmp/validation/nightly_failure_issue/bug-promotion-status.txt"
-          if [ -f "${ISSUE_NUMBERS_FILE}" ]; then
-            ISSUE_COUNT="$(python -c "import json; print(len(json.load(open('${ISSUE_NUMBERS_FILE}', encoding='utf-8')).get('issues') or []))")"
-            if [ "${ISSUE_COUNT}" -gt 1 ]; then
-              echo "workflow_gate=deferred_multi_issue_promotion issue_count=${ISSUE_COUNT} reason=per_module_issues_require_independent_bug_identity" | tee "${PROMOTION_STATUS}"
-              exit 0
-            fi
-          fi
           if [ ! -f "${ISSUE_NUMBER_FILE}" ]; then
-            echo "workflow_gate=skipped reason=nightly_issue_number_missing" | tee "${PROMOTION_STATUS}"
+            echo "workflow_gate=skipped reason=no_unlinked_nightly_issue_pending" | tee "${PROMOTION_STATUS}"
             exit 0
           fi
           ISSUE_NUMBER="$(tr -d '[:space:]' < "${ISSUE_NUMBER_FILE}")"
