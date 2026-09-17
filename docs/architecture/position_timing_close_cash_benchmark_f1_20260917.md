@@ -1,6 +1,62 @@
 # Position Timing 独立现金账户收盘实验（F1）
 
-状态：IMPLEMENTING；用户已确认实验方向，尚无收益结论。不改变在线策略，不覆盖 PT-NEXT-020 旧产物。
+状态：EXPERIMENT_EXECUTED_WITH_EXPLICIT_COVERAGE_LIMITATIONS。prepare/run/inspect/exact retry 已完成；未证明原 R0 有超额收益。源码未合入，不改变在线策略，不覆盖 PT-NEXT-020 旧产物。
+
+## Execution Evidence（2026-09-17）
+
+- 代码冻结 commit：`f2f2fda533d8840bc3cec7c7e4f3914394ab2056`；后续设计格式补齐不改变 Python 实现身份。
+- 定向测试 17 passed；changed-file Ruff、compileall、diff --check 通过；F1 validator 8/8 通过（设计闭合，不表示收益验证成功）。
+- request：`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_close_cash_benchmark_v1/requests/745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff.json`。
+- request canonical SHA：`745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff`；文件 SHA：`961bd3baca5fd2b836f1aaee29642db22359a0bd6b338f2faba3eedde75d035e`；实验合同 SHA：`f299ac66c86036855a18010a7b0f222f0e2faa98ccb467351688c63e725e8a9b`。
+- source preflight：5,144 股、7,970,157 factor 行，invalid/insufficient 均 0，coverage_complete=true；factor audit `1131d05c5fa7f4c84d50eaec428cdd8359ee2cf1119ccea12afbef806ccc36bd`，restatement audit `48b78cc7237fc02d4c0d840f3ef63c7cb9ddc6ef46325330b8b7acc3b2dd32ac`。
+- prepare 时 outcomes_read=false；run 在 `RUN_AFTER_FULL_SOURCE_PREFLIGHT` 后才设置 true。161 个分块全部完成；inspect=VERIFIED；exact retry=ALREADY_MATERIALIZED，request/bundle 身份不变。
+- bundle：`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_close_cash_benchmark_v1/bundles/745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff`；manifest canonical SHA：`a304822c9c6bb09ca4fae151d35e6dad48c17944226f0cf5c47258b02191d444`。包含 request、report、stocks.parquet、pool_daily.parquet、receipt，receipt 绑定所有分块及每日路径/成交事件/诊断文件。
+- 5,144 个诊断身份全部保留，5,138 条股票路径、8,067,196 条日账户记录；负净值/仓位超过100%/提前成交均为0。未知估值日记录3,290；4,807只股票具备完整配对期间收益，1,613只择时胜过持有（33.56%）；配对超额中位数 -26.89 个百分点。6只无完整指标历史：001221.SZ、301491.SZ、301609.SZ、301632.SZ、603262.SH、603406.SH。
+- L0：`python -m nox -s l0 -- backend/services/position_timing/pattern_close_cash_benchmark.py backend/services/position_timing/pattern_close_cash_replay.py backend/services/position_timing/pattern_close_cash_report.py backend/tests/position_timing/test_pattern_close_cash_benchmark.py` 通过，0 finding / 0 blocking。代码期间没有修改。
+
+## 结果与解释
+
+以下均为成本后独立账户的等权日收益合成指数，**仅限当日可评价配对样本的诊断**，不是完整全人口收益，也不是共享现金组合。完整人口字段在存在未知成员日时返回 UNAVAILABLE；没有将未知收益设为0。所有指数为对应官方价格指数。
+
+### 各自期间的诊断总收益
+
+| 股票池 | 日收益起始日（终日均2026-08-31） | 择时 | 长持 | 对应指数 |
+|---|---|---:|---:|---:|
+| 全市场 | 2018-08-31 | 9.93% | 176.15% | 沪深300 38.02% |
+| 沪深300成分 | 2018-08-31 | 8.09% | 67.63% | 38.02% |
+| 中证500成分 | 2018-08-31 | 6.87% | 109.05% | 63.38% |
+| 中证1000成分 | 2018-08-31 | 4.61% | 114.24% | 51.94% |
+| 科创50成分 | 2020-08-05 | 不可计算完整期间 | 不可计算完整期间 | 7.56% |
+| 科创100成分 | 2023-08-08 | 7.95% | 58.23% | 缺失，不替代 |
+
+科创50前21个日收益日（2020-08-05～2020-09-02）没有可评价配对账户，禁止删掉这些天伪称完整期间收益。核查688001.SH：raw行情始于2019-07-22，stock PIT始于2020-08-04；现有 pattern_feature_frame 将 PIT 掩码前置到特征构造，因而需要重新预热。这不是“没有更早行情”的结论，本轮不修改既有特征语义。
+
+### 统一期间：2023-08-08～2026-08-31（743个日收益，基准起点收盘2023-08-07）
+
+由 bundle 的 `pool_daily.parquet` 选择 mode=dynamic、date>=2023-08-08，按 report.comparison 同一百分比复合公式读回；没有重新回放股票。以下仍是可评价配对样本诊断。
+
+| 股票池 | 择时 | 长持 | 对应指数 | 择时−长持（百分点） |
+|---|---:|---:|---:|---:|
+| 全市场 | 5.64% | 46.36% | 沪深30015.91% | -40.72 |
+| 沪深300成分 | 3.94% | 18.12% | 15.91% | -14.18 |
+| 中证500成分 | 4.20% | 31.24% | 30.56% | -27.04 |
+| 中证1000成分 | 3.02% | 27.27% | 19.47% | -24.26 |
+| 科创50成分 | 5.88% | 39.81% | 73.85% | -33.93 |
+| 科创100成分 | 7.95% | 58.23% | 缺失 | -50.28 |
+
+完整期间动态池未知账户日/预期账户日分别为：全市场46,597/7,913,933；沪深300 1,110/567,801；中证500 1,432/941,297；中证1000 7,229/1,864,200；科创50 2,189/67,762；科创100 507/72,637。它们包括尚未具备指标历史的账户日与未知估值配对日，不等于3,290个原始未知估值行。跨股票对比也受不同可用起点影响；不可把配对分布解释成共同起点的正式 alpha 检验。
+
+### 资金与交易机制诊断
+
+- 逐股时间平均仓位再等权平均为12.41%；持仓时间占比14.58%；条件持仓比例均值83.30%。两项均值的乘积不要求严格等于总体均值。
+- 入场确认62,669次：成交27,792次、价格guard拦截34,112次（54.43%）、涨停拦截753次、停牌12次。现金不足最小手数/预算失败为0，不能再把低仓位归因于未给足账户现金。
+- 价格guard买入拦截中，超过最大买入价20,951次，开盘缺口超过上限13,133次，接近涨停28次；它们是冻结 guard 的实际原因，不能归因于成交量或止盈阈值。
+- 成交卖出27,198次中，冻结风险退出19,797次，加速放量退出7,401次。另有卖出价格guard拦截3,814次、跌停350次、停牌38次；重试次数不是独立交易机会。
+- 全市场自身期间诊断中择时最大回撤6.02%，长持32.18%；较低风险主要伴随较低暴露，不能将回撤优势当作超额收益优势。
+
+### 下一步研究建议（未执行、不自动调参）
+
+先拆分“原始信号机会→价格guard拦截→实际入场→风险退出”的收益损失，尤其检查突破锚点与后续回踩确认价格的兼容性；再冻结小规模退出/分步止盈对照。单独评估 PIT 交易资格与历史特征可用性的解耦，而不是本轮事后放宽掩码。科创100指数序列仅交回数据准备窗口；不要求重新引入账户级公司行动。不得宣称当前规则最优或已有稳定超额收益。
 
 ## Background / Feature Card
 
