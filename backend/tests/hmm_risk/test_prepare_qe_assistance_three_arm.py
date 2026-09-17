@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from datetime import date
 from pathlib import Path
-
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "hmm_risk" / "prepare_qe_assistance_three_arm.py"
@@ -39,6 +39,46 @@ def test_fetch_source_config_requires_nested_config(monkeypatch) -> None:
     monkeypatch.setattr(subject.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
     monkeypatch.setattr(subject.json, "load", lambda _response: {"data": {"config_json": {"model_id": "m"}}})
     assert subject._fetch_source_config("http://example.test", 1) == {"model_id": "m"}
+
+
+def test_active_dataset_identity_uses_current_profile_and_all_node_roots(monkeypatch, tmp_path: Path) -> None:
+    subject = _load()
+    controller = tmp_path / "candidate"
+    profile = {
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": date(2026, 8, 31),
+        "profile_sha256": "a" * 64,
+        "candidate_roots": tuple(
+            sorted([str(controller), "/mnt/wsl/releases/candidate", "/home/lc999/data/candidate"])
+        ),
+    }
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: profile)
+
+    identity = subject._active_dataset_identity()
+
+    assert identity == {
+        "schema_version": subject.ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION,
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": "2026-08-31",
+        "profile_sha256": "a" * 64,
+        "candidate_roots": sorted([str(controller), "/mnt/wsl/releases/candidate", "/home/lc999/data/candidate"]),
+    }
+
+
+def test_active_dataset_identity_fails_closed_without_profile(monkeypatch) -> None:
+    subject = _load()
+    monkeypatch.setattr(
+        subject,
+        "load_active_hmm_dataset_identity",
+        lambda: (_ for _ in ()).throw(
+            subject.RotationL1InputBundleError("hmm_risk_test_profile_missing", "missing profile")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="missing profile"):
+        subject._active_dataset_identity()
 
 
 def test_submission_preflight_rejects_future_filtered_pool_snapshot() -> None:

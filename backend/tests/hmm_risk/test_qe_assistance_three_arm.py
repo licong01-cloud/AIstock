@@ -13,6 +13,20 @@ from backend.services.quantevolver.experiment_config_builders import build_confi
 from backend.routers.quantevolver_evolution import CustomEvolutionCreateRequest
 
 
+def _dataset_identity() -> dict:
+    return {
+        "schema_version": subject.ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION,
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": "2026-08-31",
+        "profile_sha256": "c" * 64,
+        "candidate_roots": [
+            "/home/lc999/data/dataset_candidates/20260831-qe_hmm_full_v2-direct-20260917-r6-candidate",
+            "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\20260831-qe_hmm_full_v2-direct-20260917-r6-candidate",
+        ],
+    }
+
+
 def _source(*, hmm: bool) -> dict:
     model_params = {
         "disable_alpha158": True,
@@ -63,6 +77,7 @@ def test_request_freezes_one_prediction_source_and_three_exact_arms() -> None:
         no_hmm_source=_source(hmm=False),
         legacy_hmm_source=_source(hmm=True),
         artifact_binding=_binding(),
+        active_dataset_identity=_dataset_identity(),
         task_name="formal-three-arm",
     )
     loops = request["loops"]
@@ -82,6 +97,8 @@ def test_request_freezes_one_prediction_source_and_three_exact_arms() -> None:
     assert loops[1]["enable_sector_hmm"] is True
     assert loops[2]["enable_sector_hmm"] is True
     assert loops[2]["strategy_params"][BINDING_PARAM] == _binding()
+    assert request["frozen_identity"]["active_dataset_identity"] == _dataset_identity()
+    assert all("custom_params" not in loop for loop in loops)
     assert request["api_request"]["auto_start"] is False
     parsed = CustomEvolutionCreateRequest.model_validate(request["api_request"])
     assert "source_label_horizon" not in parsed.model_dump()["loops"][2]
@@ -95,8 +112,25 @@ def test_request_rejects_non_hmm_source_drift() -> None:
             no_hmm_source=_source(hmm=False),
             legacy_hmm_source=legacy,
             artifact_binding=_binding(),
+            active_dataset_identity=_dataset_identity(),
             task_name="formal-three-arm",
         )
+    assert exc.value.reason_code == subject.REASON_IDENTITY
+
+
+def test_request_rejects_invalid_active_dataset_identity() -> None:
+    identity = _dataset_identity()
+    identity["candidate_roots"] = [identity["candidate_roots"][0], identity["candidate_roots"][0]]
+
+    with pytest.raises(subject.QEAssistanceThreeArmError, match="active dataset identity") as exc:
+        subject.build_three_arm_request(
+            no_hmm_source=_source(hmm=False),
+            legacy_hmm_source=_source(hmm=True),
+            artifact_binding=_binding(),
+            active_dataset_identity=identity,
+            task_name="formal-three-arm",
+        )
+
     assert exc.value.reason_code == subject.REASON_IDENTITY
 
 
@@ -105,6 +139,7 @@ def test_new_arm_builds_without_legacy_snapshot_lookup(monkeypatch) -> None:
         no_hmm_source=_source(hmm=False),
         legacy_hmm_source=_source(hmm=True),
         artifact_binding=_binding(),
+        active_dataset_identity=_dataset_identity(),
         task_name="formal-three-arm",
     )
     monkeypatch.setattr(
@@ -278,9 +313,7 @@ def test_new_arm_typed_failure_is_not_converted_to_success() -> None:
         "status": "failed",
         "failure_reason": "hmm_risk_qe_assistance_pit_mapping_missing",
     }
-    result = subject.compare_three_arm_results(
-        [_result("no_hmm", 0.02), _result("legacy_static_hmm", 0.03), failed]
-    )
+    result = subject.compare_three_arm_results([_result("no_hmm", 0.02), _result("legacy_static_hmm", 0.03), failed])
     assert result["status"] == subject.STATUS_NEW_UNAVAILABLE
     assert result["arms"]["new_pit_hmm"]["failure_reason"] == failed["failure_reason"]
     assert result["delta_new_vs_no_hmm"] is None

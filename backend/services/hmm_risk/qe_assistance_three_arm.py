@@ -16,8 +16,9 @@ from backend.services.hmm_risk.qe_assistance_adapter import (
 )
 from backend.services.hmm_risk.qe_assistance_transport import BINDING_PARAM
 
-SCHEMA_VERSION = "hmm_risk_qe_assistance_three_arm_request_v1"
+SCHEMA_VERSION = "hmm_risk_qe_assistance_three_arm_request_v2"
 RESULT_SCHEMA_VERSION = "hmm_risk_qe_assistance_three_arm_result_v1"
+ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION = "hmm_risk_active_dataset_identity_v1"
 SOURCE_TASK_ID = "qe_20260502_131502_9b54"
 SOURCE_LOOP_INDEX = 2
 TARGET_NODE_ID = "rdagent-node1"
@@ -101,6 +102,33 @@ def _common_identity(value: Mapping[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _active_dataset_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "generation",
+        "release_id",
+        "cutoff",
+        "profile_sha256",
+        "candidate_roots",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise QEAssistanceThreeArmError(REASON_IDENTITY, "active dataset identity fields differ")
+    roots = value.get("candidate_roots")
+    if (
+        value.get("schema_version") != ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION
+        or _SHA256.fullmatch(str(value.get("profile_sha256") or "")) is None
+        or not isinstance(roots, list)
+        or not roots
+        or any(not isinstance(root, str) or not root.strip() for root in roots)
+        or roots != sorted(set(roots))
+    ):
+        raise QEAssistanceThreeArmError(REASON_IDENTITY, "active dataset identity is invalid")
+    for field in ("generation", "release_id", "cutoff"):
+        if not isinstance(value.get(field), str) or not str(value[field]).strip():
+            raise QEAssistanceThreeArmError(REASON_IDENTITY, f"active dataset {field} is invalid")
+    return copy.deepcopy(dict(value))
+
+
 def _loop_from_source(source: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     strategy_params = copy.deepcopy(dict(source.get("strategy_params") or {}))
     model_params = copy.deepcopy(dict(source.get("model_params") or {}))
@@ -134,8 +162,7 @@ def _loop_from_source(source: Mapping[str, Any], *, label: str) -> dict[str, Any
     if unfilled_handler:
         loop["unfilled_handler"] = unfilled_handler
         loop["unfilled_handler_params"] = {
-            "backup_depth": model_params.get("unfilled_backup_depth")
-            or strategy_params.get("unfilled_backup_depth")
+            "backup_depth": model_params.get("unfilled_backup_depth") or strategy_params.get("unfilled_backup_depth")
         }
     return loop
 
@@ -145,12 +172,14 @@ def build_three_arm_request(
     no_hmm_source: Mapping[str, Any],
     legacy_hmm_source: Mapping[str, Any],
     artifact_binding: Mapping[str, Any],
+    active_dataset_identity: Mapping[str, Any],
     task_name: str,
 ) -> dict[str, Any]:
     """Build one frozen pending custom-evo request without reading outcomes."""
 
     no_hmm = _config(no_hmm_source, label="no-HMM")
     legacy = _config(legacy_hmm_source, label="legacy-HMM")
+    dataset_identity = _active_dataset_identity(active_dataset_identity)
     if _common_identity(no_hmm) != _common_identity(legacy):
         raise QEAssistanceThreeArmError(
             REASON_IDENTITY,
@@ -202,6 +231,7 @@ def build_three_arm_request(
             "window_start": WINDOW_START,
             "window_end": WINDOW_END,
             "arms": list(ARMS),
+            "active_dataset_identity": dataset_identity,
         },
     }
     if not body["task_name"]:
