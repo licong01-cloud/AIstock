@@ -12,6 +12,7 @@ import pandas as pd
 from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.trading_core.exit_guard import ExitGuardContext, evaluate as evaluate_exit
 from backend.services.trading_core.price_guard import PriceGuardContext, evaluate as evaluate_price
+from backend.services.trading_core.price_guard import PriceGuardPolicy
 
 from .action_value import ActionValueError
 from .contracts import TriggerSide
@@ -91,6 +92,8 @@ class Account:
 def execute(
     account: Account, *, symbol: str, bar: dict[str, Any], ordinal: int,
     side: str, reference: Decimal, guarded: bool, risk: bool = False,
+    sell_fraction: Decimal = Decimal(1),
+    price_guard_policy: PriceGuardPolicy | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"side": side, "status": execution_status(bar, side)}
     if result["status"] != "EXECUTABLE":
@@ -109,7 +112,7 @@ def execute(
             limit_up=float(bar["up_limit"]), limit_down=float(bar["down_limit"]),
             side=side.lower(), sell_reason="rebalance" if side == "SELL" else None,
             price_basis="raw",
-        ), frozen_price_guard_policy())
+        ), price_guard_policy or frozen_price_guard_policy())
         result["guard_reason"] = decision.reason_code
         if decision.action not in {"ACCEPT", "REDUCE", "SELL"}:
             return {**result, "status": "PRICE_GUARD_BLOCKED"}
@@ -132,18 +135,39 @@ def execute(
         account.bought_once = True
         result["raw_quantity"] = qty
     else:
+        if sell_fraction <= 0 or sell_fraction > 1:
+            raise ActionValueError("CLOSE_CASH_SELL_FRACTION_INVALID")
         # Complete virtual-unit liquidation is intentional, not a claim of a
         # legal broker share entitlement inferred from adjustment factors.
-        units = account.units
+        # An intermediate child is first projected to the execution-day raw
+        # equivalent and must remain a normal board-legal SELL quantity; only
+        # a complete liquidation may flush a residual.
+        if sell_fraction == 1:
+            units = account.units
+        else:
+            raw_available = int(account.units * factor)
+            requested = int(Decimal(raw_available) * sell_fraction)
+            quantity = round_to_board_lot(
+                requested,
+                symbol,
+                side="SELL",
+                allow_sell_residual=False,
+            )
+            if not quantity:
+                return {**result, "status": "PARTIAL_QUANTITY_UNAVAILABLE"}
+            units = min(account.units, Decimal(quantity) / factor)
         notional = units * raw * factor
         charged = fee(notional, side)
         if account.cash + notional < charged:
             return {**result, "status": "CASH_BELOW_SELL_FEE"}
         account.cash += notional - charged
-        account.units, account.entry = ZERO, None
+        account.units -= units
+        if account.units <= ZERO:
+            account.units, account.entry = ZERO, None
     account.fees += charged
     return {**result, "status": "FILLED", "notional": float(notional),
-            "fee": float(charged), "virtual_units": float(units)}
+            "fee": float(charged), "virtual_units": float(units),
+            "remaining_virtual_units": float(account.units)}
 
 
 def replay(symbol: str, bars: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]], dict[str, Any]]:
