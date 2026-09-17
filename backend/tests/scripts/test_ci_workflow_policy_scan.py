@@ -600,6 +600,23 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
     assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
 
 
+def test_runner_queue_watchdog_has_event_fallbacks_without_self_hosted_runner_use() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/runner-queue-watchdog.yml").read_text(encoding="utf-8"))
+    triggers = workflow[True]
+    job = workflow["jobs"]["reconcile-scheduled-queues"]
+    cancel_step = next(step for step in job["steps"] if step.get("name") == "Cancel only stale scheduled runs without active jobs")
+
+    assert triggers["schedule"] == [{"cron": "7,22,37,52 * * * *"}]
+    assert triggers["workflow_run"] == {"workflows": ["AIstock CI"], "types": ["completed"]}
+    assert triggers["workflow_dispatch"] == {}
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "if" not in cancel_step
+    assert "--current-event schedule" in cancel_step["run"]
+    assert "--expected-head-branch main" in cancel_step["run"]
+
+
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
     import yaml
 
