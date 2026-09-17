@@ -21,6 +21,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260917-c1fe3ad6c717",
       "timestamp": "2026-09-17T02:16:52.240761Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "Codex",
+      "note": "WSL same-task pure-backtest capacity now honors explicit node_parallelism 1-4 while preserving default 2, baseline 1, non-GAT training 2, and remote 4; related matrix 73 passed/3 skipped.",
+      "timestamp": "2026-09-17T02:24:07Z"
     }
   ],
   "evidence_uris": [
@@ -117,11 +123,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded the task-worktree capacity service and read back WSL pure-backtest default=2 plus explicit 1/2/3/4 exactly; WSL baseline remained 1, non-GAT parallel training remained 2, and rdagent-node1 remained 4.",
+      "fresh Python process -> WSL pure-backtest default=2 and explicit 1/2/3/4 exact; baseline=1, training=2, remote=4",
+      "fresh Python process -> passed: WSL pure-backtest default=2 and explicit 1/2/3/4 exact; baseline=1, training=2, remote=4"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
