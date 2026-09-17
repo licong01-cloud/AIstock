@@ -10,6 +10,7 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,23 +22,15 @@ import numpy as np
 import pandas as pd
 
 from .action_value import ActionValueError
-from .action_value_corporate_actions import CorporateActionBook
 from .action_value_data import BENCHMARK, DailyCandidate, file_reference
 from .action_value_pipeline import _clean_repository_commit
 from .artifact_store import PositionTimingArtifactStore, _exclusive_file_lock
 from .contracts import canonical_json_bytes, canonical_sha256
 from .pattern_research import (
     BLOCK_SESSIONS,
-    CORPORATE_ACTION_APPLICATION_POLICY,
-    CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
-    FACTOR_ACTION_COVERAGE_POLICY,
-    FACTOR_ACTION_COVERAGE_POLICY_SHA256,
     INITIAL_TRAINING_SESSIONS,
     REFERENCE_CAPITAL_CNY,
     TERMINAL_MAX_DEFER,
-    _snapshot_scope,
-    apply_pattern_corporate_action_policy,
-    audit_pattern_factor_action_coverage,
     inspect_pattern_bundle,
     mean_interval,
     replay_full_policy_symbol,
@@ -46,27 +39,14 @@ from .pattern_adj_factor_restatement import (
     audit_candidate_adj_factor_restatement,
     open_adj_factor_restatement_authority,
 )
-from .pattern_full_scope_authority import (
-    EXPECTED_CLASSIFICATION_COUNTS,
-    apply_full_scope_corporate_action_authority,
-    open_full_scope_corporate_action_authority,
-)
-from .pattern_rights_issue import (
-    RIGHTS_ISSUE_PARTICIPATION_POLICY,
-    RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
-    combined_corporate_action_source_snapshot,
-    freeze_rights_issue_participation_policy,
-    open_rights_issue_authority,
-    rights_issue_application_audit,
-)
 from .pattern_strategy import PATTERN_FEATURE_COLUMNS, pattern_feature_frame
 
 
 PIPELINE_ID = "POSITION_TIMING_PATTERN_UNIVERSE_BENCHMARK_V1"
 ARTIFACT_FOLDER = "pattern_universe_benchmark_v1"
-REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v3"
-RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v3"
-BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v3"
+REQUEST_SCHEMA = "position_timing_pattern_universe_benchmark_request_v4"
+RECEIPT_SCHEMA = "position_timing_pattern_universe_benchmark_receipt_v4"
+BUNDLE_SCHEMA = "position_timing_pattern_universe_benchmark_bundle_v4"
 CHUNK_SCHEMA = "position_timing_pattern_universe_benchmark_chunk_v1"
 MEMBERSHIP_SCHEMA = "position_timing_candidate_bound_pool_membership_v1"
 RESULT_CLASS = "EXPLORATORY_CROSS_SYMBOL_EXTERNAL_VALIDITY_NOT_TEMPORAL_HOLDOUT"
@@ -80,23 +60,8 @@ EXPECTED_CANDIDATE_DATASET_SHA256 = (
 EXPECTED_PARENT_MANIFEST_SHA256 = (
     "7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541"
 )
-EXPECTED_RIGHTS_AUTHORITY_SHA256 = (
-    "4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c"
-)
 EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256 = (
     "c40f3c991ac31b570e7a739bb1898a59f12e202f2e96e9bcd8399211e5323edd"
-)
-EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256 = (
-    "8d9a7b6bca857344276ab11f8a3fa04e8e6956bbccb0d60ba6a8bbaad29e01ee"
-)
-EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256 = (
-    "9a6e4c5737da9f903a06894a48e2665295a72f35109cd46208ccd7aff0a8f415"
-)
-EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256 = (
-    "3c10a9633bfe217b5c214e0e473509c9c36ad676d35d9baff46f1576a9ca3d85"
-)
-EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256 = (
-    "7198fc52af5d744a2e4144035a6306b7492a6226ecaa3cc7a6d57c22e40a42fd"
 )
 POOL_IDS = (
     "stock_universe",
@@ -150,11 +115,8 @@ SOURCE_CODE_FILES: Mapping[str, str] = {
     "pipeline": "pattern_universe_benchmark.py",
     "pattern_research": "pattern_research.py",
     "pattern_strategy": "pattern_strategy.py",
-    "rights_issue": "pattern_rights_issue.py",
     "adj_factor_restatement": "pattern_adj_factor_restatement.py",
-    "full_scope_authority": "pattern_full_scope_authority.py",
     "daily_candidate": "action_value_data.py",
-    "corporate_actions": "action_value_corporate_actions.py",
     "cost_and_fill": "action_value.py",
 }
 EXTERNAL_WRITE_RECEIPT_FLAGS: Mapping[str, bool] = {
@@ -172,20 +134,32 @@ EXTERNAL_WRITE_RECEIPT_FLAGS: Mapping[str, bool] = {
     "runtime_written": False,
 }
 
+QLIB_ADJUSTED_FACTOR_CONTRACT: Mapping[str, Any] = {
+    "schema_version": "position_timing_qlib_adjusted_factor_contract_v1",
+    "valuation_mode": "QLIB_ADJUSTED_PRICE",
+    "price_transform": "ADJUSTED_OHLC=RAW_OHLC_X_FACTOR",
+    "volume_transform": "ADJUSTED_VOLUME=RAW_VOLUME_DIV_FACTOR",
+    "position_semantics": "VIRTUAL_ADJUSTED_UNITS_NOT_BROKER_SHARES",
+    "corporate_action_accounting": "NOT_SIMULATED",
+    "cash_dividend_accounting": "NOT_SIMULATED",
+    "rights_subscription_accounting": "NOT_SIMULATED",
+    "share_arrival_accounting": "NOT_SIMULATED",
+    "execution_authority": "SIGNAL_RESEARCH_ONLY",
+    "factor_restatement_gate": "REQUIRED",
+}
+QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256 = canonical_sha256(
+    QLIB_ADJUSTED_FACTOR_CONTRACT
+)
+
 BENCHMARK_CONTRACT: Mapping[str, Any] = {
-    "schema_version": "position_timing_pattern_universe_benchmark_contract_v1",
+    "schema_version": "position_timing_pattern_universe_benchmark_contract_v2",
     "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
     "candidate_dataset_manifest_sha256": EXPECTED_CANDIDATE_DATASET_SHA256,
     "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
     "adj_factor_restatement_authority_canonical_sha256": (
         EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
     ),
-    "corporate_action_snapshot_file_sha256": (
-        EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-    ),
-    "full_scope_authority_canonical_sha256": (
-        EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-    ),
+    "qlib_adjusted_factor_contract_sha256": QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256,
     "pool_ids": POOL_IDS,
     "effective_index_population": "INDEX_MEMBERSHIP_AND_STOCK_UNIVERSE_PIT",
     "primary_strategy": PRIMARY_STRATEGY,
@@ -385,6 +359,26 @@ class FrozenParentEvidence:
     request_sha256: str
 
 
+@dataclass(frozen=True)
+class _NoAccountActions:
+    """Compatibility view proving this signal replay has no account actions."""
+
+    actions: tuple[()] = ()
+
+    @staticmethod
+    def on(_symbol: str, _trade_date: date) -> None:
+        return None
+
+    @staticmethod
+    def between(
+        _symbol: str, _start_exclusive: date, _end_inclusive: date
+    ) -> tuple[()]:
+        return ()
+
+
+NO_ACCOUNT_ACTIONS = _NoAccountActions()
+
+
 def load_frozen_parent_evidence(bundle: Path) -> FrozenParentEvidence:
     root = bundle.resolve()
     inspected = inspect_pattern_bundle(root)
@@ -425,659 +419,138 @@ def _publish_source_diagnostic(
     return path
 
 
-def prepare_request(
+def _qlib_adjusted_bars(bars: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+    """Return Qlib-style adjusted units without account-level actions.
+
+    ``DailyCandidate`` exposes raw OHLC/volume plus the frozen adjustment
+    factor.  Signal research consumes the equivalent Qlib representation:
+    prices are multiplied by the factor and volume is divided by it.  The
+    resulting frame has a unit factor so downstream replay cannot apply the
+    source adjustment twice.
+    """
+
+    required = {"open", "high", "low", "close", "volume", "factor"}
+    if not required.issubset(bars):
+        raise ActionValueError("PATTERN_QLIB_ADJUSTED_SOURCE_SCHEMA_INVALID", symbol=symbol)
+    result = bars.copy()
+    factor = pd.to_numeric(result["factor"], errors="coerce")
+    numeric = result.loc[:, ["open", "high", "low", "close", "volume"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    present = numeric[["open", "high", "low", "close"]].notna().any(axis=1)
+    invalid_factor = present & (~np.isfinite(factor) | factor.le(0))
+    if invalid_factor.any():
+        raise ActionValueError(
+            "PATTERN_QLIB_ADJUSTED_FACTOR_INVALID",
+            symbol=symbol,
+            invalid_row_count=int(invalid_factor.sum()),
+        )
+    result.loc[:, ["open", "high", "low", "close"]] = numeric[
+        ["open", "high", "low", "close"]
+    ].mul(factor, axis=0)
+    result["volume"] = numeric["volume"].div(factor)
+    for field in ("up_limit", "down_limit"):
+        if field in result:
+            result[field] = pd.to_numeric(result[field], errors="coerce").mul(
+                factor
+            )
+    result["source_adjustment_factor"] = factor
+    result["factor"] = 1.0
+    return result
+
+
+def _audit_qlib_adjusted_factor_integrity(
+    candidate: DailyCandidate,
     *,
-    timing_root: Path,
-    repository_root: Path,
-    parent_pattern_bundle: Path,
-    candidate_root: Path,
-    corporate_action_snapshot: Path,
-    corporate_action_full_scope_authority: Path,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-) -> Path:
-    if not timing_root.is_absolute() or not repository_root.is_absolute():
-        raise ActionValueError("PATTERN_BENCHMARK_PREPARE_SPEC_INVALID")
-    repository = repository_root.resolve()
-    root = timing_root.resolve()
-    candidate_root = candidate_root.resolve()
-    corporate_action_snapshot = corporate_action_snapshot.resolve()
-    corporate_action_full_scope_authority = (
-        corporate_action_full_scope_authority.resolve()
-    )
-    if (
-        not root.is_absolute()
-        or root == repository
-        or root.is_relative_to(repository)
-        or isinstance(chunk_size, bool)
-        or not 1 <= chunk_size <= 256
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_PREPARE_SPEC_INVALID")
-    repository_commit = _clean_repository_commit(repository)
-    candidate = DailyCandidate.open(candidate_root)
-    memberships = open_candidate_pool_memberships(candidate)
-    parent = load_frozen_parent_evidence(parent_pattern_bundle)
-    symbols = memberships.symbols
-    if symbols != candidate.symbols:
-        raise ActionValueError("PATTERN_BENCHMARK_POPULATION_IDENTITY_MISMATCH")
-    start = candidate.calendar[0].date()
-    end = candidate.calendar[-1].date()
-    if (start, end, len(candidate.calendar)) != (
-        date(2018, 8, 1),
-        date(2026, 8, 31),
-        1961,
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_CALENDAR_IDENTITY_MISMATCH")
+    symbols: Sequence[str],
+    start: date,
+    end: date,
+    candidate_source_sha256: str,
+) -> Mapping[str, Any]:
+    """Validate every in-scope factor series without inferring account events."""
 
-    corporate_snapshot_reference = file_reference(corporate_action_snapshot)
-    if (
-        corporate_snapshot_reference["sha256"]
-        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED")
-    corporate_scope = _snapshot_scope(
-        corporate_action_snapshot,
-        expected_symbols=symbols,
-        start=start,
-        end=end,
-    )
-    source_actions = CorporateActionBook.open(corporate_action_snapshot)
-    if source_actions.snapshot_sha256 != EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256:
-        raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED")
-    full_scope_authority = open_full_scope_corporate_action_authority(
-        corporate_action_full_scope_authority,
-        candidate=candidate,
-        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        expected_authority_canonical_sha256=(
-            EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        ),
-        expected_authority_file_sha256=EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256,
-        expected_start=start,
-        expected_end=end,
-    )
-    rights_authority = open_rights_issue_authority(
-        candidate_root=candidate_root,
-        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        expected_authority_canonical_sha256=EXPECTED_RIGHTS_AUTHORITY_SHA256,
-    )
-    rights_policy_path = freeze_rights_issue_participation_policy(
-        timing_root=root
-    )
-    rights_policy_reference = file_reference(rights_policy_path)
-    rights_application = rights_issue_application_audit(
-        rights_authority,
-        symbols=symbols,
-        start=start,
-        end=end,
-    )
-    restatement_authority = open_adj_factor_restatement_authority(
-        candidate_root=candidate_root,
-        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        expected_authority_canonical_sha256=(
-            EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
-        ),
-    )
-    if (
-        restatement_authority.candidate_manifest_reference
-        != rights_authority.candidate_manifest_reference
-        or restatement_authority.candidate_dataset_manifest_sha256
-        != rights_authority.candidate_dataset_manifest_sha256
-        or restatement_authority.candidate_revision
-        != rights_authority.candidate_revision
-    ):
-        raise ActionValueError(
-            "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_CANDIDATE_IDENTITY_MISMATCH"
+    normalized = tuple(sorted({str(symbol).upper() for symbol in symbols}))
+    if not normalized or start > end or len(candidate_source_sha256) != 64:
+        raise ActionValueError("PATTERN_QLIB_ADJUSTED_FACTOR_SCOPE_INVALID")
+    invalid_symbols: list[Mapping[str, Any]] = []
+    insufficient_symbols: list[str] = []
+    material_change_count = 0
+    observed_row_count = 0
+    series_digest = hashlib.sha256()
+    for symbol in normalized:
+        bars = candidate.bars(symbol)
+        in_scope = (
+            bars["pit_active"].astype(bool)
+            & (bars.index.date >= start)
+            & (bars.index.date <= end)
         )
-    restatement_audit = audit_candidate_adj_factor_restatement(
-        DailyCandidate.open(candidate_root), restatement_authority
-    )
-    combined_source = combined_corporate_action_source_snapshot(
-        dividend_snapshot_sha256=source_actions.snapshot_sha256,
-        authority=rights_authority,
-    )
-    candidate_identity_sha256 = canonical_sha256(
-        {
-            "candidate_manifest": memberships.candidate_manifest_reference,
-            "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
-            "pool_sidecars": memberships.references,
-        }
-    )
-    typed_actions, full_scope_application = (
-        apply_full_scope_corporate_action_authority(
-            source_actions,
-            full_scope_authority,
-            candidate_source_sha256=candidate_identity_sha256,
+        numeric = bars.loc[:, ["open", "high", "low", "close", "volume", "factor"]].apply(
+            pd.to_numeric, errors="coerce"
         )
-    )
-    applied_actions, action_application = apply_pattern_corporate_action_policy(
-        candidate,
-        symbols=symbols,
-        corporate_actions=typed_actions,
-        start=start,
-        end=end,
-        candidate_source_sha256=candidate_identity_sha256,
-        prevalidated_action_keys=tuple(
-            resolution.key
-            for resolution in full_scope_authority.resolutions
-            if resolution.replay_application
-            != "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION"
-        ),
-    )
-    factor_coverage = audit_pattern_factor_action_coverage(
-        candidate,
-        symbols=symbols,
-        corporate_actions=applied_actions,
-        start=start,
-        end=end,
-        candidate_source_sha256=candidate_identity_sha256,
-        rights_issues=rights_authority,
-        combined_corporate_action_snapshot_sha256=combined_source["snapshot_sha256"],
-        rights_issue_application_sha256=rights_application["application_sha256"],
-    )
-    source_preflight_identity = {
-        "schema_version": "position_timing_pattern_source_preflight_audit_v1",
-        "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        "corporate_action_snapshot_file_sha256": (
-            EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-        ),
-        "full_scope_authority_canonical_sha256": (
-            full_scope_authority.authority_canonical_sha256
-        ),
-        "full_scope_resolution_audit_sha256": (
-            full_scope_authority.resolution_audit_sha256
-        ),
-        "full_scope_application_audit_sha256": full_scope_application[
-            "application_sha256"
-        ],
-        "corporate_action_application_sha256": action_application[
-            "application_sha256"
-        ],
-        "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
-        "pattern_corporate_action_factor_mismatch_count": 0,
-        "pattern_corporate_action_factor_unverifiable_count": 0,
-        "unbound_material_factor_change_count": factor_coverage[
-            "unbound_material_factor_change_count"
-        ],
-        "unresolved_typed_resolution_count": full_scope_application[
-            "unresolved_typed_resolution_count"
-        ],
-        "duplicate_economic_accumulation_count": full_scope_application[
-            "duplicate_economic_accumulation_count"
-        ],
-        "outcomes_read": False,
-        "factor_account_participation_inference": False,
-    }
-    source_preflight = {
-        **source_preflight_identity,
-        "audit_sha256": canonical_sha256(source_preflight_identity),
-    }
-    candidate.bars(BENCHMARK)
-    candidate_data_references_sha256 = canonical_sha256(candidate.references)
-    if factor_coverage.get("coverage_complete") is not True:
-        diagnostic_path = _publish_source_diagnostic(
-            timing_root=root,
-            payload={
-                "schema_version": "position_timing_pattern_universe_source_diagnostic_v1",
-                "pipeline_id": PIPELINE_ID,
-                "candidate_manifest": memberships.candidate_manifest_reference,
-                "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
-                "corporate_action_snapshot": corporate_snapshot_reference,
-                "corporate_action_full_scope_authority": (
-                    full_scope_authority.authority_reference
-                ),
-                "corporate_action_full_scope_resolution_audit": (
-                    full_scope_authority.resolution_audit
-                ),
-                "corporate_action_full_scope_application_audit": (
-                    full_scope_application
-                ),
-                "corporate_action_application": action_application,
-                "rights_issue_authority": rights_authority.authority_reference,
-                "adj_factor_restatement_authority": (
-                    restatement_authority.authority_reference
-                ),
-                "adj_factor_restatement_authority_canonical_sha256": (
-                    restatement_authority.authority_canonical_sha256
-                ),
-                "adj_factor_restatement_audit": restatement_audit,
-                "rights_issue_participation_policy_sha256": RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
-                "factor_action_coverage": factor_coverage,
-                "outcomes_read": False,
-                "database_written": False,
-                "runtime_action_performed": False,
-            },
+        present = in_scope & numeric[["open", "high", "low", "close"]].notna().any(axis=1)
+        factor = numeric["factor"]
+        invalid = present & (~np.isfinite(factor) | factor.le(0))
+        valid = factor.where(present & np.isfinite(factor) & factor.gt(0)).dropna()
+        adjusted_prices = numeric[["open", "high", "low", "close"]].mul(
+            factor, axis=0
         )
-        raise ActionValueError(
-            "PATTERN_FACTOR_ACTION_COVERAGE_INCOMPLETE",
-            diagnostic_path=diagnostic_path.as_posix(),
-            unbound_material_factor_change_count=factor_coverage.get(
-                "unbound_material_factor_change_count"
-            ),
-            insufficient_factor_symbol_count=factor_coverage.get(
-                "insufficient_factor_symbol_count"
-            ),
+        invalid_adjusted = present & (
+            ~np.isfinite(adjusted_prices).all(axis=1)
+            | adjusted_prices.le(0).any(axis=1)
         )
-
-    request: dict[str, Any] = {
-        "schema_version": REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "repository_root": repository.as_posix(),
-        "repository_commit": repository_commit,
-        "timing_root": root.as_posix(),
-        "candidate_root": candidate_root.as_posix(),
-        "candidate_manifest": memberships.candidate_manifest_reference,
-        "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
-        "candidate_identity_sha256": candidate_identity_sha256,
-        "candidate_data_reference_count": len(candidate.references),
-        "candidate_data_references_sha256": candidate_data_references_sha256,
-        "candidate_calendar": {
+        invalid_volume = present & (
+            ~np.isfinite(numeric["volume"]) | numeric["volume"].lt(0)
+        )
+        invalid_count = int((invalid | invalid_adjusted | invalid_volume).sum())
+        if invalid_count:
+            invalid_symbols.append(
+                {"symbol": symbol, "invalid_row_count": invalid_count}
+            )
+        if len(valid) < 2:
+            insufficient_symbols.append(symbol)
+        ratios = valid.div(valid.shift(1)).dropna()
+        material_change_count += int(
+            ((ratios - 1.0).abs() * 10000.0 > 10.0).sum()
+        )
+        observed_row_count += len(valid)
+        symbol_digest = hashlib.sha256()
+        for stamp, value in valid.items():
+            symbol_digest.update(
+                f"{pd.Timestamp(stamp).date().isoformat()}|{float(value).hex()}\n".encode(
+                    "ascii"
+                )
+            )
+        series_digest.update(
+            f"{symbol}|{len(valid)}|{symbol_digest.hexdigest()}\n".encode("ascii")
+        )
+    identity: dict[str, Any] = {
+        "schema_version": "position_timing_qlib_adjusted_factor_integrity_audit_v1",
+        "contract_sha256": QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256,
+        "candidate_source_sha256": candidate_source_sha256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(normalized),
+            "symbol_count": len(normalized),
             "start": start.isoformat(),
             "end": end.isoformat(),
-            "session_count": len(candidate.calendar),
         },
-        "pool_sidecars": memberships.references,
-        "pool_ids": POOL_IDS,
-        "population_symbols": symbols,
-        "population_symbols_sha256": canonical_sha256(symbols),
-        "parent_pattern_bundle": parent.bundle.as_posix(),
-        "parent_manifest": parent.manifest_reference,
-        "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
-        "parent_request_sha256": parent.request_sha256,
-        "corporate_action_snapshot": corporate_snapshot_reference,
-        "corporate_action_snapshot_sha256": source_actions.snapshot_sha256,
-        "corporate_action_full_scope_authority": (
-            full_scope_authority.authority_reference
-        ),
-        "corporate_action_full_scope_authority_canonical_sha256": (
-            full_scope_authority.authority_canonical_sha256
-        ),
-        "corporate_action_full_scope_resolution_audit": (
-            full_scope_authority.resolution_audit
-        ),
-        "corporate_action_full_scope_resolution_audit_sha256": (
-            full_scope_authority.resolution_audit_sha256
-        ),
-        "corporate_action_full_scope_application_audit": full_scope_application,
-        "corporate_action_full_scope_application_audit_sha256": (
-            full_scope_application["application_sha256"]
-        ),
-        "corporate_action_scope": corporate_scope,
-        "corporate_action_application_policy": CORPORATE_ACTION_APPLICATION_POLICY,
-        "corporate_action_application_policy_sha256": CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
-        "corporate_action_application_audit": action_application,
-        "corporate_action_application_sha256": action_application["application_sha256"],
-        "combined_corporate_action_source": combined_source,
-        "combined_corporate_action_source_sha256": combined_source["snapshot_sha256"],
-        "rights_issue_authority": rights_authority.authority_reference,
-        "rights_issue_authority_canonical_sha256": rights_authority.authority_canonical_sha256,
-        "rights_issue_source_documents_sha256": rights_authority.source_documents_sha256,
-        "rights_issue_participation_policy": RIGHTS_ISSUE_PARTICIPATION_POLICY,
-        "rights_issue_participation_policy_sha256": RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
-        "rights_issue_participation_policy_artifact": rights_policy_reference,
-        "rights_issue_application_audit": rights_application,
-        "rights_issue_application_sha256": rights_application["application_sha256"],
-        "adj_factor_restatement_authority": (
-            restatement_authority.authority_reference
-        ),
-        "adj_factor_restatement_authority_canonical_sha256": (
-            restatement_authority.authority_canonical_sha256
-        ),
-        "adj_factor_restatement_diagnosis_sha256": (
-            restatement_authority.diagnosis_sha256
-        ),
-        "adj_factor_restatement_series": [
-            {
-                "symbol": series.symbol,
-                "start": series.start.isoformat(),
-                "end": series.end.isoformat(),
-                "row_count": series.row_count,
-                "ordered_rows_sha256": series.ordered_rows_sha256,
-            }
-            for series in restatement_authority.series
-        ],
-        "adj_factor_restatement_audit": restatement_audit,
-        "adj_factor_restatement_audit_sha256": restatement_audit["audit_sha256"],
-        "factor_action_coverage_policy": FACTOR_ACTION_COVERAGE_POLICY,
-        "factor_action_coverage_policy_sha256": FACTOR_ACTION_COVERAGE_POLICY_SHA256,
-        "factor_action_coverage_audit": factor_coverage,
-        "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
-        "source_preflight_audit": source_preflight,
-        "source_preflight_audit_sha256": source_preflight["audit_sha256"],
-        "benchmark_contract": BENCHMARK_CONTRACT,
-        "benchmark_contract_sha256": BENCHMARK_CONTRACT_SHA256,
-        "chunk_size": chunk_size,
-        "source_code": _source_code_references(repository),
-        "result_class": RESULT_CLASS,
-        "selected_trial_count": 0,
-        "registry_write": False,
-        "current_write": False,
-        "serving_model_artifact_write": False,
-        "card_write": False,
-        "alert_write": False,
-        "order_write": False,
+        "observed_factor_row_count": observed_row_count,
+        "material_factor_change_count": material_change_count,
+        "factor_series_sha256": series_digest.hexdigest(),
+        "invalid_factor_symbol_count": len(invalid_symbols),
+        "invalid_factor_symbols": invalid_symbols,
+        "insufficient_factor_symbol_count": len(insufficient_symbols),
+        "insufficient_factor_symbols": insufficient_symbols,
+        "coverage_complete": not invalid_symbols and not insufficient_symbols,
+        "corporate_action_authority_read": False,
+        "account_economics_simulated": False,
+        "broker_account_clearing": False,
+        "outcomes_read": False,
+        "database_read": False,
         "database_write": False,
-        "runtime_write": False,
+        "network_accessed": False,
+        "runtime_action_performed": False,
     }
-    request["request_sha256"] = canonical_sha256(request)
-    path = (
-        root
-        / "research"
-        / ARTIFACT_FOLDER
-        / "requests"
-        / f"{request['request_sha256']}.json"
-    )
-    PositionTimingArtifactStore._publish_immutable(
-        path, canonical_json_bytes(request)
-    )
-    return path
-
-
-def _load_request(path: Path) -> dict[str, Any]:
-    try:
-        request = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ActionValueError("PATTERN_BENCHMARK_REQUEST_UNAVAILABLE") from exc
-    identity = {key: value for key, value in request.items() if key != "request_sha256"}
-    false_flags = (
-        "registry_write",
-        "current_write",
-        "serving_model_artifact_write",
-        "card_write",
-        "alert_write",
-        "order_write",
-        "database_write",
-        "runtime_write",
-    )
-    restatement_audit = request.get("adj_factor_restatement_audit")
-    restatement_audit_identity = (
-        {
-            key: value
-            for key, value in restatement_audit.items()
-            if key != "audit_sha256"
-        }
-        if isinstance(restatement_audit, Mapping)
-        else {}
-    )
-    corporate_application = request.get("corporate_action_application_audit")
-    corporate_application_identity = (
-        {
-            key: value
-            for key, value in corporate_application.items()
-            if key != "application_sha256"
-        }
-        if isinstance(corporate_application, Mapping)
-        else {}
-    )
-    rights_application = request.get("rights_issue_application_audit")
-    rights_application_identity = (
-        {
-            key: value
-            for key, value in rights_application.items()
-            if key != "application_sha256"
-        }
-        if isinstance(rights_application, Mapping)
-        else {}
-    )
-    factor_audit = request.get("factor_action_coverage_audit")
-    factor_audit_identity = (
-        {
-            key: value
-            for key, value in factor_audit.items()
-            if key != "audit_sha256"
-        }
-        if isinstance(factor_audit, Mapping)
-        else {}
-    )
-    full_scope_resolution_audit = request.get(
-        "corporate_action_full_scope_resolution_audit"
-    )
-    full_scope_resolution_audit_identity = (
-        {
-            key: value
-            for key, value in full_scope_resolution_audit.items()
-            if key != "audit_sha256"
-        }
-        if isinstance(full_scope_resolution_audit, Mapping)
-        else {}
-    )
-    full_scope_application_audit = request.get(
-        "corporate_action_full_scope_application_audit"
-    )
-    full_scope_application_audit_identity = (
-        {
-            key: value
-            for key, value in full_scope_application_audit.items()
-            if key != "application_sha256"
-        }
-        if isinstance(full_scope_application_audit, Mapping)
-        else {}
-    )
-    source_preflight_audit = request.get("source_preflight_audit")
-    source_preflight_audit_identity = (
-        {
-            key: value
-            for key, value in source_preflight_audit.items()
-            if key != "audit_sha256"
-        }
-        if isinstance(source_preflight_audit, Mapping)
-        else {}
-    )
-    full_scope_resolution_scope = (
-        full_scope_resolution_audit.get("scope")
-        if isinstance(full_scope_resolution_audit, Mapping)
-        and isinstance(full_scope_resolution_audit.get("scope"), Mapping)
-        else {}
-    )
-    candidate_manifest = request.get("candidate_manifest")
-    corporate_snapshot_reference = request.get("corporate_action_snapshot")
-    full_scope_authority_reference = request.get(
-        "corporate_action_full_scope_authority"
-    )
-    pool_sidecars = request.get("pool_sidecars")
-    source_code = request.get("source_code")
-    policy_artifact = request.get("rights_issue_participation_policy_artifact")
-    try:
-        repository_root = Path(str(request.get("repository_root")))
-        timing_root = Path(str(request.get("timing_root")))
-        resolved_repository_root = repository_root.resolve()
-        resolved_timing_root = timing_root.resolve()
-    except (OSError, TypeError, ValueError):
-        repository_root = Path()
-        timing_root = Path()
-        resolved_repository_root = Path()
-        resolved_timing_root = Path()
-    chunk_size = request.get("chunk_size")
-    if (
-        request.get("schema_version") != REQUEST_SCHEMA
-        or request.get("pipeline_id") != PIPELINE_ID
-        or request.get("request_sha256") != canonical_sha256(identity)
-        or not _same_canonical_identity(
-            request.get("benchmark_contract"), BENCHMARK_CONTRACT
-        )
-        or request.get("benchmark_contract_sha256") != BENCHMARK_CONTRACT_SHA256
-        or request.get("candidate_manifest_sha256")
-        != EXPECTED_CANDIDATE_MANIFEST_SHA256
-        or request.get("candidate_dataset_manifest_sha256")
-        != EXPECTED_CANDIDATE_DATASET_SHA256
-        or not isinstance(corporate_snapshot_reference, Mapping)
-        or corporate_snapshot_reference.get("sha256")
-        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-        or request.get("corporate_action_snapshot_sha256")
-        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256
-        or request.get("corporate_action_full_scope_authority_canonical_sha256")
-        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        or not isinstance(full_scope_authority_reference, Mapping)
-        or full_scope_authority_reference.get("sha256")
-        != EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256
-        or not isinstance(full_scope_resolution_audit, Mapping)
-        or full_scope_resolution_audit.get("audit_sha256")
-        != canonical_sha256(full_scope_resolution_audit_identity)
-        or request.get("corporate_action_full_scope_resolution_audit_sha256")
-        != full_scope_resolution_audit.get("audit_sha256")
-        or full_scope_resolution_audit.get("authority_canonical_sha256")
-        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        or full_scope_resolution_audit.get("candidate_manifest_sha256")
-        != EXPECTED_CANDIDATE_MANIFEST_SHA256
-        or full_scope_resolution_scope.get("resolution_count") != 15
-        or full_scope_resolution_audit.get("classification_counts")
-        != EXPECTED_CLASSIFICATION_COUNTS
-        or full_scope_resolution_audit.get("unresolved_typed_resolution_count")
-        != 0
-        or full_scope_resolution_audit.get("outcomes_read") is not False
-        or full_scope_resolution_audit.get("factor_account_participation_inference")
-        is not False
-        or not isinstance(full_scope_application_audit, Mapping)
-        or full_scope_application_audit.get("application_sha256")
-        != canonical_sha256(full_scope_application_audit_identity)
-        or request.get("corporate_action_full_scope_application_audit_sha256")
-        != full_scope_application_audit.get("application_sha256")
-        or full_scope_application_audit.get("authority_canonical_sha256")
-        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        or full_scope_application_audit.get("resolution_audit_sha256")
-        != full_scope_resolution_audit.get("audit_sha256")
-        or full_scope_application_audit.get("resolution_count") != 15
-        or full_scope_application_audit.get("classification_counts")
-        != EXPECTED_CLASSIFICATION_COUNTS
-        or full_scope_application_audit.get("unresolved_typed_resolution_count")
-        != 0
-        or full_scope_application_audit.get("duplicate_economic_accumulation_count")
-        != 0
-        or full_scope_application_audit.get("outcomes_read") is not False
-        or full_scope_application_audit.get("factor_account_participation_inference")
-        is not False
-        or not isinstance(source_preflight_audit, Mapping)
-        or source_preflight_audit.get("schema_version")
-        != "position_timing_pattern_source_preflight_audit_v1"
-        or source_preflight_audit.get("audit_sha256")
-        != canonical_sha256(source_preflight_audit_identity)
-        or request.get("source_preflight_audit_sha256")
-        != source_preflight_audit.get("audit_sha256")
-        or source_preflight_audit.get("candidate_manifest_sha256")
-        != EXPECTED_CANDIDATE_MANIFEST_SHA256
-        or source_preflight_audit.get("corporate_action_snapshot_file_sha256")
-        != EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-        or source_preflight_audit.get("full_scope_authority_canonical_sha256")
-        != EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        or source_preflight_audit.get("full_scope_resolution_audit_sha256")
-        != full_scope_resolution_audit.get("audit_sha256")
-        or source_preflight_audit.get("full_scope_application_audit_sha256")
-        != full_scope_application_audit.get("application_sha256")
-        or source_preflight_audit.get("corporate_action_application_sha256")
-        != request.get("corporate_action_application_sha256")
-        or source_preflight_audit.get("factor_action_coverage_audit_sha256")
-        != request.get("factor_action_coverage_audit_sha256")
-        or source_preflight_audit.get("pattern_corporate_action_factor_mismatch_count")
-        != 0
-        or source_preflight_audit.get(
-            "pattern_corporate_action_factor_unverifiable_count"
-        )
-        != 0
-        or source_preflight_audit.get("unbound_material_factor_change_count")
-        != 0
-        or source_preflight_audit.get("unresolved_typed_resolution_count") != 0
-        or source_preflight_audit.get("duplicate_economic_accumulation_count")
-        != 0
-        or source_preflight_audit.get("outcomes_read") is not False
-        or source_preflight_audit.get("factor_account_participation_inference")
-        is not False
-        or request.get("parent_manifest_sha256") != EXPECTED_PARENT_MANIFEST_SHA256
-        or request.get("rights_issue_authority_canonical_sha256")
-        != EXPECTED_RIGHTS_AUTHORITY_SHA256
-        or request.get("adj_factor_restatement_authority_canonical_sha256")
-        != EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
-        or not isinstance(restatement_audit, Mapping)
-        or request.get("adj_factor_restatement_audit_sha256")
-        != restatement_audit.get("audit_sha256")
-        or restatement_audit.get("audit_sha256")
-        != canonical_sha256(restatement_audit_identity)
-        or not isinstance(candidate_manifest, Mapping)
-        or candidate_manifest.get("sha256")
-        != request.get("candidate_manifest_sha256")
-        or not isinstance(pool_sidecars, Mapping)
-        or set(pool_sidecars) != set(POOL_IDS)
-        or request.get("candidate_identity_sha256")
-        != canonical_sha256(
-            {
-                "candidate_manifest": candidate_manifest,
-                "candidate_dataset_manifest_sha256": request.get(
-                    "candidate_dataset_manifest_sha256"
-                ),
-                "pool_sidecars": pool_sidecars,
-            }
-        )
-        or request.get("corporate_action_application_policy")
-        != CORPORATE_ACTION_APPLICATION_POLICY
-        or request.get("corporate_action_application_policy_sha256")
-        != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
-        or not isinstance(corporate_application, Mapping)
-        or corporate_application.get("application_sha256")
-        != canonical_sha256(corporate_application_identity)
-        or request.get("corporate_action_application_sha256")
-        != corporate_application.get("application_sha256")
-        or corporate_application.get("policy_sha256")
-        != CORPORATE_ACTION_APPLICATION_POLICY_SHA256
-        or request.get("rights_issue_participation_policy")
-        != RIGHTS_ISSUE_PARTICIPATION_POLICY
-        or request.get("rights_issue_participation_policy_sha256")
-        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
-        or not isinstance(policy_artifact, Mapping)
-        or policy_artifact.get("sha256")
-        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
-        or not isinstance(rights_application, Mapping)
-        or rights_application.get("application_sha256")
-        != canonical_sha256(rights_application_identity)
-        or request.get("rights_issue_application_sha256")
-        != rights_application.get("application_sha256")
-        or rights_application.get("policy_sha256")
-        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
-        or rights_application.get("outcomes_read") is not False
-        or rights_application.get("account_quantity_change") != 0
-        or rights_application.get("account_cash_change_cny") != "0"
-        or request.get("factor_action_coverage_policy")
-        != FACTOR_ACTION_COVERAGE_POLICY
-        or request.get("factor_action_coverage_policy_sha256")
-        != FACTOR_ACTION_COVERAGE_POLICY_SHA256
-        or not isinstance(factor_audit, Mapping)
-        or factor_audit.get("audit_sha256")
-        != canonical_sha256(factor_audit_identity)
-        or request.get("factor_action_coverage_audit_sha256")
-        != factor_audit.get("audit_sha256")
-        or factor_audit.get("policy_sha256")
-        != FACTOR_ACTION_COVERAGE_POLICY_SHA256
-        or factor_audit.get("corporate_action_application_sha256")
-        != request.get("corporate_action_application_sha256")
-        or factor_audit.get("rights_issue_application_sha256")
-        != request.get("rights_issue_application_sha256")
-        or factor_audit.get("coverage_complete") is not True
-        or factor_audit.get("outcomes_read") is not False
-        or factor_audit.get("factor_account_participation_inference") is not False
-        or factor_audit.get("unbound_material_factor_change_count") != 0
-        or factor_audit.get("unbound_material_factor_changes") != []
-        or factor_audit.get("insufficient_factor_symbol_count") != 0
-        or factor_audit.get("insufficient_factor_symbols") != []
-        or factor_audit.get("material_factor_change_count")
-        != factor_audit.get("bound_material_factor_change_count")
-        or not isinstance(source_code, Mapping)
-        or set(source_code) != set(SOURCE_CODE_FILES)
-        or not all(isinstance(reference, Mapping) for reference in source_code.values())
-        or isinstance(chunk_size, bool)
-        or not isinstance(chunk_size, int)
-        or not 1 <= chunk_size <= 256
-        or not repository_root.is_absolute()
-        or not timing_root.is_absolute()
-        or resolved_timing_root == resolved_repository_root
-        or resolved_timing_root.is_relative_to(resolved_repository_root)
-        or tuple(request.get("pool_ids") or ()) != POOL_IDS
-        or tuple(request.get("population_symbols") or ())
-        != tuple(sorted(set(request.get("population_symbols") or ())))
-        or request.get("population_symbols_sha256")
-        != canonical_sha256(tuple(request.get("population_symbols") or ()))
-        or request.get("result_class") != RESULT_CLASS
-        or request.get("selected_trial_count") != 0
-        or any(request.get(flag) is not False for flag in false_flags)
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH")
-    return request
+    return {**identity, "audit_sha256": canonical_sha256(identity)}
 
 
 def _first_evaluable_ordinal(
@@ -1237,7 +710,7 @@ def _run_strategy_path(
     pool_bars: pd.DataFrame,
     pattern_features: pd.DataFrame,
     calendar_dates: Sequence[date],
-    corporate_actions: CorporateActionBook,
+    corporate_actions: _NoAccountActions,
     start_ordinal: int,
     terminal_ordinal: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Counter[str]]:
@@ -1353,8 +826,11 @@ def _run_chunk(
     symbols: Sequence[str],
     candidate: DailyCandidate,
     memberships: CandidatePoolMemberships,
-    corporate_actions: CorporateActionBook,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Mapping[str, Any]]:
+    # The replay engine retains a read-only empty-book compatibility input,
+    # but this research pipeline has no authority or code path for applying
+    # account-level corporate actions.
+    no_account_actions = NO_ACCOUNT_ACTIONS
     calendar_dates = tuple(item.date() for item in candidate.calendar)
     minimum_ordinal = INITIAL_TRAINING_SESSIONS
     terminal_ordinal = len(calendar_dates) - 1 - TERMINAL_MAX_DEFER
@@ -1367,7 +843,7 @@ def _run_chunk(
     for symbol in symbols:
         try:
             before_refs = set(candidate.references)
-            bars = candidate.bars(symbol)
+            bars = _qlib_adjusted_bars(candidate.bars(symbol), symbol=symbol)
             source_references.update(
                 {
                     key: value
@@ -1376,7 +852,7 @@ def _run_chunk(
                 }
             )
             features = pattern_feature_frame(
-                bars, symbol=symbol, corporate_actions=corporate_actions
+                bars, symbol=symbol, corporate_actions=no_account_actions
             )
             for pool_id in memberships.pools_for(symbol):
                 membership_mask = memberships.effective_mask(
@@ -1424,7 +900,7 @@ def _run_chunk(
                             pool_bars=pool_bars,
                             pattern_features=features,
                             calendar_dates=calendar_dates,
-                            corporate_actions=corporate_actions,
+                            corporate_actions=no_account_actions,
                             start_ordinal=strategy_start,
                             terminal_ordinal=terminal_ordinal,
                         )
@@ -1789,7 +1265,7 @@ def _aggregate_results(
     coverage = {
         "schema_version": "position_timing_pattern_universe_benchmark_coverage_v1",
         "request_sha256": request["request_sha256"],
-        "source_preflight_complete": request["factor_action_coverage_audit"][
+        "source_preflight_complete": request["qlib_adjusted_factor_integrity_audit"][
             "coverage_complete"
         ],
         "source_excluded_symbol_count": source_failures,
@@ -1867,13 +1343,380 @@ def _publish_bundle(
             shutil.rmtree(staging)
 
 
+def prepare_request(
+    *,
+    timing_root: Path,
+    repository_root: Path,
+    parent_pattern_bundle: Path,
+    candidate_root: Path,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> Path:
+    """Freeze a Qlib adjusted-factor signal-research request.
+
+    This path intentionally does not read or bind corporate-action, rights-
+    issue, cash-ledger, share-arrival, or broker-account authorities.
+    """
+
+    if not timing_root.is_absolute() or not repository_root.is_absolute():
+        raise ActionValueError("PATTERN_BENCHMARK_PREPARE_SPEC_INVALID")
+    repository = repository_root.resolve()
+    root = timing_root.resolve()
+    candidate_root = candidate_root.resolve()
+    if (
+        root == repository
+        or root.is_relative_to(repository)
+        or isinstance(chunk_size, bool)
+        or not 1 <= chunk_size <= 256
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_PREPARE_SPEC_INVALID")
+    repository_commit = _clean_repository_commit(repository)
+    candidate = DailyCandidate.open(candidate_root)
+    memberships = open_candidate_pool_memberships(candidate)
+    parent = load_frozen_parent_evidence(parent_pattern_bundle)
+    symbols = memberships.symbols
+    if symbols != candidate.symbols:
+        raise ActionValueError("PATTERN_BENCHMARK_POPULATION_IDENTITY_MISMATCH")
+    start = candidate.calendar[0].date()
+    end = candidate.calendar[-1].date()
+    if (start, end, len(candidate.calendar)) != (
+        date(2018, 8, 1),
+        date(2026, 8, 31),
+        1961,
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_CALENDAR_IDENTITY_MISMATCH")
+    candidate_identity_sha256 = canonical_sha256(
+        {
+            "candidate_manifest": memberships.candidate_manifest_reference,
+            "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
+            "pool_sidecars": memberships.references,
+        }
+    )
+    restatement_authority = open_adj_factor_restatement_authority(
+        candidate_root=candidate_root,
+        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        expected_authority_canonical_sha256=(
+            EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+        ),
+    )
+    restatement_audit = audit_candidate_adj_factor_restatement(
+        candidate, restatement_authority
+    )
+    if (
+        restatement_authority.candidate_manifest_reference
+        != memberships.candidate_manifest_reference
+        or restatement_authority.candidate_dataset_manifest_sha256
+        != memberships.candidate_dataset_manifest_sha256
+    ):
+        raise ActionValueError(
+            "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_CANDIDATE_IDENTITY_MISMATCH"
+        )
+    factor_audit = _audit_qlib_adjusted_factor_integrity(
+        candidate,
+        symbols=symbols,
+        start=start,
+        end=end,
+        candidate_source_sha256=candidate_identity_sha256,
+    )
+    candidate.bars(BENCHMARK)
+    source_preflight_identity = {
+        "schema_version": "position_timing_pattern_adjusted_source_preflight_audit_v1",
+        "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "qlib_adjusted_factor_contract_sha256": (
+            QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        ),
+        "qlib_adjusted_factor_integrity_audit_sha256": factor_audit[
+            "audit_sha256"
+        ],
+        "adj_factor_restatement_audit_sha256": restatement_audit[
+            "audit_sha256"
+        ],
+        "invalid_factor_symbol_count": factor_audit[
+            "invalid_factor_symbol_count"
+        ],
+        "insufficient_factor_symbol_count": factor_audit[
+            "insufficient_factor_symbol_count"
+        ],
+        "corporate_action_authority_read": False,
+        "account_economics_simulated": False,
+        "broker_account_clearing": False,
+        "outcomes_read": False,
+    }
+    source_preflight = {
+        **source_preflight_identity,
+        "audit_sha256": canonical_sha256(source_preflight_identity),
+    }
+    if factor_audit["coverage_complete"] is not True:
+        diagnostic_path = _publish_source_diagnostic(
+            timing_root=root,
+            payload={
+                "schema_version": "position_timing_pattern_adjusted_source_diagnostic_v1",
+                "pipeline_id": PIPELINE_ID,
+                "candidate_manifest": memberships.candidate_manifest_reference,
+                "qlib_adjusted_factor_contract": QLIB_ADJUSTED_FACTOR_CONTRACT,
+                "qlib_adjusted_factor_integrity_audit": factor_audit,
+                "adj_factor_restatement_audit": restatement_audit,
+                "corporate_action_authority_read": False,
+                "outcomes_read": False,
+                "database_written": False,
+                "runtime_action_performed": False,
+            },
+        )
+        raise ActionValueError(
+            "PATTERN_QLIB_ADJUSTED_FACTOR_COVERAGE_INCOMPLETE",
+            diagnostic_path=diagnostic_path.as_posix(),
+            invalid_factor_symbol_count=factor_audit[
+                "invalid_factor_symbol_count"
+            ],
+            insufficient_factor_symbol_count=factor_audit[
+                "insufficient_factor_symbol_count"
+            ],
+        )
+    request: dict[str, Any] = {
+        "schema_version": REQUEST_SCHEMA,
+        "pipeline_id": PIPELINE_ID,
+        "repository_root": repository.as_posix(),
+        "repository_commit": repository_commit,
+        "timing_root": root.as_posix(),
+        "candidate_root": candidate_root.as_posix(),
+        "candidate_manifest": memberships.candidate_manifest_reference,
+        "candidate_manifest_sha256": EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "candidate_dataset_manifest_sha256": memberships.candidate_dataset_manifest_sha256,
+        "candidate_identity_sha256": candidate_identity_sha256,
+        "candidate_data_reference_count": len(candidate.references),
+        "candidate_data_references_sha256": canonical_sha256(candidate.references),
+        "candidate_calendar": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "session_count": len(candidate.calendar),
+        },
+        "pool_sidecars": memberships.references,
+        "pool_ids": POOL_IDS,
+        "population_symbols": symbols,
+        "population_symbols_sha256": canonical_sha256(symbols),
+        "parent_pattern_bundle": parent.bundle.as_posix(),
+        "parent_manifest": parent.manifest_reference,
+        "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
+        "parent_request_sha256": parent.request_sha256,
+        "qlib_adjusted_factor_contract": QLIB_ADJUSTED_FACTOR_CONTRACT,
+        "qlib_adjusted_factor_contract_sha256": (
+            QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        ),
+        "qlib_adjusted_factor_integrity_audit": factor_audit,
+        "qlib_adjusted_factor_integrity_audit_sha256": factor_audit[
+            "audit_sha256"
+        ],
+        "adj_factor_restatement_authority": (
+            restatement_authority.authority_reference
+        ),
+        "adj_factor_restatement_authority_canonical_sha256": (
+            restatement_authority.authority_canonical_sha256
+        ),
+        "adj_factor_restatement_diagnosis_sha256": (
+            restatement_authority.diagnosis_sha256
+        ),
+        "adj_factor_restatement_series": [
+            {
+                "symbol": series.symbol,
+                "start": series.start.isoformat(),
+                "end": series.end.isoformat(),
+                "row_count": series.row_count,
+                "ordered_rows_sha256": series.ordered_rows_sha256,
+            }
+            for series in restatement_authority.series
+        ],
+        "adj_factor_restatement_audit": restatement_audit,
+        "adj_factor_restatement_audit_sha256": restatement_audit[
+            "audit_sha256"
+        ],
+        "source_preflight_audit": source_preflight,
+        "source_preflight_audit_sha256": source_preflight["audit_sha256"],
+        "benchmark_contract": BENCHMARK_CONTRACT,
+        "benchmark_contract_sha256": BENCHMARK_CONTRACT_SHA256,
+        "chunk_size": chunk_size,
+        "source_code": _source_code_references(repository),
+        "result_class": RESULT_CLASS,
+        "selected_trial_count": 0,
+        "registry_write": False,
+        "current_write": False,
+        "serving_model_artifact_write": False,
+        "card_write": False,
+        "alert_write": False,
+        "order_write": False,
+        "database_write": False,
+        "runtime_write": False,
+    }
+    request["request_sha256"] = canonical_sha256(request)
+    path = (
+        root
+        / "research"
+        / ARTIFACT_FOLDER
+        / "requests"
+        / f"{request['request_sha256']}.json"
+    )
+    PositionTimingArtifactStore._publish_immutable(
+        path, canonical_json_bytes(request)
+    )
+    return path
+
+
+def _load_request(path: Path) -> dict[str, Any]:
+    try:
+        request = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ActionValueError("PATTERN_BENCHMARK_REQUEST_UNAVAILABLE") from exc
+    identity = {key: value for key, value in request.items() if key != "request_sha256"}
+    factor_audit = request.get("qlib_adjusted_factor_integrity_audit")
+    factor_identity = (
+        {key: value for key, value in factor_audit.items() if key != "audit_sha256"}
+        if isinstance(factor_audit, Mapping)
+        else {}
+    )
+    restatement_audit = request.get("adj_factor_restatement_audit")
+    restatement_identity = (
+        {key: value for key, value in restatement_audit.items() if key != "audit_sha256"}
+        if isinstance(restatement_audit, Mapping)
+        else {}
+    )
+    preflight = request.get("source_preflight_audit")
+    preflight_identity = (
+        {key: value for key, value in preflight.items() if key != "audit_sha256"}
+        if isinstance(preflight, Mapping)
+        else {}
+    )
+    candidate_manifest = request.get("candidate_manifest")
+    pool_sidecars = request.get("pool_sidecars")
+    source_code = request.get("source_code")
+    false_flags = (
+        "registry_write",
+        "current_write",
+        "serving_model_artifact_write",
+        "card_write",
+        "alert_write",
+        "order_write",
+        "database_write",
+        "runtime_write",
+    )
+    forbidden = {
+        "corporate_action_snapshot",
+        "corporate_action_full_scope_authority",
+        "corporate_action_application_audit",
+        "rights_issue_authority",
+        "rights_issue_participation_policy",
+        "factor_action_coverage_audit",
+    }
+    forbidden_prefixes = ("corporate_action_", "rights_issue_")
+    repository_root = Path(str(request.get("repository_root", "")))
+    timing_root = Path(str(request.get("timing_root", "")))
+    if (
+        request.get("schema_version") != REQUEST_SCHEMA
+        or request.get("pipeline_id") != PIPELINE_ID
+        or request.get("request_sha256") != canonical_sha256(identity)
+        or request.get("candidate_manifest_sha256")
+        != EXPECTED_CANDIDATE_MANIFEST_SHA256
+        or request.get("candidate_dataset_manifest_sha256")
+        != EXPECTED_CANDIDATE_DATASET_SHA256
+        or request.get("parent_manifest_sha256")
+        != EXPECTED_PARENT_MANIFEST_SHA256
+        or not _same_canonical_identity(
+            request.get("benchmark_contract"), BENCHMARK_CONTRACT
+        )
+        or request.get("benchmark_contract_sha256")
+        != BENCHMARK_CONTRACT_SHA256
+        or not _same_canonical_identity(
+            request.get("qlib_adjusted_factor_contract"),
+            QLIB_ADJUSTED_FACTOR_CONTRACT,
+        )
+        or request.get("qlib_adjusted_factor_contract_sha256")
+        != QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        or forbidden.intersection(request)
+        or any(str(key).startswith(forbidden_prefixes) for key in request)
+        or not isinstance(factor_audit, Mapping)
+        or factor_audit.get("audit_sha256") != canonical_sha256(factor_identity)
+        or request.get("qlib_adjusted_factor_integrity_audit_sha256")
+        != factor_audit.get("audit_sha256")
+        or factor_audit.get("contract_sha256")
+        != QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        or factor_audit.get("candidate_source_sha256")
+        != request.get("candidate_identity_sha256")
+        or factor_audit.get("coverage_complete") is not True
+        or factor_audit.get("invalid_factor_symbol_count") != 0
+        or factor_audit.get("insufficient_factor_symbol_count") != 0
+        or factor_audit.get("corporate_action_authority_read") is not False
+        or factor_audit.get("account_economics_simulated") is not False
+        or factor_audit.get("broker_account_clearing") is not False
+        or request.get("adj_factor_restatement_authority_canonical_sha256")
+        != EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
+        or not isinstance(restatement_audit, Mapping)
+        or restatement_audit.get("audit_sha256")
+        != canonical_sha256(restatement_identity)
+        or request.get("adj_factor_restatement_audit_sha256")
+        != restatement_audit.get("audit_sha256")
+        or restatement_audit.get("coverage_complete") is not True
+        or not isinstance(preflight, Mapping)
+        or preflight.get("audit_sha256") != canonical_sha256(preflight_identity)
+        or request.get("source_preflight_audit_sha256")
+        != preflight.get("audit_sha256")
+        or preflight.get("candidate_manifest_sha256")
+        != request.get("candidate_manifest_sha256")
+        or preflight.get("qlib_adjusted_factor_contract_sha256")
+        != request.get("qlib_adjusted_factor_contract_sha256")
+        or preflight.get("qlib_adjusted_factor_integrity_audit_sha256")
+        != request.get("qlib_adjusted_factor_integrity_audit_sha256")
+        or preflight.get("adj_factor_restatement_audit_sha256")
+        != request.get("adj_factor_restatement_audit_sha256")
+        or preflight.get("invalid_factor_symbol_count") != 0
+        or preflight.get("insufficient_factor_symbol_count") != 0
+        or preflight.get("corporate_action_authority_read") is not False
+        or preflight.get("account_economics_simulated") is not False
+        or preflight.get("broker_account_clearing") is not False
+        or preflight.get("outcomes_read") is not False
+        or not isinstance(candidate_manifest, Mapping)
+        or candidate_manifest.get("sha256")
+        != request.get("candidate_manifest_sha256")
+        or not isinstance(pool_sidecars, Mapping)
+        or set(pool_sidecars) != set(POOL_IDS)
+        or request.get("candidate_identity_sha256")
+        != canonical_sha256(
+            {
+                "candidate_manifest": candidate_manifest,
+                "candidate_dataset_manifest_sha256": request.get(
+                    "candidate_dataset_manifest_sha256"
+                ),
+                "pool_sidecars": pool_sidecars,
+            }
+        )
+        or not isinstance(source_code, Mapping)
+        or set(source_code) != set(SOURCE_CODE_FILES)
+        or not all(isinstance(item, Mapping) for item in source_code.values())
+        or isinstance(request.get("chunk_size"), bool)
+        or not isinstance(request.get("chunk_size"), int)
+        or not 1 <= request["chunk_size"] <= 256
+        or not repository_root.is_absolute()
+        or not timing_root.is_absolute()
+        or timing_root == repository_root
+        or timing_root.is_relative_to(repository_root)
+        or tuple(request.get("pool_ids") or ()) != POOL_IDS
+        or tuple(request.get("population_symbols") or ())
+        != tuple(sorted(set(request.get("population_symbols") or ())))
+        or request.get("population_symbols_sha256")
+        != canonical_sha256(tuple(request.get("population_symbols") or ()))
+        or request.get("result_class") != RESULT_CLASS
+        or request.get("selected_trial_count") != 0
+        or any(request.get(flag) is not False for flag in false_flags)
+    ):
+        raise ActionValueError("PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH")
+    return request
+
+
 def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
     root = bundle.resolve()
     try:
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         receipt = json.loads((root / "receipt.json").read_text(encoding="utf-8"))
         coverage = json.loads((root / "coverage.json").read_text(encoding="utf-8"))
-        chunk_refs = json.loads((root / "chunk_references.json").read_text(encoding="utf-8"))
+        chunk_refs = json.loads(
+            (root / "chunk_references.json").read_text(encoding="utf-8")
+        )
     except (OSError, ValueError) as exc:
         raise ActionValueError("PATTERN_BENCHMARK_BUNDLE_UNAVAILABLE") from exc
     request = _load_request(root / "request.json")
@@ -1891,20 +1734,7 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         for key, value in chunk_refs.items()
         if key != "chunk_references_sha256"
     }
-    false_flags = (
-        "registry_written",
-        "current_written",
-        "serving_model_artifact_written",
-        "card_written",
-        "alert_written",
-        "order_written",
-        "database_written",
-        "database_read",
-        "network_accessed",
-        "live_market_read",
-        "runtime_action_performed",
-        "runtime_written",
-    )
+    false_flags = tuple(EXTERNAL_WRITE_RECEIPT_FLAGS)
     request_bound_receipt_fields = (
         "repository_commit",
         "benchmark_contract_sha256",
@@ -1912,18 +1742,10 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         "candidate_dataset_manifest_sha256",
         "candidate_data_references_sha256",
         "parent_manifest_sha256",
-        "corporate_action_snapshot_sha256",
-        "corporate_action_full_scope_authority",
-        "corporate_action_full_scope_authority_canonical_sha256",
-        "corporate_action_full_scope_resolution_audit_sha256",
-        "corporate_action_full_scope_application_audit_sha256",
-        "corporate_action_application_sha256",
-        "combined_corporate_action_source_sha256",
-        "rights_issue_authority_canonical_sha256",
-        "rights_issue_participation_policy_sha256",
+        "qlib_adjusted_factor_contract_sha256",
+        "qlib_adjusted_factor_integrity_audit_sha256",
         "adj_factor_restatement_authority_canonical_sha256",
         "adj_factor_restatement_audit_sha256",
-        "factor_action_coverage_audit_sha256",
         "source_preflight_audit_sha256",
     )
     actual_files = {
@@ -1941,6 +1763,9 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
         or receipt.get("receipt_sha256") != canonical_sha256(receipt_identity)
         or receipt.get("result_class") != RESULT_CLASS
         or receipt.get("selected_trial_count") != 0
+        or receipt.get("corporate_action_authority_read") is not False
+        or receipt.get("account_economics_simulated") is not False
+        or receipt.get("broker_account_clearing") is not False
         or any(receipt.get(flag) is not False for flag in false_flags)
         or any(
             receipt.get(field) != request.get(field)
@@ -1969,8 +1794,7 @@ def inspect_bundle(bundle: Path) -> Mapping[str, Any]:
                 (chunk_root / "manifest.json").read_text(encoding="utf-8")
             )
             inspect_chunk(
-                chunk_root,
-                expected_identity=external_manifest["chunk_identity"],
+                chunk_root, expected_identity=external_manifest["chunk_identity"]
             )
         except (KeyError, OSError, ValueError) as exc:
             raise ActionValueError(
@@ -2010,19 +1834,6 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         _assert_file_reference(
             reference, code="PATTERN_BENCHMARK_SOURCE_CODE_CHANGED"
         )
-    corporate_snapshot = _assert_file_reference(
-        request["corporate_action_snapshot"],
-        code="PATTERN_BENCHMARK_CORPORATE_ACTION_SOURCE_CHANGED",
-    )
-    full_scope_authority_path = _assert_file_reference(
-        request["corporate_action_full_scope_authority"],
-        code="PATTERN_BENCHMARK_FULL_SCOPE_AUTHORITY_CHANGED",
-    )
-    _assert_file_reference(
-        request["rights_issue_participation_policy_artifact"],
-        code="PATTERN_BENCHMARK_RIGHTS_POLICY_CHANGED",
-    )
-
     candidate = DailyCandidate.open(Path(request["candidate_root"]))
     memberships = open_candidate_pool_memberships(candidate)
     if (
@@ -2035,34 +1846,12 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         or memberships.symbols != tuple(request["population_symbols"])
     ):
         raise ActionValueError("PATTERN_BENCHMARK_POPULATION_DRIFT")
-
     parent = load_frozen_parent_evidence(Path(request["parent_pattern_bundle"]))
     if (
         parent.manifest_reference != request["parent_manifest"]
         or parent.request_sha256 != request["parent_request_sha256"]
     ):
         raise ActionValueError("PATTERN_BENCHMARK_PARENT_DRIFT")
-
-    rights_authority = open_rights_issue_authority(
-        candidate_root=candidate.root,
-        expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
-        expected_authority_canonical_sha256=request[
-            "rights_issue_authority_canonical_sha256"
-        ],
-    )
-    rights_application = rights_issue_application_audit(
-        rights_authority,
-        symbols=memberships.symbols,
-        start=candidate.calendar[0].date(),
-        end=candidate.calendar[-1].date(),
-    )
-    if (
-        rights_authority.authority_reference != request["rights_issue_authority"]
-        or rights_authority.source_documents_sha256
-        != request["rights_issue_source_documents_sha256"]
-        or rights_application != request["rights_issue_application_audit"]
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_RIGHTS_AUTHORITY_DRIFT")
     restatement_authority = open_adj_factor_restatement_authority(
         candidate_root=candidate.root,
         expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
@@ -2071,7 +1860,7 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         ],
     )
     restatement_audit = audit_candidate_adj_factor_restatement(
-        DailyCandidate.open(candidate.root), restatement_authority
+        candidate, restatement_authority
     )
     declared_restatement_series = [
         {
@@ -2087,113 +1876,43 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         restatement_authority.authority_reference
         != request["adj_factor_restatement_authority"]
         or restatement_authority.candidate_manifest_reference
-        != rights_authority.candidate_manifest_reference
+        != request["candidate_manifest"]
         or restatement_authority.candidate_dataset_manifest_sha256
-        != rights_authority.candidate_dataset_manifest_sha256
-        or restatement_authority.candidate_revision
-        != rights_authority.candidate_revision
+        != request["candidate_dataset_manifest_sha256"]
         or restatement_authority.diagnosis_sha256
         != request["adj_factor_restatement_diagnosis_sha256"]
-        or declared_restatement_series
-        != request["adj_factor_restatement_series"]
+        or declared_restatement_series != request["adj_factor_restatement_series"]
         or restatement_audit != request["adj_factor_restatement_audit"]
     ):
         raise ActionValueError(
             "PATTERN_BENCHMARK_ADJ_FACTOR_RESTATEMENT_AUTHORITY_DRIFT"
         )
-    source_actions = CorporateActionBook.open(corporate_snapshot)
-    full_scope_authority = open_full_scope_corporate_action_authority(
-        full_scope_authority_path,
-        candidate=candidate,
-        expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
-        expected_authority_canonical_sha256=request[
-            "corporate_action_full_scope_authority_canonical_sha256"
-        ],
-        expected_authority_file_sha256=request[
-            "corporate_action_full_scope_authority"
-        ]["sha256"],
-        expected_start=candidate.calendar[0].date(),
-        expected_end=candidate.calendar[-1].date(),
-    )
-    combined_source = combined_corporate_action_source_snapshot(
-        dividend_snapshot_sha256=source_actions.snapshot_sha256,
-        authority=rights_authority,
-    )
-    if combined_source != request["combined_corporate_action_source"]:
-        raise ActionValueError("PATTERN_BENCHMARK_CORPORATE_SOURCE_DRIFT")
-    typed_actions, full_scope_application = (
-        apply_full_scope_corporate_action_authority(
-            source_actions,
-            full_scope_authority,
-            candidate_source_sha256=request["candidate_identity_sha256"],
-        )
-    )
-    if (
-        full_scope_authority.resolution_audit
-        != request["corporate_action_full_scope_resolution_audit"]
-        or full_scope_application
-        != request["corporate_action_full_scope_application_audit"]
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_FULL_SCOPE_AUTHORITY_DRIFT")
-    applied_actions, application_audit = apply_pattern_corporate_action_policy(
+    factor_audit = _audit_qlib_adjusted_factor_integrity(
         candidate,
         symbols=memberships.symbols,
-        corporate_actions=typed_actions,
         start=candidate.calendar[0].date(),
         end=candidate.calendar[-1].date(),
         candidate_source_sha256=request["candidate_identity_sha256"],
-        prevalidated_action_keys=tuple(
-            resolution.key
-            for resolution in full_scope_authority.resolutions
-            if resolution.replay_application
-            != "EXCLUDE_BEFORE_FIRST_OBSERVABLE_POSITION"
-        ),
     )
-    if (
-        application_audit != request["corporate_action_application_audit"]
-        or applied_actions.snapshot_sha256
-        != request["corporate_action_application_sha256"]
-    ):
-        raise ActionValueError("PATTERN_BENCHMARK_ACTION_APPLICATION_DRIFT")
-
-    factor_coverage = audit_pattern_factor_action_coverage(
-        candidate,
-        symbols=memberships.symbols,
-        corporate_actions=applied_actions,
-        start=candidate.calendar[0].date(),
-        end=candidate.calendar[-1].date(),
-        candidate_source_sha256=request["candidate_identity_sha256"],
-        rights_issues=rights_authority,
-        combined_corporate_action_snapshot_sha256=combined_source[
-            "snapshot_sha256"
-        ],
-        rights_issue_application_sha256=rights_application[
-            "application_sha256"
-        ],
-    )
-    source_preflight_identity = {
+    if factor_audit != request["qlib_adjusted_factor_integrity_audit"]:
+        raise ActionValueError("PATTERN_BENCHMARK_ADJUSTED_FACTOR_DRIFT")
+    observed_preflight_identity = {
         key: value
         for key, value in request["source_preflight_audit"].items()
         if key != "audit_sha256"
     }
-    observed_source_preflight = {
-        **source_preflight_identity,
-        "factor_action_coverage_audit_sha256": factor_coverage["audit_sha256"],
-        "unbound_material_factor_change_count": factor_coverage[
-            "unbound_material_factor_change_count"
+    observed_preflight = {
+        **observed_preflight_identity,
+        "qlib_adjusted_factor_integrity_audit_sha256": factor_audit[
+            "audit_sha256"
+        ],
+        "adj_factor_restatement_audit_sha256": restatement_audit[
+            "audit_sha256"
         ],
     }
-    observed_source_preflight["audit_sha256"] = canonical_sha256(
-        observed_source_preflight
-    )
-    if (
-        factor_coverage != request["factor_action_coverage_audit"]
-        or observed_source_preflight != request["source_preflight_audit"]
-    ):
+    observed_preflight["audit_sha256"] = canonical_sha256(observed_preflight)
+    if observed_preflight != request["source_preflight_audit"]:
         raise ActionValueError("PATTERN_BENCHMARK_SOURCE_PREFLIGHT_DRIFT")
-
-    # Strategy return materialization starts only after the complete source
-    # preflight above has been recomputed and matched to the frozen request.
     benchmark_close = candidate.bars(BENCHMARK)["close"]
     observed_candidate_references = dict(candidate.references)
     symbols = tuple(request["population_symbols"])
@@ -2212,6 +1931,7 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
             "symbols_sha256": canonical_sha256(chunk_symbols),
             "strategy_ids": STRATEGY_IDS,
             "pool_ids": POOL_IDS,
+            "valuation_mode": "QLIB_ADJUSTED_PRICE",
         }
         chunk_root = (
             timing_root
@@ -2231,7 +1951,6 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
                 symbols=chunk_symbols,
                 candidate=candidate,
                 memberships=memberships,
-                corporate_actions=applied_actions,
             )
             _publish_chunk(
                 target=chunk_root,
@@ -2253,7 +1972,6 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         != request["candidate_data_references_sha256"]
     ):
         raise ActionValueError("PATTERN_BENCHMARK_CANDIDATE_DATA_DRIFT")
-
     daily, pool_summary, symbol_summary, aggregate = _aggregate_results(
         request=request,
         chunk_roots=chunk_roots,
@@ -2276,32 +1994,11 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
             "candidate_data_references_sha256"
         ],
         "parent_manifest_sha256": request["parent_manifest_sha256"],
-        "corporate_action_snapshot_sha256": request[
-            "corporate_action_snapshot_sha256"
+        "qlib_adjusted_factor_contract_sha256": request[
+            "qlib_adjusted_factor_contract_sha256"
         ],
-        "corporate_action_full_scope_authority": request[
-            "corporate_action_full_scope_authority"
-        ],
-        "corporate_action_full_scope_authority_canonical_sha256": request[
-            "corporate_action_full_scope_authority_canonical_sha256"
-        ],
-        "corporate_action_full_scope_resolution_audit_sha256": request[
-            "corporate_action_full_scope_resolution_audit_sha256"
-        ],
-        "corporate_action_full_scope_application_audit_sha256": request[
-            "corporate_action_full_scope_application_audit_sha256"
-        ],
-        "corporate_action_application_sha256": request[
-            "corporate_action_application_sha256"
-        ],
-        "combined_corporate_action_source_sha256": request[
-            "combined_corporate_action_source_sha256"
-        ],
-        "rights_issue_authority_canonical_sha256": request[
-            "rights_issue_authority_canonical_sha256"
-        ],
-        "rights_issue_participation_policy_sha256": request[
-            "rights_issue_participation_policy_sha256"
+        "qlib_adjusted_factor_integrity_audit_sha256": request[
+            "qlib_adjusted_factor_integrity_audit_sha256"
         ],
         "adj_factor_restatement_authority_canonical_sha256": request[
             "adj_factor_restatement_authority_canonical_sha256"
@@ -2309,14 +2006,14 @@ def run_request(request_path: Path) -> Mapping[str, Any]:
         "adj_factor_restatement_audit_sha256": request[
             "adj_factor_restatement_audit_sha256"
         ],
-        "factor_action_coverage_audit_sha256": request[
-            "factor_action_coverage_audit_sha256"
-        ],
         "source_preflight_audit_sha256": request[
             "source_preflight_audit_sha256"
         ],
         "source_preflight_outcomes_read": False,
         "outcomes_read_after_source_preflight": True,
+        "corporate_action_authority_read": False,
+        "account_economics_simulated": False,
+        "broker_account_clearing": False,
         "pool_sidecars": request["pool_sidecars"],
         "main_family_size": FAMILY_SIZE,
         "primary_comparisons": comparisons,
@@ -2357,10 +2054,6 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--repository-root", required=True, type=Path)
     prepare.add_argument("--parent-pattern-bundle", required=True, type=Path)
     prepare.add_argument("--candidate-root", required=True, type=Path)
-    prepare.add_argument("--corporate-action-snapshot", required=True, type=Path)
-    prepare.add_argument(
-        "--corporate-action-full-scope-authority", required=True, type=Path
-    )
     prepare.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     run = commands.add_parser("run")
     run.add_argument("--request", required=True, type=Path)
@@ -2378,10 +2071,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repository_root=arguments.repository_root,
                 parent_pattern_bundle=arguments.parent_pattern_bundle,
                 candidate_root=arguments.candidate_root,
-                corporate_action_snapshot=arguments.corporate_action_snapshot,
-                corporate_action_full_scope_authority=(
-                    arguments.corporate_action_full_scope_authority
-                ),
                 chunk_size=arguments.chunk_size,
             )
             output: Mapping[str, Any] = {
