@@ -113,13 +113,20 @@ OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 PR_BODY_CODEGRAPH_TEST_LIMIT = 10
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
 RUNNER_INFRA_SIGNATURES = (
-    "self-hosted",
-    "runner-preflight",
-    "runner unavailable",
-    "runner availability",
+    "self-hosted windows runner unavailable",
     "no online github actions runner",
     "unable to query github runner health",
     "aistock_runner_health_token",
+    "runner-preflight=failure",
+    "runner_preflight=failure",
+    "runner-preflight: failure",
+    "runner_preflight: failure",
+)
+NETWORK_INFRA_SIGNATURES = (
+    "tls handshake timeout",
+    "connection reset",
+    "network is unreachable",
+    "early eof",
 )
 SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
@@ -7288,12 +7295,6 @@ def _extract_run_id_from_issue_body(body: str) -> str | None:
     return run_url.group(1) if run_url else None
 
 
-def _issue_body_failure_text(body: str) -> str:
-    """Keep CI classification focused on failure evidence, not generic checklists."""
-    text = str(body or "")
-    return re.split(r"\n##\s+(Agent Handoff|Suggested Triage|BUG JSON Linkage|Production Gates)\b", text, maxsplit=1)[0]
-
-
 def _extract_regression_locator_from_issue_body(body: str, summary: dict[str, Any]) -> dict[str, Any] | None:
     text = str(body or "")
     status_match = re.search(r"last_green_status:\s*`?([A-Za-z0-9_-]+)`?", text)
@@ -12787,17 +12788,18 @@ def build_postmortem_plan(
 
 def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
     title = str(issue.get("title") or "").lower()
-    evidence_body = _issue_body_failure_text(str(issue.get("body") or "")).lower()
-    title_body = f"{title}\n{evidence_body}"
     errors = "\n".join(
         str(item)
         for job in summary.get("failed_jobs") or []
         for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
         if item
     ).lower()
-    if any(token in title_body or token in errors for token in RUNNER_INFRA_SIGNATURES):
+    explicit_failure_evidence = f"{title}\n{errors}"
+    if any(token in explicit_failure_evidence for token in RUNNER_INFRA_SIGNATURES):
         return "infra_blocker"
-    if any(token in title_body for token in ["flaky", "timeout", "network"]):
+    if re.search(r"\b(?:flaky|timeout|network)\b", title) or any(
+        token in errors for token in NETWORK_INFRA_SIGNATURES
+    ):
         return "infra_flaky"
     if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
         return "test_fixture_gap_or_real_regression"
