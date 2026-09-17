@@ -2820,6 +2820,7 @@ def factor_research_backend(session: nox.Session) -> None:
         "backend/tests/factor_research/test_recovery.py",
         "backend/tests/factor_research/test_full_evaluation.py",
         "backend/tests/factor_research/test_quality.py",
+        "backend/tests/factor_research/test_rdagent_salvage.py",
         "backend/tests/factor_research/test_repository_dev.py",
     ]
     session.run(
