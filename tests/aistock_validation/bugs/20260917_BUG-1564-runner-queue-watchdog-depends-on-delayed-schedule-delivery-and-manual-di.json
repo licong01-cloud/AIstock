@@ -1,0 +1,254 @@
+{
+  "actual": "Queue cleanup depends entirely on delayed schedule delivery and manual dispatch produces only an empty summary.",
+  "allowed_write_scope": [
+    ".github/workflows/runner-queue-watchdog.yml",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20260917_BUG-1564-runner-queue-watchdog-depends-on-delayed-schedule-delivery-and-manual-di.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1564",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-17T03:03:56.863833Z",
+  "description": "Queue cleanup depends entirely on delayed schedule delivery and manual dispatch produces only an empty summary.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260917-f3d5bf0adea9",
+      "timestamp": "2026-09-17T03:03:56.863814Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/workflows/runner-queue-watchdog.yml"
+  ],
+  "expected": "Keep a staggered schedule as best-effort, run reconciliation on explicit dispatch, and opportunistically reconcile after trusted AIstock CI completions without consuming a self-hosted runner.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/runner-queue-watchdog.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1564-runner-queue-watchdog-depends-on-delayed-schedule-delivery-and-manual-di.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/runner-queue-watchdog.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260917_BUG-1564-runner-queue-watchdog-depends-on-delayed-schedule-delivery-and-manual-di.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/runner-queue-watchdog.yml",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails",
+        "validation.center",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/runner-queue-watchdog.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_github_workflows"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/runner-queue-watchdog.yml",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/runner-queue-watchdog.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/runner-queue-watchdog.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+    ]
+  },
+  "first_seen_at": "2026-09-17T03:03:56.863833Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4887,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4887",
+  "last_seen_at": "2026-09-17T03:03:56.863833Z",
+  "module": "validation.runner",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/scripts/test_aistock_runner_health.py -q",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation.runner"
+  ],
+  "title": "Runner queue watchdog depends on delayed schedule delivery and manual dispatch is a no-op",
+  "trigger_condition": {
+    "fingerprint": "f3d5bf0adea97c330fea722b",
+    "source_event_id": "FE-20260917-f3d5bf0adea9"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation.runner",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation.runner",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
