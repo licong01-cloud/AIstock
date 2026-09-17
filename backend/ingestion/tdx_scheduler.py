@@ -3369,7 +3369,11 @@ class TDXScheduler:
                    COUNT(*) FILTER (
                        WHERE turnover_rate_f IS NOT NULL
                          AND turnover_rate_f::text NOT IN ('NaN', 'Infinity', '-Infinity')
-                   )::bigint AS required_turnover_rate_f_count"""
+                   )::bigint AS required_turnover_rate_f_count,
+                   COUNT(*) FILTER (
+                       WHERE volume_ratio IS NOT NULL
+                         AND volume_ratio::text NOT IN ('NaN', 'Infinity', '-Infinity')
+                   )::bigint AS required_volume_ratio_count"""
         rows = self._fetchall(
             f"""
             SELECT {date_col}::date AS trade_date,
@@ -3386,7 +3390,10 @@ class TDXScheduler:
         counts = {r["trade_date"]: int(r["row_count"] or 0) for r in rows}
         max_at = {r["trade_date"]: r.get("data_max_at") for r in rows}
         daily_basic_required_counts = {
-            r["trade_date"]: int(r.get("required_turnover_rate_f_count") or 0)
+            r["trade_date"]: {
+                "turnover_rate_f": int(r.get("required_turnover_rate_f_count") or 0),
+                "volume_ratio": int(r.get("required_volume_ratio_count") or 0),
+            }
             for r in rows
             if dataset == "daily_basic"
         }
@@ -3415,17 +3422,31 @@ class TDXScheduler:
                 quality_status = "ok"
                 failure_category = None
                 if dataset == "daily_basic" and row_count > 0:
-                    finite_count = daily_basic_required_counts.get(trade_date, 0)
-                    coverage_ratio = finite_count / row_count
+                    required_counts = daily_basic_required_counts.get(
+                        trade_date,
+                        {"turnover_rate_f": 0, "volume_ratio": 0},
+                    )
+                    fields = {
+                        field: {
+                            "finite_count": required_counts[field],
+                            "row_count": row_count,
+                            "ratio": required_counts[field] / row_count,
+                            "required_ratio": 0.95,
+                        }
+                        for field in ("turnover_rate_f", "volume_ratio")
+                    }
+                    # Keep the v1 turnover receipt for older health readers while
+                    # persisting the complete two-field contract for current audits.
                     row_metadata["required_field_coverage"] = {
                         "schema_version": "daily_basic_required_field_coverage_v1",
                         "field": "turnover_rate_f",
-                        "finite_count": finite_count,
-                        "row_count": row_count,
-                        "ratio": coverage_ratio,
-                        "required_ratio": 0.95,
+                        **fields["turnover_rate_f"],
                     }
-                    if coverage_ratio < 0.95:
+                    row_metadata["required_field_coverages"] = {
+                        "schema_version": "daily_basic_required_field_coverages_v2",
+                        "fields": fields,
+                    }
+                    if any(value["ratio"] < 0.95 for value in fields.values()):
                         quality_status = "low_coverage"
                         failure_category = "required_field_low_coverage"
                 if row_count > 0 and quality_status == "ok":
@@ -3444,12 +3465,20 @@ class TDXScheduler:
                 else:
                     error_message = f"{dataset} has 0 rows in {table_name} for {trade_date}"
                     if row_count > 0:
-                        coverage = row_metadata["required_field_coverage"]
+                        coverages = row_metadata["required_field_coverages"]["fields"]
+                        failing = [
+                            (field, value)
+                            for field, value in coverages.items()
+                            if value["ratio"] < value["required_ratio"]
+                        ]
+                        coverage_text = "; ".join(
+                            f"field={field} finite_count={value['finite_count']} "
+                            f"row_count={row_count} ratio={value['ratio']:.6f} required=0.950000"
+                            for field, value in failing
+                        )
                         error_message = (
                             "daily_basic required field coverage is below contract: "
-                            f"trade_date={trade_date} field=turnover_rate_f "
-                            f"finite_count={coverage['finite_count']} row_count={row_count} "
-                            f"ratio={coverage['ratio']:.6f} required=0.950000"
+                            f"trade_date={trade_date} {coverage_text}"
                         )
                     repo.record_failure(
                         dataset=dataset,

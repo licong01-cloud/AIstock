@@ -165,7 +165,7 @@ def test_incremental_does_not_advance_past_an_incomplete_day(monkeypatch) -> Non
         calls.append(day)
         if day == dt.date(2026, 9, 1):
             raise ValueError("DAILY_BASIC_SNAPSHOT_INCOMPLETE")
-        return [{"trade_date": day, "turnover_rate_f": 1.0}]
+        return [{"trade_date": day, "turnover_rate_f": 1.0, "volume_ratio": 1.0}]
 
     monkeypatch.setattr(ingestion, "_fetch_daily_basic_for_date", fetch)
     monkeypatch.setattr(ingestion, "_upsert_daily_basic", lambda *args: writes.append(args) or 1)
