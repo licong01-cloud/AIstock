@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1565",
-  "closed_at": null,
+  "closed_at": "2026-09-17T05:15:12Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-09-17T03:29:18.361550Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7e37dc25e5cb22156c1e0e996b43f98696c8350f",
+  "fixed_at": "2026-09-17T05:15:12Z",
   "github_issue_number": 4890,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4890",
   "last_seen_at": "2026-09-17T03:29:18.361550Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4891",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,6 +124,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -132,7 +134,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1565",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0124893dfb36ef8e",
+    "recorded_at": "2026-09-17T05:16:23.038648Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c5dbbd2d79196ab572e2eabb9ef4f808527da13f",
+    "source_merge_commit": "7e37dc25e5cb22156c1e0e996b43f98696c8350f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4891",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/position_timing/pattern_universe_benchmark.py backend/tests/position_timing/test_pattern_universe_benchmark.py tests/aistock_validation/bugs/20260917_BUG-1565-position-timing-qlib-adjusted-factor-research-is-blocked-by-account-leve.json -> passed"
+    ],
+    "validation_evidence_digest": "c46e136d827537fe97de15416a2cdf6759719600232c5c3dd9774bf579b12357"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "position_timing"
   ],
@@ -141,6 +164,9 @@
     "fingerprint": "e2d8eac6a7d9de66306da034",
     "source_event_id": "FE-20260917-e2d8eac6a7d9"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/position_timing/pattern_universe_benchmark.py backend/tests/position_timing/test_pattern_universe_benchmark.py tests/aistock_validation/bugs/20260917_BUG-1565-position-timing-qlib-adjusted-factor-research-is-blocked-by-account-leve.json -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
