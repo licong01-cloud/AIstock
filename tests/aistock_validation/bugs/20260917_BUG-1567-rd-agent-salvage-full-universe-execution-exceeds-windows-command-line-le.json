@@ -96,7 +96,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "python scripts/factor_research.py salvage-precheck --help",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Windows fresh process full-history/full-universe salvage-precheck completed 1/1 candidate with 5,144 instruments and 7,970,157 rows"
