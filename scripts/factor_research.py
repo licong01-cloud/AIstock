@@ -36,6 +36,26 @@ def configure(env_file: Path, target: str):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
+    salvage = sub.add_parser("salvage")
+    salvage.add_argument("--input", type=Path, required=True)
+    salvage.add_argument("--artifact-root", type=Path, required=True)
+    salvage.add_argument("--format", choices=("summary", "json"), default="summary")
+    salvage_prepare = sub.add_parser("salvage-prepare")
+    salvage_prepare.add_argument("--inventory-root", type=Path, required=True)
+    salvage_prepare.add_argument("--artifact-root", type=Path, required=True)
+    salvage_prepare.add_argument("--format", choices=("summary", "json"), default="summary")
+    salvage_precheck = sub.add_parser("salvage-precheck")
+    salvage_precheck.add_argument("--input", type=Path, required=True)
+    salvage_precheck.add_argument("--artifact-root", type=Path, required=True)
+    salvage_precheck.add_argument("--format", choices=("summary", "json"), default="summary")
+    salvage_evaluate = sub.add_parser("salvage-evaluate")
+    salvage_evaluate.add_argument("--input", type=Path, required=True)
+    salvage_evaluate.add_argument("--artifact-root", type=Path, required=True)
+    salvage_evaluate.add_argument("--format", choices=("summary", "json"), default="summary")
+    salvage_correlate = sub.add_parser("salvage-correlate")
+    salvage_correlate.add_argument("--input", type=Path, required=True)
+    salvage_correlate.add_argument("--artifact-root", type=Path, required=True)
+    salvage_correlate.add_argument("--format", choices=("summary", "json"), default="summary")
     for command in ("create", "list", "show", "record", "context", "run", "attach", "quality"):
         item = sub.add_parser(command)
         item.add_argument("--env-file", type=Path, required=True)
@@ -69,6 +89,31 @@ def parser():
 
 
 def dispatch(args):
+    if args.command == "salvage":
+        from backend.services.factor_research.rdagent_salvage import run_salvage
+
+        summary = run_salvage(read_json(args.input), args.artifact_root)
+        return response(result=summary)
+    if args.command == "salvage-prepare":
+        from backend.services.factor_research.rdagent_salvage import prepare_salvage_evaluation
+
+        summary = prepare_salvage_evaluation(args.inventory_root, args.artifact_root)
+        return response(result=summary)
+    if args.command == "salvage-precheck":
+        from backend.services.factor_research.rdagent_salvage import run_salvage_precheck
+
+        summary = run_salvage_precheck(read_json(args.input), args.artifact_root)
+        return response(result=summary)
+    if args.command == "salvage-evaluate":
+        from backend.services.factor_research.rdagent_salvage import run_salvage_metric_evaluation
+
+        summary = run_salvage_metric_evaluation(read_json(args.input), args.artifact_root)
+        return response(result=summary)
+    if args.command == "salvage-correlate":
+        from backend.services.factor_research.rdagent_salvage import run_salvage_reference_correlation
+
+        summary = run_salvage_reference_correlation(read_json(args.input), args.artifact_root)
+        return response(result=summary)
     target = configure(args.env_file, args.target)
     payload = read_json(args.input) if hasattr(args, "input") else None
     if getattr(args, "dry_run", False):
