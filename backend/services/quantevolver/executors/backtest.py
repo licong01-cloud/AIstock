@@ -309,9 +309,16 @@ class BacktestExecutor(BaseExecutor):
         )
 
         # 4. 构建传给 RDAgent 的 config 记录
+        from backend.services.hmm_risk.qe_assistance_transport import BINDING_PARAM
+
         persisted_model_params = {
             k: v for k, v in custom_params.items()
-            if k not in {_PRECOMPUTED_HMM_COEFF_JSON_PARAM, "_seed_ensemble_config"}
+            if k
+            not in {
+                _PRECOMPUTED_HMM_COEFF_JSON_PARAM,
+                BINDING_PARAM,
+                "_seed_ensemble_config",
+            }
         }
         if fixed_seed is not None:
             persisted_model_params.setdefault("random_seed", fixed_seed)

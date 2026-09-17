@@ -678,11 +678,28 @@ def build_config_from_custom_evo_loop(
     enable_sector_hmm: bool = bool(loop_config.get("enable_sector_hmm", False))
     hmm_model_version_id: str | None = loop_config.get("hmm_model_version_id")
     hmm_signal_preset: str | None = loop_config.get("hmm_signal_preset")
+    artifact_bound_hmm_path: str | None = None
+    artifact_bound_hmm_config: dict[str, Any] | None = None
+    if enable_sector_hmm:
+        from backend.services.hmm_risk.qe_assistance_transport import (
+            BINDING_PARAM,
+            normalize_artifact_binding,
+        )
+
+        artifact_binding = strategy_params.get(BINDING_PARAM)
+        if artifact_binding is not None:
+            normalized_binding = normalize_artifact_binding(
+                artifact_binding,
+                verify_local_file=False,
+            )
+            artifact_bound_hmm_path = normalized_binding["remote_path"]
+            artifact_bound_hmm_config = {}
     hmm = _build_hmm_config(
         enable_sector_hmm=enable_sector_hmm,
         hmm_model_version_id=hmm_model_version_id,
-        sector_hmm_model_path=None,  # always resolve from version_id
+        sector_hmm_model_path=artifact_bound_hmm_path,
         hmm_signal_preset=hmm_signal_preset,
+        hmm_config_json=artifact_bound_hmm_config,
     )
 
     sector_blacklist: list[str] | None = loop_config.get("sector_blacklist") or None

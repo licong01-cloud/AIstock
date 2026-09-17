@@ -1710,6 +1710,7 @@ class ConfigComposer:
     def _validate_hmm_coefficients_json(content: str) -> None:
         data = json.loads(content)
         membership_fields = (
+            "stock_sector_applicability_by_date",
             "stock_sector_membership_spans",
             "stock_sector_map_by_date",
             "stock_sector_map",
@@ -1729,7 +1730,9 @@ class ConfigComposer:
         if not memberships or not all(isinstance(value, dict) for value in memberships):
             raise RuntimeError("precomputed HMM coefficients contain no stock-sector membership")
 
-        maps_by_date = data.get("stock_sector_map_by_date")
+        maps_by_date = data.get("stock_sector_map_by_date") or data.get(
+            "stock_sector_applicability_by_date"
+        )
         if maps_by_date:
             coefficient_dates = set(data["daily_coefficients"])
             missing_dates = sorted(coefficient_dates - set(maps_by_date))
@@ -1967,11 +1970,27 @@ class ConfigComposer:
 
         # HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         hmm_json_content: Optional[str] = None
+        hmm_binding_json: Optional[str] = None
         if _cp.get("enable_sector_hmm"):
-            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            from backend.services.hmm_risk.qe_assistance_transport import (
+                BINDING_PARAM,
+                binding_json,
+                normalize_artifact_binding,
+            )
+
             _hmm_sp = dict(custom_params or {})
-            hmm_json_content = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
-            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+            artifact_binding = _hmm_sp.get(BINDING_PARAM)
+            if artifact_binding is not None:
+                normalized_binding = normalize_artifact_binding(
+                    artifact_binding,
+                    verify_local_file=False,
+                )
+                custom_params["hmm_coefficients_file"] = normalized_binding["remote_path"]
+                hmm_binding_json = binding_json(normalized_binding)
+                custom_params.pop(BINDING_PARAM, None)
+            else:
+                hmm_json_content = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
+                custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
             # 严格验证：策略必须原生支持 HMM
             _hmm_supported_classes = {
@@ -2054,6 +2073,10 @@ class ConfigComposer:
         if hmm_json_content:
             hmm_path = exp_dir / "hmm_sector_coefficients.json"
             hmm_path.write_text(hmm_json_content, encoding="utf-8")
+        if hmm_binding_json:
+            from backend.services.hmm_risk.qe_assistance_transport import BINDING_FILE
+
+            (exp_dir / BINDING_FILE).write_text(hmm_binding_json, encoding="utf-8")
 
         if frozen_build_spec_json:
             (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
@@ -2416,14 +2439,29 @@ class ConfigComposer:
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
         if _cp.get("enable_sector_hmm"):
-            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            from backend.services.hmm_risk.qe_assistance_transport import (
+                BINDING_FILE,
+                BINDING_PARAM,
+                binding_json,
+                normalize_artifact_binding,
+            )
+
             _hmm_sp = dict(_cp)
-            hmm_json = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
-            experiment_files["hmm_sector_coefficients.json"] = hmm_json
-            # 注入到 custom_params 以便 _compose_conf_yaml 写入 strategy kwargs
             if custom_params is None:
                 custom_params = {}
-            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+            artifact_binding = _hmm_sp.get(BINDING_PARAM)
+            if artifact_binding is not None:
+                normalized_binding = normalize_artifact_binding(
+                    artifact_binding,
+                    verify_local_file=False,
+                )
+                custom_params["hmm_coefficients_file"] = normalized_binding["remote_path"]
+                experiment_files[BINDING_FILE] = binding_json(normalized_binding)
+                custom_params.pop(BINDING_PARAM, None)
+            else:
+                hmm_json = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
+                experiment_files["hmm_sector_coefficients.json"] = hmm_json
+                custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
             # 严格验证：策略必须原生支持 HMM，禁止静默替换策略
             _hmm_supported_classes = {
@@ -2777,7 +2815,7 @@ class ConfigComposer:
         import re as _re
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
-        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2", "hmm_qe_assistance_contract",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
@@ -4116,6 +4154,7 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
+            "_precomputed_hmm_coefficients_artifact_binding",
         } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
 
         if custom_params:
@@ -6714,7 +6753,7 @@ model_cls = {nn_class_name}
         import re as _re
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
-        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2", "hmm_qe_assistance_contract",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
