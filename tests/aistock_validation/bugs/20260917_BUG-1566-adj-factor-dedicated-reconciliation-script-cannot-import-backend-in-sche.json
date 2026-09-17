@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1566",
-  "closed_at": null,
+  "closed_at": "2026-09-17T06:06:21Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-09-17T05:52:10.342690Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "caa687d2c71a11748947ade6dfa2bebceb306283",
+  "fixed_at": "2026-09-17T06:06:21Z",
   "github_issue_number": 4893,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4893",
   "last_seen_at": "2026-09-17T05:52:10.342690Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4894",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,6 +124,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -132,7 +134,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1566",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "46f017d1b4dd52c2",
+    "recorded_at": "2026-09-17T06:07:43.485276Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3",
+    "source_merge_commit": "caa687d2c71a11748947ade6dfa2bebceb306283",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4894",
+    "validation_evidence": [
+      "validation-receipt: id=70e5744c8413d255 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/ingest_tushare_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py tests/aistock_validation/bugs/20260917_BUG-1566-adj-factor-dedicated-reconciliation-script-cannot-import-backend-in-sche.json` result=`passed`",
+      "validation-receipt: id=ed05c703743eb564 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`5 passed`",
+      "validation-receipt: id=48a6726f316876f5 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=ruff plan=direct status=passed command=`python -m ruff check scripts/ingest_tushare_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "35eb4df762ea64b4ff2224ab5f2f55ff7832b6124744b75e206fced39059f316"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -141,6 +166,11 @@
     "fingerprint": "4515490d326ee85762785900",
     "source_event_id": "FE-20260917-4515490d326e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=70e5744c8413d255 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/ingest_tushare_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py tests/aistock_validation/bugs/20260917_BUG-1566-adj-factor-dedicated-reconciliation-script-cannot-import-backend-in-sche.json` result=`passed`",
+    "validation-receipt: id=ed05c703743eb564 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`5 passed`",
+    "validation-receipt: id=48a6726f316876f5 commit=6079e6faaa5ff69b6f08ab5ccd9b206dff3196e3 kind=ruff plan=direct status=passed command=`python -m ruff check scripts/ingest_tushare_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
