@@ -403,10 +403,13 @@ def _replay_path(
     terminal: dict[str, Any] = {}
     for role, account in {"timing": state.policy, "hold": state.hold}.items():
         status = "CASH" if not account.units else "HELD_AT_END"
+        terminal_nav = rows[-1][f"{role}_nav"]
         terminal[role] = {
             "status": status,
             "fees_cny": float(account.fees),
-            "mtm_nav_cny": rows[-1][f"{role}_nav"],
+            # Diagnostics are immutable canonical JSON.  Unknown valuation is
+            # a typed null, never a non-standard NaN token.
+            "mtm_nav_cny": float(terminal_nav) if np.isfinite(terminal_nav) else None,
         }
     detail = {
         "symbol": symbol,

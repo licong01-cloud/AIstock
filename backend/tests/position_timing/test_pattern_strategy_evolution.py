@@ -31,6 +31,7 @@ from backend.services.position_timing.pattern_close_cash_benchmark import (
 )
 from backend.services.position_timing.action_value_data import file_reference
 from backend.services.position_timing.action_value import ActionValueError
+from backend.services.position_timing.contracts import canonical_json_bytes
 
 
 def _bar(price=100.0, factor=1.0, **changes):
@@ -152,6 +153,19 @@ def test_a0_own_start_reproduces_existing_replay_and_future_changes_are_causal()
     left = days.loc[days.ordinal < len(bars) - 5].reset_index(drop=True)
     right = later.loc[later.ordinal < len(bars) - 5].reset_index(drop=True)
     pd.testing.assert_frame_equal(left, right)
+
+
+def test_unknown_terminal_valuation_is_canonical_json_null():
+    bars = _bars()
+    bars.loc[bars.index[-1], ["open", "high", "low", "close"]] = np.nan
+    _, _, details = replay_strategy_set("600001.SH", bars)
+    assert any(
+        value["mtm_nav_cny"] is None
+        for detail in details
+        if detail["status"] == "REPLAYED"
+        for value in detail["terminal"].values()
+    )
+    canonical_json_bytes(details)
 
 
 def test_chunk_partials_merge_exactly_and_family_keeps_all_54_hypotheses():
