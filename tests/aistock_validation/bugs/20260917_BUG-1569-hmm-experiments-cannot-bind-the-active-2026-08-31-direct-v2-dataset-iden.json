@@ -129,8 +129,8 @@
   },
   "first_seen_at": "2026-09-17T14:01:16.101431Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "05ba6b8ab67e2007bb329752e426b306893fc0b5",
+  "fixed_at": "2026-09-17T14:44:04Z",
   "github_issue_number": 4904,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4904",
   "last_seen_at": "2026-09-17T14:01:16.101431Z",
@@ -138,6 +138,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4905",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -167,6 +168,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -177,7 +179,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -186,6 +188,15 @@
     "fingerprint": "91165cb615ce7255e9a20e32",
     "source_event_id": "FE-20260917-91165cb615ce"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ce2e30665d78d62d commit=05c7b9c3ab60fadd5a7eb6bbf67a1bc0b98f4c53 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=6113cd6da1e89ea0 commit=05c7b9c3ab60fadd5a7eb6bbf67a1bc0b98f4c53 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=e0f7afe7d4e2c1a3 commit=05c7b9c3ab60fadd5a7eb6bbf67a1bc0b98f4c53 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice` result=`19 passed`",
+    "validation-receipt: id=50a79b23cf91fa55 commit=05c7b9c3ab60fadd5a7eb6bbf67a1bc0b98f4c53 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py backend/tests/hmm_risk/test_qe_assistance_three_arm.py backend/tests/hmm_risk/test_prepare_qe_assistance_three_arm.py -q -p no:cacheprovider` result=`92 passed`",
+    "validation-receipt: id=c6ef090281a407a0 commit=05c7b9c3ab60fadd5a7eb6bbf67a1bc0b98f4c53 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s hmm_risk_pr_slice -> 19 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
