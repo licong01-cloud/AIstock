@@ -5,6 +5,7 @@
     "backend/ingestion/tdx_scheduler.py",
     "backend/db/init_tushare_schedules.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
     "tests/aistock_validation/bugs/20260917_BUG-1571-daily-basic-volume-ratio-ingestion-succeeds-before-provider-field-is-com.json"
   ],
   "assigned_agent": null,
@@ -35,7 +36,8 @@
       "scripts/ingest_tushare_daily_basic.py",
       "backend/ingestion/tdx_scheduler.py",
       "backend/db/init_tushare_schedules.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -43,7 +45,8 @@
         "scripts/ingest_tushare_daily_basic.py",
         "backend/ingestion/tdx_scheduler.py",
         "backend/db/init_tushare_schedules.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -102,6 +105,18 @@
           "primary_module": "local_data",
           "risk_level": "high",
           "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_daily_basic_operator"
         }
       ],
       "risk_levels": [
@@ -111,7 +126,8 @@
         "scripts/ingest_tushare_daily_basic.py",
         "backend/ingestion/tdx_scheduler.py",
         "backend/db/init_tushare_schedules.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
       ],
       "unmatched_files": []
     },
@@ -119,14 +135,16 @@
       "scripts/ingest_tushare_daily_basic.py",
       "backend/ingestion/tdx_scheduler.py",
       "backend/db/init_tushare_schedules.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/ingest_tushare_daily_basic.py",
       "backend/ingestion/tdx_scheduler.py",
       "backend/db/init_tushare_schedules.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
     ]
   },
   "first_seen_at": "2026-09-17T16:55:32.577359Z",
@@ -153,8 +171,12 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
