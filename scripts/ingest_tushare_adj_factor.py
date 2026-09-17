@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -29,7 +30,14 @@ import psycopg2.extras as pgx
 from dotenv import load_dotenv
 import requests
 
-from backend.services.adj_factor_history_reconciler import (
+# The scheduler launches this file by absolute path and does not guarantee that
+# the repository root is the process working directory. Make the repository
+# package importable before importing any ``backend.*`` module.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from backend.services.adj_factor_history_reconciler import (  # noqa: E402
     AdjFactorHistoryReconciler,
     PostgresAdjFactorHistoryRepository,
 )
