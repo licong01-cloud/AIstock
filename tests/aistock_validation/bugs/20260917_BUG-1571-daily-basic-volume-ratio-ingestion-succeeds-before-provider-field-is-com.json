@@ -156,8 +156,8 @@
   },
   "first_seen_at": "2026-09-17T16:55:32.577359Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3fd9f9a7f0513d33ff19fbce14e15e158f402cd0",
+  "fixed_at": "2026-09-17T19:11:30Z",
   "github_issue_number": 4910,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4910",
   "last_seen_at": "2026-09-17T16:55:32.577359Z",
@@ -165,6 +165,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4914",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -191,6 +192,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -202,7 +204,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1571",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4838e6485278605c",
+    "recorded_at": "2026-09-17T19:14:08.066047Z",
+    "runtime_contract_digest": "c000657ad8fc964c0dfb30c8efb60b08292656355391795131d8d77cd4f942c3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "46448606864e334c0095dbead9a7641d03f4c473",
+    "source_merge_commit": "3fd9f9a7f0513d33ff19fbce14e15e158f402cd0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4914",
+    "validation_evidence": [
+      "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/scripts/test_ingest_tushare_daily_basic.py -q -p no:cacheprovider -> 118 passed, 1 skipped",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed, 16 tests"
+    ],
+    "validation_evidence_digest": "f1d9ddf3c296ce8ceadc2b2a13f98ff0070f9d111a755f8a8e8e6ca44b295ebd"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -211,6 +236,11 @@
     "fingerprint": "f3ec7ec347c09cf7baea6a18",
     "source_event_id": "FE-20260917-f3ec7ec347c0"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/scripts/test_ingest_tushare_daily_basic.py -q -p no:cacheprovider -> 118 passed, 1 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed, 16 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
