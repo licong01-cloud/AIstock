@@ -83,7 +83,7 @@ def test_candidate_create_outputs_event_candidate_and_stable_fingerprint(tmp_pat
     assert first["candidate"]["schema_version"] == "aistock_issue_candidate_v1"
     assert first["candidate"]["fingerprint"] == second["candidate"]["fingerprint"]
     assert first["candidate"]["risk_level"] == "high"
-    assert "guardrail_changed_files" in first["candidate"]["suggested_validation"]
+    assert first["candidate"]["suggested_validation"] == ["l0", "validation_workflow_automation"]
     assert first["candidate"]["suggested_scope"] == ["scripts/issue_flow.py"]
 
 
@@ -439,14 +439,15 @@ def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys:
     assert payload["required_plans"] == []
 
 
-def test_validation_select_uses_module_hint_only_when_ownership_is_unmapped() -> None:
+def test_validation_select_prefers_owned_module_over_broad_module_hint() -> None:
     payload = flow.select_validation(
         ["scripts/aistock_issue_workflow.py"],
         module="validation",
     )
 
-    assert payload["primary_modules"] == ["validation.guardrails"]
-    assert "guardrail_changed_files" in payload["required_plans"]
+    assert payload["primary_modules"] == ["validation.workflow_automation"]
+    assert payload["required_plans"] == ["l0", "validation_workflow_automation"]
+    assert "guardrail_changed_files" not in payload["required_plans"]
     assert "validation_center_backend" not in payload["required_plans"]
 
 
