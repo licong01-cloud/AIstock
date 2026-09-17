@@ -13,8 +13,9 @@ import math
 import re
 import struct
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
+from itertools import groupby
 from typing import Any, Protocol
 
 from backend.services.dataset_release.canonical import canonical_json_bytes
@@ -27,6 +28,8 @@ FORMAL_WINDOW_START = date(2024, 7, 2)
 FORMAL_WINDOW_END = date(2026, 3, 31)
 SEALED_TAIL_START = date(2026, 4, 1)
 EXPECTED_SOURCE_FILE_SHA256 = "0957ae8a6527fb28ba337a449ce0f72dfe9f43513003492329d7e770aa9da8e2"
+EXPECTED_MODEL_CONTRACT = "hmm_risk_rotation_l1_g2a_v1_6"
+EXPECTED_MODEL_HASH = "3956107600a3aef4b51ac1da0c56f7940ce49a34777c836e974d14a5b45fbee6"
 EXPECTED_MAPPING_SHA256 = "e478722f700535ac4e37744a651291bc6d179cb899dccd28cdb957ed4491b82f"
 EXPECTED_AUTHORITY_BUNDLE_HASH = "203effb611d00edde4c0ee9c40f205759097628b8c5eb249907f3b33e6932ddf"
 EXPECTED_APPLIED_ROWS = 1_780_359
@@ -34,6 +37,10 @@ EXPECTED_NOT_APPLICABLE_ROWS = 171_089
 EXPECTED_EXECUTABLE_ROWS = 1_951_448
 EXPECTED_DATE_COUNT = 423
 EXPECTED_SECTOR_COUNT = 31
+EXPECTED_TOPK = 50
+CONSUMER_EFFECT_SCHEMA_VERSION = "hmm_risk_qe_assistance_consumer_effect_v1"
+CONSUMER_EFFECT_OBSERVED = "consumer_effect_observed"
+NO_CONSUMER_EFFECT = "no_consumer_effect"
 
 STATE_COEFFICIENTS = {"fading": 0.98, "neutral": 1.0, "trending": 1.02}
 APPLIED = "applied"
@@ -79,6 +86,17 @@ class IndustryAdapter(Protocol):
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _sequence_sha256(values: Iterable[Sequence[Any]]) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"[")
+    for index, value in enumerate(values):
+        if index:
+            digest.update(b",")
+        digest.update(canonical_json_bytes(value))
+    digest.update(b"]")
+    return digest.hexdigest()
 
 
 def _require_sha256(value: Any, field: str, reason: str = REASON_INPUT) -> str:
@@ -153,6 +171,232 @@ def _calendar_successors(calendar: Sequence[date]) -> dict[date, date]:
     return dict(zip(normalized, normalized[1:], strict=False))
 
 
+def _normalize_prediction_rows(
+    raw_prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    successors: Mapping[date, date],
+    window_start: date,
+    window_end: date,
+) -> list[tuple[date, date, str, float]]:
+    normalized_rows: list[tuple[date, date, str, float]] = []
+    seen: set[tuple[date, str]] = set()
+    for row in raw_prediction_rows:
+        if not isinstance(row, Mapping):
+            raise QEAssistanceContractError(REASON_INPUT, "prediction row must be an object")
+        source_date = _parse_date(row.get("source_date"), "prediction.source_date")
+        trade_date = _parse_date(row.get("trade_date"), "prediction.trade_date")
+        symbol = str(row.get("instrument") or "").strip().upper()
+        score = row.get("score")
+        if _SYMBOL.fullmatch(symbol) is None or isinstance(score, bool):
+            raise QEAssistanceContractError(REASON_INPUT, "prediction symbol or score is invalid")
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError) as exc:
+            raise QEAssistanceContractError(REASON_INPUT, "prediction score must be numeric") from exc
+        if not math.isfinite(numeric_score):
+            raise QEAssistanceContractError(REASON_INPUT, "prediction score must be finite")
+        if trade_date < window_start or trade_date > window_end or trade_date >= SEALED_TAIL_START:
+            raise QEAssistanceContractError(REASON_INPUT, "prediction row is outside the approved window")
+        if successors.get(source_date) != trade_date:
+            raise QEAssistanceContractError(REASON_CALENDAR, "source date is not the previous frozen trade date")
+        key = (trade_date, symbol)
+        if key in seen:
+            raise QEAssistanceContractError(REASON_INPUT, "prediction execution key is duplicated")
+        seen.add(key)
+        normalized_rows.append((source_date, trade_date, symbol, numeric_score))
+    if not normalized_rows:
+        raise QEAssistanceContractError(REASON_INPUT, "prediction panel is empty")
+    return normalized_rows
+
+
+def _evaluate_consumer_effect(
+    *,
+    raw_prediction_rows: Sequence[Mapping[str, Any]],
+    calendar: Sequence[date],
+    artifact: Mapping[str, Any],
+    topk: int,
+    formal_cardinality: tuple[int, int, int, int] | None,
+) -> dict[str, Any]:
+    """Measure score, rank and TopK effects without labels or QE replay."""
+
+    if isinstance(topk, bool) or not isinstance(topk, int) or topk < 1:
+        raise QEAssistanceContractError(REASON_INPUT, "topk must be a positive integer")
+    validate_qe_assistance_artifact(artifact)
+    window_start = _parse_date(artifact.get("window_start"), "artifact.window_start", REASON_AUTHORITY)
+    window_end = _parse_date(artifact.get("window_end"), "artifact.window_end", REASON_AUTHORITY)
+    normalized_rows = _normalize_prediction_rows(
+        raw_prediction_rows,
+        successors=_calendar_successors(calendar),
+        window_start=window_start,
+        window_end=window_end,
+    )
+    ordered_rows = sorted(normalized_rows)
+    source_row_hash = _sequence_sha256(
+        [source.isoformat(), trade.isoformat(), symbol, score] for source, trade, symbol, score in ordered_rows
+    )
+    if len(normalized_rows) != artifact.get("prediction_row_count") or source_row_hash != artifact.get(
+        "source_prediction_row_sha256"
+    ):
+        raise QEAssistanceContractError(REASON_REPLAY, "prediction panel identity differs from artifact")
+
+    daily_coefficients = artifact["daily_coefficients"]
+    applicability = artifact["stock_sector_applicability_by_date"]
+    prediction_dates = {trade_date.isoformat() for _, trade_date, _, _ in ordered_rows}
+    if prediction_dates != set(applicability):
+        raise QEAssistanceContractError(REASON_REPLAY, "prediction dates differ from artifact")
+    if formal_cardinality is not None:
+        expected_dates, expected_rows, expected_applied, expected_not_applicable = formal_cardinality
+        if (
+            window_start != FORMAL_WINDOW_START
+            or window_end != FORMAL_WINDOW_END
+            or topk != EXPECTED_TOPK
+            or len(prediction_dates) != expected_dates
+            or len(normalized_rows) != expected_rows
+            or artifact.get("applied_row_count") != expected_applied
+            or artifact.get("not_applicable_row_count") != expected_not_applicable
+        ):
+            raise QEAssistanceContractError(REASON_REPLAY, "formal consumer-effect cardinality differs")
+
+    changed_score_count = 0
+    changed_score_date_count = 0
+    rank_changed_row_count = 0
+    rank_changed_date_count = 0
+    topk_changed_date_count = 0
+    topk_entered_count = 0
+    topk_dropped_count = 0
+    raw_topk_not_applicable_count = 0
+    raw_topk_not_applicable_date_count = 0
+    max_abs_score_change = 0.0
+    daily_summary: list[dict[str, Any]] = []
+    applied_count = 0
+    not_applicable_count = 0
+
+    for trade_date, grouped_rows in groupby(ordered_rows, key=lambda item: item[1]):
+        day = trade_date.isoformat()
+        raw_rows = [(symbol, score) for _, _, symbol, score in grouped_rows]
+        day_applicability = applicability.get(day)
+        day_coefficients = daily_coefficients.get(day)
+        if (
+            not isinstance(day_applicability, Mapping)
+            or not isinstance(day_coefficients, Mapping)
+            or set(day_applicability) != {symbol for symbol, _ in raw_rows}
+        ):
+            raise QEAssistanceContractError(REASON_REPLAY, "daily prediction denominator differs from artifact")
+        adjusted_rows: list[tuple[str, float]] = []
+        day_changed_scores = 0
+        day_applied = 0
+        day_not_applicable = 0
+        for symbol, raw_score in raw_rows:
+            entry = day_applicability[symbol]
+            adjusted_score = apply_artifact_entry(raw_score, entry, day_coefficients)
+            adjusted_rows.append((symbol, adjusted_score))
+            if entry["status"] == APPLIED:
+                applied_count += 1
+                day_applied += 1
+            else:
+                not_applicable_count += 1
+                day_not_applicable += 1
+            max_abs_score_change = max(max_abs_score_change, abs(adjusted_score - raw_score))
+            if _float64_bits(adjusted_score) != _float64_bits(raw_score):
+                changed_score_count += 1
+                day_changed_scores += 1
+
+        raw_ranked = sorted(raw_rows, key=lambda item: (-item[1], item[0]))
+        adjusted_ranked = sorted(adjusted_rows, key=lambda item: (-item[1], item[0]))
+        raw_rank = {symbol: index for index, (symbol, _) in enumerate(raw_ranked, start=1)}
+        adjusted_rank = {symbol: index for index, (symbol, _) in enumerate(adjusted_ranked, start=1)}
+        day_rank_changes = sum(raw_rank[symbol] != adjusted_rank[symbol] for symbol in raw_rank)
+        rank_changed_row_count += day_rank_changes
+        if day_rank_changes:
+            rank_changed_date_count += 1
+        if day_changed_scores:
+            changed_score_date_count += 1
+        raw_top = {symbol for symbol, _ in raw_ranked[:topk]}
+        adjusted_top = {symbol for symbol, _ in adjusted_ranked[:topk]}
+        entered = sorted(adjusted_top - raw_top)
+        dropped = sorted(raw_top - adjusted_top)
+        day_raw_topk_not_applicable = sum(day_applicability[symbol]["status"] == NOT_APPLICABLE for symbol in raw_top)
+        raw_topk_not_applicable_count += day_raw_topk_not_applicable
+        if day_raw_topk_not_applicable:
+            raw_topk_not_applicable_date_count += 1
+        if entered or dropped:
+            topk_changed_date_count += 1
+            topk_entered_count += len(entered)
+            topk_dropped_count += len(dropped)
+        daily_summary.append(
+            {
+                "trade_date": day,
+                "row_count": len(raw_rows),
+                "applied_row_count": day_applied,
+                "not_applicable_row_count": day_not_applicable,
+                "changed_score_count": day_changed_scores,
+                "rank_changed_row_count": day_rank_changes,
+                "raw_topk_not_applicable_count": day_raw_topk_not_applicable,
+                "topk_entered_count": len(entered),
+                "topk_dropped_count": len(dropped),
+                "topk_entered_symbols": entered,
+                "topk_dropped_symbols": dropped,
+            }
+        )
+
+    if applied_count != artifact.get("applied_row_count") or not_applicable_count != artifact.get(
+        "not_applicable_row_count"
+    ):
+        raise QEAssistanceContractError(REASON_REPLAY, "consumer applicability counts differ from artifact")
+    status = CONSUMER_EFFECT_OBSERVED if changed_score_count else NO_CONSUMER_EFFECT
+    body = {
+        "schema_version": CONSUMER_EFFECT_SCHEMA_VERSION,
+        "status": status,
+        "artifact_sha256": artifact["artifact_sha256"],
+        "source_prediction_file_sha256": artifact["source_prediction_file_sha256"],
+        "source_prediction_row_sha256": artifact["source_prediction_row_sha256"],
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "topk": topk,
+        "date_count": len(prediction_dates),
+        "prediction_row_count": len(normalized_rows),
+        "applied_row_count": applied_count,
+        "not_applicable_row_count": not_applicable_count,
+        "changed_score_count": changed_score_count,
+        "changed_score_date_count": changed_score_date_count,
+        "rank_changed_row_count": rank_changed_row_count,
+        "rank_changed_date_count": rank_changed_date_count,
+        "topk_changed_date_count": topk_changed_date_count,
+        "topk_entered_count": topk_entered_count,
+        "topk_dropped_count": topk_dropped_count,
+        "raw_topk_not_applicable_count": raw_topk_not_applicable_count,
+        "raw_topk_not_applicable_date_count": raw_topk_not_applicable_date_count,
+        "max_abs_score_change": max_abs_score_change,
+        "daily_summary": daily_summary,
+        "tail_accessed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "result_sha256": _sha256(body)}
+
+
+def evaluate_consumer_effect(
+    *,
+    raw_prediction_rows: Sequence[Mapping[str, Any]],
+    calendar: Sequence[date],
+    artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run the fixed formal D5 Phase-1 consumer-effect preflight."""
+
+    return _evaluate_consumer_effect(
+        raw_prediction_rows=raw_prediction_rows,
+        calendar=calendar,
+        artifact=artifact,
+        topk=EXPECTED_TOPK,
+        formal_cardinality=(
+            EXPECTED_DATE_COUNT,
+            EXPECTED_EXECUTABLE_ROWS,
+            EXPECTED_APPLIED_ROWS,
+            EXPECTED_NOT_APPLICABLE_ROWS,
+        ),
+    )
+
+
 def _state_coefficients(
     state_rows: Sequence[Mapping[str, Any]],
     *,
@@ -207,8 +451,14 @@ def _projection_entry(projection: IndustryProjection, coefficients: Mapping[str,
         sector = str(projection.l1_code or "")
         if _SECTOR.fullmatch(sector) is None or sector not in coefficients:
             raise QEAssistanceContractError(REASON_MAPPING, "resolved PIT identity escapes daily 31-sector state")
-        if not common["classification_row_hashes"] or not common["index_membership_row_hashes"]:
-            raise QEAssistanceContractError(REASON_AUTHORITY, "resolved PIT identity lacks source row lineage")
+        # A resolved HMM industry identity is owned by the classification
+        # authority.  The dual-authority readback may legitimately report an
+        # unavailable index-membership side, in which case there is no index
+        # row to cite.  Requiring a fabricated membership lineage would reject
+        # the frozen C-013 authority even though its classification lineage is
+        # complete.
+        if not common["classification_row_hashes"]:
+            raise QEAssistanceContractError(REASON_AUTHORITY, "resolved PIT identity lacks classification lineage")
         return {
             "status": APPLIED,
             "sector_code": sector,
@@ -273,38 +523,17 @@ def _build_qe_assistance_artifact(
         raise QEAssistanceContractError(REASON_INPUT, "requested window is invalid or enters sealed tail")
 
     successors = _calendar_successors(calendar)
-    normalized_rows: list[tuple[date, date, str, float]] = []
-    seen: set[tuple[date, str]] = set()
+    normalized_rows = _normalize_prediction_rows(
+        raw_prediction_rows,
+        successors=successors,
+        window_start=window_start,
+        window_end=window_end,
+    )
     dates: set[date] = set()
     stock_keys: dict[date, set[str]] = defaultdict(set)
-    for row in raw_prediction_rows:
-        if not isinstance(row, Mapping):
-            raise QEAssistanceContractError(REASON_INPUT, "prediction row must be an object")
-        source_date = _parse_date(row.get("source_date"), "prediction.source_date")
-        trade_date = _parse_date(row.get("trade_date"), "prediction.trade_date")
-        symbol = str(row.get("instrument") or "").strip().upper()
-        score = row.get("score")
-        if _SYMBOL.fullmatch(symbol) is None or isinstance(score, bool):
-            raise QEAssistanceContractError(REASON_INPUT, "prediction symbol or score is invalid")
-        try:
-            numeric_score = float(score)
-        except (TypeError, ValueError) as exc:
-            raise QEAssistanceContractError(REASON_INPUT, "prediction score must be numeric") from exc
-        if not math.isfinite(numeric_score):
-            raise QEAssistanceContractError(REASON_INPUT, "prediction score must be finite")
-        if trade_date < window_start or trade_date > window_end or trade_date >= SEALED_TAIL_START:
-            raise QEAssistanceContractError(REASON_INPUT, "prediction row is outside the approved window")
-        if successors.get(source_date) != trade_date:
-            raise QEAssistanceContractError(REASON_CALENDAR, "source date is not the previous frozen trade date")
-        key = (trade_date, symbol)
-        if key in seen:
-            raise QEAssistanceContractError(REASON_INPUT, "prediction execution key is duplicated")
-        seen.add(key)
+    for _, trade_date, symbol, _ in normalized_rows:
         dates.add(trade_date)
         stock_keys[trade_date].add(symbol)
-        normalized_rows.append((source_date, trade_date, symbol, numeric_score))
-    if not normalized_rows:
-        raise QEAssistanceContractError(REASON_INPUT, "prediction panel is empty")
 
     daily_coefficients = _state_coefficients(
         state_rows,
@@ -336,22 +565,23 @@ def _build_qe_assistance_artifact(
             or len(normalized_rows) != expected_rows
             or counts[APPLIED] != expected_applied
             or counts[NOT_APPLICABLE] != expected_not_applicable
+            or model_contract != EXPECTED_MODEL_CONTRACT
+            or normalized_model_hash != EXPECTED_MODEL_HASH
             or window_start != FORMAL_WINDOW_START
             or window_end != FORMAL_WINDOW_END
         ):
             raise QEAssistanceContractError(REASON_MAPPING, "formal D3-B cardinality differs")
 
-    source_rows = [
-        [source.isoformat(), trade.isoformat(), symbol, score]
-        for source, trade, symbol, score in sorted(normalized_rows)
-    ]
     body = {
         "schema_version": SCHEMA_VERSION,
         "source_model_contract": model_contract,
         "model_hash": normalized_model_hash,
         "source_mapping_sha256": mapping_hash,
         "source_prediction_file_sha256": source_file_hash,
-        "source_prediction_row_sha256": _sha256(source_rows),
+        "source_prediction_row_sha256": _sequence_sha256(
+            [source.isoformat(), trade.isoformat(), symbol, score]
+            for source, trade, symbol, score in sorted(normalized_rows)
+        ),
         "authority_identity": dict(authority_identity),
         "canonical_l1_codes": sorted(canonical_sectors),
         "window_start": window_start.isoformat(),
@@ -418,6 +648,8 @@ def validate_qe_assistance_artifact(artifact: Mapping[str, Any]) -> None:
         raise QEAssistanceContractError(REASON_AUTHORITY, "artifact canonical hash differs")
     if (
         body.get("schema_version") != SCHEMA_VERSION
+        or body.get("source_model_contract") != EXPECTED_MODEL_CONTRACT
+        or body.get("model_hash") != EXPECTED_MODEL_HASH
         or body.get("adjustment_mode") != ADJUSTMENT_MODE
         or body.get("adapter_formula") != {"text": FORMULA_TEXT, "sha256": FORMULA_SHA256}
         or body.get("tail_accessed") is not False
@@ -511,13 +743,17 @@ __all__ = [
     "ADJUSTMENT_MODE",
     "APPLIED",
     "APPROVED_UNAVAILABLE_REASON",
+    "CONSUMER_EFFECT_OBSERVED",
+    "CONSUMER_EFFECT_SCHEMA_VERSION",
     "FORMULA_SHA256",
     "FORMULA_TEXT",
     "NOT_APPLICABLE",
+    "NO_CONSUMER_EFFECT",
     "QEAssistanceContractError",
     "SCHEMA_VERSION",
     "apply_artifact_entry",
     "apply_sign_safe_adjustment",
     "build_qe_assistance_artifact",
+    "evaluate_consumer_effect",
     "validate_qe_assistance_artifact",
 ]

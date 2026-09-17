@@ -181,106 +181,115 @@ def test_parent_artifact_identity_is_hash_bound_and_read_only(
         benchmark.load_frozen_parent_evidence(root)
 
 
-def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
-    chunk = tmp_path / "chunk"
-    chunk_identity = {"request_sha256": "a" * 64, "chunk_ordinal": 0}
-    chunk_manifest = benchmark._publish_chunk(
-        target=chunk,
-        chunk_identity=chunk_identity,
-        daily=pd.DataFrame({"value": [1]}),
-        fills=pd.DataFrame({"value": [1]}),
-        summaries=pd.DataFrame({"value": [1]}),
-        diagnostics={"diagnostics_sha256": "fixture"},
+def _adjusted_request_fixture(tmp_path: Path) -> dict[str, object]:
+    pool_sidecars = {pool_id: {} for pool_id in benchmark.POOL_IDS}
+    candidate_manifest = {
+        "path": (tmp_path / "candidate-manifest.json").resolve().as_posix(),
+        "sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "size_bytes": 1,
+    }
+    candidate_identity_sha256 = canonical_sha256(
+        {
+            "candidate_manifest": candidate_manifest,
+            "candidate_dataset_manifest_sha256": (
+                benchmark.EXPECTED_CANDIDATE_DATASET_SHA256
+            ),
+            "pool_sidecars": pool_sidecars,
+        }
     )
-    assert benchmark._publish_chunk(
-        target=chunk,
-        chunk_identity=chunk_identity,
-        daily=pd.DataFrame({"value": [1]}),
-        fills=pd.DataFrame({"value": [1]}),
-        summaries=pd.DataFrame({"value": [1]}),
-        diagnostics={"diagnostics_sha256": "fixture"},
-    )["manifest_sha256"] == chunk_manifest["manifest_sha256"]
-    diagnostics_path = chunk / "diagnostics.json"
-    diagnostics_bytes = diagnostics_path.read_bytes()
-    diagnostics_path.write_text("tampered", encoding="utf-8")
-    with pytest.raises(ActionValueError, match="PATTERN_BENCHMARK_CHUNK_FILE_IDENTITY_MISMATCH"):
-        benchmark.inspect_chunk(chunk, expected_identity=chunk_identity)
-    diagnostics_path.write_bytes(diagnostics_bytes)
-    request = {
+    factor_audit: dict[str, object] = {
+        "schema_version": "position_timing_qlib_adjusted_factor_integrity_audit_v1",
+        "contract_sha256": benchmark.QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256,
+        "candidate_source_sha256": candidate_identity_sha256,
+        "scope": {
+            "symbols_sha256": canonical_sha256(("000001.SZ",)),
+            "symbol_count": 1,
+            "start": "2018-08-01",
+            "end": "2026-08-31",
+        },
+        "observed_factor_row_count": 2,
+        "material_factor_change_count": 1,
+        "factor_series_sha256": "f" * 64,
+        "invalid_factor_symbol_count": 0,
+        "invalid_factor_symbols": [],
+        "insufficient_factor_symbol_count": 0,
+        "insufficient_factor_symbols": [],
+        "coverage_complete": True,
+        "corporate_action_authority_read": False,
+        "account_economics_simulated": False,
+        "broker_account_clearing": False,
+        "outcomes_read": False,
+        "database_read": False,
+        "database_write": False,
+        "network_accessed": False,
+        "runtime_action_performed": False,
+    }
+    factor_audit["audit_sha256"] = canonical_sha256(factor_audit)
+    restatement_audit: dict[str, object] = {
+        "schema_version": "fixture",
+        "coverage_complete": True,
+    }
+    restatement_audit["audit_sha256"] = canonical_sha256(restatement_audit)
+    preflight: dict[str, object] = {
+        "schema_version": "position_timing_pattern_adjusted_source_preflight_audit_v1",
+        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        "qlib_adjusted_factor_contract_sha256": (
+            benchmark.QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        ),
+        "qlib_adjusted_factor_integrity_audit_sha256": factor_audit[
+            "audit_sha256"
+        ],
+        "adj_factor_restatement_audit_sha256": restatement_audit["audit_sha256"],
+        "invalid_factor_symbol_count": 0,
+        "insufficient_factor_symbol_count": 0,
+        "corporate_action_authority_read": False,
+        "account_economics_simulated": False,
+        "broker_account_clearing": False,
+        "outcomes_read": False,
+    }
+    preflight["audit_sha256"] = canonical_sha256(preflight)
+    request: dict[str, object] = {
         "schema_version": benchmark.REQUEST_SCHEMA,
         "pipeline_id": benchmark.PIPELINE_ID,
-        "repository_root": Path.cwd().resolve().as_posix(),
-        "timing_root": tmp_path.resolve().as_posix(),
-        "benchmark_contract": benchmark.BENCHMARK_CONTRACT,
-        "benchmark_contract_sha256": benchmark.BENCHMARK_CONTRACT_SHA256,
-        "candidate_manifest": {
-            "path": (tmp_path / "candidate-manifest.json").as_posix(),
-            "sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
-            "size_bytes": 1,
-        },
+        "repository_root": (tmp_path / "repo").resolve().as_posix(),
+        "repository_commit": "1" * 40,
+        "timing_root": (tmp_path / "timing").resolve().as_posix(),
+        "candidate_root": (tmp_path / "candidate").resolve().as_posix(),
+        "candidate_manifest": candidate_manifest,
         "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        "candidate_dataset_manifest_sha256": benchmark.EXPECTED_CANDIDATE_DATASET_SHA256,
-        "pool_sidecars": {pool_id: {} for pool_id in benchmark.POOL_IDS},
-        "parent_manifest_sha256": benchmark.EXPECTED_PARENT_MANIFEST_SHA256,
-        "rights_issue_authority_canonical_sha256": (
-            benchmark.EXPECTED_RIGHTS_AUTHORITY_SHA256
+        "candidate_dataset_manifest_sha256": (
+            benchmark.EXPECTED_CANDIDATE_DATASET_SHA256
         ),
+        "candidate_identity_sha256": candidate_identity_sha256,
+        "candidate_data_reference_count": 0,
+        "candidate_data_references_sha256": canonical_sha256({}),
+        "pool_sidecars": pool_sidecars,
+        "pool_ids": benchmark.POOL_IDS,
+        "population_symbols": ("000001.SZ",),
+        "population_symbols_sha256": canonical_sha256(("000001.SZ",)),
+        "parent_manifest_sha256": benchmark.EXPECTED_PARENT_MANIFEST_SHA256,
+        "qlib_adjusted_factor_contract": benchmark.QLIB_ADJUSTED_FACTOR_CONTRACT,
+        "qlib_adjusted_factor_contract_sha256": (
+            benchmark.QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
+        ),
+        "qlib_adjusted_factor_integrity_audit": factor_audit,
+        "qlib_adjusted_factor_integrity_audit_sha256": factor_audit[
+            "audit_sha256"
+        ],
         "adj_factor_restatement_authority_canonical_sha256": (
             benchmark.EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256
         ),
-        "adj_factor_restatement_audit": {},
-        "repository_commit": "1" * 40,
-        "candidate_data_references_sha256": "2" * 64,
-        "corporate_action_snapshot": {
-            "path": (tmp_path / "corporate-action-snapshot.json").as_posix(),
-            "sha256": benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256,
-            "size_bytes": 1,
-        },
-        "corporate_action_snapshot_sha256": (
-            benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_SHA256
-        ),
-        "corporate_action_full_scope_authority": {
-            "path": (tmp_path / "full-scope-authority.json").as_posix(),
-            "sha256": benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_FILE_SHA256,
-            "size_bytes": 1,
-        },
-        "corporate_action_full_scope_authority_canonical_sha256": (
-            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        ),
-        "combined_corporate_action_source_sha256": "5" * 64,
-        "corporate_action_application_policy": (
-            benchmark.CORPORATE_ACTION_APPLICATION_POLICY
-        ),
-        "corporate_action_application_policy_sha256": (
-            benchmark.CORPORATE_ACTION_APPLICATION_POLICY_SHA256
-        ),
-        "rights_issue_participation_policy": (
-            benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY
-        ),
-        "rights_issue_participation_policy_sha256": (
-            benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
-        ),
-        "rights_issue_participation_policy_artifact": {
-            "path": (tmp_path / "rights-policy.json").as_posix(),
-            "sha256": benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
-            "size_bytes": 1,
-        },
-        "factor_action_coverage_policy": benchmark.FACTOR_ACTION_COVERAGE_POLICY,
-        "factor_action_coverage_policy_sha256": (
-            benchmark.FACTOR_ACTION_COVERAGE_POLICY_SHA256
-        ),
+        "adj_factor_restatement_audit": restatement_audit,
+        "adj_factor_restatement_audit_sha256": restatement_audit["audit_sha256"],
+        "source_preflight_audit": preflight,
+        "source_preflight_audit_sha256": preflight["audit_sha256"],
+        "benchmark_contract": benchmark.BENCHMARK_CONTRACT,
+        "benchmark_contract_sha256": benchmark.BENCHMARK_CONTRACT_SHA256,
+        "chunk_size": 64,
         "source_code": {
-            role: {
-                "path": (tmp_path / filename).as_posix(),
-                "sha256": "8" * 64,
-                "size_bytes": 1,
-            }
+            role: {"path": filename, "sha256": "2" * 64, "size_bytes": 1}
             for role, filename in benchmark.SOURCE_CODE_FILES.items()
         },
-        "chunk_size": 32,
-        "pool_ids": benchmark.POOL_IDS,
-        "population_symbols": (),
-        "population_symbols_sha256": canonical_sha256(()),
         "result_class": benchmark.RESULT_CLASS,
         "selected_trial_count": 0,
         "registry_write": False,
@@ -292,225 +301,87 @@ def test_bundle_inspection_recursively_validates_external_chunk(tmp_path: Path):
         "database_write": False,
         "runtime_write": False,
     }
-    request["candidate_identity_sha256"] = canonical_sha256(
-        {
-            "candidate_manifest": request["candidate_manifest"],
-            "candidate_dataset_manifest_sha256": request[
-                "candidate_dataset_manifest_sha256"
-            ],
-            "pool_sidecars": request["pool_sidecars"],
-        }
-    )
-    request["corporate_action_full_scope_resolution_audit"] = {
-        "authority_canonical_sha256": (
-            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        ),
-        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        "scope": {"resolution_count": 15},
-        "classification_counts": dict(benchmark.EXPECTED_CLASSIFICATION_COUNTS),
-        "unresolved_typed_resolution_count": 0,
-        "outcomes_read": False,
-        "factor_account_participation_inference": False,
-    }
-    request["corporate_action_full_scope_resolution_audit"]["audit_sha256"] = (
-        canonical_sha256(request["corporate_action_full_scope_resolution_audit"])
-    )
-    request["corporate_action_full_scope_resolution_audit_sha256"] = request[
-        "corporate_action_full_scope_resolution_audit"
-    ]["audit_sha256"]
-    request["corporate_action_full_scope_application_audit"] = {
-        "authority_canonical_sha256": (
-            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        ),
-        "resolution_audit_sha256": request[
-            "corporate_action_full_scope_resolution_audit_sha256"
-        ],
-        "resolution_count": 15,
-        "classification_counts": dict(benchmark.EXPECTED_CLASSIFICATION_COUNTS),
-        "unresolved_typed_resolution_count": 0,
-        "duplicate_economic_accumulation_count": 0,
-        "outcomes_read": False,
-        "factor_account_participation_inference": False,
-    }
-    request["corporate_action_full_scope_application_audit"][
-        "application_sha256"
-    ] = canonical_sha256(request["corporate_action_full_scope_application_audit"])
-    request["corporate_action_full_scope_application_audit_sha256"] = request[
-        "corporate_action_full_scope_application_audit"
-    ]["application_sha256"]
-    request["corporate_action_application_audit"] = {
-        "policy_sha256": benchmark.CORPORATE_ACTION_APPLICATION_POLICY_SHA256,
-    }
-    request["corporate_action_application_audit"]["application_sha256"] = (
-        canonical_sha256(request["corporate_action_application_audit"])
-    )
-    request["corporate_action_application_sha256"] = request[
-        "corporate_action_application_audit"
-    ]["application_sha256"]
-    request["rights_issue_application_audit"] = {
-        "policy_sha256": benchmark.RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
-        "outcomes_read": False,
-        "account_quantity_change": 0,
-        "account_cash_change_cny": "0",
-    }
-    request["rights_issue_application_audit"]["application_sha256"] = (
-        canonical_sha256(request["rights_issue_application_audit"])
-    )
-    request["rights_issue_application_sha256"] = request[
-        "rights_issue_application_audit"
-    ]["application_sha256"]
-    request["factor_action_coverage_audit"] = {
-        "policy_sha256": benchmark.FACTOR_ACTION_COVERAGE_POLICY_SHA256,
-        "corporate_action_application_sha256": request[
-            "corporate_action_application_sha256"
-        ],
-        "rights_issue_application_sha256": request[
-            "rights_issue_application_sha256"
-        ],
-        "coverage_complete": True,
-        "outcomes_read": False,
-        "factor_account_participation_inference": False,
-        "unbound_material_factor_change_count": 0,
-        "unbound_material_factor_changes": [],
-        "insufficient_factor_symbol_count": 0,
-        "insufficient_factor_symbols": [],
-        "material_factor_change_count": 0,
-        "bound_material_factor_change_count": 0,
-    }
-    request["factor_action_coverage_audit"]["audit_sha256"] = canonical_sha256(
-        request["factor_action_coverage_audit"]
-    )
-    request["factor_action_coverage_audit_sha256"] = request[
-        "factor_action_coverage_audit"
-    ]["audit_sha256"]
-    request["source_preflight_audit"] = {
-        "schema_version": "position_timing_pattern_source_preflight_audit_v1",
-        "candidate_manifest_sha256": benchmark.EXPECTED_CANDIDATE_MANIFEST_SHA256,
-        "corporate_action_snapshot_file_sha256": (
-            benchmark.EXPECTED_CORPORATE_ACTION_SNAPSHOT_FILE_SHA256
-        ),
-        "full_scope_authority_canonical_sha256": (
-            benchmark.EXPECTED_FULL_SCOPE_AUTHORITY_CANONICAL_SHA256
-        ),
-        "full_scope_resolution_audit_sha256": request[
-            "corporate_action_full_scope_resolution_audit_sha256"
-        ],
-        "full_scope_application_audit_sha256": request[
-            "corporate_action_full_scope_application_audit_sha256"
-        ],
-        "corporate_action_application_sha256": request[
-            "corporate_action_application_sha256"
-        ],
-        "factor_action_coverage_audit_sha256": request[
-            "factor_action_coverage_audit_sha256"
-        ],
-        "pattern_corporate_action_factor_mismatch_count": 0,
-        "pattern_corporate_action_factor_unverifiable_count": 0,
-        "unbound_material_factor_change_count": 0,
-        "unresolved_typed_resolution_count": 0,
-        "duplicate_economic_accumulation_count": 0,
-        "outcomes_read": False,
-        "factor_account_participation_inference": False,
-    }
-    request["source_preflight_audit"]["audit_sha256"] = canonical_sha256(
-        request["source_preflight_audit"]
-    )
-    request["source_preflight_audit_sha256"] = request[
-        "source_preflight_audit"
-    ]["audit_sha256"]
-    request["adj_factor_restatement_audit"]["audit_sha256"] = canonical_sha256(
-        request["adj_factor_restatement_audit"]
-    )
-    request["adj_factor_restatement_audit_sha256"] = request[
-        "adj_factor_restatement_audit"
-    ]["audit_sha256"]
     request["request_sha256"] = canonical_sha256(request)
+    return request
+
+
+def test_qlib_adjusted_bars_reconstruct_export_units_without_account_actions():
+    bars = pd.DataFrame(
+        {
+            "open": [10.0, 10.5],
+            "high": [10.2, 10.8],
+            "low": [9.8, 10.1],
+            "close": [10.1, 10.6],
+            "volume": [1000.0, 1200.0],
+            "factor": [2.0, 2.5],
+            "up_limit": [11.0, 11.55],
+            "down_limit": [9.0, 9.45],
+        },
+        index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+    )
+
+    adjusted = benchmark._qlib_adjusted_bars(bars, symbol="000001.SZ")
+
+    assert adjusted["close"].tolist() == pytest.approx([20.2, 26.5])
+    assert adjusted["volume"].tolist() == pytest.approx([500.0, 480.0])
+    assert adjusted["up_limit"].tolist() == pytest.approx([22.0, 28.875])
+    assert adjusted["source_adjustment_factor"].tolist() == [2.0, 2.5]
+    assert adjusted["factor"].tolist() == [1.0, 1.0]
+
+
+def test_prepare_cli_has_no_account_level_corporate_action_inputs():
+    parser = benchmark._parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if action.__class__.__name__ == "_SubParsersAction"
+    )
+    prepare_help = subparsers.choices["prepare"].format_help()
+
+    assert "--corporate-action-snapshot" not in prepare_help
+    assert "--corporate-action-full-scope-authority" not in prepare_help
+    assert "--rights-issue" not in prepare_help
+
+
+def test_adjusted_request_is_hash_bound_and_rejects_account_authorities(
+    tmp_path: Path,
+):
+    request = _adjusted_request_fixture(tmp_path)
     request_path = tmp_path / "request.json"
     request_path.write_bytes(canonical_json_bytes(request))
-    receipt = {
-        "schema_version": benchmark.RECEIPT_SCHEMA,
-        "pipeline_id": benchmark.PIPELINE_ID,
-        "request_sha256": request["request_sha256"],
-        "result_class": benchmark.RESULT_CLASS,
-        "selected_trial_count": 0,
-        **{
-            field: request[field]
-            for field in (
-                "repository_commit",
-                "benchmark_contract_sha256",
-                "candidate_manifest_sha256",
-                "candidate_dataset_manifest_sha256",
-                "candidate_data_references_sha256",
-                "parent_manifest_sha256",
-                "corporate_action_snapshot_sha256",
-                "corporate_action_full_scope_authority",
-                "corporate_action_full_scope_authority_canonical_sha256",
-                "corporate_action_full_scope_resolution_audit_sha256",
-                "corporate_action_full_scope_application_audit_sha256",
-                "corporate_action_application_sha256",
-                "combined_corporate_action_source_sha256",
-                "rights_issue_authority_canonical_sha256",
-                "rights_issue_participation_policy_sha256",
-                "adj_factor_restatement_authority_canonical_sha256",
-                "adj_factor_restatement_audit_sha256",
-                "factor_action_coverage_audit_sha256",
-                "source_preflight_audit_sha256",
-            )
-        },
-        "source_preflight_outcomes_read": False,
-        "outcomes_read_after_source_preflight": True,
-        **benchmark.EXTERNAL_WRITE_RECEIPT_FLAGS,
-    }
-    receipt["receipt_sha256"] = canonical_sha256(receipt)
-    coverage = {"status": "fixture"}
-    coverage["coverage_sha256"] = canonical_sha256(coverage)
-    bundle = tmp_path / request["request_sha256"]
-    benchmark._publish_bundle(
-        bundle=bundle,
-        request_path=request_path,
-        chunk_roots=(chunk,),
-        daily=pd.DataFrame({"value": [1]}),
-        pool_summary=pd.DataFrame({"value": [1]}),
-        symbol_summary=pd.DataFrame({"value": [1]}),
-        coverage=coverage,
-        receipt=receipt,
+    assert canonical_json_bytes(benchmark._load_request(request_path)) == (
+        canonical_json_bytes(request)
     )
-    benchmark.inspect_bundle(bundle)
 
-    drifted_request = dict(request)
-    drifted_request["factor_action_coverage_policy"] = {
-        **benchmark.FACTOR_ACTION_COVERAGE_POLICY,
-        "factor_change_tolerance_bps": "11",
-    }
-    drifted_request.pop("request_sha256")
-    drifted_request["request_sha256"] = canonical_sha256(drifted_request)
-    drifted_request_path = tmp_path / "drifted-request.json"
-    drifted_request_path.write_bytes(canonical_json_bytes(drifted_request))
+    forbidden = dict(request)
+    forbidden["corporate_action_snapshot"] = {"sha256": "3" * 64}
+    forbidden.pop("request_sha256")
+    forbidden["request_sha256"] = canonical_sha256(forbidden)
+    request_path.write_bytes(canonical_json_bytes(forbidden))
     with pytest.raises(
         ActionValueError, match="PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH"
     ):
-        benchmark._load_request(drifted_request_path)
+        benchmark._load_request(request_path)
 
-    original_receipt = canonical_json_bytes(receipt)
-    drifted_receipt = dict(receipt)
-    drifted_receipt["adj_factor_restatement_audit_sha256"] = "0" * 64
-    drifted_receipt.pop("receipt_sha256")
-    drifted_receipt["receipt_sha256"] = canonical_sha256(drifted_receipt)
-    (bundle / "receipt.json").write_bytes(canonical_json_bytes(drifted_receipt))
-    (bundle / "manifest.json").write_bytes(
-        canonical_json_bytes(benchmark._bundle_manifest(bundle, drifted_receipt))
-    )
+    hash_only = dict(request)
+    hash_only["rights_issue_authority_canonical_sha256"] = "4" * 64
+    hash_only.pop("request_sha256")
+    hash_only["request_sha256"] = canonical_sha256(hash_only)
+    request_path.write_bytes(canonical_json_bytes(hash_only))
     with pytest.raises(
-        ActionValueError, match="PATTERN_BENCHMARK_BUNDLE_IDENTITY_MISMATCH"
+        ActionValueError, match="PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH"
     ):
-        benchmark.inspect_bundle(bundle)
+        benchmark._load_request(request_path)
 
-    (bundle / "receipt.json").write_bytes(original_receipt)
-    (bundle / "manifest.json").write_bytes(
-        canonical_json_bytes(benchmark._bundle_manifest(bundle, receipt))
-    )
-    (chunk / "diagnostics.json").write_text("tampered", encoding="utf-8")
+    drifted = dict(request)
+    drifted["qlib_adjusted_factor_contract"] = {
+        **benchmark.QLIB_ADJUSTED_FACTOR_CONTRACT,
+        "corporate_action_accounting": "SIMULATED",
+    }
+    drifted.pop("request_sha256")
+    drifted["request_sha256"] = canonical_sha256(drifted)
+    request_path.write_bytes(canonical_json_bytes(drifted))
     with pytest.raises(
-        ActionValueError, match="PATTERN_BENCHMARK_EXTERNAL_CHUNK_CHANGED"
+        ActionValueError, match="PATTERN_BENCHMARK_REQUEST_IDENTITY_MISMATCH"
     ):
-        benchmark.inspect_bundle(bundle)
+        benchmark._load_request(request_path)

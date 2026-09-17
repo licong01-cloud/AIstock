@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from concurrent.futures import Future
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,24 @@ from backend.ingestion.tdx_scheduler import TDXScheduler
 
 def _argument_value(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
+
+
+def test_adj_factor_script_starts_by_absolute_path_outside_repository(tmp_path: Path) -> None:
+    script_path = Path(ingest_adj_factor.__file__).resolve()
+
+    completed = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--history-reconcile-dry-run" in completed.stdout
+    assert "ModuleNotFoundError" not in completed.stderr
 
 
 class _Tracker:

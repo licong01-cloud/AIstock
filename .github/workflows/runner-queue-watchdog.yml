@@ -2,7 +2,10 @@ name: AIstock Runner Queue Watchdog
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7,22,37,52 * * * *'
+  workflow_run:
+    workflows: [AIstock CI]
+    types: [completed]
   workflow_dispatch: {}
 
 permissions:
@@ -22,7 +25,6 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Cancel only stale scheduled runs without active jobs
-        if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

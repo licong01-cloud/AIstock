@@ -1690,6 +1690,10 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "fs.unlinkSync(singleIssueNumberPath)" in script
     assert "existing.body = updateParams.body" in script
     assert "payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null" in script
+    assert "promotedBugLink" in script
+    assert "existingBugDraft" in script
+    assert "promotion_status: promotedBugLink ? 'already_linked' : 'pending'" in script
+    assert "issueRecords.find((item) => item.promotion_status === 'pending')" in script
     assert "github-issue-number.txt" in script
     assert "github-issue-numbers.json" in script
 
@@ -1715,7 +1719,8 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "REGISTRY_PR_STATUS" in run
     assert "PROMOTION_WORKFLOW_GATE" in run
     assert "deferred_registry_pr_capability" in run
-    assert "deferred_multi_issue_promotion" in run
+    assert "deferred_multi_issue_promotion" not in run
+    assert "no_unlinked_nightly_issue_pending" in run
     assert "workflow_gate=manual_registry_pr_required" in run
     assert "GitHub Actions could not create the registry PR" in run
     assert "Registry PR status" in run

@@ -16,6 +16,59 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
+def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [
+            {
+                "error_signature": "Nightly failed sessions: validation_center_backend",
+                "key_log_excerpt": [
+                    "runner_preflight: success",
+                    "FAILED backend/tests/scripts/test_issue_flow.py::test_validation_select",
+                ],
+            }
+        ],
+    }
+    issue = {
+        "title": "[P1][validation_center] Nightly failed: validation_center_backend",
+        "body": """## Nightly Statuses
+
+- runner_preflight: `success`
+- nightly_l3: `failure`
+
+## LLM Triage Advice
+
+- reason: `schema_quality_smoke_no_network`
+
+## Agent Handoff
+
+Restore the self-hosted runner when infrastructure fails.
+""",
+    }
+
+    assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
+
+
+@pytest.mark.parametrize(
+    ("title", "error_signature"),
+    [
+        ("P1 Nightly blocked: self-hosted Windows runner unavailable", "Nightly failed"),
+        ("P1 Nightly failed", "no online GitHub Actions runner matches required labels"),
+        ("P1 Nightly failed", "runner_preflight=failure"),
+    ],
+)
+def test_ci_issue_classification_keeps_explicit_runner_failures_infrastructure(
+    title: str,
+    error_signature: str,
+) -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [{"error_signature": error_signature, "key_log_excerpt": []}],
+    }
+
+    assert workflow._classify_ci_issue(summary, {"title": title, "body": ""}) == "infra_blocker"
+
+
 def test_merge_uses_stable_quality_contract_and_ignores_advisory_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
 

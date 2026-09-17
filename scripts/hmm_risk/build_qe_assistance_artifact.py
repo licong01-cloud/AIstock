@@ -32,7 +32,7 @@ from backend.services.hmm_risk.qe_assistance_adapter import (  # noqa: E402
 )
 
 
-def _object(path: Path) -> dict[str, Any]:
+def load_json_object(path: Path) -> dict[str, Any]:
     if not path.is_absolute() or path.is_symlink():
         raise RuntimeError(f"input must be an absolute non-symlink file: {path}")
     try:
@@ -44,8 +44,8 @@ def _object(path: Path) -> dict[str, Any]:
     return value
 
 
-def _calendar(path: Path) -> list:
-    value = _object(path)
+def load_calendar(path: Path) -> list:
+    value = load_json_object(path)
     rows = value.get("trade_dates")
     if not isinstance(rows, list) or not rows:
         raise RuntimeError("calendar JSON must contain a non-empty trade_dates list")
@@ -85,7 +85,7 @@ def _symbol(value: Any) -> str:
     return text
 
 
-def _prediction_rows(path: Path, calendar: list[Any]) -> list[dict[str, Any]]:
+def load_prediction_rows(path: Path, calendar: list[Any]) -> list[dict[str, Any]]:
     if not path.is_absolute() or path.is_symlink():
         raise RuntimeError("prediction pickle must be an absolute non-symlink file")
     resolved = path.resolve(strict=True)
@@ -148,11 +148,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    calendar = _calendar(args.calendar)
-    state_rows, model_hash = _state_rows(_object(args.v16_report), args.source_model_contract)
-    authority = _object(args.industry_pit_authority)
+    calendar = load_calendar(args.calendar)
+    state_rows, model_hash = _state_rows(load_json_object(args.v16_report), args.source_model_contract)
+    authority = load_json_object(args.industry_pit_authority)
     artifact = build_qe_assistance_artifact(
-        raw_prediction_rows=_prediction_rows(args.prediction_pickle, calendar),
+        raw_prediction_rows=load_prediction_rows(args.prediction_pickle, calendar),
         state_rows=state_rows,
         calendar=calendar,
         industry_adapter=_adapter(authority),
