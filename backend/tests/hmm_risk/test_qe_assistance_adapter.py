@@ -9,7 +9,7 @@ import pytest
 
 from backend.services.hmm_risk import qe_assistance_adapter as subject
 
-MODEL_HASH = "a" * 64
+MODEL_HASH = subject.EXPECTED_MODEL_HASH
 AUTHORITY_HASH = "b" * 64
 ROW_HASH = "c" * 64
 MODEL_CONTRACT = "hmm_risk_rotation_l1_g2a_v1_6"
@@ -29,9 +29,18 @@ class Projection:
 
 
 class Adapter:
-    def __init__(self, *, unavailable: set[tuple[date, str]] | None = None, bad_reason: bool = False):
+    def __init__(
+        self,
+        *,
+        unavailable: set[tuple[date, str]] | None = None,
+        bad_reason: bool = False,
+        sector_by_symbol: dict[str, str] | None = None,
+        resolved_index_lineage: bool = True,
+    ):
         self.unavailable = unavailable or set()
         self.bad_reason = bad_reason
+        self.sector_by_symbol = sector_by_symbol or {}
+        self.resolved_index_lineage = resolved_index_lineage
 
     def resolve(self, symbol: str, trade_date: date) -> Projection:
         if (trade_date, symbol) in self.unavailable:
@@ -52,8 +61,9 @@ class Adapter:
             status="resolved",
             canonical_symbol=symbol,
             trade_date=trade_date,
-            l1_code="801010.SI",
+            l1_code=self.sector_by_symbol.get(symbol, "801010.SI"),
             reason_code=None,
+            index_membership_row_hashes=(ROW_HASH,) if self.resolved_index_lineage else (),
         )
 
 
@@ -124,6 +134,14 @@ def test_artifact_binds_model_mapping_source_window_and_formula_hashes() -> None
     assert all(len(value) == 31 for value in artifact["daily_coefficients"].values())
 
 
+def test_resolved_classification_does_not_fabricate_index_membership_lineage() -> None:
+    artifact = _build(adapter=Adapter(resolved_index_lineage=False))
+    subject.validate_qe_assistance_artifact(artifact)
+    entry = artifact["stock_sector_applicability_by_date"]["2024-07-02"]["000001.SZ"]
+    assert entry["classification_row_hashes"] == [ROW_HASH]
+    assert entry["index_membership_row_hashes"] == []
+
+
 def test_explicit_authority_unavailable_is_not_missing_or_neutral() -> None:
     key = (date(2024, 7, 2), "000002.SZ")
     artifact = _build(adapter=Adapter(unavailable={key}))
@@ -158,6 +176,118 @@ def test_input_row_order_does_not_change_canonical_artifact() -> None:
     first = _build()
     second = _build(rows=list(reversed(_rows())), states=list(reversed(_states((date(2024, 7, 2), date(2024, 7, 3))))))
     assert first == second
+
+
+def test_consumer_effect_reports_score_rank_and_topk_changes_without_labels() -> None:
+    rows = [
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000001.SZ", "score": 1.0},
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000002.SZ", "score": 0.99},
+    ]
+    calendar = (date(2024, 7, 1), date(2024, 7, 2))
+    artifact = _build(
+        rows=rows,
+        states=_states((date(2024, 7, 2),)),
+        calendar=calendar,
+        adapter=Adapter(sector_by_symbol={"000001.SZ": "801010.SI", "000002.SZ": "801012.SI"}),
+    )
+    first = subject._evaluate_consumer_effect(
+        raw_prediction_rows=rows,
+        calendar=calendar,
+        artifact=artifact,
+        topk=1,
+        formal_cardinality=None,
+    )
+    second = subject._evaluate_consumer_effect(
+        raw_prediction_rows=list(reversed(rows)),
+        calendar=calendar,
+        artifact=artifact,
+        topk=1,
+        formal_cardinality=None,
+    )
+
+    assert first == second
+    assert first["status"] == subject.CONSUMER_EFFECT_OBSERVED
+    assert first["changed_score_count"] == 2
+    assert first["rank_changed_row_count"] == 2
+    assert first["topk_changed_date_count"] == 1
+    assert first["topk_entered_count"] == 1
+    assert first["topk_dropped_count"] == 1
+    assert first["daily_summary"][0]["topk_entered_symbols"] == ["000002.SZ"]
+    assert first["daily_summary"][0]["topk_dropped_symbols"] == ["000001.SZ"]
+    assert first["raw_topk_not_applicable_count"] == 0
+    assert first["tail_accessed"] is False
+    assert first["database_write_performed"] is False
+    assert first["runtime_action_performed"] is False
+
+
+def test_consumer_effect_no_change_and_prediction_identity_fail_closed() -> None:
+    rows = [
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000001.SZ", "score": 1.0},
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000002.SZ", "score": 0.99},
+    ]
+    calendar = (date(2024, 7, 1), date(2024, 7, 2))
+    artifact = _build(
+        rows=rows,
+        states=_states((date(2024, 7, 2),)),
+        calendar=calendar,
+        adapter=Adapter(sector_by_symbol={"000001.SZ": "801011.SI", "000002.SZ": "801011.SI"}),
+    )
+    result = subject._evaluate_consumer_effect(
+        raw_prediction_rows=rows,
+        calendar=calendar,
+        artifact=artifact,
+        topk=1,
+        formal_cardinality=None,
+    )
+    assert result["status"] == subject.NO_CONSUMER_EFFECT
+    assert result["changed_score_count"] == 0
+    assert result["rank_changed_row_count"] == 0
+    assert result["topk_changed_date_count"] == 0
+
+    with pytest.raises(subject.QEAssistanceContractError) as exc_info:
+        subject._evaluate_consumer_effect(
+            raw_prediction_rows=rows[:-1],
+            calendar=calendar,
+            artifact=artifact,
+            topk=1,
+            formal_cardinality=None,
+        )
+    assert exc_info.value.reason_code == subject.REASON_REPLAY
+
+    with pytest.raises(subject.QEAssistanceContractError) as exc_info:
+        subject.evaluate_consumer_effect(
+            raw_prediction_rows=rows,
+            calendar=calendar,
+            artifact=artifact,
+        )
+    assert exc_info.value.reason_code == subject.REASON_REPLAY
+
+
+def test_consumer_effect_preserves_explicit_non_applicable_rows() -> None:
+    rows = [
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000001.SZ", "score": 1.0},
+        {"source_date": "2024-07-01", "trade_date": "2024-07-02", "instrument": "000002.SZ", "score": 2.0},
+    ]
+    calendar = (date(2024, 7, 1), date(2024, 7, 2))
+    artifact = _build(
+        rows=rows,
+        states=_states((date(2024, 7, 2),)),
+        calendar=calendar,
+        adapter=Adapter(unavailable={(date(2024, 7, 2), "000002.SZ")}),
+    )
+    result = subject._evaluate_consumer_effect(
+        raw_prediction_rows=rows,
+        calendar=calendar,
+        artifact=artifact,
+        topk=1,
+        formal_cardinality=None,
+    )
+    assert result["applied_row_count"] == 1
+    assert result["not_applicable_row_count"] == 1
+    assert result["changed_score_count"] == 1
+    assert result["raw_topk_not_applicable_count"] == 1
+    assert result["raw_topk_not_applicable_date_count"] == 1
+    assert result["daily_summary"][0]["not_applicable_row_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -226,6 +356,13 @@ def test_artifact_readback_rejects_missing_key_unknown_status_and_hash_drift() -
     with pytest.raises(subject.QEAssistanceContractError, match="canonical hash differs"):
         subject.validate_qe_assistance_artifact(drift)
 
+    rehashed_drift = copy.deepcopy(artifact)
+    rehashed_drift["model_hash"] = "d" * 64
+    rehashed_body = {key: value for key, value in rehashed_drift.items() if key != "artifact_sha256"}
+    rehashed_drift["artifact_sha256"] = subject._sha256(rehashed_body)
+    with pytest.raises(subject.QEAssistanceContractError, match="fixed identity differs"):
+        subject.validate_qe_assistance_artifact(rehashed_drift)
+
 
 def test_formal_builder_rejects_sample_cardinality_and_tail() -> None:
     assert "formal_cardinality" not in inspect.signature(subject.build_qe_assistance_artifact).parameters
@@ -253,3 +390,8 @@ def test_formal_builder_rejects_sample_cardinality_and_tail() -> None:
             calendar=(date(2026, 3, 31), date(2026, 4, 1)),
         )
     assert exc_info.value.reason_code == subject.REASON_INPUT
+
+
+def test_streamed_sequence_hash_matches_canonical_list_hash() -> None:
+    values = [["2024-07-01", "2024-07-02", "000001.SZ", 1.0], ["中文", None, -0.0]]
+    assert subject._sequence_sha256(iter(values)) == subject._sha256(values)

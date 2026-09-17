@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2：QE 场景三臂历史回放 F2 详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.4
-> **日期**：2026-09-16
-> **状态**：`D1_D2_D3B_D4_D5_D6_USER_APPROVED_IMPLEMENTATION_AUTHORIZED`
+> **文档版本**：v1.5
+> **日期**：2026-09-17
+> **状态**：`PHASE1_CONSUMER_EFFECT_OBSERVED_FORMAL_REPLAY_NOT_AUTHORIZED`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.58
 > **唯一目标**：在一个冻结 QE 场景中比较无 HMM、历史旧 QE HMM 和一个新版 HMM 模块辅助，回答 HMM 辅助是否带来真实的成本后收益、回撤或换手增量；不建设通用平台，不替换旧版本，不把独立板块预测效果外推为 QE 增益。
 
@@ -15,7 +15,7 @@
 2. 该 authority 对 1,951,448 个 executable keys 明确返回 1,780,359 个 resolved 和 171,089 个 causal unavailable，而不是 100% resolved；
 3. 已批准 `explicit non-applicable`：权威显式 unavailable 行不适用 HMM、保持 raw score 并完整记账；不得自行补行业、删除股票、缩窗或把 unavailable 伪装为 neutral。
 
-当前授权允许分别实施 HMM adapter 与 RD-Agent consumer contract；不授权启动 QE 回放、提交 tail、数据库、runtime 或进程动作，也不得声称新版已接入。
+当前授权允许分别实施 HMM adapter 与 RD-Agent consumer contract。HMM 侧无标签 consumer-effect 前检已完成并证明新版会改变正式 QE score/rank/Top50；这只解除 `NO_CONSUMER_EFFECT` 早停，不是收益结论。当前仍不授权启动 QE 回放、提交 tail、数据库、runtime 或进程动作，也不得声称新版已接入。
 
 ## 1. 目标、范围与非目标
 
@@ -136,6 +136,24 @@ v1.6 是确定性 L1 资金流排序，不得称为旧 L2 HMM 的新训练版本
 正式 authority 的 full-denominator receipt 自身为 passed，因为其合同要求每个键明确归类为 resolved 或 causal unavailable，而不是伪造 100% 行业覆盖。因此当前问题不是 asset 缺失、HMM fit、tail、停牌或个别脏行，而是 QE assistance 如何处理“权威明确不可用”的业务语义尚未批准。不得把 476 只股票排除、回落 index membership、使用当前行业或缩短窗口来伪造闭合。
 
 1,951,448 的分母不是把无关历史数据扩成门禁：当前正式 consumer 在 TopK 排序和权重计算之前对当日全部 normalized score 调用 HMM adjustment，因此每一条 score 都可能改变排序、持仓或权重，均属于 executable panel。只验证 TopK 或事后入选股票会产生选择后缺口并改变原策略语义。
+
+### 2.6 2026-09-17 consumer-effect 前检终态
+
+在零 fit、零标签、零 tail、零数据库和零 runtime 动作下，使用 D1 唯一 Loop2 `pred.pkl`、正式 v1.6 OOF rows、exact `e478...` authority 和完整 423 日 calendar 构造 D3-B artifact。artifact canonical SHA-256 为 `de92f166c06112771c0d1385043f8599d22fbed44e5ed1c43fb8b138e86bc971`，其 1,951,448 行由 1,780,359 个 applied 与 171,089 个 explicit non-applicable 组成。
+
+固定 Top50 consumer-effect 前检结果为：
+
+| 指标 | 结果 |
+|---|---:|
+| adjusted score changed rows / dates | 704,872 / 423 |
+| rank changed rows / dates | 1,671,103 / 423 |
+| Top50 changed dates | 341 / 423 |
+| Top50 entered / dropped | 555 / 555 |
+| raw Top50 explicit non-applicable rows / dates | 422 / 296 |
+| max absolute score change | 0.01914355982251159 |
+| compact result SHA-256 | `c70bc8e93d3a74e4eec48a28538beb6b1c64f6c10c0e8b0d10602a05b63ab866` |
+
+终态为 `consumer_effect_observed`：D6 的 `NO_CONSUMER_EFFECT` 早停条件未触发，正式三臂回放具有直接决策价值。该终态不读取 forward outcome，不证明收益、回撤或换手改善，也不产生回放授权；D5 的正式三臂结果仍须独立执行。
 
 ## 3. 架构与 owner 边界
 
@@ -427,7 +445,7 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 | F-003 | `backend/services/hmm_risk/qe_assistance_adapter.py::apply_sign_safe_adjustment`、`apply_artifact_entry` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_sign_safe_adjustment_handles_positive_negative_and_zero_scores`、`test_applied_entry_uses_sign_safe_formula_and_missing_entry_fails` | implemented_direct_test_passed | - |
 | F-004 | `backend/services/hmm_risk/qe_assistance_adapter.py::build_qe_assistance_artifact`；`scripts/hmm_risk/build_qe_assistance_artifact.py` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_artifact_binds_model_mapping_source_window_and_formula_hashes`；artifact authority:`bundle=203effb6..., mapping=e478722f...` | source_implementation_passed | - |
 | F-005 | HMM side:`backend/services/hmm_risk/qe_assistance_adapter.py`；RD-Agent consumer owner boundary | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_explicit_authority_unavailable_is_not_missing_or_neutral`、`test_unknown_unavailable_reason_fails_closed`；preflight:`1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes` | source_implementation_passed | approved_by_user: D4 将 RD-Agent consumer 实施明确分配给独立 worktree/PR，不属于本 HMM-owned source commit |
-| F-006 | `backend/services/hmm_evolution/evaluator.py`; proposed three-arm CLI | `backend/tests/hmm_evolution/test_evaluator.py`; `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_only_zero_adjusted_score_change_stops_before_qe_replay` | design_ready_for_user_decision | - |
+| F-006 | `backend/services/hmm_risk/qe_assistance_adapter.py::evaluate_consumer_effect`；`scripts/hmm_risk/evaluate_qe_assistance_consumer_effect.py` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py`、`backend/tests/hmm_risk/test_evaluate_qe_assistance_consumer_effect.py`；§2.6 `consumer_effect_observed` compact result | source_implementation_passed | approved_by_user: 本次只完成无标签 score/rank/Top50 前检；forward outcome 与正式三臂回放须独立实验授权 |
 | F-007 | proposed three-arm result comparator | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_result_requires_all_three_arms_and_cost_after_metrics` | design_ready_for_user_decision | - |
 | F-008 | proposed result state machine | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_compounded_return_is_only_primary_comparison_and_does_not_auto_select` | design_ready_for_user_decision | - |
 | F-009 | §3 owner boundary and independent PRs | `backend/tests/hmm_risk/test_qe_assistance_adapter.py`; artifact:`owner-review-required-before-experiment` | design_ready_for_user_decision | - |
@@ -465,10 +483,11 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 
 ## 18. 当前状态
 
-- changed files：本设计文档、`backend/services/hmm_risk/qe_assistance_adapter.py`、`scripts/hmm_risk/build_qe_assistance_artifact.py`、`backend/tests/hmm_risk/test_qe_assistance_adapter.py`；
+- changed files：本设计文档、`backend/services/hmm_risk/qe_assistance_adapter.py`、`scripts/hmm_risk/build_qe_assistance_artifact.py`、`scripts/hmm_risk/evaluate_qe_assistance_consumer_effect.py`、对应三个 `backend/tests/hmm_risk` 定向测试文件；
 - approved decisions：D1、D2、D3-B、D4 及其澄清、D5、D6（2026-09-16）；
 - D3 preflight：exact `e478...` authority；1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes；476 stocks；
-- adapter source：HMM-owned builder/validator/CLI 已实施并通过直接测试；Phase 1 evaluator 与 RD-Agent consumer 独立实现仍 pending；
+- adapter source：HMM-owned builder/validator 与无标签 consumer-effect CLI 已实施并通过直接测试；resolved classification 合法缺少 index-membership row lineage 的正式 C-013 路径已修复，未伪造 lineage；
+- Phase 1 consumer effect：`consumer_effect_observed`；704,872 score rows、1,671,103 rank rows、341/423 Top50 dates 发生变化；正式三臂回放仍 pending independent authorization；
 - QE replay：未执行；
 - training/fits：0；
 - tail accessed：false；
