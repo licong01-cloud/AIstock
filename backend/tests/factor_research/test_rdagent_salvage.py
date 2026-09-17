@@ -349,7 +349,12 @@ def test_salvage_prepare_cli_is_offline(tmp_path: Path) -> None:
     assert result["result"]["database_writes"] == 0
 
 
-def test_salvage_precheck_executes_bounded_scope_without_value_conclusion(tmp_path: Path) -> None:
+def test_salvage_precheck_executes_bounded_scope_without_value_conclusion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import subprocess
+
     import pandas as pd
 
     source_root = tmp_path / "sources" / "task-1" / "factors"
@@ -373,6 +378,17 @@ def test_salvage_precheck_executes_bounded_scope_without_value_conclusion(tmp_pa
     pd.DataFrame({"close": range(1, 7)}, index=index).to_hdf(
         data_dir / "daily_pv.h5", key="data", mode="w", format="table", data_columns=True,
     )
+    commands = []
+    real_run = subprocess.run
+
+    def capture_command(command, **kwargs):
+        commands.append(command)
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(
+        "backend.services.factor_research.rdagent_salvage.subprocess.run",
+        capture_command,
+    )
     summary = run_salvage_precheck({
         "prepared_root": str(prepared),
         "data_dir": str(data_dir),
@@ -386,6 +402,11 @@ def test_salvage_precheck_executes_bounded_scope_without_value_conclusion(tmp_pa
     assert summary["unavailable_candidates"] == 0
     assert summary["denominator_closed"] is True
     assert summary["value_conclusions"] == 0
+    assert "--instruments-file" in commands[0]
+    assert "--instruments" not in commands[0]
+    assert json.loads((tmp_path / "precheck" / "scope_instruments.json").read_text(encoding="utf-8")) == [
+        "000001.SZ",
+    ]
 
 
 def test_salvage_precheck_rejects_unknown_candidate_selection(tmp_path: Path) -> None:
