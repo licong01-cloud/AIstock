@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from backend.services.hmm_risk.qe_assistance_three_arm import (  # noqa: E402
+    ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION,
     SOURCE_TASK_ID,
     build_three_arm_request,
     compare_three_arm_results,
@@ -29,6 +30,10 @@ from backend.services.hmm_risk.qe_assistance_transport import (  # noqa: E402
     formal_runtime_binding,
 )
 from backend.services.hmm_risk.qe_assistance_adapter import SCHEMA_VERSION  # noqa: E402
+from backend.services.hmm_risk.rotation_l1_input_bundle import (  # noqa: E402
+    RotationL1InputBundleError,
+    load_active_hmm_dataset_identity,
+)
 from backend.services.qe_templates.validator import (  # noqa: E402
     validate_qe_historical_stock_pool_window,
 )
@@ -57,10 +62,7 @@ def _write_new(path: Path, value: Any) -> None:
 
 
 def _fetch_source_config(base_url: str, loop_index: int) -> dict[str, Any]:
-    url = (
-        f"{base_url.rstrip('/')}/api/v1/quantevolver/evolution/tasks/"
-        f"{SOURCE_TASK_ID}/loops/{loop_index}/config"
-    )
+    url = f"{base_url.rstrip('/')}/api/v1/quantevolver/evolution/tasks/{SOURCE_TASK_ID}/loops/{loop_index}/config"
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 - explicit operator URL
         payload = json.load(response)
     data = payload.get("data") if isinstance(payload, dict) else None
@@ -91,6 +93,21 @@ def _validate_submission_preflight(api_request: dict[str, Any]) -> None:
         raise RuntimeError("; ".join(errors))
 
 
+def _active_dataset_identity() -> dict[str, Any]:
+    try:
+        profile = load_active_hmm_dataset_identity()
+    except RotationL1InputBundleError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return {
+        "schema_version": ACTIVE_DATASET_IDENTITY_SCHEMA_VERSION,
+        "generation": profile["generation"],
+        "release_id": profile["release_id"],
+        "cutoff": profile["cutoff"].isoformat(),
+        "profile_sha256": profile["profile_sha256"],
+        "candidate_roots": list(profile["candidate_roots"]),
+    }
+
+
 def _prepare(args: argparse.Namespace) -> int:
     artifact = args.artifact.resolve(strict=True)
     binding = formal_runtime_binding(
@@ -104,10 +121,12 @@ def _prepare(args: argparse.Namespace) -> int:
             "size_bytes": artifact.stat().st_size,
         }
     )
+    dataset_identity = _active_dataset_identity()
     request = build_three_arm_request(
         no_hmm_source=_fetch_source_config(args.api_base_url, 1),
         legacy_hmm_source=_fetch_source_config(args.api_base_url, 2),
         artifact_binding=binding,
+        active_dataset_identity=dataset_identity,
         task_name=args.task_name,
     )
     _validate_submission_preflight(request["api_request"])
@@ -119,6 +138,7 @@ def _prepare(args: argparse.Namespace) -> int:
                 "output": str(args.output),
                 "request_sha256": request["request_sha256"],
                 "artifact_binding": binding,
+                "active_dataset_identity": dataset_identity,
                 "database_write_performed": False,
                 "experiment_started": False,
             },

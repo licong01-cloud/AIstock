@@ -25,6 +25,21 @@ from backend.services.hmm_risk.contracts import canonical_sha256
 from scripts.hmm_risk import build_rotation_l1_input_bundle as cli
 
 
+_ACTIVE_DIRECT_V2_ROOT: Path | None = None
+_ACTIVE_PROFILE_PATH: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _active_direct_v2_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = tmp_path / "active_dataset_profile.json"
+    monkeypatch.setenv(subject.ACTIVE_DATASET_PROFILE_ENV, str(_ACTIVE_PROFILE_PATH))
+    yield
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = None
+
+
 def _receipt(label: str) -> dict[str, object]:
     body: dict[str, object] = {"schema_version": f"{label}_v1", "status": "complete", "count": 1}
     return {**body, "receipt_sha256": canonical_sha256(body)}
@@ -1430,7 +1445,19 @@ def _direct_v2_candidate(
     state_schema_version: str = subject.DIRECT_V2_STATE_SCHEMA_VERSION,
     root_name: str = "20260831-qe_hmm_full_v2-direct-test-candidate",
 ) -> tuple[Path, Path, Path]:
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
     root = (tmp_path / root_name).resolve()
+    _ACTIVE_DIRECT_V2_ROOT = root
+    assert _ACTIVE_PROFILE_PATH is not None
+    profile = {
+        "schema_version": "aistock_active_dataset_profile_v1",
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "controller_paths": {"candidate_root": str(root)},
+        "node_bindings": {"test-node": {"candidate_root": str(root)}},
+    }
+    _ACTIVE_PROFILE_PATH.write_bytes(subject.canonical_json_bytes(profile))
     day = root / "components" / "daily_bin_candidate"
     factor = root / "components" / "factor_h5_static_candidate_v2"
     index_root = root / "components" / "index_context"
@@ -1627,36 +1654,41 @@ def _direct_v2_candidate(
     }
     if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
         components["sw_l1_index"] = ("sw_l1_index_daily_candidate_v1", "sw_l1_index")
-    (root / "direct_monthly_state.json").write_text(
-        json.dumps(
-            {
-                "schema_version": state_schema_version,
-                "profile": subject.DIRECT_V2_PROFILE,
-                "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                "status": "CANDIDATE_READY",
-                "source_freeze": False,
-                "full_history_content_hash": False,
-                "candidate_root": declared_root,
-                "components": {
-                    name: {
-                        "status": "PASS",
-                        "receipt": {
-                            "status": "PASS",
-                            "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                            "path": f"{declared_root}\\components\\{directory}",
-                        },
-                    }
-                    for name, (directory, _label) in components.items()
-                },
-                "validation": {
-                    "status": "PASS",
-                    "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                    "checks": {name: True for name in components},
-                },
+    dataset_manifest_sha256 = "d" * 64
+    dataset_manifest = {
+        "schema_version": subject.DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION,
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff_trade_date": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "availability_status": "CANDIDATE_READY",
+        "dataset_manifest_sha256": dataset_manifest_sha256,
+        "deployment_snapshot_id": "qe_hmm_full_v2_20260831_test",
+        "revision": "20260917-r6-test",
+        "components": {},
+    }
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest_path.write_text(json.dumps(dataset_manifest, sort_keys=True), encoding="utf-8")
+    state = {
+        "schema_version": state_schema_version,
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "release_id": "qe_hmm_full_v2_20260831",
+        "revision": dataset_manifest["revision"],
+        "status": "CANDIDATE_READY",
+        "candidate_root": declared_root,
+        "components": {name: {"status": "PASS", "action": "REUSE_BYTE_IDENTICAL_HARDLINK"} for name in components},
+        "manifest": {
+            "dataset_manifest_sha256": dataset_manifest_sha256,
+            "deployment_snapshot_id": dataset_manifest["deployment_snapshot_id"],
+            "file_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "path": "qe_dataset_manifest.json",
+        },
+        "validation": {
+            "structural": {
+                "status": "PASS",
+                "checks": {name: True for name in components},
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
     security = tmp_path / "security.json"
     provider = tmp_path / "provider.json"
     security.write_text("{}", encoding="utf-8")
@@ -1763,6 +1795,14 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     assert "minute_bin" not in loaded["files"]
     assert loaded["source_revision"] == subject.DIRECT_V2_SOURCE_REVISION
     assert loaded["release_identity"]["release_id"] == root.name
+    assert loaded["release_identity"]["active_release_id"] == "qe_hmm_full_v2_20260831"
+    assert loaded["release_identity"]["active_profile_generation"] == "20260917-v9"
+    assert _ACTIVE_PROFILE_PATH is not None
+    assert (
+        loaded["release_identity"]["active_profile_sha256"]
+        == hashlib.sha256(_ACTIVE_PROFILE_PATH.read_bytes()).hexdigest()
+    )
+    assert loaded["release_identity"]["dataset_revision"] == "20260917-r6-test"
     assert len(loaded["sector_index_code_by_sector"]) == 31
     assert len(loaded["sector_index_close"]) == 31 * 3
     assert set(loaded["benchmark_close"]) == {
@@ -1772,12 +1812,16 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     }
 
 
-def test_direct_v2_schema_boundary_keeps_v2_compatible_but_g2a_requires_v3(
+def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root, security, provider = _direct_v2_candidate(
-        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
-    )
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    all_path = root / "components" / "daily_bin_candidate" / "instruments" / "all.txt"
+    with all_path.open("a", encoding="utf-8", newline="") as handle:
+        handle.write(
+            f"000018.SZ\t{subject.DIRECT_V2_RELEASE_START.isoformat()}\t"
+            f"{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+        )
     _stub_direct_source_preflights(monkeypatch)
 
     loaded = subject.load_rotation_l1_direct_v2_source_assets(
@@ -1786,10 +1830,19 @@ def test_direct_v2_schema_boundary_keeps_v2_compatible_but_g2a_requires_v3(
         provider_absence_manifest=provider,
     )
 
-    assert loaded["release_identity"]["schema_version"] == subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1
-    assert loaded["sector_index_close"] is None
+    assert loaded["instrument_universe_path"].name == "stock_universe.txt"
+
+
+def test_direct_v2_schema_boundary_rejects_retired_v2_for_all_new_hmm_experiments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(
+        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
+    )
+    _stub_direct_source_preflights(monkeypatch)
+
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
-        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+        subject.load_rotation_l1_direct_v2_source_assets(
             root,
             security_identity_manifest=security,
             provider_absence_manifest=provider,
@@ -1802,6 +1855,54 @@ def test_direct_v2_source_binding_rejects_unknown_state_schema(tmp_path: Path) -
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["schema_version"] = "qe_direct_monthly_state_v4"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_requires_active_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.delenv(subject.ACTIVE_DATASET_PROFILE_ENV)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_rejects_manifest_hash_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["revision"] = "stale-revision"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_direct_v2_source_binding_rejects_state_manifest_revision_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["revision"] = "stale-revision"
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
@@ -1835,7 +1936,7 @@ def test_direct_v2_candidate_root_must_be_absolute_and_direct(tmp_path: Path, mo
     assert indirect.value.reason_code == subject.REASON_MANIFEST_INVALID
 
 
-def test_direct_v2_v3_requires_sw_l1_component_and_matching_receipt(tmp_path: Path) -> None:
+def test_direct_v2_v3_requires_sw_l1_component_and_valid_component_state(tmp_path: Path) -> None:
     root, security, provider = _direct_v2_candidate(tmp_path / "missing")
     (root / "components" / "sw_l1_index_daily_candidate_v1" / "sector_data.h5").unlink()
     with pytest.raises(subject.RotationL1InputBundleError) as missing:
@@ -1849,7 +1950,7 @@ def test_direct_v2_v3_requires_sw_l1_component_and_matching_receipt(tmp_path: Pa
     root, security, provider = _direct_v2_candidate(tmp_path / "receipt")
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["components"]["sw_l1_index"]["receipt"]["path"] = str(root / "components" / "factor_h5_static_candidate_v2")
+    state["components"]["sw_l1_index"]["action"] = ""
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(subject.RotationL1InputBundleError) as mismatch:
         subject.load_rotation_l1_direct_v2_source_assets(
@@ -1864,7 +1965,7 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_direct_source_preflights(monkeypatch)
-    roots = []
+    candidates = []
     for suffix in ("release-a", "release-b"):
         root, security, provider = _direct_v2_candidate(tmp_path / suffix, root_name=f"candidate-{suffix}")
         loaded = subject.load_rotation_l1_g2a_direct_v2_source_assets(
@@ -1879,8 +1980,16 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
             if name not in {"security_identity", "provider_absence"}
         )
         assert "20260902-candidate" not in json.dumps(loaded["release_identity"])
-        roots.append(root)
-    assert roots[0] != roots[1]
+        candidates.append((root, security, provider))
+    assert candidates[0][0] != candidates[1][0]
+    old_root, old_security, old_provider = candidates[0]
+    with pytest.raises(subject.RotationL1InputBundleError) as stale:
+        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            old_root,
+            security_identity_manifest=old_security,
+            provider_absence_manifest=old_provider,
+        )
+    assert stale.value.reason_code == subject.REASON_MANIFEST_INVALID
 
 
 @pytest.mark.parametrize("contract_kind", ["rotation_v13", "rotation_v16", "risk_v1"])
@@ -1967,6 +2076,7 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
     monkeypatch.setattr(subject, "_SecurityResolutionIndex", lambda value: value)
     monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[]))
     monkeypatch.setattr(subject, "_load_suspend_keys", lambda *_args, **_kwargs: frozenset())
+
     def spool_qlib_months(*_args, **kwargs):
         spool_calls.append(kwargs)
         return (tmp_path / "202603.bin",)
@@ -2146,7 +2256,7 @@ def test_direct_v2_source_binding_rejects_cross_release_and_legacy_fallback(
     root, security, provider = _direct_v2_candidate(tmp_path / "fallback")
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["components"]["daily_bin"]["receipt"]["path"] = "/home/lc999/data/qlib_bin"
+    state["candidate_root"] = "/home/lc999/data/qlib_bin"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(subject.RotationL1InputBundleError) as legacy:
         subject.load_rotation_l1_direct_v2_source_assets(
