@@ -31,6 +31,13 @@
   ],
   "expected": "Daily ingestion must not report success unless both turnover_rate_f and volume_ratio meet the bounded finite coverage contract; the first run should occur after the provider publication window and same-date bounded retry must close transient gaps.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/ingest_tushare_daily_basic.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/db/init_tushare_schedules.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
+    ],
     "added_files": [],
     "changed_files": [
       "scripts/ingest_tushare_daily_basic.py",
@@ -39,7 +46,7 @@
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/scripts/test_ingest_tushare_daily_basic.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_daily_basic.py",
@@ -173,13 +180,19 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
     "database_readback_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -c import required fields and default schedule -> passed: turnover_rate_f and volume_ratio; daily_basic at 20:30"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
