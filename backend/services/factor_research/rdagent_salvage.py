@@ -96,9 +96,16 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
-    parser.add_argument("--instruments", required=True)
+    instrument_source = parser.add_mutually_exclusive_group(required=True)
+    instrument_source.add_argument("--instruments")
+    instrument_source.add_argument("--instruments-file", type=Path)
     args = parser.parse_args()
-    instruments = json.loads(args.instruments)
+    if args.instruments_file is not None:
+        if args.instruments_file.is_symlink() or not args.instruments_file.is_file():
+            raise FileNotFoundError(args.instruments_file)
+        instruments = json.loads(args.instruments_file.read_text(encoding="utf-8"))
+    else:
+        instruments = json.loads(args.instruments)
     if (
         not isinstance(instruments, list)
         or not instruments
@@ -855,6 +862,8 @@ def run_salvage_precheck(spec: Mapping[str, Any], artifact_root: Path) -> dict[s
     artifact_root.mkdir(parents=True, exist_ok=True)
     results_root = artifact_root / "results"
     results_root.mkdir()
+    instruments_path = artifact_root / "scope_instruments.json"
+    _write_json(instruments_path, instruments)
     results: list[dict[str, Any]] = []
     for candidate in candidates:
         name = candidate.get("evaluation_name")
@@ -874,7 +883,7 @@ def run_salvage_precheck(spec: Mapping[str, Any], artifact_root: Path) -> dict[s
         command = [
             sys.executable, str(script), "--data-dir", str(data_dir), "--output", str(output),
             "--start-date", start, "--end-date", end,
-            "--instruments", json.dumps(instruments, ensure_ascii=True, separators=(",", ":")),
+            "--instruments-file", str(instruments_path),
         ]
         try:
             with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
