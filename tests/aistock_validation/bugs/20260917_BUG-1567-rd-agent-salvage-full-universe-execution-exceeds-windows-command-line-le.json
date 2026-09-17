@@ -1,6 +1,8 @@
 {
   "actual": "salvage-precheck serializes 5,144 canonical instruments into one --instruments argument; Windows CreateProcess fails before candidate execution, causing all 668 full-history candidates to be typed candidate_output_invalid. Pass the explicit instrument scope through a task-owned regular JSON file while preserving the existing bounded-scope and zero-write contracts.",
   "allowed_write_scope": [
+    "backend/services/factor_research/rdagent_salvage.py",
+    "backend/tests/factor_research/test_rdagent_salvage.py",
     "tests/aistock_validation/bugs/20260917_BUG-1567-rd-agent-salvage-full-universe-execution-exceeds-windows-command-line-le.json"
   ],
   "assigned_agent": null,
@@ -25,19 +27,51 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/factor_research/rdagent_salvage.py",
+      "backend/tests/factor_research/test_rdagent_salvage.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
-      "changed_files": [],
+      "changed_files": [
+        "backend/services/factor_research/rdagent_salvage.py",
+        "backend/tests/factor_research/test_rdagent_salvage.py"
+      ],
       "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "matched_rules": [
+        {
+          "file": "backend/services/factor_research/rdagent_salvage.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_rdagent_salvage.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/factor_research/rdagent_salvage.py",
+        "backend/tests/factor_research/test_rdagent_salvage.py"
+      ],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/factor_research/rdagent_salvage.py",
+      "backend/tests/factor_research/test_rdagent_salvage.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/factor_research/rdagent_salvage.py",
+      "backend/tests/factor_research/test_rdagent_salvage.py"
+    ]
   },
   "first_seen_at": "2026-09-17T06:25:38.473530Z",
   "fix_branch": null,
@@ -191,5 +225,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": null
 }
