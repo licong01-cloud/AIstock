@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from backend.services import manual_factor_service as manual_svc
 from backend.services.quantevolver import factor_official_evaluation_service as svc
 from backend.services.quantevolver.factor_official_evaluation_service import (
     FactorOfficialEvaluationService,
@@ -58,37 +57,6 @@ class _Conn:
 
     def __exit__(self, exc_type, exc, tb):
         return False
-
-
-def test_manual_factor_workspace_prefers_active_dataset_profile(monkeypatch) -> None:
-    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/r7/factor_data")
-    monkeypatch.setattr(
-        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
-        lambda: "wsl2-5080",
-    )
-    monkeypatch.setattr(
-        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
-        lambda *, node_id: {
-            "node_id": node_id,
-            "factor_data_dir": "/releases/r8/components/factor_h5_static_candidate_v2",
-        },
-    )
-
-    assert manual_svc._require_factor_workspace_wsl() == "/releases/r8/components/factor_h5_static_candidate_v2"
-
-
-def test_manual_factor_workspace_uses_legacy_env_without_active_profile(monkeypatch) -> None:
-    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/factor_data")
-    monkeypatch.setattr(
-        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
-        lambda: "wsl2-5080",
-    )
-    monkeypatch.setattr(
-        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
-        lambda *, node_id: None,
-    )
-
-    assert manual_svc._require_factor_workspace_wsl() == "/legacy/factor_data"
 
 
 def _factor_df(value: float = 1.0, dates: list[str] | None = None) -> pd.DataFrame:
@@ -177,57 +145,6 @@ def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch):
     assert captured["submit"]["end_date"] == "2026-04-30"
     assert captured["submit"]["workers"] == 4
     assert captured["submit"]["batch_size"] == 16
-
-
-def test_compute_prefers_active_profile_paths_over_legacy_workspace_config(monkeypatch):
-    captured = {}
-
-    class _ForbiddenComposer:
-        def _fetch_workspace_config(self, node_id=None):
-            raise AssertionError("legacy workspace config must not be read while an active profile exists")
-
-    class _FakeFullComputeDispatch:
-        def __init__(self, dispatch_service=None):
-            pass
-
-        def submit(self, **kwargs):
-            captured.update(kwargs)
-            return {"ok": True, "status": "running", "task_id": "r8-task"}
-
-    monkeypatch.setattr(
-        "backend.services.quantevolver.config_composer.ConfigComposer",
-        lambda: _ForbiddenComposer(),
-    )
-    monkeypatch.setattr(
-        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
-        lambda *, node_id: {
-            "node_id": node_id,
-            "factor_data_dir": "/releases/r8/components/factor_h5_static_candidate_v2",
-            "qlib_data_path": "/releases/r8/components/daily_bin_candidate",
-            "generation": "20260918-v11",
-            "profile_sha256": "r8-profile-sha",
-        },
-    )
-    monkeypatch.setattr(
-        "backend.services.quantevolver.official_factor_full_compute_dispatch_service.OfficialFactorFullComputeDispatchService",
-        _FakeFullComputeDispatch,
-    )
-
-    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
-    service._dispatch_service = object()
-    result = service.compute(
-        factor_names=["Alpha_Test"],
-        start_date="2018-08-01",
-        end_date="2026-08-31",
-    )
-
-    assert result["success"] is True
-    assert captured["factor_data_dir"] == "/releases/r8/components/factor_h5_static_candidate_v2"
-    assert captured["qlib_bin_path"] == "/releases/r8/components/daily_bin_candidate"
-    assert captured["node_id"] == "wsl2-5080"
-    assert result["active_profile_generation"] == "20260918-v11"
-    assert result["active_profile_sha256"] == "r8-profile-sha"
-
 
 
 def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeypatch):

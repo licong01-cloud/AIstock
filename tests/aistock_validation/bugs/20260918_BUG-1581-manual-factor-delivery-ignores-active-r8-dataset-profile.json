@@ -5,6 +5,7 @@
     "backend/services/quantevolver/factor_official_evaluation_service.py",
     "backend/tests/test_manual_factor_service_wsl_output.py",
     "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
     "tests/aistock_validation/bugs/20260918_BUG-1581-manual-factor-delivery-ignores-active-r8-dataset-profile.json"
   ],
   "assigned_agent": null,
@@ -35,7 +36,8 @@
       "backend/services/manual_factor_service.py",
       "backend/services/quantevolver/factor_official_evaluation_service.py",
       "backend/tests/test_manual_factor_service_wsl_output.py",
-      "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -43,7 +45,8 @@
         "backend/services/manual_factor_service.py",
         "backend/services/quantevolver/factor_official_evaluation_service.py",
         "backend/tests/test_manual_factor_service_wsl_output.py",
-        "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+        "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
       ],
       "impacted_modules": [
         "platform.api",
@@ -97,6 +100,16 @@
           "primary_module": "qe.core",
           "risk_level": "high",
           "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
         }
       ],
       "risk_levels": [
@@ -106,7 +119,8 @@
         "backend/services/manual_factor_service.py",
         "backend/services/quantevolver/factor_official_evaluation_service.py",
         "backend/tests/test_manual_factor_service_wsl_output.py",
-        "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+        "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
       ],
       "unmatched_files": []
     },
@@ -114,14 +128,16 @@
       "backend/services/manual_factor_service.py",
       "backend/services/quantevolver/factor_official_evaluation_service.py",
       "backend/tests/test_manual_factor_service_wsl_output.py",
-      "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/manual_factor_service.py",
       "backend/services/quantevolver/factor_official_evaluation_service.py",
       "backend/tests/test_manual_factor_service_wsl_output.py",
-      "backend/tests/quantevolver/test_official_evaluation_cache_source.py"
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
     ]
   },
   "first_seen_at": "2026-09-18T17:08:01.526521Z",
