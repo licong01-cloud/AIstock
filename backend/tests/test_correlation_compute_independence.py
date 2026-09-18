@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,44 @@ class _FakeUniverseMaskService:
             "universe_fingerprint_sha256": "fp-test",
             "index_policy": "st_pit_buy_eligible_reindexed_v1",
         }
+
+
+def test_correlation_submit_uses_schema_valid_job_type_and_keeps_dataset_identity(monkeypatch) -> None:
+    from backend.services.quantevolver import correlation_scheduler as scheduler_module
+    from backend.services.quantevolver.correlation_scheduler import CorrelationScheduler
+
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    cursor = connection.cursor.return_value.__enter__.return_value
+    scheduler = CorrelationScheduler()
+    dispatch = MagicMock()
+    dispatch.create_and_submit_task = AsyncMock(
+        return_value={"task_id": "dispatch-rejected", "status": "failed"}
+    )
+    scheduler._dispatch_service = dispatch
+
+    monkeypatch.setattr(scheduler_module, "get_conn", lambda: connection)
+    monkeypatch.setattr(scheduler, "_resolve_factor_names", lambda *_args: ["factor_a"])
+    monkeypatch.setattr(scheduler, "_update_job_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scheduler, "_update_schedule_status", lambda *_args, **_kwargs: None)
+
+    scheduler.submit_job(
+        schedule_id=None,
+        dataset="correlation_full",
+        options={"factor_names": ["factor_a"], "node_id": "node-1"},
+    )
+
+    connection.commit.assert_called_once_with()
+    cursor.execute.assert_called_once()
+    insert_sql, insert_params = cursor.execute.call_args.args
+    assert "INSERT INTO market.ingestion_jobs" in insert_sql
+    assert insert_params[1] == "init"
+    summary = json.loads(insert_params[2])
+    assert summary["job_type"] == "init"
+    assert summary["dataset"] == "correlation_full"
+    dispatch_request = dispatch.create_and_submit_task.await_args.args[0]
+    assert dispatch_request["task_type"] == "correlation_compute"
+    assert dispatch_request["payload"]["factor_names"] == ["factor_a"]
 
 
 def test_correlation_wsl_runner_does_not_import_qe_router_or_stub() -> None:
