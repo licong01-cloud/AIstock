@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backend.services import manual_factor_service as manual_svc
 from backend.services.quantevolver import factor_official_evaluation_service as svc
 from backend.services.quantevolver.factor_official_evaluation_service import (
     FactorOfficialEvaluationService,
@@ -57,6 +58,37 @@ class _Conn:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+def test_manual_factor_workspace_prefers_active_dataset_profile(monkeypatch) -> None:
+    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/r7/factor_data")
+    monkeypatch.setattr(
+        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
+        lambda: "wsl2-5080",
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        lambda *, node_id: {
+            "node_id": node_id,
+            "factor_data_dir": "/releases/r8/components/factor_h5_static_candidate_v2",
+        },
+    )
+
+    assert manual_svc._require_factor_workspace_wsl() == "/releases/r8/components/factor_h5_static_candidate_v2"
+
+
+def test_manual_factor_workspace_uses_legacy_env_without_active_profile(monkeypatch) -> None:
+    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/factor_data")
+    monkeypatch.setattr(
+        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
+        lambda: "wsl2-5080",
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        lambda *, node_id: None,
+    )
+
+    assert manual_svc._require_factor_workspace_wsl() == "/legacy/factor_data"
 
 
 def _factor_df(value: float = 1.0, dates: list[str] | None = None) -> pd.DataFrame:
