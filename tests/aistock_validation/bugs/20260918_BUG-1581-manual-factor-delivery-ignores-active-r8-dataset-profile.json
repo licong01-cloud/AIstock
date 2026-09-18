@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1581",
-  "closed_at": null,
+  "closed_at": "2026-09-18T19:24:53.317872Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -177,10 +177,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1581\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1581",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "cb96a0b54648da85b2b32930428f5f6b04d9bfff",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-18T18:44:12.932742Z",
+      "mode": "read_only",
+      "observed_identity": "13439eedd74e5e033b6ede0bd077df2ca79eb91c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e3cf820450b08e78d03428194192fb8dbc69ba51c1a33000ab00b7608c557f7a",
+      "receipt_sha256": "e2e3fa7c1c8583035b2c3f84776534cd433345048342b34c00041e5ecb1d0c02",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f040463b6b5958e7b5e7da6e87f278df58bb39e3e97e5d77c663ac4b86788ff3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -211,7 +233,7 @@
     ],
     "validation_evidence_digest": "9c8074826dc88bc0b60fca95afff715a8a525986daee7c9e1d02d86e3ddcb222"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -221,7 +243,10 @@
     "source_event_id": "FE-20260918-66d44a4278b9"
   },
   "validation_evidence": [
-    "CI 35374377124 passed; local platform_api_backend 15 passed; qe_read_backend 619 passed 1 skipped; L0 and registry passed"
+    "CI 35374377124 passed; local platform_api_backend 15 passed; qe_read_backend 619 passed 1 skipped; L0 and registry passed",
+    "platform_api_backend: 15 passed",
+    "qe_read_backend: 619 passed, 1 skipped",
+    "L0 and validation module registry: passed, blocking=0"
   ],
   "verification_budget": {
     "budget": "standard",
