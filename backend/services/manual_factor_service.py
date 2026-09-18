@@ -27,7 +27,7 @@ FACTOR_WORKSPACE_WSL = os.getenv("FACTOR_WORKSPACE_WSL", "").strip()
 # 数据文件列表
 DATA_FILES = [
     "daily_pv.h5", "daily_basic.h5", "moneyflow.h5",
-    "bak_basic.h5", "cyq_perf.h5", "sector_data.h5",
+    "bak_basic.h5", "cyq_perf.h5", "margin_detail.h5", "sector_data.h5",
     "static_factors.parquet",
 ]
 
