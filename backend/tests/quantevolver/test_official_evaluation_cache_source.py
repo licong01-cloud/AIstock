@@ -147,6 +147,7 @@ def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch):
     assert captured["submit"]["batch_size"] == 16
 
 
+
 def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeypatch):
     calls = {"loader": [], "prepare": None, "metrics_factor": None, "saved": None}
 
