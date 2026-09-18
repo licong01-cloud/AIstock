@@ -1,11 +1,11 @@
 # PT-NEXT-022：R8 基本面筛选与同股长期持有对照详细设计
 
-> 版本：v1.0；日期：2026-09-19；Feature tier：F1
-> 状态：DESIGN_VERIFIED_NOT_IMPLEMENTED；本次仅交付设计，不执行回放、训练或上线。
+> 版本：v1.1；日期：2026-09-19；Feature tier：F1
+> 状态：P1_R8_REPLAY_VERIFIED_P2_P3_INPUT_UNAVAILABLE；离线研究完成，不上线。
 > 主蓝图：[F2 §9.25](position_timing_advice_f2_redesign_20260903.md)
 > 唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
-`DESIGN_VERIFIED` 仅表示设计闭合，不表示 reader 已实现、财务数据已交付或策略有效。P1市值源已作只读核验；P2/P3财报PIT输入未确认交付。该数据依赖不阻止设计合入、P1开发和独立评价，不能以P1完成冒充三个组全部完成。
+`DESIGN_VERIFIED` 仅表示设计闭合。当前 P1 reader、两政策、WSL 并行回放和不可变产物已经实现并完成验证；P2/P3 财报 PIT 输入仍未交付，四个 hypothesis slot 明确为 `UNAVAILABLE`。P1 结果不能冒充三个组全部完成，也没有产生可上线策略。
 
 ## 1. Background / 目标与依据
 
@@ -35,7 +35,7 @@ PT-NEXT-021 r7结果仍是历史事实：5,144股已回放，54项family-wise比
 | 财报输入 | bak_basic有同比/每股指标，但没有本设计要求的季度、可见版本、现金流/ROE完整契约 | P2/P3=`FINANCIAL_PIT_INPUT_NOT_DELIVERED`，不可用备用同比替代 |
 | 现行研究入口 | `pattern_strategy_evolution_benchmark.py`固定R7文件/canonical hash、54项family和旧父实验 | **不能仅换路径直接运行**；新增PT-NEXT-022命名空间，不改旧入口 |
 
-本次未读取新策略收益，未查询数据库，未执行训练/回放。49项只覆盖manifest直接引用，不冒充全部日线/分钟文件已重扫。R8内继承的r5/r7旧报告只能作为谱系，不能作为新R8实验完成收据。
+设计冻结时未读取新策略收益；正式实现随后按本文顺序在 source preflight 完成后才读取收益，证据见§14。全程未查询数据库、未训练模型。49项只覆盖manifest直接引用，不冒充全部日线/分钟文件已重扫。R8内继承的r5/r7旧报告只能作为谱系，不能作为新R8实验完成收据。
 
 ### 2.2 冻结身份
 
@@ -255,16 +255,40 @@ WSL原生ext4源码checkout和artifact，Windows只作控制/设计。固定8个
 
 ## 13. Design Acceptance Matrix
 
-矩阵仅验收**设计**，`implementation_refs`指未来落点/复用依据；非实现或收益验收。财务数据待交付按§2/§4处理，不隐藏在`gap_or_exception=none`中；该列none只表示设计合同无未定义条款。
+矩阵验收设计与当前 P1 实现映射；`DESIGN_VERIFIED` 仍只表示条款闭合，实际运行证据见§14。财务数据待交付按§2/§4处理，不隐藏在`gap_or_exception=none`中；该列none只表示设计合同无未定义条款。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §2、§8；拟议fundamental_timing_benchmark | artifact: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260918-r8-candidate/qe_dataset_manifest.json；§2只读结果 | DESIGN_VERIFIED | none |
-| F-002 | §3/§11；无生产实现 | §10隔离审核；`backend/tests/position_timing/test_isolation.py`为后续回归依据 | DESIGN_VERIFIED | none |
-| F-003 | §4；拟议fundamental_screen | §2字段核验/§10第1～2项；artifact: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260918-r8-candidate/components/factor_h5_static_candidate_v2/static_factors_schema.csv | DESIGN_VERIFIED | none |
-| F-004 | §5/§7；拟议enrollment | §10第2/5项；`backend/tests/position_timing/test_pattern_strategy_evolution.py`为旧语义依据 | DESIGN_VERIFIED | none |
-| F-005 | §6；pattern_close_cash_replay、pattern_strategy、policy | §10第3～4项；`backend/tests/position_timing/test_pattern_strategy_evolution.py`为复用依据 | DESIGN_VERIFIED | none |
-| F-006 | §7；pattern_close_cash_report复用 | §10第6项；`backend/tests/position_timing/test_pattern_strategy_evolution.py`为报告模式依据 | DESIGN_VERIFIED | none |
-| F-007 | §8；现有纯worker/parent seal模式 | §10第6项；`backend/tests/position_timing/test_pattern_strategy_evolution.py`为并行模式依据 | DESIGN_VERIFIED | none |
-| F-008 | §9；三块计划 | §10范围审核；artifact: docs/architecture/position_timing_fundamental_screen_research_f1_20260919.md | DESIGN_VERIFIED | none |
-| F-009 | §10/§11；本次仅文档 | F1/F2 validator、diff检查与PR证据；artifact: docs/architecture/position_timing_fundamental_screen_research_f1_20260919.md | DESIGN_VERIFIED | none |
+| F-001 | §2、§8；`fundamental_screen.open_r8_candidate_identity`、`fundamental_timing_benchmark.prepare` | test: `backend/tests/position_timing/test_fundamental_screen.py`；artifact: §14 request source audits | DESIGN_VERIFIED | none |
+| F-002 | §3/§11；新增文件仅在`backend/services/position_timing`及直接测试 | test: `backend/tests/position_timing/test_isolation.py`；artifact: §14 receipt 六项 side-effect 均 false | DESIGN_VERIFIED | none |
+| F-003 | §4；`fundamental_screen.py` | test: `backend/tests/position_timing/test_fundamental_screen.py`；P1 四态和 P2/P3 typed unavailable | DESIGN_VERIFIED | none |
+| F-004 | §5/§7；`p1_mask_for_symbol`、`_replay_symbol_task` | test: `backend/tests/position_timing/test_fundamental_timing.py`；artifact: §14 coverage | DESIGN_VERIFIED | none |
+| F-005 | §6；`fundamental_timing.py`及既有成交/guard复用 | test: `backend/tests/position_timing/test_fundamental_timing.py`；artifact: §14 fills/terminal evidence | DESIGN_VERIFIED | none |
+| F-006 | §7；`fundamental_timing_benchmark._build_report` | artifact: §14 bundle `report.json`；六格family、逐股、六池、年度和覆盖结果 | DESIGN_VERIFIED | none |
+| F-007 | §8；`fundamental_timing_benchmark.py` | test: `backend/tests/position_timing/test_fundamental_timing.py`；artifact: §14 1-vs-8、sealed chunks、inspect/exact retry | DESIGN_VERIFIED | none |
+| F-008 | §9；P1三块已完成，P2/P3等待独立财务输入 | artifact: §14正式bundle；未引入旧策略矩阵或其他模块 | DESIGN_VERIFIED | none |
+| F-009 | §10/§11；直接测试、旧策略回归、F1/F2 validator | test: `backend/tests/position_timing/test_fundamental_screen.py`、`test_fundamental_timing.py`；artifact: §14验证记录 | DESIGN_VERIFIED | none |
+
+## 14. Implementation / 正式结果（2026-09-19）
+
+### 14.1 实现和不可变身份
+
+实现文件为`fundamental_screen.py`、`fundamental_timing.py`和`fundamental_timing_benchmark.py`，直接测试为`test_fundamental_screen.py`和`test_fundamental_timing.py`。正式 request canonical SHA 为`52218b6026c85073f5c0b11fa14dbaa8bb2c97f15a53ecb67c6186f5a7ba1bbd`，request 文件 SHA 为`49835e331c86c638d24e9be4dcd397b802bb84789c42ee28bb1032609a0f6388`；bundle manifest canonical SHA 为`7de1867179bd53d1c2fb9b9243ecd8cab573f75f8bdd362ee9d7ae53c5c52401`。源码提交为`6935ac0841238c4fa9f5c2b548e3a14893439d24`；最终文档/测试修订的PR身份以合入记录为准，不能用后续文档提交冒充该研究计算源码。
+
+运行环境为 WSL2、Python 3.10.19、pandas 2.2.3、numpy 2.1.2、pyarrow 21.0.0，environment SHA 为`677d5fd6f1a188b86a0a28a8abf667d4d698c9a1296e93d7713d647c8da64626`。R8 factor audit覆盖5,144股、7,970,157行，invalid/insufficient均0；factor series SHA 为`fc6db8af41ab0a5550da37ed3b02f5f90bb449eab558d7a724d3436bcc4043d6`，restatement coverage完整。市值源8,124,082行、5,340个物理symbol，候选人口缺失symbol为0。preflight时`outcomes_read=false`，收益读取只发生于`RUN_AFTER_FULL_SOURCE_PREFLIGHT`。
+
+16股固定样本的1进程与8进程结果逐股hash完全一致，audit SHA 为`30266eacfd00c72fa90ab55a861eacc4e1b5f3332b284c31261874e88ff95933`。正式运行完成41个sealed chunk（末块24股），`inspect=VERIFIED`；相同request重试返回同一bundle的`ALREADY_MATERIALIZED`。receipt中database read/write、network、runtime action、service process control、corporate-action authority、account economics和broker clearing均为false；research worker process为true。
+
+### 14.2 覆盖和结果
+
+P1日级状态为expected 10,087,384、PASS 3,983,142、FAIL 6,087,608、UNKNOWN 16,634、NOT_APPLICABLE 0；公共特征ready后的enrollment eligible为3,778,624个symbol-date。最终4,360股入选、784股正常未入选，首次可判定入选前的`ENROLLMENT_UNKNOWN`为0；4,335股有双方可清算终值。P2/P3因正式财务PIT快照未交付，四格保持`FINANCIAL_PIT_INPUT_NOT_DELIVERED/UNAVAILABLE`，六假设family没有缩水。
+
+全市场动态池的 T1 复合账户收益为+5.75%，同股 BH 为+142.03%，沪深300价格指数背景为+43.55%，Timing-BH为-136.28个百分点；T2分别为+5.43%、+142.03%、+43.55%和-136.60个百分点。逐股可清算终值方面，T1相对BH中位数为-27.05个百分点、胜率27.34%；T2中位数为-26.75个百分点、胜率27.96%。底部5%对总体均值的贡献约-28.9个百分点，说明左尾不是可忽略的小样本。
+
+全市场配对日收益差的T1点估计为-5.2255 bps，nominal 95%区间[-9.6755,-1.0436]，六假设family-wise区间[-11.2225,+0.6081]；T2点估计-5.2402 bps，nominal区间[-9.6789,-1.0454]，family-wise区间[-11.2301,+0.6029]。两项按冻结0 bps经济阈值均为`INCONCLUSIVE`，不是`NEGATIVE`，但逐股、六池和点估计均没有显示超过BH。`selected_trial_count=0`，不进入card、alert、registry/current或serving。
+
+中证300/500/1000、科创50/100视图均保留各自指数背景；两个政策在六池的累计Timing-BH均为负。科创100价格指数源在共同区间不可用时保持typed unavailable，没有改用沪深300替代。年度cohort只作诊断，不从其中回选年份、阈值或政策。
+
+### 14.3 结论与下一步边界
+
+本轮已经回答“50～500亿元初筛后，冻结T1/T2是否能超过同股长期持有”：当前R8 P1证据不支持，且经济量级明显落后。不能把family-wise区间跨0解释成策略可能已有效，也不能据此扫描趋势、减仓比例或止盈阈值。P2/P3是否改变适用人口仍是未回答问题，唯一正当后续是由数据窗口交付§4.1的严格财务PIT快照后，以同一冻结六格family补齐；在此之前不重复P1、不接QE/HMM/Agent、不训练模型，也不修改在线L1/L1a。
