@@ -31,15 +31,24 @@
   ],
   "expected": "Preserve the 131-code catalog and full PIT membership, validate a hash-pinned release quote-availability authority, generate L2 coefficients only while quotes are formally available, and apply an explicit no-L2-overlay policy for stocks mapped to unavailable sectors while published-sector gaps remain fail-closed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/precompute_hmm_coefficients.py",
-      "scripts/score_weighted_strategy.py",
+    "actual_changed_files": [
       "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
-      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md"
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "scripts/precompute_hmm_coefficients.py",
+      "scripts/score_weighted_strategy.py",
+      "tests/aistock_validation/bugs/20260918_BUG-1583-hmm-frozen-coefficient-generator-conflates-stopped-sw-l2-publication-wit.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "scripts/precompute_hmm_coefficients.py",
+      "scripts/score_weighted_strategy.py",
+      "tests/aistock_validation/bugs/20260918_BUG-1583-hmm-frozen-coefficient-generator-conflates-stopped-sw-l2-publication-wit.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/precompute_hmm_coefficients.py",
@@ -178,13 +187,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -c import backend.routers.hmm_risk, backend.routers.health, scripts.precompute_hmm_coefficients -> fresh_process_import=passed at b19f41870"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
