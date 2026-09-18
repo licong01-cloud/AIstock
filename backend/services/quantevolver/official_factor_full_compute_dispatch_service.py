@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..dispatch_service import DispatchService
+from .factor_universe_mask_service import OFFICIAL_FACTOR_UNIVERSE_KEY
 from .official_factor_batch_compute_service import OFFICIAL_FACTOR_WINDOW_END, OFFICIAL_FACTOR_WINDOW_START
 
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
@@ -31,6 +32,7 @@ class OfficialFactorFullComputeDispatchService:
         timeout_per_factor: int = 1800,
         force: bool = False,
         qlib_bin_path: str | None = None,
+        universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         node_id: str | None = None,
         task_id: str | None = None,
         resumed_from_task_id: str | None = None,
@@ -52,6 +54,7 @@ class OfficialFactorFullComputeDispatchService:
             "force": force,
             "resumed_from_task_id": resumed_from_task_id,
             "qlib_bin_path": qlib_bin_path,
+            "universe_key": universe_key,
             "cache_source": "official_offline_backtest_factor_data",
             "code_source": "code_text",
         }
