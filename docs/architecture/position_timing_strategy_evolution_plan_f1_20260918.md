@@ -19,7 +19,7 @@
 
 第一次 PT-NEXT-021 实施在独立 Windows worktree 形成两个未合入提交 `21d25dd807575a7a07c6fb9e2f19537c1132be5d`、`5f28e22faf26ec930dcb70d6bd16ea7239ece871`，定向 26 项通过，并修复 BUG-1574：未知终值估值必须序列化为 typed `null`，不能把 `NaN` 写入 canonical JSON。其 r5 正式 request `a67dddf8f8e5dce87db1c591493b9746bc0da805c79bb8551e9a2a5c5016452a` 只完成 8×128=1,024/5,144 股后被用户明确终止；分片 0000～0007 均有 manifest、没有未封存分片，但不存在最终 bundle/report/inspect/exact retry。因此它只证明串行工程路径可运行，不证明任何候选策略收益；旧分片永久留在 r5 命名空间，r7 不读取、不续跑、不覆盖。
 
-本轮改用已激活但在 request 中显式冻结的 r7 candidate，并在 WSL2 ext4 上执行。r5 与 r7 的 63,312 个日线 candidate 文件、6 个股票池文件、2 个指数上下文文件及 11 个择时 source-authority 文件逐文件一致；当前策略实际输入差异只有 r7 停牌表新增 `688766.SH` 的 2025-11-27～2025-12-05 七个 `S` 记录。r7 新补的 `daily_basic.volume_ratio` 不被本策略读取，策略量比继续由冻结日线 volume 因果计算。上述差异说明继续等待 r5 完成没有最终研究价值，但不授权把 r5 分片改名复用为 r7：最终结论必须在 r7 身份下重算全部 5,144 股。
+本轮改用已激活但在 request 中显式冻结的 r7 candidate，并在 WSL2 ext4 上执行。r5 与 r7 的 63,312 个日线 candidate 文件、6 个股票池文件、2 个指数上下文文件及 11 个择时 source-authority 文件逐文件一致。停牌 parquet 的物理行差异为新增 9 行、删除 2 行：其中 `000979.SZ 2018-08-28` 与 `688766.SH 2025-11-26` 只是 `suspend_timing` 规范化替换，按当前 reader 实际消费的 `(symbol, date, suspend_type=S)` 语义没有变化；当前策略真实输入差异严格只有 `688766.SH` 的 2025-11-27～2025-12-05 七个新增停牌日。request 同时冻结物理行差异与策略语义差异的独立 hash，A0 回归豁免只来自后者。r7 新补的 `daily_basic.volume_ratio` 不被本策略读取，策略量比继续由冻结日线 volume 因果计算。上述差异说明继续等待 r5 完成没有最终研究价值，但不授权把 r5 分片改名复用为 r7：最终结论必须在 r7 身份下重算全部 5,144 股。
 
 ## 2. Documentation Discovery / 已核接口与最小复用
 
@@ -48,7 +48,7 @@
 - 活跃 profile 只用于发现 r7 路径；`prepare` 后 request 必须绑定上述路径、文件/canonical身份和源代码提交，`run` 不再解析可变 active profile。旧 r5 request、分片与 bundle 全部只读，禁止覆盖或纳入 r7 bundle。
 - OHLC×factor、volume÷factor、下游 factor=1；数量是虚拟复权单位，不模拟分红、配股认购、股份到账或券商清算。material factor 变化 >10 bps 只统计，不重新要求公司行动绑定；非正/非有限/历史不足/重述漂移/身份错误继续 fail closed。
 
-正式执行环境冻结为 WSL2 原生 ext4 checkout 与 `/home/lc999/miniconda3/envs/rdagent-gpu/bin/python`；request 记录 Linux/kernel、Python、NumPy、pandas、PyArrow 版本及 `environment_sha256`。研究 artifact 写入独立 ext4 根 `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1`，不会逐 chunk 写 `/mnt/f`。完成 inspect 与 exact retry 后，只把已封存的 request/bundle/receipt 导出到 Windows timing artifact 根，逐文件 hash readback；导出不是激活、serving 或 current pointer 更新。
+正式执行环境冻结为 WSL2 原生 ext4 checkout 与 `/home/lc999/miniconda3/envs/rdagent-gpu/bin/python`（Python 3.10.19）；request 记录 Linux/kernel、Python、NumPy、pandas、PyArrow 版本及 `environment_sha256`。`position_timing` 包入口采用保持公开 API 不变的惰性在线服务导入，使离线研究 CLI 不加载 Python 3.11 专用的在线服务依赖图；这不是修改共享服务语义或为研究复制实现。研究 artifact 写入独立 ext4 根 `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1`，不会逐 chunk 写 `/mnt/f`。完成 inspect 与 exact retry 后，只把已封存的 request/bundle/receipt 导出到 Windows timing artifact 根，逐文件 hash readback；导出不是激活、serving 或 current pointer 更新。
 
 ### 3.2 现金、时钟与成交（F-002）
 

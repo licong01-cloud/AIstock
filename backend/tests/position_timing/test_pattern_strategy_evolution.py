@@ -1,4 +1,5 @@
 """Behavioral contracts for the frozen PT-NEXT-021 strategy set."""
+
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,10 +21,17 @@ from backend.services.position_timing.pattern_strategy_evolution import (
     replay_strategy_set,
 )
 from backend.services.position_timing.pattern_strategy_evolution_benchmark import (
+    MAX_IN_FLIGHT,
+    WORKER_COUNT,
     _baseline_equivalence,
     _bootstrap_family,
+    _environment_identity,
     _merge_partials,
+    _normalized_suspend_rows,
+    _ordered_replays,
+    _parallel_verification_symbols,
     _partial_frame,
+    _symbol_result_sha256,
 )
 from backend.services.position_timing.pattern_close_cash_benchmark import (
     publish_frame,
@@ -60,9 +68,7 @@ def _bars(periods=150):
 
 
 def test_strategy_family_is_frozen_and_complete():
-    assert [item.strategy_id for item in STRATEGIES] == [
-        "A0", "A1", "A2", "A3", "B0", "B1", "B2", "C0", "C1", "C2"
-    ]
+    assert [item.strategy_id for item in STRATEGIES] == ["A0", "A1", "A2", "A3", "B0", "B1", "B2", "C0", "C1", "C2"]
     assert len(STRATEGY_SET_SHA256) == 64
     assert sum(item.omit_open_gap_veto for item in STRATEGIES) == 8
 
@@ -70,12 +76,22 @@ def test_strategy_family_is_frozen_and_complete():
 def test_open_gap_policy_keeps_observed_gap_but_only_removes_that_veto():
     source = _bar(100.0, open=104.0, close=100.0, up_limit=110.0, down_limit=90.0)
     blocked = execute(
-        Account(), symbol="600001.SH", bar=source, ordinal=1,
-        side="BUY", reference=Decimal("100"), guarded=True,
+        Account(),
+        symbol="600001.SH",
+        bar=source,
+        ordinal=1,
+        side="BUY",
+        reference=Decimal("100"),
+        guarded=True,
     )
     accepted = execute(
-        Account(), symbol="600001.SH", bar=source, ordinal=1,
-        side="BUY", reference=Decimal("100"), guarded=True,
+        Account(),
+        symbol="600001.SH",
+        bar=source,
+        ordinal=1,
+        side="BUY",
+        reference=Decimal("100"),
+        guarded=True,
         price_guard_policy=NO_OPEN_GAP_POLICY,
     )
     assert blocked["status"] == "PRICE_GUARD_BLOCKED"
@@ -85,13 +101,23 @@ def test_open_gap_policy_keeps_observed_gap_but_only_removes_that_veto():
 def test_partial_sell_preserves_cost_basis_and_never_uses_residual_exception():
     account = Account()
     bought = execute(
-        account, symbol="600001.SH", bar=_bar(10.0), ordinal=1,
-        side="BUY", reference=Decimal("10"), guarded=False,
+        account,
+        symbol="600001.SH",
+        bar=_bar(10.0),
+        ordinal=1,
+        side="BUY",
+        reference=Decimal("10"),
+        guarded=False,
     )
     entry = account.entry
     sold = execute(
-        account, symbol="600001.SH", bar=_bar(12.0), ordinal=2,
-        side="SELL", reference=Decimal("12"), guarded=False,
+        account,
+        symbol="600001.SH",
+        bar=_bar(12.0),
+        ordinal=2,
+        side="SELL",
+        reference=Decimal("12"),
+        guarded=False,
         sell_fraction=Decimal("0.5"),
     )
     assert bought["raw_quantity"] % 100 == 0
@@ -102,8 +128,13 @@ def test_partial_sell_preserves_cost_basis_and_never_uses_residual_exception():
 
     residual = Account(cash=Decimal(0), units=Decimal(100), entry=Decimal(10), bought_on=0)
     unavailable = execute(
-        residual, symbol="600001.SH", bar=_bar(12.0), ordinal=2,
-        side="SELL", reference=Decimal("12"), guarded=False,
+        residual,
+        symbol="600001.SH",
+        bar=_bar(12.0),
+        ordinal=2,
+        side="SELL",
+        reference=Decimal("12"),
+        guarded=False,
         sell_fraction=Decimal("0.5"),
     )
     assert unavailable["status"] == "PARTIAL_QUANTITY_UNAVAILABLE"
@@ -229,6 +260,7 @@ def test_a0_full_population_equivalence_is_fail_closed(tmp_path: Path):
         baseline_manifest_path=tmp_path / "manifest.json",
     )
     assert audit["symbol_count"] == 1
+    assert audit["affected_field_differences"] == []
     changed = current.copy()
     changed.loc[0, "timing_total_return"] += 1e-8
     with pytest.raises(ActionValueError, match="STRATEGY_EVOLUTION_A0_BASELINE_MISMATCH"):
@@ -236,3 +268,78 @@ def test_a0_full_population_equivalence_is_fail_closed(tmp_path: Path):
             stocks=changed,
             baseline_manifest_path=tmp_path / "manifest.json",
         )
+
+    explained = _baseline_equivalence(
+        stocks=changed,
+        baseline_manifest_path=tmp_path / "manifest.json",
+        affected_symbols=["600001.SH"],
+    )
+    assert explained["unaffected_symbol_count"] == 0
+    assert explained["affected_field_differences"] == [
+        {
+            "symbol": "600001.SH",
+            "field": "timing_total_return",
+            "current": pytest.approx(0.20000001),
+            "baseline": 0.2,
+        }
+    ]
+
+
+def test_parallel_replay_is_ordered_and_exact_for_same_inputs():
+    inputs = [("000001.SZ", _bars(90)), ("688766.SH", _bars(95))]
+    sequential = list(_ordered_replays(inputs, worker_count=1, max_in_flight=1))
+    parallel = list(_ordered_replays(inputs, worker_count=2, max_in_flight=2))
+
+    assert [item[0] for item in parallel] == [item[0] for item in sequential]
+    assert [_symbol_result_sha256(item) for item in parallel] == [_symbol_result_sha256(item) for item in sequential]
+    assert WORKER_COUNT == 8
+    assert MAX_IN_FLIGHT == 16
+
+
+def test_parallel_worker_failure_writes_no_artifact(tmp_path: Path):
+    with pytest.raises(
+        ActionValueError, match="PATTERN_QLIB_ADJUSTED_SOURCE_SCHEMA_INVALID"
+    ):
+        list(
+            _ordered_replays(
+                [("000001.SZ", pd.DataFrame())],
+                worker_count=2,
+                max_in_flight=2,
+            )
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_parallel_verification_sample_is_fixed_and_board_complete():
+    population = [
+        *(f"000{index:03d}.SZ" for index in range(10)),
+        *(f"300{index:03d}.SZ" for index in range(10)),
+        *(f"600{index:03d}.SH" for index in range(10)),
+        *(f"688{index:03d}.SH" for index in range(10)),
+        "688766.SH",
+    ]
+    selected = _parallel_verification_symbols(population)
+    assert len(selected) == 32
+    assert "688766.SH" in selected
+    assert all(any(symbol.startswith(prefix) for symbol in selected) for prefix in ("000", "300", "600", "688"))
+    assert selected == _parallel_verification_symbols(population)
+
+
+def test_environment_and_suspend_delta_inputs_are_hashable_and_typed():
+    environment = _environment_identity()
+    assert environment["pyarrow"]
+    assert len(environment["environment_sha256"]) == 64
+
+    rows = pd.DataFrame(
+        [
+            {
+                "trade_date": "2025-11-27",
+                "ts_code": "688766.SH",
+                "suspend_type": "S",
+                "suspend_timing": None,
+            }
+        ]
+    )
+    assert _normalized_suspend_rows(rows) == {("2025-11-27", "688766.SH", "S", None)}
+    with pytest.raises(ActionValueError, match="STRATEGY_EVOLUTION_SUSPEND_SCHEMA_DRIFT"):
+        _normalized_suspend_rows(rows.drop(columns="suspend_timing"))

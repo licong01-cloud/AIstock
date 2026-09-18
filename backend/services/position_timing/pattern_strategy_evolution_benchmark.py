@@ -1,13 +1,20 @@
 """Immutable offline benchmark for the frozen PT-NEXT-021 strategy set."""
+
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import date
+import hashlib
+import importlib.metadata
 import json
+import multiprocessing
 from pathlib import Path
 import platform
-from typing import Any, Iterable
+from pathlib import PureWindowsPath
+import re
+from typing import Any, Iterable, Iterator, Mapping
 
 import numpy as np
 import pandas as pd
@@ -24,7 +31,6 @@ from .pattern_adj_factor_restatement import (
 from .pattern_close_cash_benchmark import (
     INDEX_FILE_SHA,
     check_ref,
-    inspect as inspect_close_cash,
     publish_frame,
     publish_json,
     read_json,
@@ -40,8 +46,8 @@ from .pattern_strategy_evolution import (
 )
 from .pattern_universe_benchmark import (
     EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256,
-    EXPECTED_CANDIDATE_MANIFEST_SHA256,
     EXPECTED_PARENT_MANIFEST_SHA256,
+    EXPECTED_POOL_FILES,
     POOL_IDS,
     QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256,
     CandidatePoolMemberships,
@@ -57,20 +63,26 @@ from .policy import (
 
 PIPELINE_ID = "POSITION_TIMING_CLOSE_CASH_STRATEGY_EVOLUTION_V1"
 FOLDER = "pattern_strategy_evolution_v1"
-REQUEST_SCHEMA = "position_timing_strategy_evolution_request_v1"
-RECEIPT_SCHEMA = "position_timing_strategy_evolution_receipt_v1"
+REQUEST_SCHEMA = "position_timing_strategy_evolution_request_v2"
+RECEIPT_SCHEMA = "position_timing_strategy_evolution_receipt_v2"
 MANIFEST_SCHEMA = "position_timing_strategy_evolution_files_v1"
 CHUNK_SIZE = 128
+WORKER_COUNT = 8
+MAX_IN_FLIGHT = 16
 BOOTSTRAP_REPLICATES = 5_000
 BOOTSTRAP_BLOCK = 25
 BOOTSTRAP_SEED = 20260918
 FAMILY_SIZE = 54
-BASELINE_CLOSE_CASH_REQUEST_SHA256 = (
-    "745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff"
-)
-BASELINE_CLOSE_CASH_MANIFEST_SHA256 = (
-    "a304822c9c6bb09ca4fae151d35e6dad48c17944226f0cf5c47258b02191d444"
-)
+BASELINE_CLOSE_CASH_REQUEST_SHA256 = "745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff"
+BASELINE_CLOSE_CASH_MANIFEST_SHA256 = "a304822c9c6bb09ca4fae151d35e6dad48c17944226f0cf5c47258b02191d444"
+BASELINE_CLOSE_CASH_MANIFEST_FILE_SHA256 = "58c4127d3f501647c9add304e8f31668124394b4e77b4336021f786cf04f22fe"
+EXPECTED_R5_CANDIDATE_MANIFEST_SHA256 = "7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1"
+EXPECTED_R7_CANDIDATE_MANIFEST_SHA256 = "084ffe869dafe919e73e884afa6a833c497df4ab09e1bfb7f649993043bc6900"
+EXPECTED_R7_CANDIDATE_DATASET_SHA256 = "c11e16ee15719c0b96af4a6fafcaa338858f541eedc6b3a0768b34621e202836"
+EXPECTED_R5_SUSPEND_SHA256 = "f8af78479eb6d8709a037e5abe19258e65c5c895eaccc4ccd79c6f96753697f9"
+EXPECTED_R7_SUSPEND_SHA256 = "7f1895fe3c3a025708c1afa525d17e594f536180a86d6a9cf22b3c25d87bee3f"
+EXPECTED_R7_DEPLOYMENT_CONTENT_SHA256 = "372c41a147fe252596379878ebbeadc6601b195d744a144026a6308fdc73f257"
+_WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 UNIFORM_PERIOD_START = date(2023, 8, 8)
 CONTRACT = {
     "pipeline_id": PIPELINE_ID,
@@ -102,7 +114,362 @@ CONTRACT = {
     "corporate_action_authority_read": False,
     "account_economics_simulated": False,
     "broker_account_clearing": False,
+    "parallel_execution": {
+        "executor": "PROCESS_POOL_EXECUTOR",
+        "start_method": "spawn",
+        "worker_count": WORKER_COUNT,
+        "max_in_flight": MAX_IN_FLIGHT,
+        "chunk_size": CHUNK_SIZE,
+        "writer": "PARENT_PROCESS_ONLY",
+        "result_order": "CANONICAL_SYMBOL_ORDER",
+    },
 }
+
+
+def _environment_identity() -> dict[str, str]:
+    identity = {
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "pyarrow": importlib.metadata.version("pyarrow"),
+    }
+    return {**identity, "environment_sha256": canonical_sha256(identity)}
+
+
+def _portable_reference_path(reference: Mapping[str, Any]) -> Path:
+    """Resolve an immutable Windows-authored reference from WSL without rewriting it."""
+
+    raw = str(reference.get("path") or "")
+    direct = Path(raw)
+    candidates = [direct]
+    if platform.system() == "Linux" and _WINDOWS_ABSOLUTE.match(raw):
+        windows = PureWindowsPath(raw)
+        candidates.insert(0, Path("/mnt") / windows.drive[0].lower() / Path(*windows.parts[1:]))
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        observed = file_reference(candidate)
+        if observed["sha256"] == reference.get("sha256") and observed["size_bytes"] == reference.get("size_bytes"):
+            return candidate.resolve()
+    raise ActionValueError("STRATEGY_EVOLUTION_PORTABLE_REFERENCE_DRIFT", path=raw)
+
+
+def _validate_baseline_bundle(bundle: Path) -> dict[str, Any]:
+    """Validate the immutable r5 bundle while preserving its Windows-authored manifest."""
+
+    root = bundle.resolve()
+    manifest_path = root / "manifest.json"
+    manifest_reference = file_reference(manifest_path)
+    manifest = read_json(manifest_path)
+    expected_files = {
+        "request.json",
+        "report.json",
+        "stocks.parquet",
+        "pool_daily.parquet",
+        "receipt.json",
+    }
+    identity = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    if (
+        manifest_reference["sha256"] != BASELINE_CLOSE_CASH_MANIFEST_FILE_SHA256
+        or manifest.get("manifest_sha256") != BASELINE_CLOSE_CASH_MANIFEST_SHA256
+        or canonical_sha256(identity) != BASELINE_CLOSE_CASH_MANIFEST_SHA256
+        or manifest.get("request_sha256") != BASELINE_CLOSE_CASH_REQUEST_SHA256
+        or manifest.get("schema_version") != "position_timing_close_cash_files_v1"
+        or set(manifest.get("files") or {}) != expected_files
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_BASELINE_IDENTITY_DRIFT")
+    resolved_files = {name: _portable_reference_path(reference) for name, reference in manifest["files"].items()}
+    request = read_json(resolved_files["request.json"])
+    if (
+        request.get("request_sha256") != BASELINE_CLOSE_CASH_REQUEST_SHA256
+        or canonical_sha256({key: value for key, value in request.items() if key != "request_sha256"})
+        != BASELINE_CLOSE_CASH_REQUEST_SHA256
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_BASELINE_REQUEST_DRIFT")
+    return {
+        "manifest": manifest,
+        "manifest_reference": manifest_reference,
+        "resolved_files": {name: path.as_posix() for name, path in resolved_files.items()},
+    }
+
+
+def _read_candidate_manifest(root: Path, *, expected_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = root.resolve() / "qe_dataset_manifest.json"
+    reference = file_reference(path)
+    if reference["sha256"] != expected_sha256:
+        raise ActionValueError("STRATEGY_EVOLUTION_CANDIDATE_MANIFEST_DRIFT")
+    payload = read_json(path)
+    identity = {key: value for key, value in payload.items() if key != "dataset_manifest_sha256"}
+    if payload.get("dataset_manifest_sha256") != canonical_sha256(identity):
+        raise ActionValueError("STRATEGY_EVOLUTION_CANDIDATE_CANONICAL_DRIFT")
+    return payload, reference
+
+
+def _manifest_component_reference(root: Path, manifest: Mapping[str, Any], name: str) -> dict[str, Any]:
+    component = (manifest.get("components") or {}).get(name)
+    if not isinstance(component, Mapping):
+        raise ActionValueError("STRATEGY_EVOLUTION_COMPONENT_MISSING", component=name)
+    path = (root.resolve() / str(component.get("path") or "")).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ActionValueError("STRATEGY_EVOLUTION_COMPONENT_SCOPE_DRIFT", component=name)
+    reference = file_reference(path)
+    if reference["sha256"] != component.get("sha256") or reference["size_bytes"] != component.get("size"):
+        raise ActionValueError("STRATEGY_EVOLUTION_COMPONENT_IDENTITY_DRIFT", component=name)
+    return reference
+
+
+def _normalized_suspend_rows(frame: pd.DataFrame) -> set[tuple[str, str, str, str | None]]:
+    required = {"trade_date", "ts_code", "suspend_type", "suspend_timing"}
+    if set(frame.columns) != required:
+        raise ActionValueError("STRATEGY_EVOLUTION_SUSPEND_SCHEMA_DRIFT")
+    rows: set[tuple[str, str, str, str | None]] = set()
+    for row in frame.itertuples(index=False):
+        timing = None if pd.isna(row.suspend_timing) else str(row.suspend_timing)
+        rows.add(
+            (
+                pd.Timestamp(row.trade_date).date().isoformat(),
+                str(row.ts_code),
+                str(row.suspend_type),
+                timing,
+            )
+        )
+    if len(rows) != len(frame):
+        raise ActionValueError("STRATEGY_EVOLUTION_SUSPEND_DUPLICATE_DRIFT")
+    return rows
+
+
+def _dataset_delta_audit(*, prior_candidate_root: Path, candidate_root: Path) -> dict[str, Any]:
+    prior_root = prior_candidate_root.resolve()
+    current_root = candidate_root.resolve()
+    prior, prior_ref = _read_candidate_manifest(prior_root, expected_sha256=EXPECTED_R5_CANDIDATE_MANIFEST_SHA256)
+    current, current_ref = _read_candidate_manifest(current_root, expected_sha256=EXPECTED_R7_CANDIDATE_MANIFEST_SHA256)
+    if (
+        current.get("dataset_manifest_sha256") != EXPECTED_R7_CANDIDATE_DATASET_SHA256
+        or current.get("deployment_content_sha256") != EXPECTED_R7_DEPLOYMENT_CONTENT_SHA256
+        or current.get("revision") != "20260918-r7"
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_R7_IDENTITY_DRIFT")
+
+    unchanged_components = (
+        "day_calendar",
+        "day_meta_export",
+        "day_provider_catalog",
+        "day_selection_universe",
+        "index_daily",
+        "index_meta",
+        "adj_factor_restatement_authority",
+        "rights_issue_authority",
+    )
+    component_audit: dict[str, Any] = {}
+    for name in unchanged_components:
+        prior_component = _manifest_component_reference(prior_root, prior, name)
+        current_component = _manifest_component_reference(current_root, current, name)
+        same = {key: prior_component[key] == current_component[key] for key in ("sha256", "size_bytes")}
+        if not all(same.values()):
+            raise ActionValueError("STRATEGY_EVOLUTION_UNEXPECTED_COMPONENT_DELTA", component=name)
+        component_audit[name] = {
+            "sha256": current_component["sha256"],
+            "size_bytes": current_component["size_bytes"],
+        }
+    prior_sidecars = (prior.get("st_pit_manifest") or {}).get("index_membership_sidecars") or {}
+    current_sidecars = (current.get("st_pit_manifest") or {}).get("index_membership_sidecars") or {}
+    if prior_sidecars != current_sidecars:
+        raise ActionValueError("STRATEGY_EVOLUTION_POOL_SIDECAR_DELTA")
+
+    prior_suspend = _manifest_component_reference(prior_root, prior, "suspend_data")
+    current_suspend = _manifest_component_reference(current_root, current, "suspend_data")
+    if prior_suspend["sha256"] != EXPECTED_R5_SUSPEND_SHA256 or current_suspend["sha256"] != EXPECTED_R7_SUSPEND_SHA256:
+        raise ActionValueError("STRATEGY_EVOLUTION_SUSPEND_IDENTITY_DRIFT")
+    prior_rows = _normalized_suspend_rows(pd.read_parquet(prior_suspend["path"]))
+    current_rows = _normalized_suspend_rows(pd.read_parquet(current_suspend["path"]))
+    raw_added = sorted(current_rows - prior_rows)
+    raw_removed = sorted(prior_rows - current_rows)
+    prior_strategy_keys = {(row[1], row[0]) for row in prior_rows if row[2] == "S"}
+    current_strategy_keys = {(row[1], row[0]) for row in current_rows if row[2] == "S"}
+    strategy_added = sorted(current_strategy_keys - prior_strategy_keys)
+    strategy_removed = sorted(prior_strategy_keys - current_strategy_keys)
+    affected_symbols = sorted({row[0] for row in strategy_added + strategy_removed})
+    expected_dates = [
+        "2025-11-27",
+        "2025-11-28",
+        "2025-12-01",
+        "2025-12-02",
+        "2025-12-03",
+        "2025-12-04",
+        "2025-12-05",
+    ]
+    if (
+        strategy_removed
+        or affected_symbols != ["688766.SH"]
+        or [row[1] for row in strategy_added] != expected_dates
+        or raw_removed
+        != [
+            ("2018-08-28", "000979.SZ", "S", None),
+            ("2025-11-26", "688766.SH", "S", "09:30-09:30"),
+        ]
+        or raw_added
+        != [
+            ("2018-08-28", "000979.SZ", "S", "10:37-15:00"),
+            ("2025-11-26", "688766.SH", "S", None),
+            *[(day, "688766.SH", "S", None) for day in expected_dates],
+        ]
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_SUSPEND_DELTA_DRIFT")
+    identity = {
+        "schema_version": "position_timing_r5_r7_strategy_input_delta_v1",
+        "prior_candidate_manifest": prior_ref,
+        "current_candidate_manifest": current_ref,
+        "unchanged_components": component_audit,
+        "pool_sidecars_sha256": canonical_sha256(current_sidecars),
+        "prior_suspend": prior_suspend,
+        "current_suspend": current_suspend,
+        "prior_suspend_row_count": len(prior_rows),
+        "current_suspend_row_count": len(current_rows),
+        "raw_added_rows": [
+            {
+                "trade_date": row[0],
+                "symbol": row[1],
+                "suspend_type": row[2],
+                "suspend_timing": row[3],
+            }
+            for row in raw_added
+        ],
+        "raw_removed_rows": [
+            {
+                "trade_date": row[0],
+                "symbol": row[1],
+                "suspend_type": row[2],
+                "suspend_timing": row[3],
+            }
+            for row in raw_removed
+        ],
+        "strategy_suspension_added": [
+            {"symbol": symbol, "trade_date": trade_date} for symbol, trade_date in strategy_added
+        ],
+        "strategy_suspension_removed": [],
+        "affected_symbols": affected_symbols,
+        "r5_evolution_chunks_reusable": False,
+    }
+    return {**identity, "audit_sha256": canonical_sha256(identity)}
+
+
+def _r7_pool_memberships(candidate: DailyCandidate) -> CandidatePoolMemberships:
+    return open_candidate_pool_memberships(
+        candidate,
+        expected_candidate_manifest_sha256=EXPECTED_R7_CANDIDATE_MANIFEST_SHA256,
+        expected_candidate_dataset_sha256=EXPECTED_R7_CANDIDATE_DATASET_SHA256,
+        expected_pool_files=EXPECTED_POOL_FILES,
+    )
+
+
+def _replay_symbol_task(
+    symbol: str, bars: pd.DataFrame
+) -> tuple[str, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+    days, fills, details = replay_strategy_set(symbol, bars)
+    return symbol, days, fills, details
+
+
+def _ordered_replays(
+    inputs: Iterable[tuple[str, pd.DataFrame]],
+    *,
+    worker_count: int,
+    max_in_flight: int,
+) -> Iterator[tuple[str, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]]:
+    if worker_count < 1 or max_in_flight < worker_count:
+        raise ActionValueError("STRATEGY_EVOLUTION_PARALLEL_CONTRACT_INVALID")
+    if worker_count == 1:
+        for symbol, bars in inputs:
+            yield _replay_symbol_task(symbol, bars)
+        return
+
+    executor = ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+    pending: dict[int, tuple[str, Future[Any]]] = {}
+    iterator = iter(inputs)
+    submit_index = 0
+    consume_index = 0
+    exhausted = False
+    try:
+        while not exhausted or pending:
+            while not exhausted and len(pending) < max_in_flight:
+                try:
+                    symbol, bars = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                    break
+                pending[submit_index] = (
+                    symbol,
+                    executor.submit(_replay_symbol_task, symbol, bars),
+                )
+                submit_index += 1
+            if consume_index not in pending:
+                if exhausted:
+                    break
+                continue
+            expected_symbol, future = pending.pop(consume_index)
+            result = future.result()
+            if result[0] != expected_symbol:
+                raise ActionValueError("STRATEGY_EVOLUTION_WORKER_ORDER_DRIFT")
+            yield result
+            consume_index += 1
+    finally:
+        for _, future in pending.values():
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _frame_sha256(frame: pd.DataFrame) -> str:
+    payload = frame.to_json(
+        orient="table",
+        index=False,
+        date_format="iso",
+        double_precision=15,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _symbol_result_sha256(result: tuple[str, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]) -> str:
+    symbol, days, fills, details = result
+    return canonical_sha256(
+        {
+            "symbol": symbol,
+            "days_sha256": _frame_sha256(days),
+            "fills_sha256": _frame_sha256(fills),
+            "details_sha256": canonical_sha256(details),
+        }
+    )
+
+
+def _parallel_verification_symbols(symbols: Iterable[str], *, size: int = 32) -> list[str]:
+    population = tuple(symbols)
+    available = set(population)
+    mandatory: list[str] = []
+    for predicate in (
+        lambda value: value.startswith("000"),
+        lambda value: value.startswith("300"),
+        lambda value: value.startswith("600"),
+        lambda value: value.startswith("688"),
+    ):
+        selected = next((symbol for symbol in population if predicate(symbol)), None)
+        if selected is None:
+            raise ActionValueError("STRATEGY_EVOLUTION_PARALLEL_SAMPLE_INCOMPLETE")
+        mandatory.append(selected)
+    if "688766.SH" not in available:
+        raise ActionValueError("STRATEGY_EVOLUTION_VERSION_DELTA_SYMBOL_MISSING")
+    mandatory.append("688766.SH")
+    ranked = sorted(
+        (symbol for symbol in population if symbol not in mandatory),
+        key=lambda symbol: (hashlib.sha256(symbol.encode("ascii")).hexdigest(), symbol),
+    )
+    selected = set(mandatory + ranked[: max(0, size - len(mandatory))])
+    if len(selected) != size:
+        raise ActionValueError("STRATEGY_EVOLUTION_PARALLEL_SAMPLE_SIZE_DRIFT")
+    return [symbol for symbol in population if symbol in selected]
 
 
 def _seal(root: Path, names: list[str], *, request_hash: str) -> dict[str, Any]:
@@ -119,9 +486,7 @@ def _seal(root: Path, names: list[str], *, request_hash: str) -> dict[str, Any]:
 
 def inspect(root: Path, *, request_hash: str | None = None) -> dict[str, Any]:
     manifest = read_json(root / "manifest.json")
-    expected_hash = canonical_sha256(
-        {key: value for key, value in manifest.items() if key != "manifest_sha256"}
-    )
+    expected_hash = canonical_sha256({key: value for key, value in manifest.items() if key != "manifest_sha256"})
     if (
         manifest.get("schema_version") != MANIFEST_SCHEMA
         or manifest.get("manifest_sha256") != expected_hash
@@ -148,13 +513,10 @@ def inspect(root: Path, *, request_hash: str | None = None) -> dict[str, Any]:
         receipt = read_json(root / "receipt.json")
         if (
             request.get("request_sha256") != manifest["request_sha256"]
-            or canonical_sha256(
-                {key: value for key, value in request.items() if key != "request_sha256"}
-            )
+            or canonical_sha256({key: value for key, value in request.items() if key != "request_sha256"})
             != manifest["request_sha256"]
             or receipt.get("request_sha256") != manifest["request_sha256"]
-            or len(receipt.get("chunks", []))
-            != (len(request["symbols"]) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            or len(receipt.get("chunks", [])) != (len(request["symbols"]) + CHUNK_SIZE - 1) // CHUNK_SIZE
         ):
             raise ActionValueError("STRATEGY_EVOLUTION_BUNDLE_IDENTITY_DRIFT")
         for reference in receipt["chunks"]:
@@ -173,24 +535,32 @@ def prepare(
     timing_root: Path,
     repository_root: Path,
     parent_pattern_bundle: Path,
+    baseline_close_cash_bundle: Path,
+    prior_candidate_root: Path,
     candidate_root: Path,
 ) -> Path:
     repository = repository_root.resolve()
     root = timing_root.resolve()
+    absolute_inputs = (
+        timing_root,
+        repository_root,
+        parent_pattern_bundle,
+        baseline_close_cash_bundle,
+        prior_candidate_root,
+        candidate_root,
+    )
     if (
-        not all(
-            path.is_absolute()
-            for path in (timing_root, repository_root, parent_pattern_bundle, candidate_root)
-        )
+        not all(path.is_absolute() for path in absolute_inputs)
         or root.is_relative_to(repository)
         or root.is_relative_to(candidate_root.resolve())
+        or root.is_relative_to(prior_candidate_root.resolve())
         or repository != Path(__file__).resolve().parents[3]
     ):
         raise ActionValueError("STRATEGY_EVOLUTION_PATH_SCOPE_INVALID")
     commit = _clean_repository_commit(repository)
     code = sources(repository)
     candidate = DailyCandidate.open(candidate_root)
-    pools = open_candidate_pool_memberships(candidate)
+    pools = _r7_pool_memberships(candidate)
     if (
         candidate.calendar[0].date(),
         candidate.calendar[-1].date(),
@@ -201,18 +571,20 @@ def prepare(
     parent = read_json(Path(parent_ref["path"]))
     if (
         parent.get("manifest_sha256") != EXPECTED_PARENT_MANIFEST_SHA256
-        or canonical_sha256(
-            {key: value for key, value in parent.items() if key != "manifest_sha256"}
-        )
+        or canonical_sha256({key: value for key, value in parent.items() if key != "manifest_sha256"})
         != EXPECTED_PARENT_MANIFEST_SHA256
     ):
         raise ActionValueError("STRATEGY_EVOLUTION_PARENT_IDENTITY_DRIFT")
     authority = open_adj_factor_restatement_authority(
         candidate_root=candidate.root,
-        expected_candidate_manifest_sha256=EXPECTED_CANDIDATE_MANIFEST_SHA256,
+        expected_candidate_manifest_sha256=EXPECTED_R7_CANDIDATE_MANIFEST_SHA256,
         expected_authority_canonical_sha256=EXPECTED_ADJ_FACTOR_RESTATEMENT_AUTHORITY_SHA256,
     )
     restatement = audit_candidate_adj_factor_restatement(candidate, authority)
+    version_delta = _dataset_delta_audit(
+        prior_candidate_root=prior_candidate_root,
+        candidate_root=candidate.root,
+    )
     candidate_identity = canonical_sha256(
         {
             "candidate_manifest": pools.candidate_manifest_reference,
@@ -243,20 +615,8 @@ def prepare(
     if index_ref["sha256"] != INDEX_FILE_SHA:
         raise ActionValueError("STRATEGY_EVOLUTION_INDEX_SOURCE_DRIFT")
     check_ref(parent_ref)
-    baseline_bundle = (
-        root
-        / "research"
-        / "pattern_close_cash_benchmark_v1"
-        / "bundles"
-        / BASELINE_CLOSE_CASH_REQUEST_SHA256
-    )
-    baseline_verified = inspect_close_cash(
-        baseline_bundle,
-        request_hash=BASELINE_CLOSE_CASH_REQUEST_SHA256,
-    )
-    if baseline_verified["manifest_sha256"] != BASELINE_CLOSE_CASH_MANIFEST_SHA256:
-        raise ActionValueError("STRATEGY_EVOLUTION_BASELINE_IDENTITY_DRIFT")
-    baseline_ref = file_reference(baseline_bundle / "manifest.json")
+    baseline_verified = _validate_baseline_bundle(baseline_close_cash_bundle)
+    baseline_ref = baseline_verified["manifest_reference"]
     if sources(repository) != code:
         raise ActionValueError("STRATEGY_EVOLUTION_CODE_DRIFT")
     request: dict[str, Any] = {
@@ -266,16 +626,13 @@ def prepare(
         "repository_commit": commit,
         "repository_root": repository.as_posix(),
         "source_code": code,
-        "environment": {
-            "python": platform.python_version(),
-            "numpy": np.__version__,
-            "pandas": pd.__version__,
-        },
+        "environment": _environment_identity(),
         "timing_root": root.as_posix(),
         "candidate_root": candidate.root.as_posix(),
         "candidate_manifest": pools.candidate_manifest_reference,
         "parent_manifest": parent_ref,
         "baseline_close_cash_manifest": baseline_ref,
+        "dataset_version_delta_audit": version_delta,
         "symbols": candidate.symbols,
         "pool_sidecars": pools.references,
         "calendar": [str(stamp.date()) for stamp in candidate.calendar],
@@ -291,7 +648,8 @@ def prepare(
         "database_write": False,
         "network_accessed": False,
         "runtime_action_performed": False,
-        "process_control_performed": False,
+        "service_process_control_performed": False,
+        "research_worker_processes_used": True,
     }
     request["request_sha256"] = canonical_sha256(request)
     path = root / "research" / FOLDER / "requests" / f"{request['request_sha256']}.json"
@@ -301,9 +659,7 @@ def prepare(
 
 def load_request(path: Path) -> dict[str, Any]:
     request = read_json(path)
-    identity = canonical_sha256(
-        {key: value for key, value in request.items() if key != "request_sha256"}
-    )
+    identity = canonical_sha256({key: value for key, value in request.items() if key != "request_sha256"})
     if (
         request.get("request_sha256") != identity
         or request.get("contract_sha256") != canonical_sha256(CONTRACT)
@@ -321,23 +677,23 @@ def load_request(path: Path) -> dict[str, Any]:
         or owner.is_relative_to(Path(request["candidate_root"]).resolve())
     ):
         raise ActionValueError("STRATEGY_EVOLUTION_REQUEST_SCOPE_DRIFT")
-    if request.get("source_preflight_complete") is not True or any(
-        request.get(key) is not False
-        for key in (
-            "outcomes_read",
-            "database_read",
-            "database_write",
-            "network_accessed",
-            "runtime_action_performed",
-            "process_control_performed",
+    if (
+        request.get("source_preflight_complete") is not True
+        or any(
+            request.get(key) is not False
+            for key in (
+                "outcomes_read",
+                "database_read",
+                "database_write",
+                "network_accessed",
+                "runtime_action_performed",
+                "service_process_control_performed",
+            )
         )
+        or request.get("research_worker_processes_used") is not True
     ):
         raise ActionValueError("STRATEGY_EVOLUTION_REQUEST_BOUNDARY_DRIFT")
-    expected_environment = {
-        "python": platform.python_version(),
-        "numpy": np.__version__,
-        "pandas": pd.__version__,
-    }
+    expected_environment = _environment_identity()
     if request.get("environment") != expected_environment:
         raise ActionValueError("STRATEGY_EVOLUTION_ENVIRONMENT_DRIFT")
     for name in ("factor_audit", "restatement_audit"):
@@ -347,7 +703,7 @@ def load_request(path: Path) -> dict[str, Any]:
         ):
             raise ActionValueError("STRATEGY_EVOLUTION_PREFLIGHT_DRIFT")
     if (
-        request["candidate_manifest"]["sha256"] != EXPECTED_CANDIDATE_MANIFEST_SHA256
+        request["candidate_manifest"]["sha256"] != EXPECTED_R7_CANDIDATE_MANIFEST_SHA256
         or request["index_source"]["sha256"] != INDEX_FILE_SHA
         or request["qlib_contract_sha256"] != QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
     ):
@@ -355,17 +711,19 @@ def load_request(path: Path) -> dict[str, Any]:
     for reference in (
         request["candidate_manifest"],
         request["parent_manifest"],
-        request["baseline_close_cash_manifest"],
         request["index_source"],
         request["restatement_authority"],
     ):
         check_ref(reference)
-    baseline = inspect_close_cash(
-        Path(request["baseline_close_cash_manifest"]["path"]).parent,
-        request_hash=BASELINE_CLOSE_CASH_REQUEST_SHA256,
-    )
-    if baseline["manifest_sha256"] != BASELINE_CLOSE_CASH_MANIFEST_SHA256:
-        raise ActionValueError("STRATEGY_EVOLUTION_BASELINE_IDENTITY_DRIFT")
+    _validate_baseline_bundle(_portable_reference_path(request["baseline_close_cash_manifest"]).parent)
+    version_delta = request.get("dataset_version_delta_audit") or {}
+    if (
+        version_delta.get("audit_sha256")
+        != canonical_sha256({key: value for key, value in version_delta.items() if key != "audit_sha256"})
+        or version_delta.get("affected_symbols") != ["688766.SH"]
+        or version_delta.get("r5_evolution_chunks_reusable") is not False
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_VERSION_DELTA_DRIFT")
     for group in ("source_code", "source_data", "pool_sidecars"):
         for reference in request[group].values():
             check_ref(reference)
@@ -461,9 +819,7 @@ def _add_symbol_path(
             "timing_terminal_mtm_return": full[-1, 0] / float(CAPITAL) - 1 if np.isfinite(full[-1, 0]) else None,
             "hold_terminal_mtm_return": full[-1, 1] / float(CAPITAL) - 1 if np.isfinite(full[-1, 1]) else None,
             "terminal_excess_return": (
-                (full[-1, 0] - full[-1, 1]) / float(CAPITAL)
-                if np.isfinite(full[-1]).all()
-                else None
+                (full[-1, 0] - full[-1, 1]) / float(CAPITAL) if np.isfinite(full[-1]).all() else None
             ),
             "paired_unknown_sessions": int((~valid[int(start) + 1 :]).sum()),
             "daily_path_complete": bool(valid[int(start) + 1 :].all()),
@@ -479,11 +835,7 @@ def _add_symbol_path(
     )
     flat = pd.json_normalize(stock_comparison, sep="_").iloc[0].to_dict()
     result.update(
-        {
-            key: value
-            for key, value in flat.items()
-            if not key.startswith("index_") and "_minus_index" not in key
-        }
+        {key: value for key, value in flat.items() if not key.startswith("index_") and "_minus_index" not in key}
     )
     exposure = path.timing_exposure.to_numpy(float)
     invested = np.isfinite(exposure) & (exposure > 0)
@@ -584,15 +936,18 @@ def _bootstrap_family(
 
 
 def _baseline_equivalence(
-    *, stocks: pd.DataFrame, baseline_manifest_path: Path
+    *,
+    stocks: pd.DataFrame,
+    baseline_manifest_path: Path,
+    affected_symbols: Iterable[str] = (),
 ) -> dict[str, Any]:
     manifest = read_json(baseline_manifest_path)
     reference = manifest["files"]["stocks.parquet"]
-    check_ref(reference)
-    baseline = pd.read_parquet(reference["path"]).sort_values("symbol", kind="stable")
-    current = stocks.loc[
-        stocks.strategy_id.eq("A0") & stocks.start_mode.eq("OWN_START")
-    ].sort_values("symbol", kind="stable")
+    baseline_path = _portable_reference_path(reference)
+    baseline = pd.read_parquet(baseline_path).sort_values("symbol", kind="stable")
+    current = stocks.loc[stocks.strategy_id.eq("A0") & stocks.start_mode.eq("OWN_START")].sort_values(
+        "symbol", kind="stable"
+    )
     if list(current.symbol) != list(baseline.symbol):
         raise ActionValueError("STRATEGY_EVOLUTION_A0_POPULATION_DRIFT")
     columns = (
@@ -615,7 +970,17 @@ def _baseline_equivalence(
         "hold_annualized_return",
         "hold_max_drawdown",
     )
+    allowed = set(affected_symbols)
+    if not allowed.issubset(set(current.symbol)):
+        raise ActionValueError("STRATEGY_EVOLUTION_A0_AFFECTED_SYMBOL_DRIFT")
     mismatches: list[dict[str, Any]] = []
+    affected_differences: list[dict[str, Any]] = []
+
+    def encoded(value: Any) -> Any:
+        if pd.isna(value):
+            return None
+        return value.item() if isinstance(value, np.generic) else value
+
     for column in columns:
         left, right = current[column].reset_index(drop=True), baseline[column].reset_index(drop=True)
         if pd.api.types.is_numeric_dtype(right):
@@ -627,27 +992,31 @@ def _baseline_equivalence(
                 equal_nan=True,
             )
         else:
-            equal = left.fillna("<NA>").astype(str).eq(
-                right.fillna("<NA>").astype(str)
-            ).to_numpy()
-        for ordinal in np.flatnonzero(~np.asarray(equal))[:10]:
-            mismatches.append(
-                {
-                    "symbol": str(current.iloc[ordinal].symbol),
-                    "field": column,
-                    "current": None if pd.isna(left.iloc[ordinal]) else left.iloc[ordinal],
-                    "baseline": None if pd.isna(right.iloc[ordinal]) else right.iloc[ordinal],
-                }
-            )
+            equal = left.fillna("<NA>").astype(str).eq(right.fillna("<NA>").astype(str)).to_numpy()
+        for ordinal in np.flatnonzero(~np.asarray(equal)):
+            difference = {
+                "symbol": str(current.iloc[ordinal].symbol),
+                "field": column,
+                "current": encoded(left.iloc[ordinal]),
+                "baseline": encoded(right.iloc[ordinal]),
+            }
+            if difference["symbol"] in allowed:
+                affected_differences.append(difference)
+            elif len(mismatches) < 20:
+                mismatches.append(difference)
     if mismatches:
         raise ActionValueError(
             "STRATEGY_EVOLUTION_A0_BASELINE_MISMATCH",
             mismatch_examples=mismatches,
         )
     audit = {
-        "status": "EXACT_WITH_NUMERIC_TOLERANCE_1E_12",
+        "status": "EXACT_UNAFFECTED_SYMBOLS_WITH_VERSION_DELTA_DIAGNOSTIC",
         "symbol_count": len(current),
+        "unaffected_symbol_count": len(current) - len(allowed),
+        "affected_symbols": sorted(allowed),
+        "affected_field_differences": affected_differences,
         "fields": list(columns),
+        "numeric_absolute_tolerance": 1e-12,
         "baseline_manifest_sha256": BASELINE_CLOSE_CASH_MANIFEST_SHA256,
     }
     audit["audit_sha256"] = canonical_sha256(audit)
@@ -726,9 +1095,7 @@ def _build_report(
                 "last_date": str(calendar[selected[-1]].date()),
                 "incomplete_sessions": int((eligible & ~complete).sum()),
                 "missing_index_sessions": int((eligible & ~np.isfinite(index_values)).sum()),
-                "population_unique_symbols": int(
-                    memberships.intervals[pool].symbol.nunique()
-                ),
+                "population_unique_symbols": int(memberships.intervals[pool].symbol.nunique()),
                 "full_population": full,
                 "paired_observed_only_not_full_population": observed,
                 "uniform_2023_08_08_to_2026_08_31_paired_observed": comparison(
@@ -755,10 +1122,7 @@ def _build_report(
                     "unknown_accounts": int(aggregate["unknown"][ordinal]),
                 }
             )
-        if (
-            start_mode == "COMMON_START"
-            and cohort_mode == "dynamic"
-        ):
+        if start_mode == "COMMON_START" and cohort_mode == "dynamic":
             values = np.full(len(calendar), np.nan)
             values[eligible] = timing[eligible]
             strategy_series[(strategy, pool)] = values
@@ -779,14 +1143,10 @@ def _build_report(
         hold_total = row.get("hold_total_return")
         index_total = index_summary["total_return"]
         stocks.at[row_index, "timing_minus_index"] = (
-            float(timing_total) - float(index_total)
-            if pd.notna(timing_total) and index_total is not None
-            else np.nan
+            float(timing_total) - float(index_total) if pd.notna(timing_total) and index_total is not None else np.nan
         )
         stocks.at[row_index, "hold_minus_index"] = (
-            float(hold_total) - float(index_total)
-            if pd.notna(hold_total) and index_total is not None
-            else np.nan
+            float(hold_total) - float(index_total) if pd.notna(hold_total) and index_total is not None else np.nan
         )
 
     contrast_specs = {
@@ -802,16 +1162,11 @@ def _build_report(
         for pool in POOL_IDS:
             arrays = [strategy_series.get((strategy, pool)) for strategy, _ in terms]
             if any(value is None for value in arrays):
-                mechanism_contrasts.append(
-                    {"contrast": name, "pool": pool, "status": "UNAVAILABLE"}
-                )
+                mechanism_contrasts.append({"contrast": name, "pool": pool, "status": "UNAVAILABLE"})
                 continue
             stacked = np.vstack(arrays)
             complete = np.isfinite(stacked).all(axis=0)
-            estimate = sum(
-                weight * np.asarray(value)
-                for (_, weight), value in zip(terms, arrays, strict=True)
-            )
+            estimate = sum(weight * np.asarray(value) for (_, weight), value in zip(terms, arrays, strict=True))
             mechanism_contrasts.append(
                 {
                     "contrast": name,
@@ -819,9 +1174,7 @@ def _build_report(
                     "status": "ESTIMATED" if complete.any() else "UNAVAILABLE",
                     "paired_sessions": int(complete.sum()),
                     "mean_daily_difference_bps": (
-                        float(np.mean(estimate[complete]) * 10_000.0)
-                        if complete.any()
-                        else None
+                        float(np.mean(estimate[complete]) * 10_000.0) if complete.any() else None
                     ),
                     "diagnostic_only": True,
                 }
@@ -837,9 +1190,7 @@ def _build_report(
                 "win_fraction": float((delta > 0).mean()) if len(delta) else None,
                 "mean": float(delta.mean()) if len(delta) else None,
                 "quantiles": (
-                    {str(q): float(delta.quantile(q)) for q in (0.05, 0.25, 0.5, 0.75, 0.95)}
-                    if len(delta)
-                    else {}
+                    {str(q): float(delta.quantile(q)) for q in (0.05, 0.25, 0.5, 0.75, 0.95)} if len(delta) else {}
                 ),
             }
         )
@@ -863,9 +1214,7 @@ def _build_report(
                     "count": int(count),
                 }
             )
-        for (strategy, start_mode), group in fills.groupby(
-            ["strategy_id", "start_mode"], sort=True
-        ):
+        for (strategy, start_mode), group in fills.groupby(["strategy_id", "start_mode"], sort=True):
             reentry = pd.to_numeric(
                 group.get(
                     "sessions_since_last_exit",
@@ -927,6 +1276,88 @@ def _build_report(
     return report, pd.DataFrame(daily_rows)
 
 
+def _validate_candidate_population(candidate: DailyCandidate, request: Mapping[str, Any]) -> None:
+    if (
+        list(candidate.symbols) != request["symbols"]
+        or [str(stamp.date()) for stamp in candidate.calendar] != request["calendar"]
+    ):
+        raise ActionValueError("STRATEGY_EVOLUTION_POPULATION_DRIFT")
+
+
+def _validated_bar_inputs(
+    *,
+    candidate: DailyCandidate,
+    request: Mapping[str, Any],
+    symbols: Iterable[str],
+) -> Iterator[tuple[str, pd.DataFrame]]:
+    for symbol in symbols:
+        bars = candidate.bars(symbol)
+        for field in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "factor",
+            "up_limit_price",
+            "down_limit_price",
+        ):
+            key = f"{symbol}:{field}"
+            if candidate.references[key] != request["source_data"][key]:
+                raise ActionValueError("STRATEGY_EVOLUTION_BAR_SOURCE_DRIFT", symbol=symbol)
+        yield symbol, bars
+
+
+def verify_parallel(path: Path) -> dict[str, Any]:
+    """Compare fixed single-process and 8-process results without publishing artifacts."""
+
+    request = load_request(path)
+    candidate = DailyCandidate.open(Path(request["candidate_root"]))
+    _validate_candidate_population(candidate, request)
+    symbols = _parallel_verification_symbols(candidate.symbols)
+    inputs = list(
+        _validated_bar_inputs(
+            candidate=candidate,
+            request=request,
+            symbols=symbols,
+        )
+    )
+    sequential = {
+        symbol: _symbol_result_sha256(result)
+        for result in _ordered_replays(
+            inputs,
+            worker_count=1,
+            max_in_flight=1,
+        )
+        for symbol in (result[0],)
+    }
+    parallel = {
+        symbol: _symbol_result_sha256(result)
+        for result in _ordered_replays(
+            inputs,
+            worker_count=WORKER_COUNT,
+            max_in_flight=MAX_IN_FLIGHT,
+        )
+        for symbol in (result[0],)
+    }
+    if sequential != parallel or list(sequential) != symbols:
+        raise ActionValueError("STRATEGY_EVOLUTION_PARALLEL_RESULT_DRIFT")
+    audit = {
+        "schema_version": "position_timing_parallel_verification_v1",
+        "request_sha256": request["request_sha256"],
+        "symbols": symbols,
+        "sequential_worker_count": 1,
+        "parallel_worker_count": WORKER_COUNT,
+        "max_in_flight": MAX_IN_FLIGHT,
+        "start_method": "spawn",
+        "result_sha256_by_symbol": sequential,
+        "artifact_written": False,
+        "outcomes_read_stage": "AFTER_FULL_SOURCE_PREFLIGHT",
+    }
+    audit["audit_sha256"] = canonical_sha256(audit)
+    return {"status": "EXACT", **audit}
+
+
 def run(path: Path) -> dict[str, Any]:
     request = load_request(path)
     digest = request["request_sha256"]
@@ -936,15 +1367,10 @@ def run(path: Path) -> dict[str, Any]:
         if (bundle / "manifest.json").exists():
             return {**inspect(bundle, request_hash=digest), "status": "ALREADY_MATERIALIZED"}
         candidate = DailyCandidate.open(Path(request["candidate_root"]))
-        memberships = open_candidate_pool_memberships(candidate)
-        if list(candidate.symbols) != request["symbols"] or [
-            str(stamp.date()) for stamp in candidate.calendar
-        ] != request["calendar"]:
-            raise ActionValueError("STRATEGY_EVOLUTION_POPULATION_DRIFT")
+        memberships = _r7_pool_memberships(candidate)
+        _validate_candidate_population(candidate, request)
         print(
-            json.dumps(
-                {"stage": "RUN_AFTER_FULL_SOURCE_PREFLIGHT", "outcomes_read": True}
-            ),
+            json.dumps({"stage": "RUN_AFTER_FULL_SOURCE_PREFLIGHT", "outcomes_read": True}),
             flush=True,
         )
         chunks: list[dict[str, Any]] = []
@@ -953,30 +1379,27 @@ def run(path: Path) -> dict[str, Any]:
             if (chunk / "manifest.json").exists():
                 inspect(chunk, request_hash=digest)
             else:
-                totals: dict[
-                    tuple[str, str, str, str, int], dict[str, np.ndarray]
-                ] = {}
+                totals: dict[tuple[str, str, str, str, int], dict[str, np.ndarray]] = {}
                 stock_rows: list[dict[str, Any]] = []
                 fill_frames: list[pd.DataFrame] = []
                 details: list[dict[str, Any]] = []
-                for symbol in candidate.symbols[offset : offset + CHUNK_SIZE]:
-                    bars = candidate.bars(symbol)
-                    for field in (
-                        "open",
-                        "high",
-                        "low",
-                        "close",
-                        "volume",
-                        "factor",
-                        "up_limit_price",
-                        "down_limit_price",
+                selected_symbols = candidate.symbols[offset : offset + CHUNK_SIZE]
+                pit_masks: dict[str, np.ndarray] = {}
+
+                def chunk_inputs() -> Iterator[tuple[str, pd.DataFrame]]:
+                    for selected_symbol, selected_bars in _validated_bar_inputs(
+                        candidate=candidate,
+                        request=request,
+                        symbols=selected_symbols,
                     ):
-                        key = f"{symbol}:{field}"
-                        if candidate.references[key] != request["source_data"][key]:
-                            raise ActionValueError(
-                                "STRATEGY_EVOLUTION_BAR_SOURCE_DRIFT", symbol=symbol
-                            )
-                    days, fills, symbol_details = replay_strategy_set(symbol, bars)
+                        pit_masks[selected_symbol] = selected_bars.pit_active.to_numpy(bool)
+                        yield selected_symbol, selected_bars
+
+                for symbol, days, fills, symbol_details in _ordered_replays(
+                    chunk_inputs(),
+                    worker_count=WORKER_COUNT,
+                    max_in_flight=MAX_IN_FLIGHT,
+                ):
                     if not fills.empty:
                         fill_frames.append(fills)
                     details.extend(symbol_details)
@@ -984,8 +1407,7 @@ def run(path: Path) -> dict[str, Any]:
                         selected = None
                         if detail["status"] == "REPLAYED":
                             selected = days.loc[
-                                (days.strategy_id == detail["strategy_id"])
-                                & (days.start_mode == detail["start_mode"])
+                                (days.strategy_id == detail["strategy_id"]) & (days.start_mode == detail["start_mode"])
                             ]
                         stock_rows.append(
                             _add_symbol_path(
@@ -994,12 +1416,15 @@ def run(path: Path) -> dict[str, Any]:
                                 start_mode=detail["start_mode"],
                                 path=selected,
                                 detail=detail,
-                                stock_pit_mask=bars.pit_active.to_numpy(bool),
+                                stock_pit_mask=pit_masks[symbol],
                                 memberships=memberships,
                                 calendar=candidate.calendar,
                                 totals=totals,
                             )
                         )
+                    pit_masks.pop(symbol)
+                if pit_masks:
+                    raise ActionValueError("STRATEGY_EVOLUTION_PARENT_INPUT_CACHE_DRIFT")
                 publish_frame(chunk / "partials.parquet", _partial_frame(totals))
                 publish_frame(chunk / "stocks.parquet", pd.DataFrame(stock_rows))
                 publish_frame(
@@ -1054,9 +1479,8 @@ def run(path: Path) -> dict[str, Any]:
         )
         report["a0_own_start_baseline_equivalence"] = _baseline_equivalence(
             stocks=stocks,
-            baseline_manifest_path=Path(
-                request["baseline_close_cash_manifest"]["path"]
-            ),
+            baseline_manifest_path=Path(request["baseline_close_cash_manifest"]["path"]),
+            affected_symbols=request["dataset_version_delta_audit"]["affected_symbols"],
         )
         load_request(path)
         publish_json(bundle / "request.json", request)
@@ -1078,7 +1502,9 @@ def run(path: Path) -> dict[str, Any]:
             "database_write": False,
             "network_accessed": False,
             "runtime_action_performed": False,
-            "process_control_performed": False,
+            "service_process_control_performed": False,
+            "research_worker_processes_used": True,
+            "parallel_execution": CONTRACT["parallel_execution"],
             "corporate_action_authority_read": False,
             "account_economics_simulated": False,
             "broker_account_clearing": False,
@@ -1104,14 +1530,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare_parser = commands.add_parser("prepare")
-    for name in ("timing-root", "repository-root", "parent-pattern-bundle", "candidate-root"):
+    for name in (
+        "timing-root",
+        "repository-root",
+        "parent-pattern-bundle",
+        "baseline-close-cash-bundle",
+        "prior-candidate-root",
+        "candidate-root",
+    ):
         prepare_parser.add_argument(f"--{name}", type=Path, required=True)
+    commands.add_parser("verify-parallel").add_argument("--request", type=Path, required=True)
     commands.add_parser("run").add_argument("--request", type=Path, required=True)
     commands.add_parser("inspect").add_argument("--bundle", type=Path, required=True)
     args = vars(parser.parse_args())
     command = args.pop("command")
     if command == "prepare":
         result = {"request": file_reference(prepare(**args))}
+    elif command == "verify-parallel":
+        result = verify_parallel(args["request"])
     elif command == "run":
         result = run(args["request"])
     else:

@@ -1292,7 +1292,7 @@ PR #4906 `pattern_close_cash_replay.replay/execute`显示：确认买入仍使�
 2. 固定新方向B0趋势持有/破位/再入场、B1中期突破/跟踪退出、B2趋势内回踩恢复；C0单笔净盈利触发、C1一次50%减仓、C2不因加速退出。共10策略含A0，9新候选全部报告，不先选最佳再组合；C1本批余仓只保留原风险退出，结构退出已由B组检验，不混成单一归因。
 3. 同股1,000万元自然复投、同成本、同收盘时钟/限制，逐股与六池BH及各自指数、年度/共同现金起点/统一期间、超额分布、回撤、暴露、成本、原因与unknown全量横向比较。新窗口与旧R0需要不同预热，故“各自全历史”和“共同现金起点”必须分开；收益切片不冒充重放。
 
-正式输入切换到WSL路径 `/mnt/wsl/aistock-qe-data-v1/releases/20260831-qe_hmm_full_v2-direct-20260918-r7-candidate`，绑定manifest文件/canonical SHA `084ffe...6900` / `c11e16...836`，不在运行时解析mutable active profile。r5/r7逐文件闭合表明：63,312个日线文件、六个股票池、两个指数上下文和11个择时authority均相同；实际策略输入差异仅为r7给`688766.SH`新增2025-11-27～12-05七个停牌记录。`daily_basic.volume_ratio`修复不是本策略输入。该事实解释为何终止r5是正确资源决策，但最终研究仍必须在r7上完整重算，不能复用r5分片。
+正式输入切换到WSL路径 `/mnt/wsl/aistock-qe-data-v1/releases/20260831-qe_hmm_full_v2-direct-20260918-r7-candidate`，绑定manifest文件/canonical SHA `084ffe...6900` / `c11e16...836`，不在运行时解析mutable active profile。r5/r7逐文件闭合表明：63,312个日线文件、六个股票池、两个指数上下文和11个择时authority均相同；停牌文件另有9条新增/2条删除的物理行差异，其中两组只是`suspend_timing`规范化替换。当前reader实际消费的`(symbol,date,suspend_type=S)`策略语义差异仅为r7给`688766.SH`新增2025-11-27～12-05七个停牌日，两层差异分别hash-bound，A0豁免只来自语义差异。`daily_basic.volume_ratio`修复不是本策略输入。该事实解释为何终止r5是正确资源决策，但最终研究仍必须在r7上完整重算，不能复用r5分片。
 
 正式运行使用WSL ext4原生干净checkout和独立ext4 artifact root。外层仍固定128股chunk，内部固定8个`spawn`进程、最多16个在途symbol任务；worker只做纯计算，父进程按canonical symbol顺序唯一写入并封存。任一worker失败使当前chunk整体未封存，续跑只复用身份一致的sealed chunk。单进程与8进程先在固定32股诊断集做canonical hash等价验证；这只是并行正确性检查，不按收益选择策略或构成审批门禁。bootstrap/source preflight保持单进程，不建设worker服务、调度平台或第二套回测框架。
 
@@ -1518,7 +1518,7 @@ git diff --check
 
 v2.43第一轮曾以当时main源码、PR#4906状态及close-cash request/report/receipt核对事实，区分纯Qlib模式合入、现金实验已运行和当时代码尚未合入；随后#4906已由merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`进入main，本版已纠正该状态。该轮另核对完整人口与条件样本、持续账户切片与共同起点重放、单笔盈利与账户回本、部分减仓与结构退出，并检查文档验收一致性；没有重跑研究、训练、DB或运行服务。
 
-v2.44再执行三层只读/设计复核：第一层确认r5正式演进只到1,024/5,144股、无最终bundle，终止后没有未封存chunk被误留为完成；第二层核对active profile generation `20260918-v10`、r7 WSL路径、manifest/canonical SHA及r5/r7全文件差异，确认当前策略唯一输入变化为`688766.SH`七个停牌日；第三层核对8-worker父写者、固定排序、失败chunk不seal、ext4 artifact及最终Windows导出边界。以上都不是r7正式收益结果。
+v2.44再执行三层只读/设计复核：第一层确认r5正式演进只到1,024/5,144股、无最终bundle，终止后没有未封存chunk被误留为完成；第二层核对active profile generation `20260918-v10`、r7 WSL路径、manifest/canonical SHA及r5/r7全文件差异，区分停牌文件9增2删的物理变化与reader真正消费的语义变化，确认当前策略唯一输入变化为`688766.SH`七个停牌日；第三层核对8-worker父写者、固定排序、失败chunk不seal、ext4 artifact及最终Windows导出边界。以上都不是r7正式收益结果。
 
 新F1的`DESIGN_VERIFIED`仅表示r7/WSL/并行设计闭合。10策略业务定义已有未合入Windows原型和26项定向测试，但r7身份、并行执行、全量回放、inspect与exact retry均未完成。未来验证除A0、现金/部分数量/费用守恒、T+1/方向限制、无重复复权、缺失不补零、PIT、共同起点、指数映射和不可变hash外，必须覆盖单/8进程canonical等价、父进程唯一写者、worker失败不seal、sealed-only续跑及WSL环境身份；不创建重复fixture或新平台。
 
