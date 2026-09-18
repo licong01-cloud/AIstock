@@ -680,6 +680,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/dataset_release/test_release_successor.py",
+        "backend/tests/dataset_release/test_shared_sector_context.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
         "backend/tests/dataset_release/test_source_authority.py",
@@ -709,6 +711,8 @@ def qlib_data_backend(session: nox.Session) -> None:
             "backend/tests/scripts/test_*backtest_dataset*.py",
         ),
         overrides={
+            "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
+            "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         },
     )
@@ -1419,6 +1423,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+        "backend/tests/test_dispatch_service_env.py",
         "backend/tests/multi_alpha/test_durable_router.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
         "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
@@ -1453,6 +1458,7 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/tests/quantevolver/test_*.py",
             "backend/tests/unified_engine/test_*.py",
             "backend/tests/test_multi_alpha*.py",
+            "backend/tests/test_dispatch_service_env.py",
         ),
         overrides={
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
