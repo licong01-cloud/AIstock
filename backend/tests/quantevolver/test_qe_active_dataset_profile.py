@@ -15,10 +15,15 @@ from backend.services.quantevolver.qe_active_dataset_profile import (
     is_pure_star50_universe,
     load_active_qe_profile,
     reject_client_dataset_internals,
+    resolve_active_dataset_node_binding,
     resolve_active_qe_dataset,
 )
 from backend.services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_INDEX_CODES
 from backend.services.dataset_release.canonical import digest_named_fields
+from backend.services.dataset_release.shared_sector_context import (
+    RELEASE_SW_L2_CODE_MAP_SCHEMA,
+    RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+)
 from backend.services.quantevolver.experiment_config import ExperimentConfig
 from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
@@ -79,14 +84,20 @@ def test_star50_top20_contract_rejects_explicit_non_integer_20(topk: object) -> 
 
 
 def test_star50_top20_contract_does_not_rewrite_union_or_other_pool() -> None:
-    assert enforce_qe_universe_topk(
-        {"topk": 50},
-        universe_selection={"mode": "index_union", "pool_ids": ["csi300", "star50"]},
-    )["topk"] == 50
-    assert enforce_qe_universe_topk(
-        {"topk": 50},
-        universe_selection={"mode": "single_index", "pool_ids": ["star100"]},
-    )["topk"] == 50
+    assert (
+        enforce_qe_universe_topk(
+            {"topk": 50},
+            universe_selection={"mode": "index_union", "pool_ids": ["csi300", "star50"]},
+        )["topk"]
+        == 50
+    )
+    assert (
+        enforce_qe_universe_topk(
+            {"topk": 50},
+            universe_selection={"mode": "single_index", "pool_ids": ["star100"]},
+        )["topk"]
+        == 50
+    )
 
 
 def test_star50_top20_contract_applies_to_normalized_single_pool_union() -> None:
@@ -99,14 +110,17 @@ def test_star50_top20_contract_applies_to_normalized_single_pool_union() -> None
 
 
 def test_star50_identity_accepts_frozen_selection_pins_with_extra_fields() -> None:
-    assert is_pure_star50_universe(
-        universe_selection={
-            "mode": "single_index",
-            "pool_ids": ["star50"],
-            "instrument_name": "index_pool__star50",
-            "membership_revision": "pit-rev",
-        }
-    ) is True
+    assert (
+        is_pure_star50_universe(
+            universe_selection={
+                "mode": "single_index",
+                "pool_ids": ["star50"],
+                "instrument_name": "index_pool__star50",
+                "membership_revision": "pit-rev",
+            }
+        )
+        is True
+    )
 
 
 def test_experiment_config_is_final_star50_top20_consumer_guard() -> None:
@@ -131,7 +145,9 @@ def _fixture_profile(
     *,
     with_gap: bool = False,
     with_sector_policy: bool = False,
+    with_sector_context: bool = False,
 ) -> Path:
+    assert not (with_sector_policy and with_sector_context)
     candidate = tmp_path / "candidate"
     pool_root = tmp_path / "pools"
     day = candidate / "components" / "daily_bin_candidate"
@@ -219,6 +235,10 @@ def _fixture_profile(
     factor_meta_sha = _write(
         candidate / "components" / "factor_h5_static_candidate_v2" / "meta.json",
         _canonical(factor_meta),
+    )
+    sector_data_sha = _write(
+        candidate / "components" / "factor_h5_static_candidate_v2" / "sector_data.h5",
+        b"sector-data-fixture",
     )
     sector_policy_pins = None
     if with_sector_policy:
@@ -309,12 +329,112 @@ def _fixture_profile(
     }
     if sector_policy_pins is not None:
         components["sector_policy_pins"] = sector_policy_pins
+    if with_sector_context:
+        import pandas as pd
+
+        sector_root = candidate / "components" / "sector_context_candidate_v1"
+        authority = {"authority_id": "fixture", "authority_sha256": "a" * 64}
+        entries = [{"l2_code_id": index * 2 + 1, "canonical_l2_code": f"801{index:03d}.SI"} for index in range(131)]
+        member_codes = sorted(row["canonical_l2_code"] for row in entries)
+        code_map = {
+            "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,
+            "mapping_authority": authority,
+            "entries": entries,
+            "member_backed_codes": member_codes,
+            "code_map_digest": digest_named_fields(
+                RELEASE_SW_L2_CODE_MAP_SCHEMA,
+                {"mapping_authority": authority, "entries": entries},
+            ),
+            "member_backed_digest": digest_named_fields(
+                RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+                {"mapping_authority": authority, "member_backed_codes": member_codes},
+            ),
+        }
+        code_map_sha = _write(sector_root / "sector_code_map.json", _canonical(code_map))
+        market_path = sector_root / "market_context.parquet"
+        market_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "trade_date": ["2018-08-01", "2026-08-31"],
+                "sw_daily_total_vol": [1.0, 2.0],
+            }
+        ).to_parquet(market_path, index=False)
+        membership_path = sector_root / "sector_membership_spans.parquet"
+        pd.DataFrame(
+            [
+                {
+                    "instrument": "000001.SZ",
+                    "start_date": "2018-08-01",
+                    "end_date": "2026-08-31",
+                    "l2_code_id": 21,
+                },
+                {
+                    "instrument": "000002.SZ",
+                    "start_date": "2018-08-01",
+                    "end_date": "2026-08-31",
+                    "l2_code_id": 41,
+                },
+                {
+                    "instrument": "000003.SZ",
+                    "start_date": "2018-08-01",
+                    "end_date": "2026-08-31",
+                    "l2_code_id": 41,
+                },
+            ]
+        ).to_parquet(membership_path, index=False)
+        context_receipt_sha = _write(
+            sector_root / "component_receipt.json",
+            _canonical({"schema_version": "aistock_sector_context_receipt_v1"}),
+        )
+        components["sector_context_pins"] = {
+            "schema_version": "aistock_sector_context_pins_v1",
+            "component_root": "components/sector_context_candidate_v1",
+            "code_map_file": "sector_code_map.json",
+            "code_map_sha256": code_map_sha,
+            "code_map_digest": code_map["code_map_digest"],
+            "market_context_file": "market_context.parquet",
+            "market_context_sha256": _sha(market_path.read_bytes()),
+            "market_volume_definition": "sum_market_sw_daily_vol_all_rows_v1",
+            "market_start": "2018-08-01",
+            "market_end": "2026-08-31",
+            "membership_file": "sector_membership_spans.parquet",
+            "membership_sha256": _sha(membership_path.read_bytes()),
+            "membership_start": "2018-08-01",
+            "membership_end": "2026-08-31",
+            "receipt_file": "component_receipt.json",
+            "receipt_sha256": context_receipt_sha,
+            "sector_data_sha256": sector_data_sha,
+            "source_dataset_manifest_sha256": "b" * 64,
+            "authority_id": authority["authority_id"],
+            "authority_sha256": authority["authority_sha256"],
+        }
+        manifest_identity = {
+            "schema_version": "qe_dataset_manifest_v1",
+            "release_id": "qe-hmm-v2-20260831",
+            "cutoff_trade_date": "2026-08-31",
+        }
+        manifest_sha = _sha(
+            json.dumps(
+                manifest_identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        manifest = {**manifest_identity, "dataset_manifest_sha256": manifest_sha}
+        manifest_file_sha = _write(
+            candidate / "qe_dataset_manifest.json",
+            _canonical(manifest),
+        )
+        components["dataset_manifest_sha256"] = manifest_sha
+        components["dataset_manifest_file_sha256"] = manifest_file_sha
+    schema_version = "aistock_active_dataset_profile_v1"
+    if with_sector_policy:
+        schema_version = "aistock_active_dataset_profile_v2"
+    elif with_sector_context:
+        schema_version = "aistock_active_dataset_profile_v3"
     profile = {
-        "schema_version": (
-            "aistock_active_dataset_profile_v2"
-            if with_sector_policy
-            else "aistock_active_dataset_profile_v1"
-        ),
+        "schema_version": schema_version,
         "generation": "20260906-v1",
         "release_id": "qe-hmm-v2-20260831",
         "cutoff": "2026-08-31",
@@ -346,6 +466,36 @@ def _fixture_profile(
             }
         },
     }
+    if with_sector_context:
+        profile["consumers"]["qe"]["required_components"] = sorted(
+            {
+                "day",
+                "minute",
+                "factor",
+                "index",
+                "suspend",
+                "benchmark",
+                "stock_pools",
+                "coverage",
+                "manifest",
+                "sector_context",
+            }
+        )
+        profile["consumers"].update(
+            {
+                "hmm": {"required_components": sorted({"factor", "index", "manifest", "sector_context"})},
+                "selection": {
+                    "required_components": sorted(
+                        {"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}
+                    )
+                },
+                "advisory": {
+                    "required_components": sorted(
+                        {"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}
+                    )
+                },
+            }
+        )
     profile_path = tmp_path / "active.json"
     _write(profile_path, _canonical(profile))
     return profile_path
@@ -452,16 +602,69 @@ def test_sector_blacklist_materializes_run_scoped_pool_without_changing_p00(
     )
 
     assert baseline is not None and filtered is not None
-    assert baseline.stock_pool_content == (
-        "000001.SZ\t2024-07-01\t2026-08-31\n"
-        "000002.SZ\t2024-07-01\t2026-08-31\n"
-    )
+    assert baseline.stock_pool_content == ("000001.SZ\t2024-07-01\t2026-08-31\n000002.SZ\t2024-07-01\t2026-08-31\n")
     assert filtered.stock_pool_content == "000002.SZ\t2024-07-01\t2026-08-31\n"
     assert filtered.binding.selection_pins["instrument_name"] == "index_pool__csi300"
-    assert filtered.binding.selection_pins["instruments_sha256"] != baseline.binding.selection_pins["instruments_sha256"]
+    assert (
+        filtered.binding.selection_pins["instruments_sha256"] != baseline.binding.selection_pins["instruments_sha256"]
+    )
     applied = filtered.apply({"sector_blacklist": ["801010.SI"]})
     assert applied["_qe_sector_blacklist_policy"]["blacklist_excluded_count"] == 1
     assert applied["_qe_run_stock_pool_content"] == filtered.stock_pool_content
+
+
+def test_v3_profile_uses_shared_sparse_sector_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+    assert profile.raw["schema_version"] == "aistock_active_dataset_profile_v3"
+
+    filtered = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        universe_selection={"mode": "single_index", "pool_ids": ["csi300"]},
+        custom_params={"sector_blacklist": ["801010.SI"]},
+        profile=profile,
+    )
+
+    assert filtered is not None
+    assert filtered.stock_pool_content == "000002.SZ\t2024-07-01\t2026-08-31\n"
+    assert filtered.sector_blacklist_policy is not None
+    assert filtered.sector_blacklist_policy["blacklist_excluded_count"] == 1
+
+
+def test_active_profile_derives_shared_node_runtime_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+
+    binding = resolve_active_dataset_node_binding(node_id="rdagent-node1")
+
+    assert binding is not None
+    assert binding["candidate_root"] == "/home/lc999/candidate"
+    assert binding["qlib_data_path"].endswith("/components/daily_bin_candidate")
+    assert binding["qlib_minute_path"].endswith("/components/minute_bin_candidate")
+    assert binding["factor_data_dir"].endswith("/components/factor_h5_static_candidate_v2")
+    assert binding["sector_context_dir"].endswith("/components/sector_context_candidate_v1")
+
+
+def test_active_profile_node_runtime_binding_fails_closed_for_unknown_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+
+    with pytest.raises(
+        QEActiveDatasetProfileError,
+        match="qe_active_dataset_node_binding_missing",
+    ):
+        resolve_active_dataset_node_binding(node_id="unknown-node")
 
 
 def test_sector_blacklist_requires_v2_frozen_policy_files(
@@ -506,9 +709,7 @@ def test_composer_rejects_active_profile_without_run_scoped_binding(
 
 def test_public_creation_rejects_server_owned_dataset_fields() -> None:
     with pytest.raises(QEActiveDatasetProfileError, match="qe_dataset_internal_input_forbidden"):
-        reject_client_dataset_internals(
-            {"_qe_direct_v2_dataset_binding": {"provider_uri_day": "/client/path"}}
-        )
+        reject_client_dataset_internals({"_qe_direct_v2_dataset_binding": {"provider_uri_day": "/client/path"}})
 
 
 def test_resolver_rejects_non_positive_label_horizon(
@@ -527,7 +728,9 @@ def test_resolver_rejects_non_positive_label_horizon(
         )
 
 
-def test_unknown_node_sidecar_tamper_and_coverage_gap_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_node_sidecar_tamper_and_coverage_gap_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = _fixture_profile(tmp_path, with_gap=True)
     monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
     profile = load_active_qe_profile()
@@ -603,6 +806,23 @@ def test_profile_cli_derives_node_runtime_bindings_without_cache_paths(tmp_path:
     assert "QE_FACTOR_DATA_DIR" not in local["environment"]
 
 
+def test_v3_runtime_bindings_expose_one_release_for_all_consumers(tmp_path: Path) -> None:
+    source = _fixture_profile(tmp_path, with_sector_context=True)
+
+    result = _runtime_bindings(source, node_id="wsl2-5080")
+
+    local = result["nodes"]["wsl2-5080"]
+    assert local["dataset_manifest_path"] == "/mnt/x/candidate/qe_dataset_manifest.json"
+    assert local["sector_context_dir"] == ("/mnt/x/candidate/components/sector_context_candidate_v1")
+    assert set(local["consumer_requirements"]) == {
+        "qe",
+        "hmm",
+        "selection",
+        "advisory",
+    }
+    assert local["environment"]["AISTOCK_DATASET_ROOT"] == "/mnt/x/candidate"
+
+
 def test_profile_cli_runtime_binding_audit_fails_closed_on_stale_path(tmp_path: Path) -> None:
     source = _fixture_profile(tmp_path)
     expected = {
@@ -636,9 +856,7 @@ def test_profile_cli_runtime_bindings_reject_unknown_node(tmp_path: Path) -> Non
 def test_profile_activation_rejects_suspend_source_contract_drift(tmp_path: Path) -> None:
     source = _fixture_profile(tmp_path)
     profile = json.loads(source.read_text(encoding="utf-8"))
-    profile["components"]["suspend_pins"]["source_contract"] = (
-        "tushare_suspend_d_shsz_S_v1"
-    )
+    profile["components"]["suspend_pins"]["source_contract"] = "tushare_suspend_d_shsz_S_v1"
     source.write_bytes(_canonical(profile))
 
     with pytest.raises(
@@ -654,9 +872,7 @@ def test_profile_activation_replaces_exactly_pinned_invalid_current_profile(
     source = _fixture_profile(tmp_path / "source")
     target = _fixture_profile(tmp_path / "target")
     invalid_profile = json.loads(target.read_text(encoding="utf-8"))
-    invalid_profile["components"]["suspend_pins"]["source_contract"] = (
-        "tushare_suspend_d_shsz_S_v1"
-    )
+    invalid_profile["components"]["suspend_pins"]["source_contract"] = "tushare_suspend_d_shsz_S_v1"
     target.write_bytes(_canonical(invalid_profile))
     invalid_bytes = target.read_bytes()
     invalid_digest = _sha256(target)
@@ -711,14 +927,7 @@ def test_resolver_rejects_component_hash_drift(
     path = _fixture_profile(tmp_path)
     monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
     profile = load_active_qe_profile()
-    minute_calendar = (
-        tmp_path
-        / "candidate"
-        / "components"
-        / "minute_bin_candidate"
-        / "calendars"
-        / "1min.txt"
-    )
+    minute_calendar = tmp_path / "candidate" / "components" / "minute_bin_candidate" / "calendars" / "1min.txt"
     minute_calendar.write_bytes(b"tampered\n")
 
     with pytest.raises(QEActiveDatasetProfileError, match="qe_dataset_component_identity_mismatch"):
