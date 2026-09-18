@@ -67,9 +67,7 @@ def _load_score_weighted_strategy(monkeypatch: pytest.MonkeyPatch):
     class TradeDecisionWO:
         pass
 
-    modules["qlib.contrib.strategy.signal_strategy"].TopkDropoutStrategy = (
-        TopkDropoutStrategy
-    )
+    modules["qlib.contrib.strategy.signal_strategy"].TopkDropoutStrategy = TopkDropoutStrategy
     modules["qlib.backtest.decision"].Order = Order
     modules["qlib.backtest.decision"].OrderDir = OrderDir
     modules["qlib.backtest.decision"].TradeDecisionWO = TradeDecisionWO
@@ -254,6 +252,118 @@ def test_hmm_adjustment_rejects_missing_point_in_time_membership(monkeypatch, tm
     with pytest.raises(RuntimeError, match="coverage is incomplete"):
         strategy._apply_hmm_adjustment(
             module.pd.Series({"000002.SZ": 1.0}),
+            "2026-07-16",
+        )
+
+
+def test_hmm_adjustment_explicitly_skips_l2_overlay_when_quote_is_unavailable(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {
+                        "000001.SZ": "A.SI",
+                        "000002.SZ": "B.SI",
+                    },
+                },
+                "quote_unavailable_sector_codes_by_date": {
+                    "2026-07-16": ["B.SI"],
+                },
+                "l2_overlay_unavailable_policy": "explicit_no_l2_overlay_v1",
+                "quote_availability_authority": {
+                    "authority_id": "fixture",
+                    "authority_sha256": "a" * 64,
+                },
+                "quote_availability_digest": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    adjusted = strategy._apply_hmm_adjustment(
+        module.pd.Series({"000001.SZ": 2.0, "000002.SZ": 3.0}),
+        "2026-07-16",
+    )
+
+    assert adjusted["000001.SZ"] == pytest.approx(2.2)
+    assert adjusted["000002.SZ"] == 3.0
+    assert strategy._last_hmm_adjustment_trace["no_l2_overlay_rows"] == [
+        {
+            "stock_id": "000002.SZ",
+            "sector_code": "B.SI",
+            "coefficient": None,
+            "reason": "hmm_l2_quote_unavailable_no_overlay",
+        }
+    ]
+
+
+def test_hmm_adjustment_rejects_missing_coefficient_without_quote_authority(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000002.SZ": "B.SI"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    with pytest.raises(RuntimeError, match="coverage is incomplete"):
+        strategy._apply_hmm_adjustment(
+            module.pd.Series({"000002.SZ": 3.0}),
+            "2026-07-16",
+        )
+
+
+def test_hmm_adjustment_rejects_sector_marked_available_and_unavailable(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "A.SI"},
+                },
+                "quote_unavailable_sector_codes_by_date": {
+                    "2026-07-16": ["A.SI"],
+                },
+                "l2_overlay_unavailable_policy": "explicit_no_l2_overlay_v1",
+                "quote_availability_authority": {
+                    "authority_id": "fixture",
+                    "authority_sha256": "a" * 64,
+                },
+                "quote_availability_digest": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    with pytest.raises(RuntimeError, match="overlaps coefficients"):
+        strategy._apply_hmm_adjustment(
+            module.pd.Series({"000001.SZ": 2.0}),
             "2026-07-16",
         )
 

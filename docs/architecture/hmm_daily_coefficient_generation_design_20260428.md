@@ -165,3 +165,18 @@ coefficients_<preset>_<effective_trade_date>_<effective_trade_date>.json
 - `scripts/precompute_hmm_coefficients.py` 保持历史批量预计算兼容，并新增每日输出日期映射测试。
 - 前端类型检查通过。
 - 使用 8012/3012 开发端口执行 Paper v2 UI E2E，至少覆盖模型/HMM 页面每日系数预览与生成控件可用性。
+
+## 10. 冻结 release 的行业行情可用性合同（2026-09-19）
+
+正式历史系数的目录、成员与行情可用性是三个不同维度，不得再用“成员存在”推导“行业指数每日仍发布”：
+
+1. `sector_code_map.json` 继续保留 131 个 C-013 正式申万 L2 目录身份；
+2. `sector_membership_spans.parquet` 继续保留完整 PIT 股票—行业成员关系；
+3. successor release 必须提供 `aistock_release_sw_l2_quote_availability_v1` 权威文件，逐行业列出闭区间 `availability_spans`，并与 code-map 使用同一 `mapping_authority`；
+4. frozen input bundle 必须钉住该文件 SHA-256，生成器还须重算 `quote_availability_digest`；缺文件、哈希漂移、authority 不同、目录缺项、区间重叠均 fail closed；
+5. 某日只有同时满足 PIT membership 与 quote availability 的 L2 才能产生正式系数；已发布区间内任何缺失、NaN 或非有限行情继续 fail closed；
+6. authority 明确处于无行情区间的 L2 不生成系数，不补零、不前填、不伪造中性系数；成员关系仍完整保留；
+7. 消费端只接受 `explicit_no_l2_overlay_v1`：股票当日映射到无行情 L2 时保持原始 score，并写入 `hmm_l2_quote_unavailable_no_overlay` trace；它不是系数 `1.0`，也不是隐式 fallback；
+8. 缺少系数但未被当日 quote-unavailability authority 精确覆盖时必须失败，不能借“停发”语义掩盖真实漏采。
+
+因此，119 个有成员行业可以在特定截止日明确分成 113 个有正式行情行业与 6 个停止发布行业；该数量是 release authority 的只读结果，不得硬编码进 HMM 源码。数据窗口只负责在 immutable successor 中补齐真实漏采并提供 authority/receipt/manifest，HMM 不修改既有 R8。
