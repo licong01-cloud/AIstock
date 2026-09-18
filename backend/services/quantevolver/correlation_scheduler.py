@@ -177,9 +177,11 @@ class CorrelationScheduler:
         factor_names = self._resolve_factor_names("full", options)
         factor_count = len(factor_names)
         node_id = str(options.get("node_id") or _DEFAULT_DISPATCH_NODE_ID)
+        job_type = "init"
 
         summary_payload = {
             "dataset": dataset,
+            "job_type": job_type,
             "triggered_by": triggered_by,
             "schedule_id": str(schedule_id) if schedule_id else None,
             "options": options,
@@ -196,7 +198,7 @@ class CorrelationScheduler:
                     """INSERT INTO market.ingestion_jobs
                        (job_id, job_type, status, created_at, summary)
                        VALUES (%s, %s, 'queued', NOW(), %s)""",
-                    (str(job_id), dataset, json.dumps(summary_payload, ensure_ascii=False, default=str)),
+                    (str(job_id), job_type, json.dumps(summary_payload, ensure_ascii=False, default=str)),
                 )
             conn.commit()
 
