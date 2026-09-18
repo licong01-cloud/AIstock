@@ -108,7 +108,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/CORD10?source=alpha158&expected_is_available=true",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Windows fresh Python and WSL Ubuntu rdagent-gpu Python 3.10 imported backend.services.manual_factor_service from the BUG-1579 worktree and asserted margin_detail.h5 is staged.",
