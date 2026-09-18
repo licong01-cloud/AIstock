@@ -84,7 +84,7 @@ def _runtime_bindings(path: Path, *, node_id: str | None = None) -> dict[str, An
         day = posixpath.join(candidate_root, "components/daily_bin_candidate")
         minute = posixpath.join(candidate_root, "components/minute_bin_candidate")
         factor = posixpath.join(candidate_root, "components/factor_h5_static_candidate_v2")
-        nodes[selected_id] = {
+        node: dict[str, object] = {
             "candidate_root": candidate_root,
             "factor_data_dir": factor,
             "qlib_data_path": day,
@@ -99,6 +99,31 @@ def _runtime_bindings(path: Path, *, node_id: str | None = None) -> dict[str, An
                 "RDAGENT_FACTOR_DATA_WSL": factor,
             },
         }
+        if profile.raw["schema_version"] == "aistock_active_dataset_profile_v3":
+            sector_context = posixpath.join(candidate_root, "components/sector_context_candidate_v1")
+            index_context = posixpath.join(candidate_root, "components/index_context/index_daily.h5")
+            suspend = posixpath.join(candidate_root, "components/suspend_d_daily_candidate_v2")
+            manifest = posixpath.join(candidate_root, "qe_dataset_manifest.json")
+            node.update(
+                {
+                    "dataset_manifest_path": manifest,
+                    "index_context_path": index_context,
+                    "sector_context_dir": sector_context,
+                    "suspend_data_dir": suspend,
+                    "consumer_requirements": {
+                        key: list(value["required_components"]) for key, value in profile.raw["consumers"].items()
+                    },
+                }
+            )
+            environment = node["environment"]
+            assert isinstance(environment, dict)
+            environment.update(
+                {
+                    "AISTOCK_DATASET_ROOT": candidate_root,
+                    "AISTOCK_SECTOR_CONTEXT_DIR": sector_context,
+                }
+            )
+        nodes[selected_id] = node
     return {
         "schema_version": "aistock_qe_runtime_bindings_v1",
         "profile_path": str(path),
@@ -118,10 +143,7 @@ def _audit_runtime_binding(
 ) -> dict[str, object]:
     plan = _runtime_bindings(path, node_id=node_id)
     expected = plan["nodes"][node_id]
-    expected_primary = {
-        key: str(expected[key])
-        for key in ("factor_data_dir", "qlib_data_path", "qlib_minute_path")
-    }
+    expected_primary = {key: str(expected[key]) for key in ("factor_data_dir", "qlib_data_path", "qlib_minute_path")}
     mismatches = {
         key: {"expected": expected_primary[key], "actual": str(actual.get(key) or "")}
         for key in expected_primary

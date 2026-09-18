@@ -17,6 +17,10 @@ import re
 from typing import Any, Mapping, Sequence
 
 from backend.services.dataset_release.canonical import digest_named_fields
+from backend.services.dataset_release.shared_sector_context import (
+    RELEASE_SW_L2_CODE_MAP_SCHEMA,
+    load_release_sw_l2_code_map,
+)
 
 
 SECTOR_BLACKLIST_POLICY_PARAM = "_qe_sector_blacklist_policy"
@@ -140,21 +144,26 @@ def requested_sector_codes(custom_params: Mapping[str, Any] | None) -> tuple[str
     return codes
 
 
-def _load_code_map(path: Path) -> tuple[list[str], dict[str, int], str]:
+def _load_code_map(path: Path) -> tuple[dict[int, str], dict[str, int], str]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise _fail("qe_sector_blacklist_code_map_invalid", "frozen sector code map is invalid JSON") from exc
-    if not isinstance(payload, Mapping) or payload.get("schema_version") != SECTOR_CODE_MAP_SCHEMA:
+    if not isinstance(payload, Mapping):
+        raise _fail("qe_sector_blacklist_code_map_invalid", "frozen sector code-map schema differs")
+    if payload.get("schema_version") == RELEASE_SW_L2_CODE_MAP_SCHEMA:
+        try:
+            code_map = load_release_sw_l2_code_map(path)
+        except ValueError as exc:
+            raise _fail("qe_sector_blacklist_code_map_invalid", str(exc)) from exc
+        return dict(code_map.id_to_code), dict(code_map.code_to_id), code_map.code_map_digest
+    if payload.get("schema_version") != SECTOR_CODE_MAP_SCHEMA:
         raise _fail("qe_sector_blacklist_code_map_invalid", "frozen sector code-map schema differs")
     ordered = payload.get("ordered_codes")
     if not isinstance(ordered, list) or not ordered:
         raise _fail("qe_sector_blacklist_code_map_invalid", "ordered_codes must be a non-empty list")
     codes = [str(value).strip().upper() for value in ordered]
-    if (
-        codes != sorted(set(codes))
-        or any(_SECTOR_CODE_RE.fullmatch(code) is None for code in codes)
-    ):
+    if codes != sorted(set(codes)) or any(_SECTOR_CODE_RE.fullmatch(code) is None for code in codes):
         raise _fail("qe_sector_blacklist_code_map_invalid", "ordered_codes are not canonical and unique")
     actual_digest = digest_named_fields(
         SECTOR_CODE_MAP_DIGEST_SCHEMA,
@@ -162,10 +171,16 @@ def _load_code_map(path: Path) -> tuple[list[str], dict[str, int], str]:
     )
     if str(payload.get("code_map_digest") or "").strip().lower() != actual_digest:
         raise _fail("qe_sector_blacklist_code_map_invalid", "sector code-map digest differs")
-    return codes, {code: index for index, code in enumerate(codes)}, actual_digest
+    return (
+        {index: code for index, code in enumerate(codes)},
+        {code: index for index, code in enumerate(codes)},
+        actual_digest,
+    )
 
 
-def _load_membership_spans(path: Path, *, calendar_index: Mapping[dt.date, int]) -> dict[str, list[tuple[int, int, int]]]:
+def _load_membership_spans(
+    path: Path, *, calendar_index: Mapping[dt.date, int]
+) -> dict[str, list[tuple[int, int, int]]]:
     try:
         import pandas as pd
 
@@ -230,12 +245,16 @@ def materialize_sector_blacklist_universe(
         )
     normalized_pins = validate_sector_policy_pins(pins)
     if normalized_pins["start"] > window_start.isoformat() or normalized_pins["end"] < window_end.isoformat():
-        raise _fail("qe_sector_blacklist_membership_incomplete", "sector policy files do not cover the experiment window")
+        raise _fail(
+            "qe_sector_blacklist_membership_incomplete", "sector policy files do not cover the experiment window"
+        )
     membership_path, code_map_path = require_pinned_sector_policy_files(factor_root, normalized_pins)
-    ordered_codes, code_to_id, code_map_digest = _load_code_map(code_map_path)
+    id_to_code, code_to_id, code_map_digest = _load_code_map(code_map_path)
     unknown_codes = sorted(set(requested) - set(code_to_id))
     if unknown_codes:
-        raise _fail("qe_sector_blacklist_request_invalid", f"requested sectors are absent from frozen code map: {unknown_codes}")
+        raise _fail(
+            "qe_sector_blacklist_request_invalid", f"requested sectors are absent from frozen code map: {unknown_codes}"
+        )
     blacklist_ids = {code_to_id[code] for code in requested}
 
     ordered_calendar = list(calendar)
@@ -279,7 +298,7 @@ def materialize_sector_blacklist_universe(
                 )
             if current_start < cursor:
                 current_start = cursor
-            if sector_id < 0 or sector_id >= len(ordered_codes):
+            if sector_id not in id_to_code:
                 raise _fail(
                     "qe_sector_blacklist_membership_unknown",
                     f"PIT sector membership is unknown for {symbol}",
