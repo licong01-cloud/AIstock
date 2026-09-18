@@ -1160,6 +1160,8 @@ rules:
       - backend/tests/test_canonical_equity_pit.py
       - backend/tests/test_dataset_refresh_audit.py
       - scripts/dataset_release_*.py
+      - scripts/build_dataset_release_successor.py
+      - scripts/build_shared_sector_context_component.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py
       - scripts/seed_dataset_refresh_audit.py

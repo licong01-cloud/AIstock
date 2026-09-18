@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.44
-> 日期：2026-09-18
+> 版本：v2.46
+> 日期：2026-09-19
 > Feature tier：F2
-> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_021_R7_WSL_PARALLEL_APPROVED_NOT_EXECUTED`
+> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_021_R7_WSL_PARALLEL_REPLAY_VERIFIED_NO_ALPHA`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -18,9 +18,11 @@ active r5 交付完整股票历史的复权因子重述authority后，`PT-NEXT-0
 
 `PT-NEXT-019` 按既有队列冻结一个更小且机制不同的日频OPEN问题：T-1的ATR14/价格位于此前252日30%低分位、前5日可比量低于前20日、T日收盘突破此前20日最高价时，T+1才尝试买入。最终同退出语义request `c2a9598ada5eee9cb691d191454be61d64ca223c8eb3f66c1bc20e90184ce494` 绑定源码 `52217df3b4d86b5c9c4b82ee6ed8a072ec383412`、原r4的64只评价股、364/364 source coverage、三条配股统一不认购政策与唯一正式比较；候选和`ALWAYS_OPEN_RISK_MANAGED`共享同一风险退出，唯一差异是现金时是否等待信号。主路径64/64，341个市场匹配、185个现金态可行动；成本后日均增量为`-4.2788 bps`、95%区间`[-11.6889,+2.9364]`，故仍为`INCONCLUSIVE/selected=0`。2/3父订单各因`688052.SH`无法合法拆单为63/64，仅标成本敏感性不完整，不否决主证据。该精确规则不调参、不serving。
 
-`PT-NEXT-020` 的旧公司行动清算阻断已不再是当前研究前置：BUG-1565 / PR #4891（merge `7e37dc25e5cb22156c1e0e996b43f98696c8350f`，close-sync #4892）已切换为纯 Qlib 复权因子信号研究。之后用户确认每股独立1,000万元、自然复投、T+1收盘成交、逐股路径事后PIT归组及对应指数基准，形成新的 `pattern_close_cash_benchmark_v1`，不是旧pool独立账户/开盘合同的无版本替换。其r5历史实验已运行，原R0尚未证明超额收益，且完整人口覆盖不足；源码 PR #4906 已合入 merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`，但不代表上线。准确结果/身份见§9.23；旧PT-NEXT-020 F1文档降为历史合同。下一优先级仍为[PT-NEXT-021 策略演进与横向验证](position_timing_strategy_evolution_plan_f1_20260918.md)，但执行权威已从r5/Windows串行改为r7/WSL原生ext4/确定性8进程并行。旧r5演进任务只完成1,024/5,144股后终止，无最终结果；本轮只完成重设计，不启动r7实验。
+`PT-NEXT-020` 的旧公司行动清算阻断已不再是当前研究前置：BUG-1565 / PR #4891（merge `7e37dc25e5cb22156c1e0e996b43f98696c8350f`，close-sync #4892）已切换为纯 Qlib 复权因子信号研究。之后用户确认每股独立1,000万元、自然复投、T+1收盘成交、逐股路径事后PIT归组及对应指数基准，形成新的 `pattern_close_cash_benchmark_v1`，不是旧pool独立账户/开盘合同的无版本替换。其r5历史实验已运行，原R0尚未证明超额收益，且完整人口覆盖不足；源码 PR #4906 已合入 merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`，但不代表上线。准确结果/身份见§9.23；旧PT-NEXT-020 F1文档降为历史合同。后续[PT-NEXT-021 策略演进与横向验证](position_timing_strategy_evolution_plan_f1_20260918.md)已在r7/WSL原生ext4以确定性8进程完成5,144股全量回放；旧r5任务的1,024股中止检查点未进入结果。9个候选在54项family-wise比较中没有正下界，所有点估计为负，selected=0；该任务完成但未找到可发布alpha。
 
-**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。当前研究模式/账户/基准与下一任务以§9.23～9.24及所链接F1计划为准，不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-18在线状态验证。
+**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。已完成研究模式/账户/基准见§9.23～9.24；下一任务由§9.25及所链接F1设计覆盖旧的后续优先级，不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-19在线状态验证。
+
+v2.46仅新增`PT-NEXT-022`设计：用户确认先不接QE/HMM/荐股，只做基本面筛选后的T1/T2与同股长期持有比较。R8文件/canonical身份已核验、Windows49项组件及12项因子文件hash/size闭合，WSL manifest一致；P1市值源可用，P2/P3严格季度财报PIT快照尚未交付。设计已闭合，不表示代码、三个组实验或超额收益已完成；旧R7入口不能直接换路径消费R8。详见[详细设计与三块实施计划](position_timing_fundamental_screen_research_f1_20260919.md)。
 
 2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。该次 GET evidence 读到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。
 
@@ -121,6 +123,7 @@ v2.38 完成 `PT-NEXT-018` 业务侧修复和同人口 r4 正式历史重放。�
 | `EVID-PATTERN-RIGHTS-SOURCE-DIAGNOSIS-20260911` | 第四批source-only 697个material factor区间中693个已绑定、4个未绑定；再次prepare仍为`PATTERN_FACTOR_ACTION_COVERAGE_INCOMPLETE`且request数保持3。正式公告将`000970.SZ/600008.SH/601236.SH`三项确定为配股，不能自动映射数量；Tushare当前查询把`300506.SZ/688109.SH`各自历史区间统一到新factor，而本地及2026-09-05/`20260911-r3`候选仍有拼接缝。生产数据库只在readonly事务中读回并rollback，没有DML；未读取比较收益 | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/source_diagnostics/c01a8d3dd05ffda3c23eaa6be5c886f4989447e173cf2df34c33a5bbe537a822.json`；[中科三环公告](https://static.cninfo.com.cn/finalpage/2022-03-07/1212510377.PDF)；[首创股份公告](https://static.cninfo.com.cn/finalpage/2020-09-16/1208445107.PDF)；[红塔证券公告](https://static.cninfo.com.cn/finalpage/2021-07-29/1210588272.PDF)；独立F1设计v1.8 §4/§9.2 |
 | `EVID-PATTERN-R4-FORMAL-20260913` | 最终request `2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f`绑定代码`63179ea1cfb3327f5efded9532cadd3bb103d755`、r4 manifest文件SHA256 `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`、rights canonical `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`及policy `4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。source 696/696、rights=3、原型/优化器/模型外层64/64、无排除；九项均`INCONCLUSIVE`、selected=0、全部运行写入false。manifest原始/canonical SHA256为`a0f03b1bd9992ceadb9922a66117a0d97a79535f8a778b4254b50cd97e2c51e6`/`a6e7a1db0d4ee9ac2e6fc57d6da31aefd46365c81fe277b03213b3f71aebf8ac`，receipt canonical SHA256为`97ba38a710ea53cd2a69d3e651c232bf53539665169f57db80e9aa4163703656`；inspect及exact retry `ALREADY_MATERIALIZED`通过 | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/bundles/2a8cdf4d74dd023a1c1cba415c968a089cfc5759d016eebdcfb38617d550cb6f/receipt.json`、`coverage.json`、`manifest.json`；独立F1设计v2.1 §4/§9.2 |
 | `EVID-PATTERN-R5-FORMAL-20260915` | source-revision request `014547fa46994c7b01b809580a8db5d4cce449c723661454bb3a29e6f0d9eeb2`保持r4人口和规格，绑定代码`9c78533d2bbc33851f8798bdb334c2f5c2ad7a75`、r5 manifest文件/内部SHA256 `7b5402c38b4b279140375fa6517595f88bdfb472e617faf8b032c04f0d33d1c1`/`59b92120a4fb52fdde8a3db57337eb9af3810d28881861db7d9e3d028987407f`、rights/restatement canonical及policy。两处伪接缝ratio=1，restatement未知日期/数值不匹配均0；factor 695/695=692 dividend+3 rights，unbound/insufficient=0；三层64/64、无排除，九项均`INCONCLUSIVE`、selected=0、全部保护写入false。manifest原始/canonical SHA256为`20c5c1301c0d618e8ec7f7c02cddd4c6a3a006f64784804c7de617dcf1b0b3c1`/`7481afad8bcb6bde45cfc4fbe90fc53ac14719ef048aa464d91498dce0da9541`，receipt canonical为`f756fdecf307c81646a268aab23ddd5dbce876cc18ef649714b675ee9a78cb23`；inspect/exact retry通过 | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_strategy_v1/bundles/014547fa46994c7b01b809580a8db5d4cce449c723661454bb3a29e6f0d9eeb2/receipt.json`、`coverage.json`、`manifest.json`；[独立F1设计v2.3](position_timing_pattern_strategy_design_20260911.md) §4/§9.2 |
+| `EVID-PT-NEXT-021-R7-FORMAL-20260918` | request `5e4d46c9ec0054c69e49896338fdf3e96a2b1474733c0c9836e04fbaa832237e`绑定源码`71234a4a3a476bab2ab365754792936d96f4d982`、r7 manifest文件/canonical `084ffe...6900`/`c11e16...836`、父pattern与r5 A0诊断基线。factor 7,970,157行、invalid/insufficient=0；32股1-vs-8为EXACT；41 chunks覆盖5,144股。9候选×6池的54项点估计全负，family-wise正/负均0项，selected=0；C2虽将全市场共同起点持仓时间提高至47.58%，统一区间仍落后同股BH 31.46个百分点。5,143个未受版本影响的A0逐字段精确等价，`688766.SH`只保留r7停牌修复差异。manifest canonical `c7774d...61f7`、report/receipt文件SHA `dd194f...dce8`/`520f16...d626`；inspect VERIFIED，exact retry ALREADY_MATERIALIZED；DB/network/runtime/service-control均false，research workers=true | `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/pattern_strategy_evolution_v1/bundles/5e4d46c9ec0054c69e49896338fdf3e96a2b1474733c0c9836e04fbaa832237e/manifest.json`、`report.json`、`receipt.json`；[独立F1计划v1.2](position_timing_strategy_evolution_plan_f1_20260918.md) §7.3 |
 | `EVID-VCB-FORMAL-20260914` | 最终同退出语义request `c2a9598ada5eee9cb691d191454be61d64ca223c8eb3f66c1bc20e90184ce494`绑定代码`52217df3b4d86b5c9c4b82ee6ed8a072ec383412`、rule `9203fbd160b705fa4278d137a18343886d50ee7b8dc8fbf56f8cd3b6aa7d665c`、r4 manifest `ed8375696030ca95b4a1f30167c2ac956e69b8276ba981babd301682dcea78de`、rights canonical `4a7cdb79e968f33a000f2e9b81196986349cff26100688794b87f6a1f454f10c`及policy `4c00bef92adf0fe242531748f2b4fe38aa35208a79c2d990cef68bf7d52eb60a`。主路径64/64、source 364/364、unbound=0；341个市场匹配、185个现金态可行动。主比较点估计`-4.2788 bps/日`、95%区间`[-11.6889,+2.9364]`、`INCONCLUSIVE/selected=0`；2/3父订单诊断因`688052.SH`合法拆单不可用而各63/64。manifest/receipt/coverage canonical identity为`db7dd39ea5dc6b936d299662ff74bbd493fab56cce29c08c11396a992b61456c`/`a697c5e625908d401b2bf0311f8067e31032dc5fe834a3629d8e1828d8c2de2e`/`904efd348a0a65d066e8d9f862f37c17367adeaa460298381e31f9ae2ac911d9`，原始文件SHA256为`7a6057a42c71ce5c79b291db97f41e3d069b140efeb017be0ca52d9d448d04ee`/`219e7a73be23df80a39bf32c740e1d03960c688a1c48e67b0d37756c8ccb8b23`/`5993a31ba188676076614b2946c483320e49300b246573c4c3654c2fa1c175ef`；inspect/exact retry通过，全部保护写入false | `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/volatility_contraction_breakout_v1/bundles/c2a9598ada5eee9cb691d191454be61d64ca223c8eb3f66c1bc20e90184ce494/receipt.json`、`coverage.json`、`manifest.json`；[独立F1设计v1.2](position_timing_volatility_contraction_breakout_f1_20260914.md) §7.1 |
 | `EVID-TDX-CONTRACT` | 批量报价上限 50，最大陈旧度 5 分钟，最大未来偏斜 30 秒 | `backend/services/simulation_data/contracts.py:47` |
 | `EVID-TDX-MINUTE` | 当前 `fetch_minute_kline_tdx` 调用无日期/count 参数的 `/api/kline-all/tdx`，取得端点完整响应后在客户端筛 `trade_date`；第一阶段不得调用 | `backend/data_service/tdx_adapter.py:191` |
@@ -1284,19 +1287,29 @@ r5最终factor coverage为695/695，其中692个绑定普通公司行动，`0009
 
 PR #4906 `pattern_close_cash_replay.replay/execute`显示：确认买入仍使用突破日参考、max_chase=100 bps、max_open_gap=300 bps，且加速盈利条件为`wealth > CAPITAL`。因此下一轮要拆分锚点/开盘条件、当前持仓盈利与账户回本、退出后再入场机制；不能仅靠提高止盈阈值、加钱或增加仓位宣布修复。6%风险退出与可交易性是不同层：前者可在显式新策略中研究，后者不可放宽。当前证据固定EXPLORATORY，尚无可发布的超额收益策略。
 
-### 9.24 下一优先任务：PT-NEXT-021 r7/WSL并行策略演进（重设计完成，未执行r7）
+### 9.24 已完成：PT-NEXT-021 r7/WSL并行策略演进
 
-具体合同、接口发现、公式、WSL环境、并行拓扑与验收见[单模块F1计划v1.1](position_timing_strategy_evolution_plan_f1_20260918.md)。旧Windows/r5串行实施已产生两个未合入提交并通过26项定向测试，随后修复BUG-1574的非有限终值序列化；正式r5 request `a67dddf8f8e5dce87db1c591493b9746bc0da805c79bb8551e9a2a5c5016452a`只封存8个128股chunk（1,024/5,144股）后按用户指令终止。它没有最终bundle/report/inspect/exact retry，不得读为策略结果或继续消耗时间；旧artifact保留、不覆盖。本次只修改设计，不启动r7 `prepare/run`，也不激活在线策略。
+具体合同、接口、公式、WSL环境、并行拓扑、失败谱系、正式身份与完整结果见[单模块F1计划v1.2](position_timing_strategy_evolution_plan_f1_20260918.md)。旧Windows/r5 request `a67dddf8f8e5dce87db1c591493b9746bc0da805c79bb8551e9a2a5c5016452a`只封存1,024/5,144股后按用户指令终止，没有最终bundle/report/inspect/retry；它未进入r7结果。正式r7 request、bundle与manifest身份分别为 `5e4d46...237e`、同名bundle和 `c7774d...61f7`，inspect及exact retry通过，不激活在线策略。
 
-1. 优先执行政策2×2：A0原规则、A1确认日参考、A2收盘成交取消买入开盘缺口veto、A3两项；其他规则不变，先解释被拒入场和空仓时间。
-2. 固定新方向B0趋势持有/破位/再入场、B1中期突破/跟踪退出、B2趋势内回踩恢复；C0单笔净盈利触发、C1一次50%减仓、C2不因加速退出。共10策略含A0，9新候选全部报告，不先选最佳再组合；C1本批余仓只保留原风险退出，结构退出已由B组检验，不混成单一归因。
-3. 同股1,000万元自然复投、同成本、同收盘时钟/限制，逐股与六池BH及各自指数、年度/共同现金起点/统一期间、超额分布、回撤、暴露、成本、原因与unknown全量横向比较。新窗口与旧R0需要不同预热，故“各自全历史”和“共同现金起点”必须分开；收益切片不冒充重放。
+1. 政策2×2、B组趋势方向及C0/C1/C2退出方向均已按冻结规格执行，未按中间收益调参或混搭组件。
+2. 54项family-wise比较没有正下界，全部点估计为负；完整人口因unknown成员日为UNAVAILABLE，paired结果只作条件诊断。共同起点统一区间内C2表现最好但仍未超过BH；降低回撤和提高暴露均不能充当alpha。
+3. 本批结论是“研发与回放完成、无候选获支持”，不是工程失败，也不是继续扫描止盈比例的理由。`selected_trial_count=0`，L1/L1a、N0、serving与运行态均未改变。
 
-正式输入切换到WSL路径 `/mnt/wsl/aistock-qe-data-v1/releases/20260831-qe_hmm_full_v2-direct-20260918-r7-candidate`，绑定manifest文件/canonical SHA `084ffe...6900` / `c11e16...836`，不在运行时解析mutable active profile。r5/r7逐文件闭合表明：63,312个日线文件、六个股票池、两个指数上下文和11个择时authority均相同；实际策略输入差异仅为r7给`688766.SH`新增2025-11-27～12-05七个停牌记录。`daily_basic.volume_ratio`修复不是本策略输入。该事实解释为何终止r5是正确资源决策，但最终研究仍必须在r7上完整重算，不能复用r5分片。
+正式输入切换到WSL路径 `/mnt/wsl/aistock-qe-data-v1/releases/20260831-qe_hmm_full_v2-direct-20260918-r7-candidate`，绑定manifest文件/canonical SHA `084ffe...6900` / `c11e16...836`，不在运行时解析mutable active profile。r5/r7逐文件闭合表明：63,312个日线文件、六个股票池、两个指数上下文和11个择时authority均相同；停牌文件另有9条新增/2条删除的物理行差异，其中两组只是`suspend_timing`规范化替换。当前reader实际消费的`(symbol,date,suspend_type=S)`策略语义差异仅为r7给`688766.SH`新增2025-11-27～12-05七个停牌日，两层差异分别hash-bound，A0豁免只来自语义差异。`daily_basic.volume_ratio`修复不是本策略输入。该事实解释为何终止r5是正确资源决策，但最终研究仍必须在r7上完整重算，不能复用r5分片。
 
 正式运行使用WSL ext4原生干净checkout和独立ext4 artifact root。外层仍固定128股chunk，内部固定8个`spawn`进程、最多16个在途symbol任务；worker只做纯计算，父进程按canonical symbol顺序唯一写入并封存。任一worker失败使当前chunk整体未封存，续跑只复用身份一致的sealed chunk。单进程与8进程先在固定32股诊断集做canonical hash等价验证；这只是并行正确性检查，不按收益选择策略或构成审批门禁。bootstrap/source preflight保持单进程，不建设worker服务、调度平台或第二套回测框架。
 
-研究选择遵循“本地失效机制→可证伪假设→固定小集合→完整负结果”；文献仅提供机制与反证，详见F1§6，不保证A股个股有效。历史特征可见性/交易资格解耦排在本批后作为独立方法学变体。再后才研究50～500亿元/PIT业绩条件及模型动作价值：筛选后仍与同一人口BH比较，避免将选股收益错记择时；不得假定财报可见历史已经齐备。本轮不接QE/HMM/Agent、不建立平台，prospective/实时行情不阻塞历史研究。旧“突破失败/支撑失守EXIT优先下一项”顺序被本节替代，结构退出机制已吸收进B组。
+本批结果不变，后续优先级已由2026-09-19用户确认的§9.25替代：先闭合新研究的历史特征可见性与交易资格分离，再做基本面筛选后的两个冻结政策对BH；不重复旧A0～C2矩阵或单独强制重跑C2。不得将筛选收益错记择时，不假定财报PIT已齐备，不按本轮结果扫描阈值。
+
+### 9.25 PT-NEXT-022：R8基本面筛选与同股BH研究（设计已闭合，未实现/未回放）
+
+权威单模块设计：[position_timing_fundamental_screen_research_f1_20260919.md](position_timing_fundamental_screen_research_f1_20260919.md)。本次仅文档交付；既有PT-NEXT-021 r7结果和全部不可变产物原样保留。后续明确不接QE、HMM、荐股/Agent，不新增模型训练或其他模块改造。
+
+1. 新研究显式绑定R8：manifest文件SHA `07db01d8c24108ebfe2b85bc42f18f33c77fb0e09451999d7520faa08ebe1b18`、canonical SHA `6bb6096aada59541f58d05e1c44d5dabd8838661936d98539adcb79d7ac39283`；WSL native发布路径见F1。旧R7 runner的版本约束保留，新增独立研究入口，不能简单改路径或放宽hash。
+2. 三筛选组：P1为50～500亿元，P2加单季度扣非利润同比加速与营收增长，P3再加ROE/经营现金流质量。P1源已核验；P2/P3缺严格季度/披露/修订快照，不用`bak_basic.profit_yoy`替代。数据窗口交付独立绑定R8的snapshot，本模块不查DB补源。缺财报只影响对应组，不阻断P1。
+3. 两政策：T1趋势参与及恢复再入场，T2基础70%/战术30%减持补回；均保留明确风险退出、实际交易限制、逐腿成本。只做3×2对同股BH六假设，不重复A0～C2对照，也不搜索比例/阈值。指数仍按各池对应基准作背景，非新增选胜假设。
+4. 每股每组在历史首次筛选PASS且共同指标就绪时建立同本金账户，不按择时成交日选择BH起点；筛选后退池不删账户/不新增基本面退出，现金自然复投、无追加资金。特征预热与当日交易资格在新研究解耦，UNKNOWN不填0、不通过事后子集美化覆盖。
+5. 后续三个块：输入/合同→两政策与WSL8进程回放→横向解释与审核。数据合同可交付不等于财务输入已交付；完整六格未执行不报告实验完成。所有收益、功效、显著性均为报告而非研究准入；无DB、runtime、serving、重启或其他模块写入。
 
 ## 10. Verification Plan / 验证方案
 
@@ -1518,7 +1531,7 @@ git diff --check
 
 v2.43第一轮曾以当时main源码、PR#4906状态及close-cash request/report/receipt核对事实，区分纯Qlib模式合入、现金实验已运行和当时代码尚未合入；随后#4906已由merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`进入main，本版已纠正该状态。该轮另核对完整人口与条件样本、持续账户切片与共同起点重放、单笔盈利与账户回本、部分减仓与结构退出，并检查文档验收一致性；没有重跑研究、训练、DB或运行服务。
 
-v2.44再执行三层只读/设计复核：第一层确认r5正式演进只到1,024/5,144股、无最终bundle，终止后没有未封存chunk被误留为完成；第二层核对active profile generation `20260918-v10`、r7 WSL路径、manifest/canonical SHA及r5/r7全文件差异，确认当前策略唯一输入变化为`688766.SH`七个停牌日；第三层核对8-worker父写者、固定排序、失败chunk不seal、ext4 artifact及最终Windows导出边界。以上都不是r7正式收益结果。
+v2.44再执行三层只读/设计复核：第一层确认r5正式演进只到1,024/5,144股、无最终bundle，终止后没有未封存chunk被误留为完成；第二层核对active profile generation `20260918-v10`、r7 WSL路径、manifest/canonical SHA及r5/r7全文件差异，区分停牌文件9增2删的物理变化与reader真正消费的语义变化，确认当前策略唯一输入变化为`688766.SH`七个停牌日；第三层核对8-worker父写者、固定排序、失败chunk不seal、ext4 artifact及最终Windows导出边界。以上都不是r7正式收益结果。
 
 新F1的`DESIGN_VERIFIED`仅表示r7/WSL/并行设计闭合。10策略业务定义已有未合入Windows原型和26项定向测试，但r7身份、并行执行、全量回放、inspect与exact retry均未完成。未来验证除A0、现金/部分数量/费用守恒、T+1/方向限制、无重复复权、缺失不补零、PIT、共同起点、指数映射和不可变hash外，必须覆盖单/8进程canonical等价、父进程唯一写者、worker失败不seal、sealed-only续跑及WSL环境身份；不创建重复fixture或新平台。
 
@@ -1661,7 +1674,8 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-048 | PT-NEXT-018 | HARD | 单一离线request冻结R0四项原型比较与R0～R7/双特征集模型五项演进比较；新评价人口排除全部prior request与训练股，PIT/公司行动/停牌/逐腿费用/UNKNOWN及开发-训练-外层覆盖fail-closed。配股绑定独立typed authority与候选/基线共同账户政策；r5 source-revision保持r4人口和全部规格，以candidate内独立restatement authority关闭两处历史factor拼接且保留三条真实配股，不得在择时内手工补源或从factor推断认购。只写timing-owned research bundle，无API/UI/serving/registry/current/card/order/DB/runtime写入 |
 | F-049 | PT-NEXT-019 | HARD | 只检验波动收缩、量缩与20日收盘突破后T+1 OPEN一个冻结规则；候选与`ALWAYS_OPEN_RISK_MANAGED`同股、同资金、同成本/公司行动/配股政策、同风险退出，唯一差异为现金入场时机。复用明确r4 candidate；1父订单主覆盖与2/3父订单诊断覆盖分离。单一正式比较、无模型/阈值搜索/runtime serving，零protected/DB/runtime写入 |
 | F-050 | PT-NEXT-020 | HARD | §9.23区分旧v2、纯Qlib v4及独立现金close-cash v1谱系。当前r5、同股1,000万元/BH、自然复投、T+1收盘、六池事后PIT归组、对应指数；只复权一次、不做账户公司行动，factor/restatement/hash正确性不放宽。报告完整人口缺口与paired诊断，不冒充alpha/上线；无其他模块/DB/runtime/serving写入 |
-| F-051 | PT-NEXT-021 | HARD | §9.24与20260918 F1 v1.1：固定10策略、同股现金/BH、各池对应指数、共同起点/覆盖/探索性多重尝试；正式输入切换r7并绑定manifest，WSL ext4原生checkout、8个纯计算worker、父进程唯一seal、sealed-only续跑。r5的1,024股中止检查点不得当结果或跨版本复用；历史先行、负结果交付、零在线改变 |
+| F-051 | PT-NEXT-021 | HARD | §9.24与20260918 F1 v1.2：固定10策略、同股现金/BH、各池对应指数、共同起点/覆盖/探索性多重尝试；正式r7 request/bundle完成5,144股、8个纯计算worker、父进程唯一seal、inspect/retry。r5中止检查点未复用；54项无正下界、selected=0、零在线改变 |
+| F-052 | PT-NEXT-022 | HARD | §9.25与20260919 F1：R8显式身份、三基本面组/两政策对BH六假设、季度财报PIT缺口分组可见、共同首次入选/现金账户/六池指数；不复跑旧策略、不接QE/HMM/荐股、不改其他模块，不用设计通过冒充实现或收益 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1719,7 +1733,8 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-048 | `pattern_strategy.py`、`pattern_research.py`、`pattern_optimizer.py`、`pattern_model.py`、`pattern_rights_issue.py`、`pattern_adj_factor_restatement.py`；request v3/v4与source-revision lineage；§9.21与独立F1设计v2.3 | 六个`backend/tests/position_timing/test_pattern_*.py`；完整模块325 passed；F1/F2 validator；r4 request `2a8cdf...cb6f` source696/696与r5 request `014547...eeb2` source695/695均三层64/64、九项`INCONCLUSIVE`、selected=0；r5两处伪接缝ratio=1、三条rights保留、unbound=0；bundle inspect/exact retry | PATTERN_TIMING_R5_SOURCE_REVISION_FORMAL_REPLAY_VERIFIED_INCONCLUSIVE | none |
 | F-049 | `volatility_contraction_breakout.py`、`volatility_contraction_breakout_research.py`、`pattern_research.py`默认不变扩展；§9.22与独立F1设计v1.2 | `backend/tests/position_timing/test_volatility_contraction_breakout.py`、`test_volatility_contraction_breakout_research.py`与`test_pattern_research.py`；直接36项、模块及AIstock PATH集中nox均318项；最终request `c2a959...494`主路径64/64、source364/364、区间跨0、selected=0；bundle inspect/exact retry | VCB_ENTRY_TIMING_FORMAL_REPLAY_VERIFIED_INCONCLUSIVE | none |
 | F-050 | `pattern_universe_benchmark.py` v4与close-cash PR#4906（merge `e3e156...54d2`）已合入；§9.23 | artifact: F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/pattern_close_cash_benchmark_v1/bundles/745c4ea3b5038532535bb86c71ac192891ac30cbac532ae6f81c543511c9f2ff/receipt.json；§10.22覆盖/状态边界 | DESIGN_VERIFIED | none |
-| F-051 | §9.24；`position_timing_strategy_evolution_plan_f1_20260918.md` v1.1 | 设计artifact `docs/architecture/position_timing_strategy_evolution_plan_f1_20260918.md`；未来测试 `backend/tests/position_timing/test_pattern_strategy_evolution.py`；r5 request `a67dd...452a`只有8个sealed chunks后终止、无bundle；r7/WSL/8-worker run与验证尚未执行 | DESIGN_VERIFIED | none |
+| F-051 | `pattern_strategy_evolution.py`、`pattern_strategy_evolution_benchmark.py`；§9.24；F1 v1.2 | `backend/tests/position_timing/test_pattern_strategy_evolution.py`及相关回归；`/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/pattern_strategy_evolution_v1/bundles/5e4d46c9ec0054c69e49896338fdf3e96a2b1474733c0c9836e04fbaa832237e/manifest.json`；41 chunks、32股1-vs-8 EXACT、A0 5,143股等价、inspect/exact retry；`EVID-PT-NEXT-021-R7-FORMAL-20260918` | PT_NEXT_021_R7_FORMAL_REPLAY_VERIFIED_NO_ALPHA | none |
+| F-052 | §9.25；20260919 F1 §2～11；仅设计，三个拟议模块未实现 | artifact: docs/architecture/position_timing_fundamental_screen_research_f1_20260919.md；R8只读源核验/三轮设计审核/F1和F2 validator；财务输入状态见F1 §2 | DESIGN_VERIFIED | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
@@ -1734,6 +1749,8 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 7. **PT-NEXT-018 专项复核**：新增代码全部位于`backend/services/position_timing/`与直接测试；复用既有纯成交/成本/公司行动/停牌/模型函数但不改其默认值或入口。一个顶层request事前冻结两个family共9项正式比较；UNKNOWN或任一开发、训练、评价、外层覆盖不完整均不能进入SUPPORTED。r4 reader只消费明确candidate与typed authority，统一`NEVER_SUBSCRIBE`政策在收益前冻结；r5 request v4再绑定最终r4人口、独立restatement authority和双接缝逐日审计，不形成新人口或假设。r4 source696/696、r5 source695/695均rights=3、三层64/64且无排除；减少的一个interval来自伪拼接消失，不是删股或放宽阈值。两次九项区间均全部跨0、selected=0，故只保留研究证据。没有抓取数据、读取或修改数据库、重建/激活candidate、换股或改变策略；旧研究、N0、timing registry/current、card/event/alert/order、数据库与运行态保持不变。
 8. **PT-NEXT-019 专项复核**：新增规则、研究管线及复用扩展全部位于`position_timing`与直接测试，三个扩展参数默认值保持旧P0路径不变。唯一正式对照与候选共享风险退出，避免把入场与退出效应混合；1父订单主证据不再被2/3父订单诊断缺口错误否决。四个request身份和三类失败原样留存，修复未改变64股人口、日期、信号阈值、成本或配股政策。最终source364/364、主路径64/64，但95%区间跨0、selected=0，故只保留不可变`INCONCLUSIVE`证据；未抓取数据、读写数据库、重建/激活candidate、修改其他模块或写入N0/timing registry/current/card/event/alert/order/runtime，也不发布serving或要求重启。
 9. **PT-NEXT-020 / close-cash 状态复核**：旧公司行动source blocker不再是纯Qlib研究前置，10 bps只统计factor变化。§9.23记录模式切换、现已合入的PR#4906及r5独立现金实验；源码合入和已运行均不冒充在线激活。full population不足不以paired诊断替代，科创100缺指数不fallback；不可变r5/父/合同/receipt身份与统计边界明确。
-10. **PT-NEXT-021 r7/WSL重设计复核**：不简化同股自然复投、各池指数或多维横向对照，不把r5已封存1,024股当研究结果。r7必须全量重算；WSL并行只有父进程写产物、固定顺序、失败chunk不seal，且先做1-vs-8输出等价。没有新增审批/收益/MDE门禁，没有启动r7回放、行情/DB/服务控制；研究子进程与共享服务控制被显式区分。
+10. **PT-NEXT-021 r7/WSL正式复核**：未简化同股自然复投、各池指数或多维横向对照，r5已封存1,024股未进入结果。r7已全量重算；32股1-vs-8精确一致，父进程唯一写产物、固定顺序、失败chunk不seal，41个正式chunk闭合。首个完整run在report发布前因`numpy.int64`规范JSON失败且无最终manifest；显式修复类型边界后以新request完整重跑，未放宽序列化或复用旧request。54项无正下界、selected=0；研究负结果如实交付，无行情/DB/服务控制或在线写入。
 
-结论：历史首发和模型/形态研究事实保留，尚无可发布的成本后择时alpha支持。独立现金R0的可评价样本落后BH，长期空仓与guard/退出机制仍值得验证，完整人口与部分指数证据不足。继续完成旧r5演进不值得：最终权威必须是r7，而r5任务尚未产生结果；它已安全终止并保留8个sealed chunks作为工程审计。用户已批准本设计，文档合入后实施r7身份与确定性并行，再从WSL ext4完整执行10策略横向实验；无QE/HMM/Agent融合，无DB/在线运行/重启/激活。
+11. **PT-NEXT-022设计复核**：明确R8 source身份核验与旧runner兼容性不同，未把备用同比包装成季度财报PIT；六项只对BH，不复跑旧矩阵。分组数据缺口不阻断P1，完整任务仍需如实披露；共同起点、入选后跟踪、T2现金守恒、terminal UNKNOWN及统计estimand在F1固定。设计通过不表示实现/实验完成，不增加研究审批或其他模块耦合。
+
+结论：历史首发和模型/形态研究事实保留，仍无可发布的成本后择时alpha支持。PT-NEXT-021 r7/WSL已完成，54项无正下界、selected=0；完整人口因unknown仍不可识别。下一步按§9.25的R8基本面筛选设计推进三个实施块，历史特征/PIT正确性先行；P1可先开发，P2/P3需数据窗口的财报PIT快照。当前只交付设计，不启动回放；无QE/HMM/荐股融合、训练、DB、在线运行、重启或激活。

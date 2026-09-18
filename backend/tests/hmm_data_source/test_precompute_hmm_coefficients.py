@@ -94,21 +94,21 @@ def _shared_code_map_payload(
 def _write_frozen_input_fixture(
     tmp_path,
     *,
-    omit_sector_day: bool = False,
+    invalid_sector_value: bool = False,
     sector_id: int = 133,
+    membership_sector_id: int | None = None,
     code_map_entries: list[dict[str, object]] | None = None,
 ):
     root = tmp_path / "release"
     root.mkdir()
     dates = pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-03"])
-    sector_dates = dates[1:] if omit_sector_day else dates
-    sector_index = pd.MultiIndex.from_product([sector_dates, ["000001.SZ"]], names=["datetime", "instrument"])
+    sector_index = pd.MultiIndex.from_product([dates, ["000001.SZ"]], names=["datetime", "instrument"])
     sector = pd.DataFrame(
         {
             "l2_code_id": [sector_id] * len(sector_index),
             "sw2_pct_change": [0.1, 0.2, 0.3][-len(sector_index) :],
             "sw2_vol": 100.0,
-            "sw2_amount": 1000.0,
+            "sw2_amount": float("nan") if invalid_sector_value else 1000.0,
             "sw2_mf_net_amt": 10.0,
             "sw2_mf_buy_elg_amt": 20.0,
             "sw2_mf_sell_elg_amt": 10.0,
@@ -127,6 +127,7 @@ def _write_frozen_input_fixture(
         "index_daily_h5": root / "index_daily.h5",
         "sector_code_map_json": root / "sector_code_map.json",
         "market_context_parquet": root / "market_context.parquet",
+        "sector_membership_spans_parquet": root / "sector_membership_spans.parquet",
     }
     sector.to_hdf(paths["sector_data_h5"], key="data", format="table", data_columns=True)
     index.to_hdf(paths["index_daily_h5"], key="data", format="fixed")
@@ -137,6 +138,14 @@ def _write_frozen_input_fixture(
     pd.DataFrame({"trade_date": dates, "sw_daily_total_vol": [1000.0, 1100.0, 1200.0]}).to_parquet(
         paths["market_context_parquet"], index=False
     )
+    pd.DataFrame(
+        {
+            "instrument": ["000001.SZ"],
+            "start_date": [date(2026, 6, 1)],
+            "end_date": [date(2026, 6, 3)],
+            "l2_code_id": [sector_id if membership_sector_id is None else membership_sector_id],
+        }
+    ).to_parquet(paths["sector_membership_spans_parquet"], index=False)
     bundle = {
         "schema_version": "qe_hmm_frozen_input_v1",
         "dataset_root": str(root),
@@ -158,6 +167,7 @@ def test_load_frozen_coefficient_inputs_uses_hash_pinned_files_only(tmp_path) ->
     assert result["dataset_identity"] == {"generation": "fixture"}
     assert result["sector_data"]["801783.SI"][date(2026, 6, 1)]["sw2_pct_change"] == 0.1
     assert result["sector_code_by_id"] == {133: "801783.SI"}
+    assert result["active_sector_codes"] == ["801783.SI"]
     assert result["sector_code_map_authority"] == {
         "authority_id": "aistock_sw_l2_shared_catalog_fixture",
         "authority_sha256": "a" * 64,
@@ -198,6 +208,63 @@ def test_load_frozen_coefficient_inputs_accepts_sparse_shared_ids_without_indexi
         133: "801783.SI",
     }
     assert set(result["sector_data"]) == {"801783.SI"}
+    assert result["active_sector_codes"] == ["801783.SI"]
+    assert result["ordered_sector_codes"] == ["801011.SI", "801783.SI"]
+
+
+def test_load_frozen_coefficient_inputs_rejects_membership_sector_without_data(tmp_path) -> None:
+    entries = [
+        {"l2_code_id": 1, "canonical_l2_code": "801011.SI"},
+        {"l2_code_id": 133, "canonical_l2_code": "801783.SI"},
+    ]
+    with pytest.raises(ValueError, match="membership references sectors without sector_data"):
+        load_frozen_coefficient_inputs(
+            _write_frozen_input_fixture(
+                tmp_path,
+                sector_id=133,
+                membership_sector_id=1,
+                code_map_entries=entries,
+            ),
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_duplicate_membership_rows(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    spec = bundle["files"]["sector_membership_spans_parquet"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    frame = pd.read_parquet(path)
+    pd.concat([frame, frame], ignore_index=True).to_parquet(path, index=False)
+    spec["sha256"] = _sha256(path)
+
+    with pytest.raises(ValueError, match="membership spans contain duplicate rows"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_overlapping_membership_spans(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    spec = bundle["files"]["sector_membership_spans_parquet"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    frame = pd.read_parquet(path)
+    overlapping = frame.copy()
+    overlapping["start_date"] = date(2026, 6, 2)
+    pd.concat([frame, overlapping], ignore_index=True).to_parquet(path, index=False)
+    spec["sha256"] = _sha256(path)
+
+    with pytest.raises(ValueError, match="membership spans overlap"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
 
 
 def test_load_frozen_coefficient_inputs_rejects_unknown_shared_id(tmp_path) -> None:
@@ -297,9 +364,17 @@ def test_load_frozen_coefficient_inputs_rejects_non_integral_shared_id(tmp_path)
 
 
 def test_load_frozen_coefficient_inputs_rejects_missing_membership_day(tmp_path) -> None:
-    with pytest.raises(ValueError, match="no rows for trading dates"):
+    bundle = _write_frozen_input_fixture(tmp_path)
+    spec = bundle["files"]["sector_membership_spans_parquet"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    frame = pd.read_parquet(path)
+    frame["start_date"] = date(2026, 6, 2)
+    frame.to_parquet(path, index=False)
+    spec["sha256"] = _sha256(path)
+
+    with pytest.raises(ValueError, match="empty point-in-time stock-sector map"):
         load_frozen_coefficient_inputs(
-            _write_frozen_input_fixture(tmp_path, omit_sector_day=True),
+            bundle,
             history_start=date(2026, 6, 1),
             test_start=date(2026, 6, 1),
             backtest_end=date(2026, 6, 3),
@@ -337,6 +412,16 @@ def test_load_frozen_coefficient_inputs_rejects_code_map_digest_drift(tmp_path) 
         )
 
 
+def test_load_frozen_coefficient_inputs_rejects_non_finite_sector_value(tmp_path) -> None:
+    with pytest.raises(ValueError, match="non-finite frozen sector value"):
+        load_frozen_coefficient_inputs(
+            _write_frozen_input_fixture(tmp_path, invalid_sector_value=True),
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
 def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, capsys) -> None:
     import builtins
     import numpy as np
@@ -352,7 +437,12 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
                     "n_states": 2,
                     "means": [[0.0] * 4, [1.0] * 4],
                     "state_labels": {"0": "neutral", "1": "trending"},
-                }
+                },
+                "B.SI": {
+                    "n_states": 2,
+                    "means": [[0.0] * 4, [1.0] * 4],
+                    "state_labels": {"0": "neutral", "1": "trending"},
+                },
             }
         ),
         encoding="utf-8",
@@ -374,6 +464,8 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             "dataset_identity": {"generation": "fixture"},
             "file_sha256": {key: "1" * 64 for key in module.FROZEN_FILE_KEYS},
             "sector_code_map_digest": "2" * 64,
+            "ordered_sector_codes": ["A.SI", "B.SI"],
+            "active_sector_codes": ["A.SI"],
             "sector_code_map_authority": {
                 "authority_id": "aistock_sw_l2_shared_catalog_fixture",
                 "authority_sha256": "a" * 64,
@@ -418,6 +510,10 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["data_source"] == "frozen_qe_release"
+    assert payload["catalog_sector_count"] == 2
+    assert payload["active_sector_count"] == 1
+    assert payload["inactive_catalog_sector_codes"] == ["B.SI"]
+    assert payload["coefficient_sector_scope"] == "membership_active_union"
     assert "stock_sector_map_by_date" not in payload
     assert payload["stock_sector_membership_spans"] == {
         "000001.SZ": [
@@ -428,6 +524,87 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             }
         ]
     }
+
+
+def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -> None:
+    import numpy as np
+    import scripts.precompute_hmm_coefficients as module
+
+    days = pd.bdate_range("2026-05-01", periods=30).date.tolist()
+    coefficient_days = [day for day in days if day >= date(2026, 6, 1)]
+    missing_day = coefficient_days[0]
+    model_path = tmp_path / "models.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "A.SI": {
+                    "n_states": 2,
+                    "means": [[0.0] * 4, [1.0] * 4],
+                    "state_labels": {"0": "neutral", "1": "trending"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    maps_by_date = {
+        day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days
+    }
+    monkeypatch.setattr(
+        module,
+        "parse_stdin",
+        lambda: {
+            "model_path": str(model_path),
+            "model_sha256": _sha256(model_path),
+            "test_start": "2026-06-01",
+            "backtest_end": coefficient_days[-1].isoformat(),
+            "frozen_input_bundle": {"schema_version": "qe_hmm_frozen_input_v1"},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "load_frozen_coefficient_inputs",
+        lambda *_args, **_kwargs: {
+            "dataset_root": str(tmp_path),
+            "dataset_identity": {"generation": "fixture"},
+            "file_sha256": {key: "1" * 64 for key in module.FROZEN_FILE_KEYS},
+            "sector_code_map_digest": "2" * 64,
+            "ordered_sector_codes": ["A.SI"],
+            "active_sector_codes": ["A.SI"],
+            "sector_data": {"A.SI": {day: {} for day in days}},
+            "sector_rows": {"A.SI": []},
+            "sector_dates": days,
+            "csi300": {day: 0.0 for day in days},
+            "index_dates": days,
+            "market_vol": {day: 1.0 for day in days},
+            "market_volume_dates": days,
+            "stock_sector_maps_by_date": maps_by_date,
+            "stock_sector_membership_spans": build_stock_sector_membership_spans(
+                maps_by_date
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "restore_hmm",
+        lambda _info: SimpleNamespace(means_=np.zeros((2, 4))),
+    )
+    observed_days = [day for day in days if day != missing_day]
+    monkeypatch.setattr(
+        module,
+        "build_legacy_observations",
+        lambda *_args, **_kwargs: (np.ones((len(observed_days), 4)), observed_days),
+    )
+    monkeypatch.setattr(
+        module,
+        "forward_filter_posteriors",
+        lambda _hmm, obs: np.tile(np.asarray([[1.0, 0.0]]), (len(obs), 1)),
+    )
+    monkeypatch.setattr(sys, "argv", ["precompute_hmm_coefficients.py"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "missing decoded state dates" in capsys.readouterr().err
 
 
 def test_precompute_source_has_no_database_data_plane() -> None:

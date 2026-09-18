@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.services.dataset_release.shared_sector_context import (
+    require_pinned_sector_context_files,
+    validate_sector_context_pins,
+)
+
 from .qe_dataset_contract import (
     QE_DATASET_START_DATE,
     QE_DIRECT_V2_DATASET_BINDING_PARAM,
@@ -36,6 +41,7 @@ from .qe_sector_blacklist_policy import (
 ACTIVE_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
 ACTIVE_PROFILE_SCHEMA_V1 = "aistock_active_dataset_profile_v1"
 ACTIVE_PROFILE_SCHEMA_V2 = "aistock_active_dataset_profile_v2"
+ACTIVE_PROFILE_SCHEMA_V3 = "aistock_active_dataset_profile_v3"
 # Compatibility export for existing profile producers.  New profiles which
 # enable sector-policy materialization must use V2.
 ACTIVE_PROFILE_SCHEMA = ACTIVE_PROFILE_SCHEMA_V1
@@ -79,6 +85,25 @@ _POOL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
 _SIDECAR_RE = re.compile(r"^(?:stock_universe|index_pool__[a-z0-9_]+)\.txt$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SYMBOL_RE = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
+_CONSUMER_REQUIRED_COMPONENTS = {
+    "qe": frozenset(
+        {
+            "day",
+            "minute",
+            "factor",
+            "index",
+            "suspend",
+            "benchmark",
+            "stock_pools",
+            "coverage",
+            "manifest",
+            "sector_context",
+        }
+    ),
+    "hmm": frozenset({"factor", "index", "manifest", "sector_context"}),
+    "selection": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
+    "advisory": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
+}
 QE_STAR50_REQUIRED_TOPK = 20
 _STAR50_ALIASES = frozenset(
     {
@@ -133,8 +158,7 @@ def _require_exact_mapping(value: Any, *, fields: set[str], field: str) -> dict[
 
 def _canonical_profile_bytes(value: Mapping[str, Any]) -> bytes:
     return (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        + "\n"
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
     ).encode("utf-8")
 
 
@@ -179,13 +203,7 @@ def _require_external_directory(path: Path, *, field: str) -> None:
 
 def _require_posix_root(value: Any, *, field: str) -> str:
     text = str(value or "")
-    if (
-        not text.startswith("/")
-        or text == "/"
-        or "\\" in text
-        or "\x00" in text
-        or posixpath.normpath(text) != text
-    ):
+    if not text.startswith("/") or text == "/" or "\\" in text or "\x00" in text or posixpath.normpath(text) != text:
         raise _fail("qe_active_dataset_profile_invalid", f"{field} must be a canonical POSIX root")
     return text
 
@@ -235,11 +253,7 @@ def is_pure_star50_universe(
         mode = str(universe_selection.get("mode") or "")
         raw_pool_ids = universe_selection.get("pool_ids")
         pool_ids = raw_pool_ids if isinstance(raw_pool_ids, (list, tuple)) else []
-        return (
-            mode in {"single_index", "index_union"}
-            and len(pool_ids) == 1
-            and _is_star50(pool_ids[0])
-        )
+        return mode in {"single_index", "index_union"} and len(pool_ids) == 1 and _is_star50(pool_ids[0])
     return _is_star50(stock_pool)
 
 
@@ -353,7 +367,11 @@ class ResolvedQEDataset:
 def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -> QEActiveDatasetProfile:
     root = _require_exact_mapping(value, fields=_TOP_LEVEL_FIELDS, field="profile")
     profile_schema = str(root["schema_version"] or "")
-    if profile_schema not in {ACTIVE_PROFILE_SCHEMA_V1, ACTIVE_PROFILE_SCHEMA_V2}:
+    if profile_schema not in {
+        ACTIVE_PROFILE_SCHEMA_V1,
+        ACTIVE_PROFILE_SCHEMA_V2,
+        ACTIVE_PROFILE_SCHEMA_V3,
+    }:
         raise _fail("qe_active_dataset_profile_invalid", "schema_version differs")
     generation = str(root["generation"] or "")
     release_id = str(root["release_id"] or "")
@@ -386,12 +404,23 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
     }
     if profile_schema == ACTIVE_PROFILE_SCHEMA_V2:
         component_fields.add("sector_policy_pins")
+    elif profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        component_fields.update(
+            {
+                "sector_context_pins",
+                "dataset_manifest_sha256",
+                "dataset_manifest_file_sha256",
+            }
+        )
     components = _require_exact_mapping(
         root["components"],
         fields=component_fields,
         field="components",
     )
-    for field in ("factor_meta_sha256",):
+    sha_fields = ["factor_meta_sha256"]
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        sha_fields.extend(["dataset_manifest_sha256", "dataset_manifest_file_sha256"])
+    for field in sha_fields:
         _require_sha256(components[field], field=f"components.{field}")
     _require_sha256(
         components["benchmark_instruments_sha256"],
@@ -405,10 +434,22 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         if (
             sector_pins["start"] != str(components["factor_meta"].get("start") or "")
             or sector_pins["end"] != cutoff.isoformat()
-            or sector_pins["universe_key"]
-            != str(components["factor_meta"].get("universe_key") or "")
+            or sector_pins["universe_key"] != str(components["factor_meta"].get("universe_key") or "")
         ):
             raise _fail("qe_active_dataset_profile_invalid", "sector policy identity differs from factor metadata")
+    elif profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        try:
+            sector_context_pins = validate_sector_context_pins(components["sector_context_pins"])
+        except ValueError as exc:
+            raise _fail("qe_active_dataset_profile_invalid", str(exc)) from exc
+        if (
+            sector_context_pins["membership_end"] != cutoff.isoformat()
+            or sector_context_pins["market_end"] != cutoff.isoformat()
+        ):
+            raise _fail(
+                "qe_active_dataset_profile_invalid",
+                "sector context cutoff differs from profile",
+            )
 
     node_bindings = root["node_bindings"]
     if not isinstance(node_bindings, Mapping) or not node_bindings:
@@ -423,19 +464,50 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         )
         _require_posix_root(node["candidate_root"], field=f"node_bindings.{node_id}.candidate_root")
 
-    consumers = _require_exact_mapping(root["consumers"], fields={"qe"}, field="consumers")
+    consumer_fields = {"qe", "hmm", "selection", "advisory"} if profile_schema == ACTIVE_PROFILE_SCHEMA_V3 else {"qe"}
+    consumers = _require_exact_mapping(root["consumers"], fields=consumer_fields, field="consumers")
+    qe_fields = {
+        "defaults",
+        "default_universe",
+        "universes",
+        "coverage_receipt_sha256",
+    }
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        qe_fields.add("required_components")
     qe = _require_exact_mapping(
         consumers["qe"],
-        fields={"defaults", "default_universe", "universes", "coverage_receipt_sha256"},
+        fields=qe_fields,
         field="consumers.qe",
     )
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        for consumer_name, required in _CONSUMER_REQUIRED_COMPONENTS.items():
+            consumer = (
+                qe
+                if consumer_name == "qe"
+                else _require_exact_mapping(
+                    consumers[consumer_name],
+                    fields={"required_components"},
+                    field=f"consumers.{consumer_name}",
+                )
+            )
+            raw_required = consumer["required_components"]
+            if not isinstance(raw_required, list) or raw_required != sorted(required):
+                raise _fail(
+                    "qe_active_dataset_profile_invalid",
+                    f"consumers.{consumer_name}.required_components differs",
+                )
     defaults = _require_exact_mapping(qe["defaults"], fields=_DEFAULT_FIELDS, field="consumers.qe.defaults")
     dates = {key: _date(value, field=f"defaults.{key}") for key, value in defaults.items()}
     if dates["signal_end"] != dates["test_end"] or dates["signal_end"] > cutoff:
         raise _fail("qe_active_dataset_profile_invalid", "signal_end/test_end/cutoff differ")
     if not (
-        dates["train_start"] <= dates["train_end"] < dates["valid_start"] <= dates["valid_end"]
-        < dates["test_start"] <= dates["backtest_end"] <= dates["test_end"]
+        dates["train_start"]
+        <= dates["train_end"]
+        < dates["valid_start"]
+        <= dates["valid_end"]
+        < dates["test_start"]
+        <= dates["backtest_end"]
+        <= dates["test_end"]
     ):
         raise _fail("qe_active_dataset_profile_invalid", "QE default date ordering is invalid")
     default_selection = UniverseSelection.from_value(qe["default_universe"])
@@ -477,7 +549,11 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         fields={"schema_version", "release_id", "cutoff", "pools"},
         field="coverage_receipt",
     )
-    if receipt["schema_version"] != UNIVERSE_COVERAGE_SCHEMA or receipt["release_id"] != release_id or receipt["cutoff"] != cutoff.isoformat():
+    if (
+        receipt["schema_version"] != UNIVERSE_COVERAGE_SCHEMA
+        or receipt["release_id"] != release_id
+        or receipt["cutoff"] != cutoff.isoformat()
+    ):
         raise _fail("qe_active_dataset_profile_invalid", "coverage receipt identity differs")
     if not isinstance(receipt["pools"], Mapping) or set(receipt["pools"]) != set(universes):
         raise _fail("qe_active_dataset_profile_invalid", "coverage receipt pools differ")
@@ -571,6 +647,46 @@ def load_active_qe_profile() -> QEActiveDatasetProfile | None:
     return _validate_profile(value, path=path, payload=payload)
 
 
+def resolve_active_dataset_node_binding(*, node_id: str) -> dict[str, Any] | None:
+    """Resolve one compute node from the single active release pointer.
+
+    This is the shared launch-time adapter for consumers which execute through
+    the RD-Agent dispatcher.  It deliberately returns only paths derived from
+    the immutable candidate root; callers must persist the returned values on
+    the newly-created task and must not re-resolve them during retry/resume.
+    """
+
+    profile = load_active_qe_profile()
+    if profile is None:
+        return None
+    normalized_node_id = str(node_id or "").strip()
+    raw_node = profile.raw["node_bindings"].get(normalized_node_id)
+    if not isinstance(raw_node, Mapping):
+        raise _fail(
+            "qe_active_dataset_node_binding_missing",
+            f"active dataset profile has no binding for node {normalized_node_id!r}",
+        )
+    candidate_root = str(raw_node["candidate_root"]).rstrip("/")
+    day = posixpath.join(candidate_root, "components/daily_bin_candidate")
+    minute = posixpath.join(candidate_root, "components/minute_bin_candidate")
+    factor = posixpath.join(candidate_root, "components/factor_h5_static_candidate_v2")
+    binding: dict[str, Any] = {
+        "node_id": normalized_node_id,
+        "candidate_root": candidate_root,
+        "qlib_data_path": day,
+        "qlib_minute_path": minute,
+        "factor_data_dir": factor,
+        "dataset_manifest_path": posixpath.join(candidate_root, "qe_dataset_manifest.json"),
+        "profile_sha256": profile.profile_sha256,
+        "generation": profile.generation,
+        "release_id": profile.release_id,
+        "cutoff": profile.cutoff.isoformat(),
+    }
+    if profile.raw["schema_version"] == ACTIVE_PROFILE_SCHEMA_V3:
+        binding["sector_context_dir"] = posixpath.join(candidate_root, "components/sector_context_candidate_v1")
+    return binding
+
+
 def get_qe_dataset_profile_summary() -> dict[str, Any]:
     profile = load_active_qe_profile()
     if profile is None:
@@ -589,9 +705,7 @@ def get_qe_dataset_profile_summary() -> dict[str, Any]:
     return profile.summary()
 
 
-def get_qe_default_data_split(
-    *, legacy_default: Mapping[str, str] | None = None
-) -> dict[str, str]:
+def get_qe_default_data_split(*, legacy_default: Mapping[str, str] | None = None) -> dict[str, str]:
     """Return active defaults, preserving the caller's pre-activation legacy contract."""
 
     profile = load_active_qe_profile()
@@ -619,7 +733,9 @@ def _resolve_data_split(profile: QEActiveDatasetProfile, override: Mapping[str, 
             raise _fail("qe_dataset_window_outside_release", "data_split must be an object")
         unknown = set(override) - set(LEGACY_QE_DEFAULT_DATA_SPLIT)
         if unknown:
-            raise _fail("qe_dataset_window_outside_release", "data_split contains unknown fields", fields=sorted(unknown))
+            raise _fail(
+                "qe_dataset_window_outside_release", "data_split contains unknown fields", fields=sorted(unknown)
+            )
         for key, value in override.items():
             if value not in (None, ""):
                 split[key] = _date(value, field=f"data_split.{key}").isoformat()
@@ -633,8 +749,13 @@ def _resolve_data_split(profile: QEActiveDatasetProfile, override: Mapping[str, 
     if any(value < QE_DATASET_START_DATE or value > profile.cutoff for value in parsed.values()):
         raise _fail("qe_dataset_window_outside_release", "requested dates exceed active release")
     if not (
-        parsed["train_start"] <= parsed["train_end"] < parsed["valid_start"] <= parsed["valid_end"]
-        < parsed["test_start"] <= parsed["backtest_end"] <= parsed["test_end"]
+        parsed["train_start"]
+        <= parsed["train_end"]
+        < parsed["valid_start"]
+        <= parsed["valid_end"]
+        < parsed["test_start"]
+        <= parsed["backtest_end"]
+        <= parsed["test_end"]
     ):
         raise _fail("qe_dataset_window_outside_release", "requested date ordering is invalid")
     return split
@@ -646,7 +767,12 @@ def _read_pinned_text(path: Path, expected_sha256: str, *, reason_code: str) -> 
     payload = path.read_bytes()
     actual = _sha256_bytes(payload)
     if actual != expected_sha256:
-        raise _fail("qe_universe_sidecar_hash_mismatch", f"sidecar hash differs: {path}", expected=expected_sha256, actual=actual)
+        raise _fail(
+            "qe_universe_sidecar_hash_mismatch",
+            f"sidecar hash differs: {path}",
+            expected=expected_sha256,
+            actual=actual,
+        )
     try:
         return payload.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -700,6 +826,56 @@ def validate_controller_snapshot(profile: QEActiveDatasetProfile) -> None:
             require_pinned_sector_policy_files(factor, components["sector_policy_pins"])
         except QESectorBlacklistPolicyError as exc:
             raise _fail(exc.reason_code, str(exc), **exc.context) from exc
+    if "sector_context_pins" in components:
+        try:
+            require_pinned_sector_context_files(
+                profile.controller_candidate_root,
+                components["sector_context_pins"],
+            )
+        except ValueError as exc:
+            raise _fail("qe_dataset_component_identity_mismatch", str(exc)) from exc
+        _require_pinned_file(
+            factor / "sector_data.h5",
+            str(components["sector_context_pins"]["sector_data_sha256"]),
+        )
+        manifest_path = profile.controller_candidate_root / "qe_dataset_manifest.json"
+        _require_pinned_file(
+            manifest_path,
+            str(components["dataset_manifest_file_sha256"]),
+        )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _fail(
+                "qe_dataset_component_identity_mismatch",
+                "dataset manifest is not valid UTF-8 JSON",
+            ) from exc
+        if not isinstance(manifest, Mapping):
+            raise _fail(
+                "qe_dataset_component_identity_mismatch",
+                "dataset manifest must be an object",
+            )
+        manifest_identity = dict(manifest)
+        manifest_identity.pop("dataset_manifest_sha256", None)
+        actual_manifest_identity = _sha256_bytes(
+            json.dumps(
+                manifest_identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        if (
+            manifest.get("dataset_manifest_sha256") != components["dataset_manifest_sha256"]
+            or actual_manifest_identity != components["dataset_manifest_sha256"]
+            or manifest.get("release_id") != profile.release_id
+            or manifest.get("cutoff_trade_date") != profile.cutoff.isoformat()
+        ):
+            raise _fail(
+                "qe_dataset_component_identity_mismatch",
+                "dataset manifest identity differs from profile",
+            )
     _require_pinned_file(
         index / "index_daily.h5",
         str(components["index_pins"]["sha256"]),
@@ -793,7 +969,9 @@ def _union_content(contents: list[str]) -> str:
     return "".join(f"{symbol}\t{start.isoformat()}\t{end.isoformat()}\n" for symbol, start, end in rows)
 
 
-def _require_window_coverage(profile: QEActiveDatasetProfile, selection: UniverseSelection, start: dt.date, end: dt.date) -> None:
+def _require_window_coverage(
+    profile: QEActiveDatasetProfile, selection: UniverseSelection, start: dt.date, end: dt.date
+) -> None:
     for pool_id in selection.pool_ids or ("stock_universe",):
         coverage = profile.coverage_receipt["pools"][pool_id]
         available_start = _date(coverage["available_start"], field="coverage.available_start")
@@ -910,18 +1088,29 @@ def resolve_active_qe_dataset(
     if blacklist_codes:
         if stock_pool_content is None:  # pragma: no cover - guarded by branches above
             raise _fail("qe_sector_blacklist_membership_incomplete", "base universe content is unavailable")
+        factor_root = selected_profile.controller_candidate_root / "components" / "factor_h5_static_candidate_v2"
+        sector_policy_pins = selected_profile.raw["components"].get("sector_policy_pins")
+        sector_context_pins = selected_profile.raw["components"].get("sector_context_pins")
+        if sector_context_pins is not None:
+            factor_root = selected_profile.controller_candidate_root / str(sector_context_pins["component_root"])
+            sector_policy_pins = {
+                "schema_version": "qe_sector_policy_input_v1",
+                "membership_file": str(sector_context_pins["membership_file"]),
+                "membership_sha256": str(sector_context_pins["membership_sha256"]),
+                "code_map_file": str(sector_context_pins["code_map_file"]),
+                "code_map_sha256": str(sector_context_pins["code_map_sha256"]),
+                "start": str(sector_context_pins["membership_start"]),
+                "end": str(sector_context_pins["membership_end"]),
+                "universe_key": str(selected_profile.raw["components"]["factor_meta"]["universe_key"]),
+            }
         try:
             result = materialize_sector_blacklist_universe(
                 base_intervals=_parse_intervals(stock_pool_content, source=instruments_file),
                 calendar=calendar,
                 window_start=window_start,
                 window_end=_date(split["test_end"], field="test_end"),
-                factor_root=(
-                    selected_profile.controller_candidate_root
-                    / "components"
-                    / "factor_h5_static_candidate_v2"
-                ),
-                pins=selected_profile.raw["components"].get("sector_policy_pins"),
+                factor_root=factor_root,
+                pins=sector_policy_pins,
                 blacklist_codes=blacklist_codes,
             )
         except QESectorBlacklistPolicyError as exc:

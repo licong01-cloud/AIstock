@@ -1,43 +1,45 @@
 {
-  "actual": "The current reader assumes l2_code_id is the zero-based index of a 131-element ordered_codes array, causing incorrect sector identity mapping for R7 shared IDs.",
+  "actual": "scripts/precompute_hmm_coefficients.py uses zero substitution for sector features and a neutral label default when materializing daily_coefficients, permitting silent fabricated success.",
   "allowed_write_scope": [
     "scripts/precompute_hmm_coefficients.py",
     "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
-    "tests/aistock_validation/bugs/20260918_BUG-1577-hmm-frozen-reader-treats-shared-l2-code-id-as-a-dense-model-index.json"
+    "tests/aistock_validation/bugs/20260917_BUG-1573-hmm-frozen-coefficient-generator-silently-fabricates-missing-numeric-fea.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1577",
-  "closed_at": "2026-09-18T07:15:37Z",
+  "bug_id": "BUG-1573",
+  "closed_at": "2026-09-18T16:11:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-18T06:39:33.526684Z",
-  "description": "The current reader assumes l2_code_id is the zero-based index of a 131-element ordered_codes array, causing incorrect sector identity mapping for R7 shared IDs.",
+  "created_at": "2026-09-17T18:25:32.086960Z",
+  "description": "scripts/precompute_hmm_coefficients.py uses zero substitution for sector features and a neutral label default when materializing daily_coefficients, permitting silent fabricated success.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260918-2fc048a608e1",
-      "timestamp": "2026-09-18T06:39:33.526665Z"
+      "note": "Promoted from IC-20260917-0539f814faff",
+      "timestamp": "2026-09-17T18:25:32.086942Z"
     }
   ],
   "evidence_uris": [
-    "R7 qe_hmm_full_v2_20260831 uses shared sparse l2_code_id values; reader expression ordered_codes[int(l2_code_id)]"
+    "scripts/precompute_hmm_coefficients.py:325",
+    "scripts/precompute_hmm_coefficients.py:604",
+    "scripts/precompute_hmm_coefficients.py:1008"
   ],
-  "expected": "HMM uses canonical SW L2 text codes as formal identity, treats integer IDs only as release-local join keys, accepts sparse IDs including values above 130, and validates a bijective authority/hash-pinned mapping.",
+  "expected": "No missing date, sector, stock membership, feature, market context or decoded state may be replaced by zero or neutral coefficients; formal full-window generation must stop with an explicit failure.",
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "scripts/precompute_hmm_coefficients.py",
-      "tests/aistock_validation/bugs/20260918_BUG-1577-hmm-frozen-reader-treats-shared-l2-code-id-as-a-dense-model-index.json"
+      "tests/aistock_validation/bugs/20260917_BUG-1573-hmm-frozen-coefficient-generator-silently-fabricates-missing-numeric-fea.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "scripts/precompute_hmm_coefficients.py",
-      "tests/aistock_validation/bugs/20260918_BUG-1577-hmm-frozen-reader-treats-shared-l2-code-id-as-a-dense-model-index.json"
+      "tests/aistock_validation/bugs/20260917_BUG-1573-hmm-frozen-coefficient-generator-silently-fabricates-missing-numeric-fea.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -95,29 +97,29 @@
       "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
     ]
   },
-  "first_seen_at": "2026-09-18T06:39:33.526684Z",
+  "first_seen_at": "2026-09-17T18:25:32.086960Z",
   "fix_branch": null,
-  "fix_commit": "4c28ae02cc641d45819a7b5415a4b585bc530b32",
-  "fixed_at": "2026-09-18T07:15:37Z",
-  "github_issue_number": 4922,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4922",
-  "last_seen_at": "2026-09-18T06:39:33.526684Z",
+  "fix_commit": "e63159aa3e74d109e4183714bb2b9a98016146e9",
+  "fixed_at": "2026-09-18T16:11:22Z",
+  "github_issue_number": 4911,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4911",
+  "last_seen_at": "2026-09-17T18:25:32.086960Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4924",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4912",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q -p no:cacheprovider",
+  "reproduce_command": "rg -n _finite_float_or_zero scripts/precompute_hmm_coefficients.py",
   "required_verification": [
     "l0",
     "paper_v2_backend",
     "hmm_data_source_backend"
   ],
-  "risk_area": "regression",
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
@@ -136,47 +138,41 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1577",
+    "bug_id": "BUG-1573",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "aebef0306c81e17b",
-    "recorded_at": "2026-09-18T08:55:42.632622Z",
+    "receipt_id": "1f7e6aa952cf5e45",
+    "recorded_at": "2026-09-18T16:13:32.148300Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "508a96fb35375ff274558a4d79bbe12c89fcb2d3",
-    "source_merge_commit": "4c28ae02cc641d45819a7b5415a4b585bc530b32",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4924",
+    "source_head_oid": "2822b04e1359b542204a5c7b193fd731622fdf18",
+    "source_merge_commit": "e63159aa3e74d109e4183714bb2b9a98016146e9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4912",
     "validation_evidence": [
-      "validation-receipt: id=c946018cfe7eb0f5 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=hmm_data_source_backend status=passed command=`rtk nox -s hmm_data_source_backend` result=`passed: 112 passed, 1 skipped, 5 deselected, coverage 76.40%`",
-      "validation-receipt: id=f33684ce0829c06f commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests and 14/14 ownership mappings`",
-      "validation-receipt: id=f308bf14c5409b60 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed on final tree after main sync: blocking=0`",
-      "validation-receipt: id=cf442160a25a2964 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed: no issues`",
-      "validation-receipt: id=b917ccd08af573b7 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=compile plan=direct status=passed command=`python -m py_compile scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
-      "validation-receipt: id=f2be0abb190b9e3a commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+      "python -m pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q -> 18 passed",
+      "python -m nox -s hmm_data_source_backend -> 114 passed, 1 skipped, 5 deselected; coverage 76.40%",
+      "python -m nox -s l0 -> passed; blocking=0"
     ],
-    "validation_evidence_digest": "ea2e7a7f8ff5b31ffb7a42e0c4597b41a96f3ebdb8ee4606254a595f7cc74c0c"
+    "validation_evidence_digest": "4da96b73e3890beb1d649716cf6a6277e2d65847f9b8ba96de5c5a9c2f8a5968"
   },
   "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
-  "title": "HMM frozen reader treats shared l2_code_id as a dense model index",
+  "title": "HMM frozen coefficient generator silently fabricates missing numeric features and neutral coefficients",
   "trigger_condition": {
-    "fingerprint": "2fc048a608e15304f95ceba5",
-    "source_event_id": "FE-20260918-2fc048a608e1"
+    "fingerprint": "0539f814faffd1e21350abe4",
+    "source_event_id": "FE-20260917-0539f814faff"
   },
   "validation_evidence": [
-    "validation-receipt: id=c946018cfe7eb0f5 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=hmm_data_source_backend status=passed command=`rtk nox -s hmm_data_source_backend` result=`passed: 112 passed, 1 skipped, 5 deselected, coverage 76.40%`",
-    "validation-receipt: id=f33684ce0829c06f commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests and 14/14 ownership mappings`",
-    "validation-receipt: id=f308bf14c5409b60 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed on final tree after main sync: blocking=0`",
-    "validation-receipt: id=cf442160a25a2964 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed: no issues`",
-    "validation-receipt: id=b917ccd08af573b7 commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=compile plan=direct status=passed command=`python -m py_compile scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
-    "validation-receipt: id=f2be0abb190b9e3a commit=508a96fb35375ff274558a4d79bbe12c89fcb2d3 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+    "python -m pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q -> 18 passed",
+    "python -m nox -s hmm_data_source_backend -> 114 passed, 1 skipped, 5 deselected; coverage 76.40%",
+    "python -m nox -s l0 -> passed; blocking=0"
   ],
   "verification_budget": {
     "budget": "standard",

@@ -35,6 +35,7 @@ FROZEN_FILE_KEYS = (
     "index_daily_h5",
     "sector_code_map_json",
     "market_context_parquet",
+    "sector_membership_spans_parquet",
 )
 FROZEN_MARKET_VOLUME_DEFINITION = "sum_market_sw_daily_vol_all_rows_v1"
 
@@ -245,12 +246,16 @@ def build_legacy_observations(
         if csi_pct is None or mvol is None:
             continue
 
-        pct = float(rec["sw2_pct_change"] or 0.0)
-        vol = float(rec["sw2_vol"] or 0.0)
-        amount = float(rec["sw2_amount"] or 0.0)
-        mf_net = float(rec["sw2_mf_net_amt"] or 0.0)
-        mf_buy_elg = float(rec["sw2_mf_buy_elg_amt"] or 0.0)
-        mf_sell_elg = float(rec["sw2_mf_sell_elg_amt"] or 0.0)
+        pct = _require_finite_float(rec["sw2_pct_change"], field="sw2_pct_change", trade_date=td)
+        vol = _require_finite_float(rec["sw2_vol"], field="sw2_vol", trade_date=td)
+        amount = _require_finite_float(rec["sw2_amount"], field="sw2_amount", trade_date=td)
+        mf_net = _require_finite_float(rec["sw2_mf_net_amt"], field="sw2_mf_net_amt", trade_date=td)
+        mf_buy_elg = _require_finite_float(
+            rec["sw2_mf_buy_elg_amt"], field="sw2_mf_buy_elg_amt", trade_date=td
+        )
+        mf_sell_elg = _require_finite_float(
+            rec["sw2_mf_sell_elg_amt"], field="sw2_mf_sell_elg_amt", trade_date=td
+        )
 
         daily_ret = pct / 100.0
         csi_window: list[float] = []
@@ -259,7 +264,14 @@ def build_legacy_observations(
             d2 = sorted_dates[j]
             c2 = csi300_pct.get(d2)
             if c2 is not None and d2 in rows_by_date:
-                ret2 = float(rows_by_date[d2]["sw2_pct_change"] or 0.0) / 100.0
+                ret2 = (
+                    _require_finite_float(
+                        rows_by_date[d2]["sw2_pct_change"],
+                        field="sw2_pct_change",
+                        trade_date=d2,
+                    )
+                    / 100.0
+                )
                 csi_window.append(ret2 - c2 / 100.0)
                 ret_window.append(ret2)
 
@@ -312,12 +324,75 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _finite_float_or_zero(value: Any) -> float:
+def _require_finite_float(
+    value: Any,
+    *,
+    field: str,
+    trade_date: Any | None = None,
+    sector_code: str | None = None,
+) -> float:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return parsed if math.isfinite(parsed) else 0.0
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "invalid frozen sector value: "
+            f"field={field} trade_date={trade_date} sector={sector_code} value={value!r}"
+        ) from exc
+    if not math.isfinite(parsed):
+        raise ValueError(
+            "non-finite frozen sector value: "
+            f"field={field} trade_date={trade_date} sector={sector_code} value={value!r}"
+        )
+    return parsed
+
+
+def build_static_daily_coefficients(
+    sector_date_labels: dict[str, dict[str, str]],
+    *,
+    expected_sector_codes: list[str],
+    expected_dates: list[str],
+    preset_coeffs: dict[str, float],
+) -> dict[str, dict[str, float]]:
+    """Build one exact sector/date coefficient grid without neutral fallback."""
+
+    expected_sectors = set(expected_sector_codes)
+    actual_sectors = set(sector_date_labels)
+    if actual_sectors != expected_sectors:
+        raise ValueError(
+            "decoded HMM sector set differs from frozen code map: "
+            f"missing={sorted(expected_sectors - actual_sectors)[:10]} "
+            f"unexpected={sorted(actual_sectors - expected_sectors)[:10]}"
+        )
+    expected_date_set = set(expected_dates)
+    for code in sorted(expected_sectors):
+        actual_dates = set(sector_date_labels[code])
+        missing_dates = sorted(expected_date_set - actual_dates)
+        unexpected_dates = sorted(actual_dates - expected_date_set)
+        if missing_dates or unexpected_dates:
+            raise ValueError(
+                "missing decoded state dates for frozen HMM sector: "
+                f"sector={code} missing={missing_dates[:5]} unexpected={unexpected_dates[:5]}"
+            )
+
+    daily_coefficients: dict[str, dict[str, float]] = {}
+    for trade_date in expected_dates:
+        day: dict[str, float] = {}
+        for code in sorted(expected_sectors):
+            label = sector_date_labels[code][trade_date]
+            if label not in preset_coeffs:
+                raise ValueError(
+                    "decoded HMM state has no preset coefficient: "
+                    f"sector={code} trade_date={trade_date} state={label!r}"
+                )
+            coefficient = float(preset_coeffs[label])
+            if not math.isfinite(coefficient):
+                raise ValueError(
+                    "non-finite HMM preset coefficient: "
+                    f"sector={code} trade_date={trade_date} state={label!r}"
+                )
+            day[code] = coefficient
+        daily_coefficients[trade_date] = day
+    return daily_coefficients
 
 
 def _resolve_frozen_files(bundle: dict[str, Any]) -> tuple[Path, dict[str, Path], dict[str, str]]:
@@ -401,67 +476,85 @@ def _select_factor_hdf_window(
 def _load_release_l2_code_map(path: Path) -> tuple[dict[int, str], dict[str, str], str]:
     """Load one hash-pinned release-wide ID-to-canonical-code bijection."""
 
-    from backend.services.dataset_release.canonical import digest_named_fields
+    from backend.services.dataset_release.shared_sector_context import (
+        load_release_sw_l2_code_map,
+    )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != FROZEN_CODE_MAP_SCHEMA:
         raise ValueError("invalid frozen SW L2 code-map schema")
-
-    authority = payload.get("mapping_authority")
-    if not isinstance(authority, dict):
+    if not isinstance(payload.get("mapping_authority"), dict):
         raise ValueError("frozen SW L2 code map requires mapping_authority")
-    authority_id = str(authority.get("authority_id") or "").strip()
-    authority_sha256 = str(authority.get("authority_sha256") or "").strip().lower()
-    if not authority_id or len(authority_sha256) != 64:
-        raise ValueError("frozen SW L2 mapping authority is incomplete")
     try:
-        int(authority_sha256, 16)
+        code_map = load_release_sw_l2_code_map(path, require_member_backed=False)
     except ValueError as exc:
-        raise ValueError("frozen SW L2 mapping authority sha256 is invalid") from exc
-    normalized_authority = {
-        "authority_id": authority_id,
-        "authority_sha256": authority_sha256,
-    }
-
-    raw_entries = payload.get("entries")
-    if not isinstance(raw_entries, list) or not raw_entries:
-        raise ValueError("frozen SW L2 code map requires non-empty entries")
-    normalized_entries: list[dict[str, Any]] = []
-    seen_ids: set[int] = set()
-    seen_codes: set[str] = set()
-    for raw_entry in raw_entries:
-        if not isinstance(raw_entry, dict):
-            raise ValueError("frozen SW L2 code-map entry must be an object")
-        raw_id = raw_entry.get("l2_code_id")
-        if type(raw_id) is not int or raw_id < 0:
-            raise ValueError("frozen SW L2 code-map l2_code_id must be a non-negative integer")
-        canonical_code = str(raw_entry.get("canonical_l2_code") or "").strip().upper()
-        if len(canonical_code) != 9 or not canonical_code[:6].isdigit() or canonical_code[6:] != ".SI":
-            raise ValueError("frozen SW L2 code map contains invalid canonical_l2_code")
-        if raw_id in seen_ids:
-            raise ValueError(f"frozen SW L2 code map contains duplicated l2_code_id: {raw_id}")
-        if canonical_code in seen_codes:
-            raise ValueError(f"frozen SW L2 code map contains duplicated canonical_l2_code: {canonical_code}")
-        seen_ids.add(raw_id)
-        seen_codes.add(canonical_code)
-        normalized_entries.append({"l2_code_id": raw_id, "canonical_l2_code": canonical_code})
-
-    normalized_entries.sort(key=lambda row: (row["l2_code_id"], row["canonical_l2_code"]))
-    expected_digest = str(payload.get("code_map_digest") or "").strip().lower()
-    actual_digest = digest_named_fields(
-        FROZEN_CODE_MAP_SCHEMA,
-        {
-            "mapping_authority": normalized_authority,
-            "entries": normalized_entries,
-        },
-    )
-    if expected_digest != actual_digest:
-        raise ValueError(f"frozen SW L2 code-map digest mismatch: expected={expected_digest} actual={actual_digest}")
+        if "code-map digest differs" in str(exc):
+            raise ValueError("frozen SW L2 code-map digest mismatch") from exc
+        raise
     return (
-        {int(row["l2_code_id"]): str(row["canonical_l2_code"]) for row in normalized_entries},
-        normalized_authority,
-        actual_digest,
+        dict(code_map.id_to_code),
+        dict(code_map.mapping_authority),
+        code_map.code_map_digest,
     )
+
+
+def _load_release_membership_maps(
+    path: Path,
+    *,
+    sector_code_by_id: dict[int, str],
+    trade_dates: list[date],
+) -> dict[str, dict[str, str]]:
+    """Load the shared PIT membership authority without inferring it from factor rows."""
+
+    import pandas as pd
+
+    required_columns = {"instrument", "start_date", "end_date", "l2_code_id"}
+    frame = pd.read_parquet(path)
+    missing_columns = sorted(required_columns - set(frame.columns))
+    if missing_columns:
+        raise ValueError(f"frozen sector membership spans missing columns: {missing_columns}")
+    frame = frame.loc[:, sorted(required_columns)].copy()
+    if frame.empty:
+        raise ValueError("frozen sector membership spans are empty")
+    frame["instrument"] = frame["instrument"].astype(str).str.strip().str.upper()
+    if (frame["instrument"] == "").any():
+        raise ValueError("frozen sector membership spans contain blank instruments")
+    frame["start_date"] = pd.to_datetime(frame["start_date"], errors="raise").dt.date
+    frame["end_date"] = pd.to_datetime(frame["end_date"], errors="raise").dt.date
+    if (frame["start_date"] > frame["end_date"]).any():
+        raise ValueError("frozen sector membership span starts after its end date")
+    numeric_ids = pd.to_numeric(frame["l2_code_id"], errors="raise")
+    if (~np.isfinite(numeric_ids) | (numeric_ids != np.floor(numeric_ids))).any():
+        raise ValueError("frozen sector membership spans contain non-integral l2_code_id values")
+    frame["l2_code_id"] = numeric_ids.astype("int64")
+    unknown_ids = sorted(set(frame["l2_code_id"]) - set(sector_code_by_id))
+    if unknown_ids:
+        raise ValueError(f"frozen sector membership spans contain unmapped l2_code_id values: {unknown_ids[:10]}")
+    duplicate_columns = ["instrument", "start_date", "end_date", "l2_code_id"]
+    if frame.duplicated(duplicate_columns, keep=False).any():
+        raise ValueError("frozen sector membership spans contain duplicate rows")
+    for instrument, spans in frame.sort_values(["instrument", "start_date", "end_date"]).groupby(
+        "instrument", sort=False
+    ):
+        prior_end: date | None = None
+        for row in spans.itertuples(index=False):
+            if prior_end is not None and row.start_date <= prior_end:
+                raise ValueError(
+                    "frozen sector membership spans overlap: "
+                    f"instrument={instrument} start_date={row.start_date.isoformat()}"
+                )
+            prior_end = row.end_date
+
+    membership_rows = [
+        {
+            "ts_code": row.instrument,
+            "l2_code": sector_code_by_id[int(row.l2_code_id)],
+            "in_date": row.start_date,
+            "out_date": row.end_date,
+        }
+        for row in frame.itertuples(index=False)
+    ]
+    return build_stock_sector_maps_by_date(membership_rows, trade_dates)
 
 
 def build_stock_sector_membership_spans(
@@ -618,12 +711,42 @@ def load_frozen_coefficient_inputs(
             {
                 "trade_date": row.datetime,
                 "l2_name": row.sector_code,
-                "pct_change": _finite_float_or_zero(row.sw2_pct_change),
-                "vol": _finite_float_or_zero(row.sw2_vol),
-                "amount": _finite_float_or_zero(row.sw2_amount),
-                "mf_net_amt": _finite_float_or_zero(row.sw2_mf_net_amt),
-                "mf_buy_elg_amt": _finite_float_or_zero(row.sw2_mf_buy_elg_amt),
-                "mf_sell_elg_amt": _finite_float_or_zero(row.sw2_mf_sell_elg_amt),
+                "pct_change": _require_finite_float(
+                    row.sw2_pct_change,
+                    field="sw2_pct_change",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
+                "vol": _require_finite_float(
+                    row.sw2_vol,
+                    field="sw2_vol",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
+                "amount": _require_finite_float(
+                    row.sw2_amount,
+                    field="sw2_amount",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
+                "mf_net_amt": _require_finite_float(
+                    row.sw2_mf_net_amt,
+                    field="sw2_mf_net_amt",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
+                "mf_buy_elg_amt": _require_finite_float(
+                    row.sw2_mf_buy_elg_amt,
+                    field="sw2_mf_buy_elg_amt",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
+                "mf_sell_elg_amt": _require_finite_float(
+                    row.sw2_mf_sell_elg_amt,
+                    field="sw2_mf_sell_elg_amt",
+                    trade_date=row.datetime,
+                    sector_code=row.sector_code,
+                ),
             }
         )
 
@@ -664,24 +787,14 @@ def load_frozen_coefficient_inputs(
         row.trade_date: float(row.pct_chg) for row in csi300_frame.itertuples(index=False) if pd.notna(row.pct_chg)
     }
 
-    policy_sector = sector_frame.loc[
-        (sector_frame["datetime"] >= test_start) & (sector_frame["datetime"] <= backtest_end),
-        ["datetime", "instrument", "sector_code"],
-    ]
-    duplicate_memberships = policy_sector.groupby(["datetime", "instrument"])["sector_code"].nunique().gt(1)
-    if bool(duplicate_memberships.any()):
-        first = duplicate_memberships.loc[duplicate_memberships].index[0]
-        raise ValueError(
-            f"frozen sector_data has conflicting stock membership: trade_date={first[0]} instrument={first[1]}"
-        )
-    maps_by_date = {
-        trade_date.isoformat(): dict(zip(group["instrument"], group["sector_code"]))
-        for trade_date, group in policy_sector.drop_duplicates(["datetime", "instrument"], keep="first").groupby(
-            "datetime", sort=True
-        )
-    }
-    expected_dates = sorted(
-        value.isoformat() for value in set(csi300_frame["trade_date"]) if test_start <= value <= backtest_end
+    expected_trade_dates = sorted(
+        value for value in set(csi300_frame["trade_date"]) if test_start <= value <= backtest_end
+    )
+    expected_dates = [value.isoformat() for value in expected_trade_dates]
+    maps_by_date = _load_release_membership_maps(
+        paths["sector_membership_spans_parquet"],
+        sector_code_by_id=sector_code_by_id,
+        trade_dates=expected_trade_dates,
     )
     missing_membership_dates = sorted(set(expected_dates) - set(maps_by_date))
     if missing_membership_dates:
@@ -689,6 +802,13 @@ def load_frozen_coefficient_inputs(
     missing_market_dates = sorted(set(expected_dates) - {value.isoformat() for value in market_vol})
     if missing_market_dates:
         raise ValueError(f"frozen HMM market context is missing trading dates: {missing_market_dates[:5]}")
+    active_sector_codes = sorted({code for day_map in maps_by_date.values() for code in day_map.values()})
+    missing_sector_data = sorted(set(active_sector_codes) - set(sector_data))
+    if missing_sector_data:
+        raise ValueError(
+            "frozen membership references sectors without sector_data: "
+            f"{missing_sector_data[:10]}"
+        )
 
     return {
         "dataset_root": str(root),
@@ -704,6 +824,8 @@ def load_frozen_coefficient_inputs(
         "stock_sector_membership_spans": build_stock_sector_membership_spans(maps_by_date),
         "stock_sector_maps_by_date": maps_by_date,
         "sector_code_by_id": dict(sorted(sector_code_by_id.items())),
+        "ordered_sector_codes": sorted(set(sector_code_by_id.values())),
+        "active_sector_codes": active_sector_codes,
         "sector_code_map_authority": sector_code_map_authority,
         "sector_code_map_digest": actual_code_map_digest,
     }
@@ -810,6 +932,7 @@ def main() -> None:
     )
 
     hmm_objs: dict[str, tuple[Any, dict[str, str] | None, dict[str, Any]]] = {}
+    restore_failures: list[str] = []
     for code, info in models.items():
         try:
             labels = info.get("state_labels")
@@ -822,9 +945,13 @@ def main() -> None:
                 raise KeyError("state_labels")
             hmm_objs[code] = (restore_hmm(info), labels, info)
         except Exception as exc:
-            print(f"  WARNING: failed to restore HMM {code}: {exc}", file=sys.stderr)
-    if not hmm_objs:
-        print("ERROR: all HMM models failed to restore", file=sys.stderr)
+            restore_failures.append(f"{code}: {type(exc).__name__}: {exc}")
+    if restore_failures:
+        print(
+            "ERROR: frozen HMM model restoration incomplete: "
+            f"count={len(restore_failures)} first={restore_failures[:3]}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     print(f"  restored {len(hmm_objs)}/{len(models)} HMM models", file=sys.stderr)
 
@@ -864,14 +991,36 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    frozen_sector_codes = set(frozen_loaded["ordered_sector_codes"])
+    active_sector_codes = set(frozen_loaded["active_sector_codes"])
+    restored_sector_codes = set(hmm_objs)
+    if restored_sector_codes != frozen_sector_codes:
+        print(
+            "ERROR: restored HMM sector set differs from frozen code map: "
+            f"missing_models={sorted(frozen_sector_codes - restored_sector_codes)[:10]} "
+            f"unexpected_models={sorted(restored_sector_codes - frozen_sector_codes)[:10]}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    inactive_sector_codes = frozen_sector_codes - active_sector_codes
+    expected_coefficient_dates = [
+        value.isoformat()
+        for value in frozen_loaded["index_dates"]
+        if start_d <= value <= end_d
+    ]
+    if not expected_coefficient_dates:
+        print("ERROR: frozen index calendar has no coefficient dates", file=sys.stderr)
+        sys.exit(1)
 
     print("  decoding sector states...", file=sys.stderr)
     sector_date_labels: dict[str, dict[str, str]] = {}
     dynamic_signal_by_date: dict[str, dict[str, float]] = {}
     dynamic_confidence_by_date: dict[str, dict[str, float]] = {}
-    for idx, (code, (hmm, labels, info)) in enumerate(hmm_objs.items()):
+    for idx, code in enumerate(sorted(active_sector_codes)):
+        hmm, labels, info = hmm_objs[code]
         if code not in sector_data:
-            continue
+            print(f"ERROR: frozen sector data missing HMM sector: {code}", file=sys.stderr)
+            sys.exit(1)
         if has_horizon_v2_features and info.get("preprocess"):
             obs, dates_out = build_horizon_v2_observations(sector_rows[code], csi300, market_vol, info["preprocess"])
         else:
@@ -883,19 +1032,23 @@ def main() -> None:
                 obs = (obs - zscore_mean) / zscore_std
 
         if len(obs) < 20:
-            continue
+            print(
+                f"ERROR: insufficient frozen observations for HMM sector {code}: {len(obs)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         expected_features = int(hmm.means_.shape[1])
         if obs.shape[1] != expected_features:
             print(
-                f"  WARNING: feature dimension mismatch {code}: obs={obs.shape[1]}, model={expected_features}",
+                f"ERROR: feature dimension mismatch {code}: obs={obs.shape[1]}, model={expected_features}",
                 file=sys.stderr,
             )
-            continue
+            sys.exit(1)
         try:
             posteriors = forward_filter_posteriors(hmm, obs)
         except Exception as exc:
-            print(f"  WARNING: forward filter failed {code}: {exc}", file=sys.stderr)
-            continue
+            print(f"ERROR: forward filter failed {code}: {exc}", file=sys.stderr)
+            sys.exit(1)
 
         if uses_dynamic_coefficients:
             state_stats = info.get("state_validation_stats")
@@ -929,11 +1082,19 @@ def main() -> None:
             by_date = {}
             for i, td in enumerate(dates_out):
                 if start_d <= td <= end_d:
-                    by_date[td.isoformat()] = labels.get(str(int(states[i])), "neutral")
+                    state_key = str(int(states[i]))
+                    if state_key not in labels:
+                        print(
+                            "ERROR: decoded HMM state is absent from state_labels: "
+                            f"sector={code} trade_date={td.isoformat()} state={state_key}",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    by_date[td.isoformat()] = labels[state_key]
             if by_date:
                 sector_date_labels[code] = by_date
         if (idx + 1) % 20 == 0:
-            print(f"  processed {idx + 1}/{len(hmm_objs)} sectors", file=sys.stderr)
+            print(f"  processed {idx + 1}/{len(active_sector_codes)} active sectors", file=sys.stderr)
 
     daily_coefficients: dict[str, dict[str, float]] = {}
     if uses_dynamic_coefficients:
@@ -981,15 +1142,49 @@ def main() -> None:
             print("ERROR: no HMM sectors decoded; refusing empty coefficient output", file=sys.stderr)
             sys.exit(1)
 
-        all_dates = sorted({d for labels in sector_date_labels.values() for d in labels})
-        for d in all_dates:
-            daily_coefficients[d] = {
-                code: float(preset_coeffs.get(labels.get(d, "neutral"), 1.0))
-                for code, labels in sector_date_labels.items()
-            }
+        try:
+            daily_coefficients = build_static_daily_coefficients(
+                sector_date_labels,
+                expected_sector_codes=frozen_loaded["active_sector_codes"],
+                expected_dates=expected_coefficient_dates,
+                preset_coeffs=preset_coeffs,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
     if not daily_coefficients:
         print("ERROR: no daily HMM coefficients generated", file=sys.stderr)
         sys.exit(1)
+    actual_dates = set(daily_coefficients)
+    expected_dates = set(expected_coefficient_dates)
+    if actual_dates != expected_dates:
+        print(
+            "ERROR: generated HMM coefficient dates differ from frozen calendar: "
+            f"missing={sorted(expected_dates - actual_dates)[:5]} "
+            f"unexpected={sorted(actual_dates - expected_dates)[:5]}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    for trade_date in expected_coefficient_dates:
+        actual_codes = set(daily_coefficients[trade_date])
+        if actual_codes != active_sector_codes:
+            print(
+                "ERROR: generated HMM coefficient sectors differ from frozen active membership: "
+                f"trade_date={trade_date} "
+                f"missing={sorted(active_sector_codes - actual_codes)[:10]} "
+                f"unexpected={sorted(actual_codes - active_sector_codes)[:10]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if any(
+            not math.isfinite(float(value))
+            for value in daily_coefficients[trade_date].values()
+        ):
+            print(
+                f"ERROR: generated HMM coefficient grid contains non-finite values: {trade_date}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if output_trade_date:
         source_trade_date = as_of_trade_date or backtest_end
@@ -1049,6 +1244,10 @@ def main() -> None:
             "sector_code_map_schema": FROZEN_CODE_MAP_SCHEMA,
             "sector_code_map_authority": frozen_loaded["sector_code_map_authority"],
             "sector_code_map_digest": frozen_loaded["sector_code_map_digest"],
+            "catalog_sector_count": len(frozen_sector_codes),
+            "active_sector_count": len(active_sector_codes),
+            "inactive_catalog_sector_codes": sorted(inactive_sector_codes),
+            "coefficient_sector_scope": "membership_active_union",
         }
     )
     if output_trade_date:

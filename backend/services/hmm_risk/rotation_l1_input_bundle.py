@@ -84,7 +84,11 @@ DIRECT_V2_PROFILE = "qe_hmm_full_v2"
 DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION = "qe_dataset_manifest_v1"
 ACTIVE_DATASET_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
 ACTIVE_DATASET_PROFILE_SCHEMA_VERSIONS = frozenset(
-    {"aistock_active_dataset_profile_v1", "aistock_active_dataset_profile_v2"}
+    {
+        "aistock_active_dataset_profile_v1",
+        "aistock_active_dataset_profile_v2",
+        "aistock_active_dataset_profile_v3",
+    }
 )
 DIRECT_V2_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DIRECT_V2_RELEASE_START = date(2018, 8, 1)
