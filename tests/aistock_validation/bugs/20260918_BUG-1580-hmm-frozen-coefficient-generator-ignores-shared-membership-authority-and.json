@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1580",
-  "closed_at": null,
+  "closed_at": "2026-09-18T16:27:38Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-09-18T16:16:31.343609Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e0fdfcc360aff1fa29caffc4bfdec01a78ae455d",
+  "fixed_at": "2026-09-18T16:27:38Z",
   "github_issue_number": 4932,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4932",
   "last_seen_at": "2026-09-18T16:16:31.343609Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4934",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,7 +118,9 @@
     "inference_basis": "planned_scope",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": true,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -125,7 +128,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -134,6 +137,11 @@
     "fingerprint": "f3b247bf3f0c095df65d4dda",
     "source_event_id": "FE-20260918-f3b247bf3f0c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q -p no:cacheprovider -> 21 passed",
+    "python -m nox -s hmm_data_source_backend -> 117 passed, 1 skipped, 5 deselected; coverage 76.40%",
+    "python -m nox -s l0 -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
