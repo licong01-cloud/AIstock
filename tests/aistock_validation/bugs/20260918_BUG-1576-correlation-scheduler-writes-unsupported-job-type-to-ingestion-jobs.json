@@ -81,7 +81,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/schedules",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python process imported CorrelationScheduler from the BUG-1576 worktree and asserted that submit_job persists job_type=init while retaining summary.dataset; no backend or scheduler process was controlled.",
