@@ -30,12 +30,15 @@ import numpy as np
 
 FROZEN_INPUT_SCHEMA = "qe_hmm_frozen_input_v1"
 FROZEN_CODE_MAP_SCHEMA = "aistock_release_sw_l2_code_map_v1"
+FROZEN_QUOTE_AVAILABILITY_SCHEMA = "aistock_release_sw_l2_quote_availability_v1"
+L2_OVERLAY_UNAVAILABLE_POLICY = "explicit_no_l2_overlay_v1"
 FROZEN_FILE_KEYS = (
     "sector_data_h5",
     "index_daily_h5",
     "sector_code_map_json",
     "market_context_parquet",
     "sector_membership_spans_parquet",
+    "sector_quote_availability_json",
 )
 FROZEN_MARKET_VOLUME_DEFINITION = "sum_market_sw_daily_vol_all_rows_v1"
 
@@ -250,12 +253,8 @@ def build_legacy_observations(
         vol = _require_finite_float(rec["sw2_vol"], field="sw2_vol", trade_date=td)
         amount = _require_finite_float(rec["sw2_amount"], field="sw2_amount", trade_date=td)
         mf_net = _require_finite_float(rec["sw2_mf_net_amt"], field="sw2_mf_net_amt", trade_date=td)
-        mf_buy_elg = _require_finite_float(
-            rec["sw2_mf_buy_elg_amt"], field="sw2_mf_buy_elg_amt", trade_date=td
-        )
-        mf_sell_elg = _require_finite_float(
-            rec["sw2_mf_sell_elg_amt"], field="sw2_mf_sell_elg_amt", trade_date=td
-        )
+        mf_buy_elg = _require_finite_float(rec["sw2_mf_buy_elg_amt"], field="sw2_mf_buy_elg_amt", trade_date=td)
+        mf_sell_elg = _require_finite_float(rec["sw2_mf_sell_elg_amt"], field="sw2_mf_sell_elg_amt", trade_date=td)
 
         daily_ret = pct / 100.0
         csi_window: list[float] = []
@@ -335,8 +334,7 @@ def _require_finite_float(
         parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "invalid frozen sector value: "
-            f"field={field} trade_date={trade_date} sector={sector_code} value={value!r}"
+            f"invalid frozen sector value: field={field} trade_date={trade_date} sector={sector_code} value={value!r}"
         ) from exc
     if not math.isfinite(parsed):
         raise ValueError(
@@ -349,35 +347,40 @@ def _require_finite_float(
 def build_static_daily_coefficients(
     sector_date_labels: dict[str, dict[str, str]],
     *,
-    expected_sector_codes: list[str],
+    expected_sector_codes_by_date: dict[str, list[str]],
     expected_dates: list[str],
     preset_coeffs: dict[str, float],
 ) -> dict[str, dict[str, float]]:
     """Build one exact sector/date coefficient grid without neutral fallback."""
 
-    expected_sectors = set(expected_sector_codes)
+    if set(expected_sector_codes_by_date) != set(expected_dates):
+        raise ValueError("quote-available sector dates differ from the frozen calendar")
+    expected_dates_by_sector: dict[str, set[str]] = {}
+    for trade_date in expected_dates:
+        for code in expected_sector_codes_by_date[trade_date]:
+            expected_dates_by_sector.setdefault(code, set()).add(trade_date)
     actual_sectors = set(sector_date_labels)
+    expected_sectors = set(expected_dates_by_sector)
     if actual_sectors != expected_sectors:
         raise ValueError(
-            "decoded HMM sector set differs from frozen code map: "
+            "decoded HMM sector set differs from quote-available membership: "
             f"missing={sorted(expected_sectors - actual_sectors)[:10]} "
             f"unexpected={sorted(actual_sectors - expected_sectors)[:10]}"
         )
-    expected_date_set = set(expected_dates)
     for code in sorted(expected_sectors):
-        actual_dates = set(sector_date_labels[code])
-        missing_dates = sorted(expected_date_set - actual_dates)
-        unexpected_dates = sorted(actual_dates - expected_date_set)
+        actual_dates = set(sector_date_labels[code]) & set(expected_dates)
+        missing_dates = sorted(expected_dates_by_sector[code] - actual_dates)
+        unexpected_dates = sorted(actual_dates - expected_dates_by_sector[code])
         if missing_dates or unexpected_dates:
             raise ValueError(
-                "missing decoded state dates for frozen HMM sector: "
+                "decoded state dates differ from quote availability: "
                 f"sector={code} missing={missing_dates[:5]} unexpected={unexpected_dates[:5]}"
             )
 
     daily_coefficients: dict[str, dict[str, float]] = {}
     for trade_date in expected_dates:
         day: dict[str, float] = {}
-        for code in sorted(expected_sectors):
+        for code in expected_sector_codes_by_date[trade_date]:
             label = sector_date_labels[code][trade_date]
             if label not in preset_coeffs:
                 raise ValueError(
@@ -387,12 +390,97 @@ def build_static_daily_coefficients(
             coefficient = float(preset_coeffs[label])
             if not math.isfinite(coefficient):
                 raise ValueError(
-                    "non-finite HMM preset coefficient: "
-                    f"sector={code} trade_date={trade_date} state={label!r}"
+                    f"non-finite HMM preset coefficient: sector={code} trade_date={trade_date} state={label!r}"
                 )
             day[code] = coefficient
         daily_coefficients[trade_date] = day
     return daily_coefficients
+
+
+def _load_release_quote_availability(
+    path: Path,
+    *,
+    catalog_codes: set[str],
+    mapping_authority: dict[str, str],
+) -> tuple[dict[str, tuple[tuple[date, date], ...]], dict[str, str], str]:
+    """Load the release-owned, hash-pinned SW L2 quote-availability authority."""
+
+    from backend.services.dataset_release.canonical import digest_named_fields, ensure_sha256
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("frozen SW L2 quote availability is not valid UTF-8 JSON") from exc
+    expected_fields = {
+        "schema_version",
+        "mapping_authority",
+        "entries",
+        "quote_availability_digest",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
+        raise ValueError("invalid frozen SW L2 quote-availability shape")
+    if payload["schema_version"] != FROZEN_QUOTE_AVAILABILITY_SCHEMA:
+        raise ValueError("invalid frozen SW L2 quote-availability schema")
+    authority = payload["mapping_authority"]
+    if not isinstance(authority, dict) or set(authority) != {"authority_id", "authority_sha256"}:
+        raise ValueError("frozen SW L2 quote availability requires mapping_authority")
+    normalized_authority = {
+        "authority_id": str(authority["authority_id"]).strip(),
+        "authority_sha256": ensure_sha256(str(authority["authority_sha256"]), field="authority_sha256"),
+    }
+    if not normalized_authority["authority_id"] or normalized_authority != mapping_authority:
+        raise ValueError("frozen SW L2 quote availability mapping authority differs")
+    raw_entries = payload["entries"]
+    if not isinstance(raw_entries, list):
+        raise ValueError("frozen SW L2 quote availability entries must be a list")
+    normalized_entries: list[dict[str, Any]] = []
+    availability: dict[str, tuple[tuple[date, date], ...]] = {}
+    for entry in raw_entries:
+        if not isinstance(entry, dict) or set(entry) != {"canonical_l2_code", "availability_spans"}:
+            raise ValueError("invalid frozen SW L2 quote-availability entry")
+        code = str(entry["canonical_l2_code"]).strip().upper()
+        if code in availability or code not in catalog_codes:
+            raise ValueError(f"unknown or duplicated quote-availability sector: {code}")
+        raw_spans = entry["availability_spans"]
+        if not isinstance(raw_spans, list):
+            raise ValueError(f"quote availability spans must be a list: {code}")
+        spans: list[tuple[date, date]] = []
+        normalized_spans: list[dict[str, str]] = []
+        prior_end: date | None = None
+        for span in raw_spans:
+            if not isinstance(span, dict) or set(span) != {"start_date", "end_date"}:
+                raise ValueError(f"invalid quote availability span: {code}")
+            try:
+                start = date.fromisoformat(str(span["start_date"]))
+                end = date.fromisoformat(str(span["end_date"]))
+            except ValueError as exc:
+                raise ValueError(f"invalid quote availability date: {code}") from exc
+            if end < start or (prior_end is not None and start <= prior_end):
+                raise ValueError(f"overlapping or inverted quote availability span: {code}")
+            prior_end = end
+            spans.append((start, end))
+            normalized_spans.append({"start_date": start.isoformat(), "end_date": end.isoformat()})
+        availability[code] = tuple(spans)
+        normalized_entries.append({"canonical_l2_code": code, "availability_spans": normalized_spans})
+    normalized_entries.sort(key=lambda entry: entry["canonical_l2_code"])
+    if set(availability) != catalog_codes or raw_entries != normalized_entries:
+        raise ValueError("quote availability must cover the full catalog in canonical order")
+    actual_digest = digest_named_fields(
+        FROZEN_QUOTE_AVAILABILITY_SCHEMA,
+        {"mapping_authority": normalized_authority, "entries": normalized_entries},
+    )
+    expected_digest = ensure_sha256(str(payload["quote_availability_digest"]), field="quote_availability_digest")
+    if actual_digest != expected_digest:
+        raise ValueError("frozen SW L2 quote-availability digest mismatch")
+    return availability, normalized_authority, actual_digest
+
+
+def _quote_is_available(
+    availability: dict[str, tuple[tuple[date, date], ...]],
+    sector_code: str,
+    trade_date: date,
+) -> bool:
+    return any(start <= trade_date <= end for start, end in availability[sector_code])
 
 
 def _resolve_frozen_files(bundle: dict[str, Any]) -> tuple[Path, dict[str, Path], dict[str, str]]:
@@ -608,6 +696,7 @@ def resolve_coefficient_membership_maps(
     all_maps_by_date: dict[str, dict[str, str]],
     daily_coefficients: dict[str, dict[str, float]],
     *,
+    quote_unavailable_sector_codes_by_date: dict[str, list[str]],
     output_trade_date: str | None,
     as_of_trade_date: str | None,
     backtest_end: str,
@@ -627,12 +716,17 @@ def resolve_coefficient_membership_maps(
             raise ValueError(f"frozen stock-sector membership missing coefficient dates: {missing_dates[:5]}")
         selected = {value: all_maps_by_date[value] for value in coefficient_dates}
 
+    if set(quote_unavailable_sector_codes_by_date) != set(selected):
+        raise ValueError("quote-unavailable sector dates differ from coefficient membership dates")
     for trade_date_value, day_map in selected.items():
         missing_codes = sorted(set(day_map.values()) - set(daily_coefficients[trade_date_value]))
-        if missing_codes:
+        unavailable_codes = sorted(set(quote_unavailable_sector_codes_by_date[trade_date_value]))
+        unexpected_unavailable = sorted(set(unavailable_codes) - set(day_map.values()))
+        if missing_codes != unavailable_codes or unexpected_unavailable:
             raise ValueError(
-                "frozen membership references sectors without daily coefficients: "
-                f"trade_date={trade_date_value} codes={missing_codes[:10]}"
+                "frozen membership coefficient gaps differ from quote availability: "
+                f"trade_date={trade_date_value} missing={missing_codes[:10]} "
+                f"unavailable={unavailable_codes[:10]}"
             )
     return selected
 
@@ -655,6 +749,15 @@ def load_frozen_coefficient_inputs(
         actual_code_map_digest,
     ) = _load_release_l2_code_map(
         paths["sector_code_map_json"],
+    )
+    (
+        quote_availability,
+        quote_availability_authority,
+        quote_availability_digest,
+    ) = _load_release_quote_availability(
+        paths["sector_quote_availability_json"],
+        catalog_codes=set(sector_code_by_id.values()),
+        mapping_authority=sector_code_map_authority,
     )
 
     sector_columns = [
@@ -696,6 +799,19 @@ def load_frozen_coefficient_inputs(
     sector_data: dict[str, dict[date, dict[str, Any]]] = {}
     sector_rows: dict[str, list[dict[str, Any]]] = {}
     for row in representatives.itertuples(index=False):
+        quote_available = _quote_is_available(
+            quote_availability,
+            row.sector_code,
+            row.datetime,
+        )
+        raw_metric_values = [getattr(row, field) for field in metric_columns]
+        if not quote_available:
+            if any(pd.notna(value) for value in raw_metric_values):
+                raise ValueError(
+                    "frozen sector_data contains quote values outside availability authority: "
+                    f"trade_date={row.datetime} sector={row.sector_code}"
+                )
+            continue
         record = {
             "trade_date": row.datetime,
             "l2_name": row.sector_code,
@@ -803,12 +919,34 @@ def load_frozen_coefficient_inputs(
     if missing_market_dates:
         raise ValueError(f"frozen HMM market context is missing trading dates: {missing_market_dates[:5]}")
     active_sector_codes = sorted({code for day_map in maps_by_date.values() for code in day_map.values()})
-    missing_sector_data = sorted(set(active_sector_codes) - set(sector_data))
-    if missing_sector_data:
-        raise ValueError(
-            "frozen membership references sectors without sector_data: "
-            f"{missing_sector_data[:10]}"
+    quote_available_sector_codes_by_date = {
+        trade_date_value: sorted(
+            code
+            for code in set(maps_by_date[trade_date_value].values())
+            if _quote_is_available(quote_availability, code, date.fromisoformat(trade_date_value))
         )
+        for trade_date_value in expected_dates
+    }
+    quote_unavailable_sector_codes_by_date = {
+        trade_date_value: sorted(
+            set(maps_by_date[trade_date_value].values()) - set(quote_available_sector_codes_by_date[trade_date_value])
+        )
+        for trade_date_value in expected_dates
+    }
+    coefficient_sector_codes = sorted(
+        {code for codes in quote_available_sector_codes_by_date.values() for code in codes}
+    )
+    missing_sector_data = sorted(set(coefficient_sector_codes) - set(sector_data))
+    if missing_sector_data:
+        raise ValueError(f"frozen membership references sectors without sector_data: {missing_sector_data[:10]}")
+    for trade_date_value, codes in quote_available_sector_codes_by_date.items():
+        trade_date = date.fromisoformat(trade_date_value)
+        missing_rows = sorted(code for code in codes if trade_date not in sector_data.get(code, {}))
+        if missing_rows:
+            raise ValueError(
+                "published frozen sectors are missing finite quote rows: "
+                f"trade_date={trade_date_value} sectors={missing_rows[:10]}"
+            )
 
     return {
         "dataset_root": str(root),
@@ -826,6 +964,11 @@ def load_frozen_coefficient_inputs(
         "sector_code_by_id": dict(sorted(sector_code_by_id.items())),
         "ordered_sector_codes": sorted(set(sector_code_by_id.values())),
         "active_sector_codes": active_sector_codes,
+        "coefficient_sector_codes": coefficient_sector_codes,
+        "quote_available_sector_codes_by_date": quote_available_sector_codes_by_date,
+        "quote_unavailable_sector_codes_by_date": quote_unavailable_sector_codes_by_date,
+        "quote_availability_authority": quote_availability_authority,
+        "quote_availability_digest": quote_availability_digest,
         "sector_code_map_authority": sector_code_map_authority,
         "sector_code_map_digest": actual_code_map_digest,
     }
@@ -993,6 +1136,7 @@ def main() -> None:
         sys.exit(1)
     frozen_sector_codes = set(frozen_loaded["ordered_sector_codes"])
     active_sector_codes = set(frozen_loaded["active_sector_codes"])
+    coefficient_sector_codes = set(frozen_loaded["coefficient_sector_codes"])
     restored_sector_codes = set(hmm_objs)
     if restored_sector_codes != frozen_sector_codes:
         print(
@@ -1004,9 +1148,7 @@ def main() -> None:
         sys.exit(1)
     inactive_sector_codes = frozen_sector_codes - active_sector_codes
     expected_coefficient_dates = [
-        value.isoformat()
-        for value in frozen_loaded["index_dates"]
-        if start_d <= value <= end_d
+        value.isoformat() for value in frozen_loaded["index_dates"] if start_d <= value <= end_d
     ]
     if not expected_coefficient_dates:
         print("ERROR: frozen index calendar has no coefficient dates", file=sys.stderr)
@@ -1016,7 +1158,7 @@ def main() -> None:
     sector_date_labels: dict[str, dict[str, str]] = {}
     dynamic_signal_by_date: dict[str, dict[str, float]] = {}
     dynamic_confidence_by_date: dict[str, dict[str, float]] = {}
-    for idx, code in enumerate(sorted(active_sector_codes)):
+    for idx, code in enumerate(sorted(coefficient_sector_codes)):
         hmm, labels, info = hmm_objs[code]
         if code not in sector_data:
             print(f"ERROR: frozen sector data missing HMM sector: {code}", file=sys.stderr)
@@ -1094,7 +1236,7 @@ def main() -> None:
             if by_date:
                 sector_date_labels[code] = by_date
         if (idx + 1) % 20 == 0:
-            print(f"  processed {idx + 1}/{len(active_sector_codes)} active sectors", file=sys.stderr)
+            print(f"  processed {idx + 1}/{len(coefficient_sector_codes)} quoted sectors", file=sys.stderr)
 
     daily_coefficients: dict[str, dict[str, float]] = {}
     if uses_dynamic_coefficients:
@@ -1145,7 +1287,7 @@ def main() -> None:
         try:
             daily_coefficients = build_static_daily_coefficients(
                 sector_date_labels,
-                expected_sector_codes=frozen_loaded["active_sector_codes"],
+                expected_sector_codes_by_date=frozen_loaded["quote_available_sector_codes_by_date"],
                 expected_dates=expected_coefficient_dates,
                 preset_coeffs=preset_coeffs,
             )
@@ -1167,19 +1309,17 @@ def main() -> None:
         sys.exit(1)
     for trade_date in expected_coefficient_dates:
         actual_codes = set(daily_coefficients[trade_date])
-        if actual_codes != active_sector_codes:
+        expected_codes = set(frozen_loaded["quote_available_sector_codes_by_date"][trade_date])
+        if actual_codes != expected_codes:
             print(
-                "ERROR: generated HMM coefficient sectors differ from frozen active membership: "
+                "ERROR: generated HMM coefficient sectors differ from quote availability: "
                 f"trade_date={trade_date} "
-                f"missing={sorted(active_sector_codes - actual_codes)[:10]} "
-                f"unexpected={sorted(actual_codes - active_sector_codes)[:10]}",
+                f"missing={sorted(expected_codes - actual_codes)[:10]} "
+                f"unexpected={sorted(actual_codes - expected_codes)[:10]}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        if any(
-            not math.isfinite(float(value))
-            for value in daily_coefficients[trade_date].values()
-        ):
+        if any(not math.isfinite(float(value)) for value in daily_coefficients[trade_date].values()):
             print(
                 f"ERROR: generated HMM coefficient grid contains non-finite values: {trade_date}",
                 file=sys.stderr,
@@ -1198,11 +1338,28 @@ def main() -> None:
             sys.exit(1)
         daily_coefficients = {str(output_trade_date): source_coefficients}
 
+    if output_trade_date:
+        source_trade_date = str(as_of_trade_date or backtest_end)
+        source_unavailable = frozen_loaded["quote_unavailable_sector_codes_by_date"].get(source_trade_date)
+        if source_unavailable is None:
+            print(
+                f"ERROR: quote availability missing for as_of_trade_date={source_trade_date}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        output_quote_unavailable_by_date = {str(output_trade_date): list(source_unavailable)}
+    else:
+        output_quote_unavailable_by_date = {
+            trade_date: list(frozen_loaded["quote_unavailable_sector_codes_by_date"][trade_date])
+            for trade_date in sorted(daily_coefficients)
+        }
+
     try:
         coefficient_dates = sorted(daily_coefficients)
         stock_sector_map_by_date = resolve_coefficient_membership_maps(
             frozen_loaded["stock_sector_maps_by_date"],
             daily_coefficients,
+            quote_unavailable_sector_codes_by_date=output_quote_unavailable_by_date,
             output_trade_date=str(output_trade_date) if output_trade_date else None,
             as_of_trade_date=str(as_of_trade_date) if as_of_trade_date else None,
             backtest_end=backtest_end,
@@ -1231,6 +1388,8 @@ def main() -> None:
         ),
         "dynamic_coefficients": uses_dynamic_coefficients,
         "daily_coefficients": daily_coefficients,
+        "quote_unavailable_sector_codes_by_date": output_quote_unavailable_by_date,
+        "l2_overlay_unavailable_policy": L2_OVERLAY_UNAVAILABLE_POLICY,
         "stock_sector_membership_spans": stock_sector_membership_spans,
         "input_data_max_dates_by_date": input_data_max_dates_by_date,
     }
@@ -1244,10 +1403,19 @@ def main() -> None:
             "sector_code_map_schema": FROZEN_CODE_MAP_SCHEMA,
             "sector_code_map_authority": frozen_loaded["sector_code_map_authority"],
             "sector_code_map_digest": frozen_loaded["sector_code_map_digest"],
+            "quote_availability_schema": FROZEN_QUOTE_AVAILABILITY_SCHEMA,
+            "quote_availability_authority": frozen_loaded["quote_availability_authority"],
+            "quote_availability_digest": frozen_loaded["quote_availability_digest"],
             "catalog_sector_count": len(frozen_sector_codes),
             "active_sector_count": len(active_sector_codes),
+            "membership_active_sector_count": len(active_sector_codes),
+            "coefficient_sector_count": len(coefficient_sector_codes),
+            "quote_available_sector_count_at_end": len(daily_coefficients[sorted(daily_coefficients)[-1]]),
+            "quote_unavailable_sector_count_at_end": len(
+                output_quote_unavailable_by_date[sorted(daily_coefficients)[-1]]
+            ),
             "inactive_catalog_sector_codes": sorted(inactive_sector_codes),
-            "coefficient_sector_scope": "membership_active_union",
+            "coefficient_sector_scope": "membership_and_quote_available_by_date",
         }
     )
     if output_trade_date:

@@ -12,6 +12,7 @@ import pytest
 
 from backend.services.dataset_release.canonical import digest_named_fields
 from scripts.precompute_hmm_coefficients import (
+    FROZEN_QUOTE_AVAILABILITY_SCHEMA,
     build_stock_sector_membership_spans,
     load_frozen_coefficient_inputs,
     main,
@@ -43,6 +44,7 @@ def test_resolve_daily_output_uses_as_of_membership_without_future_row() -> None
     result = resolve_coefficient_membership_maps(
         {"2026-06-01": {"000001.SZ": "A.SI"}},
         {"2026-06-02": {"A.SI": 1.1}},
+        quote_unavailable_sector_codes_by_date={"2026-06-02": []},
         output_trade_date="2026-06-02",
         as_of_trade_date="2026-06-01",
         backtest_end="2026-06-01",
@@ -52,14 +54,28 @@ def test_resolve_daily_output_uses_as_of_membership_without_future_row() -> None
 
 
 def test_resolve_membership_rejects_sector_without_daily_coefficient() -> None:
-    with pytest.raises(ValueError, match="without daily coefficients"):
+    with pytest.raises(ValueError, match="coefficient gaps differ from quote availability"):
         resolve_coefficient_membership_maps(
             {"2026-06-01": {"000001.SZ": "A.SI"}},
             {"2026-06-01": {"B.SI": 1.1}},
+            quote_unavailable_sector_codes_by_date={"2026-06-01": []},
             output_trade_date=None,
             as_of_trade_date=None,
             backtest_end="2026-06-01",
         )
+
+
+def test_resolve_membership_allows_only_explicit_quote_unavailable_sector() -> None:
+    result = resolve_coefficient_membership_maps(
+        {"2026-06-01": {"000001.SZ": "A.SI", "000002.SZ": "B.SI"}},
+        {"2026-06-01": {"A.SI": 1.1}},
+        quote_unavailable_sector_codes_by_date={"2026-06-01": ["B.SI"]},
+        output_trade_date=None,
+        as_of_trade_date=None,
+        backtest_end="2026-06-01",
+    )
+
+    assert result["2026-06-01"]["000002.SZ"] == "B.SI"
 
 
 def _sha256(path) -> str:
@@ -98,6 +114,7 @@ def _write_frozen_input_fixture(
     sector_id: int = 133,
     membership_sector_id: int | None = None,
     code_map_entries: list[dict[str, object]] | None = None,
+    quote_spans_by_code: dict[str, list[dict[str, str]]] | None = None,
 ):
     root = tmp_path / "release"
     root.mkdir()
@@ -128,6 +145,7 @@ def _write_frozen_input_fixture(
         "sector_code_map_json": root / "sector_code_map.json",
         "market_context_parquet": root / "market_context.parquet",
         "sector_membership_spans_parquet": root / "sector_membership_spans.parquet",
+        "sector_quote_availability_json": root / "sector_quote_availability.json",
     }
     sector.to_hdf(paths["sector_data_h5"], key="data", format="table", data_columns=True)
     index.to_hdf(paths["index_daily_h5"], key="data", format="fixed")
@@ -135,6 +153,31 @@ def _write_frozen_input_fixture(
         json.dumps(_shared_code_map_payload(code_map_entries)),
         encoding="utf-8",
     )
+    code_map_payload = _shared_code_map_payload(code_map_entries)
+    quote_entries = [
+        {
+            "canonical_l2_code": str(entry["canonical_l2_code"]),
+            "availability_spans": (
+                quote_spans_by_code[str(entry["canonical_l2_code"])]
+                if quote_spans_by_code is not None
+                else [{"start_date": "2020-01-01", "end_date": "2099-12-31"}]
+            ),
+        }
+        for entry in sorted(code_map_payload["entries"], key=lambda item: str(item["canonical_l2_code"]))
+    ]
+    quote_payload = {
+        "schema_version": FROZEN_QUOTE_AVAILABILITY_SCHEMA,
+        "mapping_authority": code_map_payload["mapping_authority"],
+        "entries": quote_entries,
+        "quote_availability_digest": digest_named_fields(
+            FROZEN_QUOTE_AVAILABILITY_SCHEMA,
+            {
+                "mapping_authority": code_map_payload["mapping_authority"],
+                "entries": quote_entries,
+            },
+        ),
+    }
+    paths["sector_quote_availability_json"].write_text(json.dumps(quote_payload), encoding="utf-8")
     pd.DataFrame({"trade_date": dates, "sw_daily_total_vol": [1000.0, 1100.0, 1200.0]}).to_parquet(
         paths["market_context_parquet"], index=False
     )
@@ -168,6 +211,16 @@ def test_load_frozen_coefficient_inputs_uses_hash_pinned_files_only(tmp_path) ->
     assert result["sector_data"]["801783.SI"][date(2026, 6, 1)]["sw2_pct_change"] == 0.1
     assert result["sector_code_by_id"] == {133: "801783.SI"}
     assert result["active_sector_codes"] == ["801783.SI"]
+    assert result["quote_available_sector_codes_by_date"] == {
+        "2026-06-01": ["801783.SI"],
+        "2026-06-02": ["801783.SI"],
+        "2026-06-03": ["801783.SI"],
+    }
+    assert result["quote_unavailable_sector_codes_by_date"] == {
+        "2026-06-01": [],
+        "2026-06-02": [],
+        "2026-06-03": [],
+    }
     assert result["sector_code_map_authority"] == {
         "authority_id": "aistock_sw_l2_shared_catalog_fixture",
         "authority_sha256": "a" * 64,
@@ -412,6 +465,104 @@ def test_load_frozen_coefficient_inputs_rejects_code_map_digest_drift(tmp_path) 
         )
 
 
+def test_load_frozen_coefficient_inputs_rejects_quote_availability_digest_drift(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    spec = bundle["files"]["sector_quote_availability_json"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["quote_availability_digest"] = "0" * 64
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    spec["sha256"] = _sha256(path)
+
+    with pytest.raises(ValueError, match="quote-availability digest mismatch"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_quote_mapping_authority_drift(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    spec = bundle["files"]["sector_quote_availability_json"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["mapping_authority"]["authority_id"] = "different-authority"
+    payload["quote_availability_digest"] = digest_named_fields(
+        FROZEN_QUOTE_AVAILABILITY_SCHEMA,
+        {
+            "mapping_authority": payload["mapping_authority"],
+            "entries": payload["entries"],
+        },
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    spec["sha256"] = _sha256(path)
+
+    with pytest.raises(ValueError, match="mapping authority differs"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_distinguishes_stopped_quote_from_missing_published_row(
+    tmp_path,
+) -> None:
+    bundle = _write_frozen_input_fixture(
+        tmp_path,
+        quote_spans_by_code={
+            "801783.SI": [{"start_date": "2020-01-01", "end_date": "2026-06-01"}],
+        },
+    )
+    sector_spec = bundle["files"]["sector_data_h5"]
+    sector_path = Path(bundle["dataset_root"]) / sector_spec["relative_path"]
+    sector = pd.read_hdf(sector_path, key="data")
+    stopped_mask = sector.index.get_level_values("datetime") > pd.Timestamp("2026-06-01")
+    metric_columns = [column for column in sector.columns if column != "l2_code_id"]
+    sector.loc[stopped_mask, metric_columns] = float("nan")
+    sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
+    sector_spec["sha256"] = _sha256(sector_path)
+
+    result = load_frozen_coefficient_inputs(
+        bundle,
+        history_start=date(2026, 6, 1),
+        test_start=date(2026, 6, 1),
+        backtest_end=date(2026, 6, 3),
+    )
+
+    assert result["quote_available_sector_codes_by_date"] == {
+        "2026-06-01": ["801783.SI"],
+        "2026-06-02": [],
+        "2026-06-03": [],
+    }
+    assert result["quote_unavailable_sector_codes_by_date"] == {
+        "2026-06-01": [],
+        "2026-06-02": ["801783.SI"],
+        "2026-06-03": ["801783.SI"],
+    }
+    assert set(result["sector_data"]["801783.SI"]) == {date(2026, 6, 1)}
+
+
+def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(
+        tmp_path,
+        quote_spans_by_code={
+            "801783.SI": [{"start_date": "2020-01-01", "end_date": "2026-06-01"}],
+        },
+    )
+
+    with pytest.raises(ValueError, match="quote values outside availability authority"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
 def test_load_frozen_coefficient_inputs_rejects_non_finite_sector_value(tmp_path) -> None:
     with pytest.raises(ValueError, match="non-finite frozen sector value"):
         load_frozen_coefficient_inputs(
@@ -466,6 +617,14 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             "sector_code_map_digest": "2" * 64,
             "ordered_sector_codes": ["A.SI", "B.SI"],
             "active_sector_codes": ["A.SI"],
+            "coefficient_sector_codes": ["A.SI"],
+            "quote_available_sector_codes_by_date": {day.isoformat(): ["A.SI"] for day in coefficient_days},
+            "quote_unavailable_sector_codes_by_date": {day.isoformat(): [] for day in coefficient_days},
+            "quote_availability_authority": {
+                "authority_id": "aistock_sw_l2_shared_catalog_fixture",
+                "authority_sha256": "a" * 64,
+            },
+            "quote_availability_digest": "3" * 64,
             "sector_code_map_authority": {
                 "authority_id": "aistock_sw_l2_shared_catalog_fixture",
                 "authority_sha256": "a" * 64,
@@ -513,7 +672,9 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
     assert payload["catalog_sector_count"] == 2
     assert payload["active_sector_count"] == 1
     assert payload["inactive_catalog_sector_codes"] == ["B.SI"]
-    assert payload["coefficient_sector_scope"] == "membership_active_union"
+    assert payload["coefficient_sector_scope"] == "membership_and_quote_available_by_date"
+    assert payload["membership_active_sector_count"] == 1
+    assert payload["quote_unavailable_sector_count_at_end"] == 0
     assert "stock_sector_map_by_date" not in payload
     assert payload["stock_sector_membership_spans"] == {
         "000001.SZ": [
@@ -546,9 +707,7 @@ def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -
         ),
         encoding="utf-8",
     )
-    maps_by_date = {
-        day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days
-    }
+    maps_by_date = {day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days}
     monkeypatch.setattr(
         module,
         "parse_stdin",
@@ -570,6 +729,14 @@ def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -
             "sector_code_map_digest": "2" * 64,
             "ordered_sector_codes": ["A.SI"],
             "active_sector_codes": ["A.SI"],
+            "coefficient_sector_codes": ["A.SI"],
+            "quote_available_sector_codes_by_date": {day.isoformat(): ["A.SI"] for day in coefficient_days},
+            "quote_unavailable_sector_codes_by_date": {day.isoformat(): [] for day in coefficient_days},
+            "quote_availability_authority": {
+                "authority_id": "aistock_sw_l2_shared_catalog_fixture",
+                "authority_sha256": "a" * 64,
+            },
+            "quote_availability_digest": "3" * 64,
             "sector_data": {"A.SI": {day: {} for day in days}},
             "sector_rows": {"A.SI": []},
             "sector_dates": days,
@@ -578,9 +745,7 @@ def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -
             "market_vol": {day: 1.0 for day in days},
             "market_volume_dates": days,
             "stock_sector_maps_by_date": maps_by_date,
-            "stock_sector_membership_spans": build_stock_sector_membership_spans(
-                maps_by_date
-            ),
+            "stock_sector_membership_spans": build_stock_sector_membership_spans(maps_by_date),
         },
     )
     monkeypatch.setattr(
@@ -604,7 +769,7 @@ def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -
     with pytest.raises(SystemExit):
         main()
 
-    assert "missing decoded state dates" in capsys.readouterr().err
+    assert "decoded state dates differ from quote availability" in capsys.readouterr().err
 
 
 def test_precompute_source_has_no_database_data_plane() -> None:
