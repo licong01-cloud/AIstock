@@ -109,9 +109,24 @@ CONTRACT_SHA256 = canonical_sha256(CONTRACT)
 def _clean_repository_commit(repository: Path) -> str:
     """Freeze source identity without importing unrelated online services."""
 
+    command = ["git"]
+    cwd: Path | None = repository
+    git_pointer = repository / ".git"
+    if platform.system() == "Linux" and git_pointer.is_file():
+        pointer = git_pointer.read_text(encoding="utf-8").strip()
+        git_directory = pointer.removeprefix("gitdir:").strip()
+        if len(git_directory) > 3 and git_directory[1:3] == ":/":
+            windows_root = subprocess.run(
+                ["wslpath", "-w", str(repository)],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            command = ["/mnt/c/Program Files/Git/cmd/git.exe", "-C", windows_root]
+            cwd = None
     status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=repository,
+        [*command, "status", "--porcelain"],
+        cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
@@ -119,8 +134,8 @@ def _clean_repository_commit(repository: Path) -> str:
     if status:
         raise ActionValueError("REPOSITORY_NOT_CLEAN")
     commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repository,
+        [*command, "rev-parse", "HEAD"],
+        cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
