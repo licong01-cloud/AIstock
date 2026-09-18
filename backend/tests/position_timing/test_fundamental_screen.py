@@ -50,6 +50,16 @@ def test_p1_does_not_fill_missing_market_cap_or_ignore_pit_and_features():
     assert counts["unknown"] == 2
     assert first_enrollment_ordinal(mask, final_decision_ordinal=1) is None
 
+    inactive_mask, inactive_counts = p1_mask_for_symbol(
+        market_cap,
+        dates=dates,
+        pit_active=np.array([False, True, True, False]),
+        feature_ready=np.ones(4, dtype=bool),
+    )
+    assert inactive_mask.tolist() == [False, True, False, False]
+    assert inactive_counts["unknown"] == 1
+    assert inactive_counts["fail"] == 2
+
 
 def _write_financial_source(root: Path, frame: pd.DataFrame, *, candidate: str) -> Path:
     data = root / "financial.parquet"

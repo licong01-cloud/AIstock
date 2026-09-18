@@ -154,17 +154,20 @@ def p1_mask_for_symbol(
     pit = np.asarray(pit_active, dtype=bool)
     ready = np.asarray(feature_ready, dtype=bool)
     screen_pass = in_band & pit
+    screen_unknown = ~known & pit
+    screen_fail = ~pit | (known & ~in_band)
     passed = screen_pass & ready
     counts = {
         "expected": int(len(dates)),
-        "unknown": int((~known).sum()),
-        "fail": int((known & ~screen_pass).sum()),
+        "unknown": int(screen_unknown.sum()),
+        "fail": int(screen_fail.sum()),
         "not_applicable": 0,
         "screen_pass": int(screen_pass.sum()),
         "market_cap_pass": int(in_band.sum()),
         "pit_inactive": int((~pit).sum()),
         "feature_unready": int((~ready).sum()),
         "enrollment_eligible": int(passed.sum()),
+        "enrollment_unknown": int((screen_unknown & ready).sum()),
     }
     return passed, counts
 

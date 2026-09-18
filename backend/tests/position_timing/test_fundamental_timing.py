@@ -18,6 +18,7 @@ from backend.services.position_timing.fundamental_timing_benchmark import (
     _merge_partials,
     _ordered_replays,
     _partial_frame,
+    _replay_symbol_task,
 )
 
 
@@ -116,3 +117,14 @@ def test_single_and_spawn_workers_are_result_identical():
     sequential = normalized(_ordered_replays(inputs, worker_count=1, max_in_flight=1))
     parallel = normalized(_ordered_replays(inputs, worker_count=2, max_in_flight=2))
     assert sequential == parallel
+
+
+def test_unknown_market_cap_before_first_possible_pass_fails_enrollment_closed():
+    bars = _bars()
+    market_cap = pd.Series(600_000.0, index=bars.index)
+    market_cap.iloc[:100] = np.nan
+    _, days, fills, details, audit = _replay_symbol_task("600001.SH", bars, market_cap)
+    assert audit["status"] == "ENROLLMENT_UNKNOWN"
+    assert audit["enrollment_ordinal"] is None
+    assert days.empty and fills.empty
+    assert {value["status"] for value in details} == {"ENROLLMENT_UNKNOWN"}

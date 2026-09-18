@@ -377,7 +377,8 @@ def _replay_symbol_task(
     aligned_market_cap = pd.to_numeric(
         market_cap.reindex(pd.DatetimeIndex(bars.index)), errors="coerce"
     ).shift(1)
-    unknown = aligned_market_cap.isna().to_numpy(bool)
+    pit = bars.pit_active.to_numpy(bool)
+    unknown = aligned_market_cap.isna().to_numpy(bool) & pit
     unknown_intervals: list[dict[str, str]] = []
     interval_start: int | None = None
     for ordinal, value in enumerate(np.r_[unknown, False]):
@@ -390,10 +391,19 @@ def _replay_symbol_task(
             })
             interval_start = None
     enrollment = first_enrollment_ordinal(mask, final_decision_ordinal=len(bars) - 1)
+    enrollment_unknown = unknown & ready
+    boundary = enrollment if enrollment is not None else len(bars) - 1
+    enrollment_identity_unknown = bool(enrollment_unknown[:boundary + 1].any())
+    if enrollment_identity_unknown:
+        enrollment = None
     audit = {
         "symbol": symbol,
         "screen_id": "P1",
-        "status": "ENROLLED" if enrollment is not None else "NOT_ENROLLED",
+        "status": (
+            "ENROLLMENT_UNKNOWN" if enrollment_identity_unknown else
+            "ENROLLED" if enrollment is not None else
+            "NOT_ENROLLED"
+        ),
         "enrollment_ordinal": enrollment,
         "coverage": coverage,
         "unknown_intervals": unknown_intervals,
@@ -404,7 +414,7 @@ def _replay_symbol_task(
                 "symbol": symbol,
                 "screen_id": "P1",
                 "policy_id": policy,
-                "status": "NOT_ENROLLED",
+                "status": "ENROLLMENT_UNKNOWN" if enrollment_identity_unknown else "NOT_ENROLLED",
                 "enrollment_ordinal": None,
                 "counts": {},
             }
@@ -788,6 +798,7 @@ def _build_report(
             "UNKNOWN": int(values["unknown"]),
             "NOT_APPLICABLE": int(values["not_applicable"]),
             "ENROLLMENT_ELIGIBLE": int(values["enrollment_eligible"]),
+            "ENROLLMENT_UNKNOWN_SESSIONS": int(values["enrollment_unknown"]),
         })
         unknown_interval_count += len(audit["unknown_intervals"])
     return {
@@ -801,6 +812,7 @@ def _build_report(
                 **dict(p1_state_counts),
                 "enrolled_symbols": int(coverage["ENROLLED"]),
                 "not_enrolled_symbols": int(coverage["NOT_ENROLLED"]),
+                "enrollment_unknown_symbols": int(coverage["ENROLLMENT_UNKNOWN"]),
                 "unknown_interval_count": unknown_interval_count,
             },
             **unavailable_financial_groups(),
