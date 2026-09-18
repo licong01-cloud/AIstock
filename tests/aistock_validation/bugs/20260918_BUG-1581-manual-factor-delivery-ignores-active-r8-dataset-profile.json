@@ -1,0 +1,312 @@
+{
+  "actual": "Active profile generation 20260918-v11 binds the R8 candidate, but validation fails because FACTOR_WORKSPACE_WSL is unset and official evaluation defaults to R7 paths.",
+  "allowed_write_scope": [
+    "backend/services/manual_factor_service.py",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/tests/test_manual_factor_service_wsl_output.py",
+    "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "tests/aistock_validation/bugs/20260918_BUG-1581-manual-factor-delivery-ignores-active-r8-dataset-profile.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1581",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-18T17:08:01.526521Z",
+  "description": "Active profile generation 20260918-v11 binds the R8 candidate, but validation fails because FACTOR_WORKSPACE_WSL is unset and official evaluation defaults to R7 paths.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260918-66d44a4278b9",
+      "timestamp": "2026-09-18T17:08:01.526465Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/issue_workflow/BUG-1579/post-restart-verify.json"
+  ],
+  "expected": "Manual factor validation and official independent evaluation resolve the currently active dataset profile for the selected local QE node, preserving explicit legacy configuration only when no active profile exists.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py",
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/manual_factor_service.py",
+        "backend/services/quantevolver/factor_official_evaluation_service.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py",
+        "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "factor_library"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/manual_factor_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/quantevolver/factor_official_evaluation_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/test_manual_factor_service_wsl_output.py",
+          "impact_modules": [
+            "qe.core"
+          ],
+          "primary_module": "factor_library",
+          "risk_level": "high",
+          "rule_id": "factor_library_remaining_tests"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/manual_factor_service.py",
+        "backend/services/quantevolver/factor_official_evaluation_service.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py",
+        "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py",
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py",
+      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    ]
+  },
+  "first_seen_at": "2026-09-18T17:08:01.526521Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4937,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4937",
+  "last_seen_at": "2026-09-18T17:08:01.526521Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/register_manual_factor.py validate --name m_md_net_repay_rate_10d_tminus1 --code-file <candidate.py>",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process loaded the active 20260918-v11 profile from AISTOCK_ACTIVE_DATASET_PROFILE_PATH and resolved the R8 factor_h5_static_candidate_v2 directory.",
+      "ManualFactorService launched a fresh WSL rdagent-gpu process against the active R8 factor directory and validated m_md_net_repay_rate_10d_tminus1 with 4,544,359 rows.",
+      "active profile 20260918-v11 resolved R8 factor_data_dir; ManualFactorService WSL validation returned success with 4,544,359 rows"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "Manual factor delivery ignores active R8 dataset profile",
+  "trigger_condition": {
+    "fingerprint": "66d44a4278b9ca572cf6d54c",
+    "source_event_id": "FE-20260918-66d44a4278b9"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "platform_api",
+        "qe_read"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "platform_api",
+          "qe_read"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

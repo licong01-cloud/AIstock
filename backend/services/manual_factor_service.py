@@ -35,6 +35,15 @@ FACTOR_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,80}$")
 
 
 def _require_factor_workspace_wsl() -> str:
+    from .quantevolver.node_execution import resolve_default_qe_node_id
+    from .quantevolver.qe_active_dataset_profile import resolve_active_dataset_node_binding
+
+    active_binding = resolve_active_dataset_node_binding(node_id=resolve_default_qe_node_id())
+    if active_binding is not None:
+        factor_data_dir = str(active_binding.get("factor_data_dir") or "").strip()
+        if not factor_data_dir:
+            raise RuntimeError("active dataset profile is missing factor_data_dir for manual factor validation")
+        return factor_data_dir
     if FACTOR_WORKSPACE_WSL:
         return FACTOR_WORKSPACE_WSL
     raise RuntimeError(
