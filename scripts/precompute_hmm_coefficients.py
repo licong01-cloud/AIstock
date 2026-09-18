@@ -401,66 +401,25 @@ def _select_factor_hdf_window(
 def _load_release_l2_code_map(path: Path) -> tuple[dict[int, str], dict[str, str], str]:
     """Load one hash-pinned release-wide ID-to-canonical-code bijection."""
 
-    from backend.services.dataset_release.canonical import digest_named_fields
+    from backend.services.dataset_release.shared_sector_context import (
+        load_release_sw_l2_code_map,
+    )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != FROZEN_CODE_MAP_SCHEMA:
         raise ValueError("invalid frozen SW L2 code-map schema")
-
-    authority = payload.get("mapping_authority")
-    if not isinstance(authority, dict):
+    if not isinstance(payload.get("mapping_authority"), dict):
         raise ValueError("frozen SW L2 code map requires mapping_authority")
-    authority_id = str(authority.get("authority_id") or "").strip()
-    authority_sha256 = str(authority.get("authority_sha256") or "").strip().lower()
-    if not authority_id or len(authority_sha256) != 64:
-        raise ValueError("frozen SW L2 mapping authority is incomplete")
     try:
-        int(authority_sha256, 16)
+        code_map = load_release_sw_l2_code_map(path, require_member_backed=False)
     except ValueError as exc:
-        raise ValueError("frozen SW L2 mapping authority sha256 is invalid") from exc
-    normalized_authority = {
-        "authority_id": authority_id,
-        "authority_sha256": authority_sha256,
-    }
-
-    raw_entries = payload.get("entries")
-    if not isinstance(raw_entries, list) or not raw_entries:
-        raise ValueError("frozen SW L2 code map requires non-empty entries")
-    normalized_entries: list[dict[str, Any]] = []
-    seen_ids: set[int] = set()
-    seen_codes: set[str] = set()
-    for raw_entry in raw_entries:
-        if not isinstance(raw_entry, dict):
-            raise ValueError("frozen SW L2 code-map entry must be an object")
-        raw_id = raw_entry.get("l2_code_id")
-        if type(raw_id) is not int or raw_id < 0:
-            raise ValueError("frozen SW L2 code-map l2_code_id must be a non-negative integer")
-        canonical_code = str(raw_entry.get("canonical_l2_code") or "").strip().upper()
-        if len(canonical_code) != 9 or not canonical_code[:6].isdigit() or canonical_code[6:] != ".SI":
-            raise ValueError("frozen SW L2 code map contains invalid canonical_l2_code")
-        if raw_id in seen_ids:
-            raise ValueError(f"frozen SW L2 code map contains duplicated l2_code_id: {raw_id}")
-        if canonical_code in seen_codes:
-            raise ValueError(f"frozen SW L2 code map contains duplicated canonical_l2_code: {canonical_code}")
-        seen_ids.add(raw_id)
-        seen_codes.add(canonical_code)
-        normalized_entries.append({"l2_code_id": raw_id, "canonical_l2_code": canonical_code})
-
-    normalized_entries.sort(key=lambda row: (row["l2_code_id"], row["canonical_l2_code"]))
-    expected_digest = str(payload.get("code_map_digest") or "").strip().lower()
-    actual_digest = digest_named_fields(
-        FROZEN_CODE_MAP_SCHEMA,
-        {
-            "mapping_authority": normalized_authority,
-            "entries": normalized_entries,
-        },
-    )
-    if expected_digest != actual_digest:
-        raise ValueError(f"frozen SW L2 code-map digest mismatch: expected={expected_digest} actual={actual_digest}")
+        if "code-map digest differs" in str(exc):
+            raise ValueError("frozen SW L2 code-map digest mismatch") from exc
+        raise
     return (
-        {int(row["l2_code_id"]): str(row["canonical_l2_code"]) for row in normalized_entries},
-        normalized_authority,
-        actual_digest,
+        dict(code_map.id_to_code),
+        dict(code_map.mapping_authority),
+        code_map.code_map_digest,
     )
 
 
