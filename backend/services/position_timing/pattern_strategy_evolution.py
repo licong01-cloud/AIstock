@@ -16,7 +16,15 @@ from backend.services.trading_core.exit_guard import (
 from backend.services.trading_core.price_guard import PriceGuardPolicy
 
 from .contracts import canonical_sha256
-from .pattern_close_cash_replay import Account, CAPITAL, dec, execute, fee, positive
+from .pattern_close_cash_replay import (
+    Account,
+    CAPITAL,
+    dec,
+    execute,
+    fee,
+    positive,
+    replay as replay_close_cash,
+)
 from .pattern_strategy import (
     BreakoutEvent,
     PATTERN_FEATURE_COLUMNS,
@@ -459,17 +467,48 @@ def replay_strategy_set(
                     }
                 )
                 continue
-            frame, events, detail = _replay_path(
-                symbol=symbol,
-                bars=bars,
-                adjusted=adjusted,
-                pattern=pattern,
-                trend=trend,
-                ready=ready[spec.strategy_id],
-                spec=spec,
-                start=start,
-                start_mode=mode,
-            )
+            if spec.strategy_id == "A0":
+                frame, events, detail = replay_close_cash(
+                    symbol,
+                    bars,
+                    start_override=start,
+                )
+                events = [
+                    {
+                        **event,
+                        "strategy_id": spec.strategy_id,
+                        "start_mode": mode,
+                    }
+                    for event in events
+                ]
+                detail = {
+                    **detail,
+                    "strategy_id": spec.strategy_id,
+                    "start_mode": mode,
+                    "terminal": {
+                        role: {
+                            **terminal,
+                            "mtm_nav_cny": (
+                                float(frame.iloc[-1][f"{role}_nav"])
+                                if np.isfinite(frame.iloc[-1][f"{role}_nav"])
+                                else None
+                            ),
+                        }
+                        for role, terminal in detail["terminal"].items()
+                    },
+                }
+            else:
+                frame, events, detail = _replay_path(
+                    symbol=symbol,
+                    bars=bars,
+                    adjusted=adjusted,
+                    pattern=pattern,
+                    trend=trend,
+                    ready=ready[spec.strategy_id],
+                    spec=spec,
+                    start=start,
+                    start_mode=mode,
+                )
             day_frames.append(
                 frame.assign(
                     symbol=symbol,

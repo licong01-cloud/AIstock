@@ -168,13 +168,27 @@ def test_trend_windows_do_not_compress_a_missing_global_session():
 
 def test_a0_own_start_reproduces_existing_replay_and_future_changes_are_causal():
     bars = _bars()
-    baseline, _, _ = replay("600001.SH", bars)
+    baseline, baseline_fills, baseline_detail = replay("600001.SH", bars)
     days, fills, details = replay_strategy_set("600001.SH", bars)
     a0 = days.loc[(days.strategy_id == "A0") & (days.start_mode == "OWN_START")]
     pd.testing.assert_frame_equal(
         baseline.reset_index(drop=True),
         a0.drop(columns=["symbol", "strategy_id", "start_mode"]).reset_index(drop=True),
     )
+    a0_fills = fills.loc[(fills.strategy_id == "A0") & (fills.start_mode == "OWN_START")]
+    assert a0_fills.loc[:, list(baseline_fills[0])].to_dict("records") == baseline_fills
+    a0_detail = next(
+        item
+        for item in details
+        if item["strategy_id"] == "A0" and item["start_mode"] == "OWN_START"
+    )
+    assert a0_detail["start_ordinal"] == baseline_detail["start_ordinal"]
+    assert a0_detail["counts"] == baseline_detail["counts"]
+    for role, terminal in baseline_detail["terminal"].items():
+        assert {
+            key: a0_detail["terminal"][role][key]
+            for key in terminal
+        } == terminal
     assert len(details) == 20
     assert set(days.strategy_id) == {item.strategy_id for item in STRATEGIES}
     assert set(days.start_mode) == {"OWN_START", "COMMON_START"}
@@ -186,6 +200,27 @@ def test_a0_own_start_reproduces_existing_replay_and_future_changes_are_causal()
     left = days.loc[days.ordinal < len(bars) - 5].reset_index(drop=True)
     right = later.loc[later.ordinal < len(bars) - 5].reset_index(drop=True)
     pd.testing.assert_frame_equal(left, right)
+
+
+def test_close_cash_start_override_is_explicit_and_bounded():
+    bars = _bars()
+    baseline, _, detail = replay("600001.SH", bars)
+    natural_start = detail["start_ordinal"]
+    requested_start = natural_start + 5
+
+    shifted, _, shifted_detail = replay(
+        "600001.SH",
+        bars,
+        start_override=requested_start,
+    )
+    assert shifted_detail["start_ordinal"] == requested_start
+    assert shifted.iloc[0].ordinal == requested_start
+    assert shifted.iloc[0].timing_nav == baseline.iloc[0].timing_nav
+
+    with pytest.raises(ActionValueError, match="CLOSE_CASH_START_OVERRIDE_INVALID"):
+        replay("600001.SH", bars, start_override=natural_start - 1)
+    with pytest.raises(ActionValueError, match="CLOSE_CASH_START_OVERRIDE_INVALID"):
+        replay("600001.SH", bars, start_override=len(bars) - 1)
 
 
 def test_unknown_terminal_valuation_is_canonical_json_null():

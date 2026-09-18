@@ -170,7 +170,12 @@ def execute(
             "remaining_virtual_units": float(account.units)}
 
 
-def replay(symbol: str, bars: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]], dict[str, Any]]:
+def replay(
+    symbol: str,
+    bars: pd.DataFrame,
+    *,
+    start_override: int | None = None,
+) -> tuple[pd.DataFrame, list[dict[str, Any]], dict[str, Any]]:
     adjusted = _qlib_adjusted_bars(bars, symbol=symbol)
     features = pattern_feature_frame(adjusted, symbol=symbol, corporate_actions=NO_ACCOUNT_ACTIONS)
     # Necessary-condition prefilters only. The existing pure functions retain
@@ -183,6 +188,10 @@ def replay(symbol: str, bars: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str
     if not len(candidates):
         return pd.DataFrame(), [], {"symbol": symbol, "status": "NO_FEATURE_READY_PIT_SESSION"}
     start = int(candidates[0])
+    if start_override is not None:
+        if start_override < start or start_override >= len(bars) - 1:
+            raise ActionValueError("CLOSE_CASH_START_OVERRIDE_INVALID")
+        start = int(start_override)
     raw_rows = bars.to_dict("records")
     policy, hold = Account(), Account()
     accounts = {"timing": policy, "hold": hold}
