@@ -2,6 +2,7 @@
   "actual": "CorrelationScheduler.submit_job writes the semantic dataset value correlation_full into market.ingestion_jobs.job_type, but the existing DEV and production schema permits only init or incremental. Every scheduled/manual correlation submission through this scheduler therefore fails before dispatch. Reuse the established FactorMetricsScheduler pattern: persist job_type=init and retain dataset=correlation_full in summary, with focused tests proving the legal database value and preserved semantic identity. No DDL, production DML, service control, or broad scheduler redesign.",
   "allowed_write_scope": [
     "backend/services/quantevolver/correlation_scheduler.py",
+    "backend/tests/quantevolver/test_correlation_scheduler.py",
     "backend/tests/test_correlation_compute_independence.py",
     "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
     "tests/aistock_validation/bugs/20260918_BUG-1576-correlation-scheduler-writes-unsupported-job-type-to-ingestion-jobs.json"
