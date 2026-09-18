@@ -24,7 +24,13 @@ from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_custom_evo_loop,
     build_config_from_strategy_evo_loop,
 )
-from scripts.qe_active_dataset_profile import _activate, _sha256, _validate
+from scripts.qe_active_dataset_profile import (
+    _activate,
+    _audit_runtime_binding,
+    _runtime_bindings,
+    _sha256,
+    _validate,
+)
 
 
 def _sha(payload: bytes) -> str:
@@ -571,6 +577,60 @@ def test_profile_cli_validate_and_atomic_activate(tmp_path: Path) -> None:
             expected_current_sha256=None,
         )
     assert not absent.exists()
+
+
+def test_profile_cli_derives_node_runtime_bindings_without_cache_paths(tmp_path: Path) -> None:
+    source = _fixture_profile(tmp_path)
+
+    result = _runtime_bindings(source)
+
+    assert result["schema_version"] == "aistock_qe_runtime_bindings_v1"
+    assert result["generation"] == "20260906-v1"
+    assert sorted(result["nodes"]) == ["rdagent-node1", "wsl2-5080"]
+    local = result["nodes"]["wsl2-5080"]
+    assert local["factor_data_dir"] == "/mnt/x/candidate/components/factor_h5_static_candidate_v2"
+    assert local["qlib_data_path"] == "/mnt/x/candidate/components/daily_bin_candidate"
+    assert local["qlib_minute_path"] == "/mnt/x/candidate/components/minute_bin_candidate"
+    assert local["environment"] == {
+        "QE_DATASET_IDENTITY_ROOTS": "/mnt/x/candidate",
+        "QE_QLIB_DATA_PATH": "/mnt/x/candidate/components/daily_bin_candidate",
+        "QLIB_DATA_PATH_WSL": "/mnt/x/candidate/components/daily_bin_candidate",
+        "QLIB_DAY_DATA": "/mnt/x/candidate/components/daily_bin_candidate",
+        "QLIB_MINUTE_PATH_WSL": "/mnt/x/candidate/components/minute_bin_candidate",
+        "QLIB_MINUTE_DATA": "/mnt/x/candidate/components/minute_bin_candidate",
+        "RDAGENT_FACTOR_DATA_WSL": "/mnt/x/candidate/components/factor_h5_static_candidate_v2",
+    }
+    assert "QE_FACTOR_DATA_DIR" not in local["environment"]
+
+
+def test_profile_cli_runtime_binding_audit_fails_closed_on_stale_path(tmp_path: Path) -> None:
+    source = _fixture_profile(tmp_path)
+    expected = {
+        "factor_data_dir": "/home/lc999/candidate/components/factor_h5_static_candidate_v2",
+        "qlib_data_path": "/home/lc999/candidate/components/daily_bin_candidate",
+        "qlib_minute_path": "/home/lc999/candidate/components/minute_bin_candidate",
+    }
+
+    result = _audit_runtime_binding(
+        source,
+        node_id="rdagent-node1",
+        actual=expected,
+    )
+    assert result["status"] == "runtime_bindings_match"
+
+    with pytest.raises(RuntimeError, match="runtime bindings differ from active profile"):
+        _audit_runtime_binding(
+            source,
+            node_id="rdagent-node1",
+            actual={**expected, "qlib_data_path": "/home/lc999/r6/day"},
+        )
+
+
+def test_profile_cli_runtime_bindings_reject_unknown_node(tmp_path: Path) -> None:
+    source = _fixture_profile(tmp_path)
+
+    with pytest.raises(RuntimeError, match="node is absent from active profile"):
+        _runtime_bindings(source, node_id="missing-node")
 
 
 def test_profile_activation_rejects_suspend_source_contract_drift(tmp_path: Path) -> None:
