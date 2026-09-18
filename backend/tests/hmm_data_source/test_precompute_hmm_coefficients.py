@@ -66,17 +66,46 @@ def _sha256(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_frozen_input_fixture(tmp_path, *, omit_sector_day: bool = False):
+def _shared_code_map_payload(
+    entries: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    normalized_entries = entries or [{"l2_code_id": 133, "canonical_l2_code": "801783.SI"}]
+    authority = {
+        "authority_id": "aistock_sw_l2_shared_catalog_fixture",
+        "authority_sha256": "a" * 64,
+    }
+    return {
+        "schema_version": "aistock_release_sw_l2_code_map_v1",
+        "mapping_authority": authority,
+        "entries": normalized_entries,
+        "code_map_digest": digest_named_fields(
+            "aistock_release_sw_l2_code_map_v1",
+            {
+                "mapping_authority": authority,
+                "entries": sorted(
+                    normalized_entries,
+                    key=lambda row: (int(row["l2_code_id"]), str(row["canonical_l2_code"])),
+                ),
+            },
+        ),
+    }
+
+
+def _write_frozen_input_fixture(
+    tmp_path,
+    *,
+    omit_sector_day: bool = False,
+    sector_id: int = 133,
+    code_map_entries: list[dict[str, object]] | None = None,
+):
     root = tmp_path / "release"
     root.mkdir()
     dates = pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-03"])
     sector_dates = dates[1:] if omit_sector_day else dates
-    sector_index = pd.MultiIndex.from_product(
-        [sector_dates, ["000001.SZ"]], names=["datetime", "instrument"]
-    )
+    sector_index = pd.MultiIndex.from_product([sector_dates, ["000001.SZ"]], names=["datetime", "instrument"])
     sector = pd.DataFrame(
         {
-            "l2_code_id": [0] * len(sector_index),
+            "l2_code_id": [sector_id] * len(sector_index),
             "sw2_pct_change": [0.1, 0.2, 0.3][-len(sector_index) :],
             "sw2_vol": 100.0,
             "sw2_amount": 1000.0,
@@ -101,32 +130,19 @@ def _write_frozen_input_fixture(tmp_path, *, omit_sector_day: bool = False):
     }
     sector.to_hdf(paths["sector_data_h5"], key="data", format="table", data_columns=True)
     index.to_hdf(paths["index_daily_h5"], key="data", format="fixed")
-    ordered_codes = ["A.SI"]
     paths["sector_code_map_json"].write_text(
-        json.dumps(
-            {
-                "schema_version": "qe_sw_l2_code_map_v1",
-                "ordered_codes": ordered_codes,
-                "code_map_digest": digest_named_fields(
-                    "dataset_release_sw_l2_code_map_v1",
-                    {"ordered_codes": ordered_codes},
-                ),
-            }
-        ),
+        json.dumps(_shared_code_map_payload(code_map_entries)),
         encoding="utf-8",
     )
-    pd.DataFrame(
-        {"trade_date": dates, "sw_daily_total_vol": [1000.0, 1100.0, 1200.0]}
-    ).to_parquet(paths["market_context_parquet"], index=False)
+    pd.DataFrame({"trade_date": dates, "sw_daily_total_vol": [1000.0, 1100.0, 1200.0]}).to_parquet(
+        paths["market_context_parquet"], index=False
+    )
     bundle = {
         "schema_version": "qe_hmm_frozen_input_v1",
         "dataset_root": str(root),
         "dataset_identity": {"generation": "fixture"},
         "market_volume_definition": "sum_market_sw_daily_vol_all_rows_v1",
-        "files": {
-            key: {"relative_path": path.name, "sha256": _sha256(path)}
-            for key, path in paths.items()
-        },
+        "files": {key: {"relative_path": path.name, "sha256": _sha256(path)} for key, path in paths.items()},
     }
     return bundle
 
@@ -140,11 +156,144 @@ def test_load_frozen_coefficient_inputs_uses_hash_pinned_files_only(tmp_path) ->
     )
 
     assert result["dataset_identity"] == {"generation": "fixture"}
-    assert result["sector_data"]["A.SI"][date(2026, 6, 1)]["sw2_pct_change"] == 0.1
+    assert result["sector_data"]["801783.SI"][date(2026, 6, 1)]["sw2_pct_change"] == 0.1
+    assert result["sector_code_by_id"] == {133: "801783.SI"}
+    assert result["sector_code_map_authority"] == {
+        "authority_id": "aistock_sw_l2_shared_catalog_fixture",
+        "authority_sha256": "a" * 64,
+    }
     assert result["stock_sector_membership_spans"]["000001.SZ"] == [
-        {"start_date": "2026-06-01", "end_date": "2026-06-03", "sector_code": "A.SI"}
+        {
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-03",
+            "sector_code": "801783.SI",
+        }
     ]
     assert date(2026, 6, 2) in result["csi300"]
+
+
+def _rewrite_code_map(bundle, payload: dict[str, object]) -> None:
+    spec = bundle["files"]["sector_code_map_json"]
+    path = Path(bundle["dataset_root"]) / spec["relative_path"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    spec["sha256"] = _sha256(path)
+
+
+def test_load_frozen_coefficient_inputs_accepts_sparse_shared_ids_without_indexing(
+    tmp_path,
+) -> None:
+    entries = [
+        {"l2_code_id": 133, "canonical_l2_code": "801783.SI"},
+        {"l2_code_id": 1, "canonical_l2_code": "801011.SI"},
+    ]
+    result = load_frozen_coefficient_inputs(
+        _write_frozen_input_fixture(tmp_path, sector_id=133, code_map_entries=entries),
+        history_start=date(2026, 6, 1),
+        test_start=date(2026, 6, 1),
+        backtest_end=date(2026, 6, 3),
+    )
+
+    assert result["sector_code_by_id"] == {
+        1: "801011.SI",
+        133: "801783.SI",
+    }
+    assert set(result["sector_data"]) == {"801783.SI"}
+
+
+def test_load_frozen_coefficient_inputs_rejects_unknown_shared_id(tmp_path) -> None:
+    with pytest.raises(ValueError, match=r"unmapped l2_code_id values: \[132\]"):
+        load_frozen_coefficient_inputs(
+            _write_frozen_input_fixture(tmp_path, sector_id=132),
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+@pytest.mark.parametrize(
+    ("entries", "error"),
+    [
+        (
+            [
+                {"l2_code_id": 1, "canonical_l2_code": "801011.SI"},
+                {"l2_code_id": 1, "canonical_l2_code": "801012.SI"},
+            ],
+            "duplicated l2_code_id",
+        ),
+        (
+            [
+                {"l2_code_id": 1, "canonical_l2_code": "801011.SI"},
+                {"l2_code_id": 133, "canonical_l2_code": "801011.SI"},
+            ],
+            "duplicated canonical_l2_code",
+        ),
+    ],
+)
+def test_load_frozen_coefficient_inputs_rejects_ambiguous_shared_mapping(tmp_path, entries, error) -> None:
+    with pytest.raises(ValueError, match=error):
+        load_frozen_coefficient_inputs(
+            _write_frozen_input_fixture(tmp_path, code_map_entries=entries),
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_dense_legacy_code_map(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    ordered_codes = ["801783.SI"]
+    _rewrite_code_map(
+        bundle,
+        {
+            "schema_version": "qe_sw_l2_code_map_v1",
+            "ordered_codes": ordered_codes,
+            "code_map_digest": digest_named_fields(
+                "dataset_release_sw_l2_code_map_v1",
+                {"ordered_codes": ordered_codes},
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid frozen SW L2 code-map schema"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_missing_mapping_authority(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    payload = _shared_code_map_payload()
+    payload.pop("mapping_authority")
+    _rewrite_code_map(bundle, payload)
+
+    with pytest.raises(ValueError, match="requires mapping_authority"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
+def test_load_frozen_coefficient_inputs_rejects_non_integral_shared_id(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(tmp_path)
+    sector_spec = bundle["files"]["sector_data_h5"]
+    sector_path = Path(bundle["dataset_root"]) / sector_spec["relative_path"]
+    sector = pd.read_hdf(sector_path, key="data")
+    sector["l2_code_id"] = 133.5
+    sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
+    sector_spec["sha256"] = _sha256(sector_path)
+
+    with pytest.raises(ValueError, match="non-integral l2_code_id"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
 
 
 def test_load_frozen_coefficient_inputs_rejects_missing_membership_day(tmp_path) -> None:
@@ -215,9 +364,7 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
         "backtest_end": coefficient_days[-1].isoformat(),
         "frozen_input_bundle": {"schema_version": "qe_hmm_frozen_input_v1"},
     }
-    maps_by_date = {
-        day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days
-    }
+    maps_by_date = {day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days}
     monkeypatch.setattr(module, "parse_stdin", lambda: params)
     monkeypatch.setattr(
         module,
@@ -227,6 +374,10 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             "dataset_identity": {"generation": "fixture"},
             "file_sha256": {key: "1" * 64 for key in module.FROZEN_FILE_KEYS},
             "sector_code_map_digest": "2" * 64,
+            "sector_code_map_authority": {
+                "authority_id": "aistock_sw_l2_shared_catalog_fixture",
+                "authority_sha256": "a" * 64,
+            },
             "sector_data": {"A.SI": {day: {} for day in days}},
             "sector_rows": {"A.SI": []},
             "sector_dates": days,
