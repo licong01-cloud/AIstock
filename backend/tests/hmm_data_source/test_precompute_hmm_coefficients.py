@@ -95,6 +95,7 @@ def _write_frozen_input_fixture(
     tmp_path,
     *,
     omit_sector_day: bool = False,
+    invalid_sector_value: bool = False,
     sector_id: int = 133,
     code_map_entries: list[dict[str, object]] | None = None,
 ):
@@ -108,7 +109,7 @@ def _write_frozen_input_fixture(
             "l2_code_id": [sector_id] * len(sector_index),
             "sw2_pct_change": [0.1, 0.2, 0.3][-len(sector_index) :],
             "sw2_vol": 100.0,
-            "sw2_amount": 1000.0,
+            "sw2_amount": float("nan") if invalid_sector_value else 1000.0,
             "sw2_mf_net_amt": 10.0,
             "sw2_mf_buy_elg_amt": 20.0,
             "sw2_mf_sell_elg_amt": 10.0,
@@ -337,6 +338,16 @@ def test_load_frozen_coefficient_inputs_rejects_code_map_digest_drift(tmp_path) 
         )
 
 
+def test_load_frozen_coefficient_inputs_rejects_non_finite_sector_value(tmp_path) -> None:
+    with pytest.raises(ValueError, match="non-finite frozen sector value"):
+        load_frozen_coefficient_inputs(
+            _write_frozen_input_fixture(tmp_path, invalid_sector_value=True),
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 1),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
 def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, capsys) -> None:
     import builtins
     import numpy as np
@@ -374,6 +385,7 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             "dataset_identity": {"generation": "fixture"},
             "file_sha256": {key: "1" * 64 for key in module.FROZEN_FILE_KEYS},
             "sector_code_map_digest": "2" * 64,
+            "ordered_sector_codes": ["A.SI"],
             "sector_code_map_authority": {
                 "authority_id": "aistock_sw_l2_shared_catalog_fixture",
                 "authority_sha256": "a" * 64,
@@ -428,6 +440,86 @@ def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, c
             }
         ]
     }
+
+
+def test_main_rejects_missing_sector_state_date(monkeypatch, tmp_path, capsys) -> None:
+    import numpy as np
+    import scripts.precompute_hmm_coefficients as module
+
+    days = pd.bdate_range("2026-05-01", periods=30).date.tolist()
+    coefficient_days = [day for day in days if day >= date(2026, 6, 1)]
+    missing_day = coefficient_days[0]
+    model_path = tmp_path / "models.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "A.SI": {
+                    "n_states": 2,
+                    "means": [[0.0] * 4, [1.0] * 4],
+                    "state_labels": {"0": "neutral", "1": "trending"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    maps_by_date = {
+        day.isoformat(): {"000001.SZ": "A.SI"} for day in coefficient_days
+    }
+    monkeypatch.setattr(
+        module,
+        "parse_stdin",
+        lambda: {
+            "model_path": str(model_path),
+            "model_sha256": _sha256(model_path),
+            "test_start": "2026-06-01",
+            "backtest_end": coefficient_days[-1].isoformat(),
+            "frozen_input_bundle": {"schema_version": "qe_hmm_frozen_input_v1"},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "load_frozen_coefficient_inputs",
+        lambda *_args, **_kwargs: {
+            "dataset_root": str(tmp_path),
+            "dataset_identity": {"generation": "fixture"},
+            "file_sha256": {key: "1" * 64 for key in module.FROZEN_FILE_KEYS},
+            "sector_code_map_digest": "2" * 64,
+            "ordered_sector_codes": ["A.SI"],
+            "sector_data": {"A.SI": {day: {} for day in days}},
+            "sector_rows": {"A.SI": []},
+            "sector_dates": days,
+            "csi300": {day: 0.0 for day in days},
+            "index_dates": days,
+            "market_vol": {day: 1.0 for day in days},
+            "market_volume_dates": days,
+            "stock_sector_maps_by_date": maps_by_date,
+            "stock_sector_membership_spans": build_stock_sector_membership_spans(
+                maps_by_date
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "restore_hmm",
+        lambda _info: SimpleNamespace(means_=np.zeros((2, 4))),
+    )
+    observed_days = [day for day in days if day != missing_day]
+    monkeypatch.setattr(
+        module,
+        "build_legacy_observations",
+        lambda *_args, **_kwargs: (np.ones((len(observed_days), 4)), observed_days),
+    )
+    monkeypatch.setattr(
+        module,
+        "forward_filter_posteriors",
+        lambda _hmm, obs: np.tile(np.asarray([[1.0, 0.0]]), (len(obs), 1)),
+    )
+    monkeypatch.setattr(sys, "argv", ["precompute_hmm_coefficients.py"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "missing decoded state dates" in capsys.readouterr().err
 
 
 def test_precompute_source_has_no_database_data_plane() -> None:
