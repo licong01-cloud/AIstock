@@ -26,9 +26,18 @@
   "evidence_uris": [],
   "expected": "CorrelationScheduler must persist a schema-valid ingestion job_type while retaining correlation_full as the semantic dataset identity in the job summary and dispatch payload.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/correlation_scheduler.py",
+      "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+      "tests/aistock_validation/bugs/20260918_BUG-1576-correlation-scheduler-writes-unsupported-job-type-to-ingestion-jobs.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/quantevolver/correlation_scheduler.py",
+      "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+      "tests/aistock_validation/bugs/20260918_BUG-1576-correlation-scheduler-writes-unsupported-job-type-to-ingestion-jobs.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -72,14 +81,19 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/correlations/schedules",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process imported CorrelationScheduler from the BUG-1576 worktree and asserted that submit_job persists job_type=init while retaining summary.dataset; no backend or scheduler process was controlled."
+      "Fresh Python process imported CorrelationScheduler from the BUG-1576 worktree and asserted that submit_job persists job_type=init while retaining summary.dataset; no backend or scheduler process was controlled.",
+      "Fresh Python process imported CorrelationScheduler from this worktree and verified persisted job_type init plus summary dataset correlation_full; no process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
