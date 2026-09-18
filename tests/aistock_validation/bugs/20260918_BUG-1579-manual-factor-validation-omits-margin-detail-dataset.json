@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1579",
-  "closed_at": null,
+  "closed_at": "2026-09-18T17:35:56.372980Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -119,10 +119,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1579-close-sync-20260918\\tmp\\issue_workflow\\BUG-1579\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1579",
+      "business_smoke_semantic": {
+        "contract_id": "factor_lifecycle_detail",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "89777230a4065d3bf05bdc7f2761190708ad8e2331f12d7d3988d7d2917945af",
+      "expected_identity": "530bba42b9a09f102dbb457ef3e549604ba945bd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-18T17:34:10.260032Z",
+      "mode": "read_only",
+      "observed_identity": "c4b626e0a5c6ad285d6befea8cdb6fbabe9ce7c0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "31050acf249fb6f04ce100f34718c2cd00fd408bef9f42bea2db3f88439d3877",
+      "receipt_sha256": "3d4a3dc4d809fc1955feb74a64be483615df5afc3591990181a1ac42f821ea1f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "403ca96b1f2b26894c05d381f374cbf1875e5250c76788b4e7f7652561113559",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -157,7 +179,7 @@
     ],
     "validation_evidence_digest": "30af63b2f4e0424835f80b8669e2c0a3c922b70424e97a7857d132a9ffcc37e8"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -171,7 +193,8 @@
     "validation-receipt: id=06ccd0f000fe6895 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
     "validation-receipt: id=2bcea8d5ccc9d1a3 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=compile plan=direct status=passed command=`python -m py_compile backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
     "validation-receipt: id=14e543c2e4a6aab5 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
-    "validation-receipt: id=ef2dda38bc16639c commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`"
+    "validation-receipt: id=ef2dda38bc16639c commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+    "post-restart-verify workflow_gate=verified; runtime identity contains 530bba42; health 200; CORD10 factor lifecycle detail semantic contract passed"
   ],
   "verification_budget": {
     "budget": "standard",
