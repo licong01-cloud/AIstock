@@ -28,12 +28,18 @@
   ],
   "expected": "Consume the hash-pinned shared membership sidecar, resolve sparse IDs through the release code map, generate coefficients only for sectors actually referenced by PIT membership in the target window, retain the 131-sector catalog as identity, and fail closed for any active sector without model/data/coefficient.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20260918_BUG-1580-hmm-frozen-coefficient-generator-ignores-shared-membership-authority-and.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "scripts/precompute_hmm_coefficients.py",
-      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+      "tests/aistock_validation/bugs/20260918_BUG-1580-hmm-frozen-coefficient-generator-ignores-shared-membership-authority-and.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/precompute_hmm_coefficients.py",
@@ -115,11 +121,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
     "post_restart_receipt_ref": null,
-    "provisional": true,
+    "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
