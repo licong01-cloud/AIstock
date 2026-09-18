@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1576",
-  "closed_at": null,
+  "closed_at": "2026-09-18T06:51:34.975294Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -60,8 +60,8 @@
   },
   "first_seen_at": "2026-09-18T06:12:22.881026Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "33f92b74eb29c62d00db12c4b24ad1b5fd9cd208",
+  "fixed_at": "2026-09-18T06:42:48Z",
   "github_issue_number": 4920,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4920",
   "last_seen_at": "2026-09-18T06:12:22.881026Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4921",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,7 +81,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/correlations/schedules",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python process imported CorrelationScheduler from the BUG-1576 worktree and asserted that submit_job persists job_type=init while retaining summary.dataset; no backend or scheduler process was controlled.",
@@ -94,9 +95,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "not_required",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1576/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1576",
+      "business_smoke_semantic": {
+        "contract_id": "correlation_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "e67cc69b72187a0ded5d3ba63ff23dc5814d650b3fe473fc5ade2373dc453b1e",
+      "expected_identity": "33f92b74eb29c62d00db12c4b24ad1b5fd9cd208",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-18T06:50:51.950768Z",
+      "mode": "read_only",
+      "observed_identity": "33f92b74eb29c62d00db12c4b24ad1b5fd9cd208",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "107efe3dce107c06856751fa2b3f21f57c147d4039328ce2cb243c496204434d",
+      "receipt_sha256": "5af37b808d47a531a16eca5b4957a99586118c58d70deb39e9940eacd112e8ab",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c2213c89db7229ec9b42db4a20f6958abad2489529f216e8355b268f4fb9129b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -106,7 +130,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1576",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "aaeb8400dd29c144",
+    "recorded_at": "2026-09-18T06:43:50.026776Z",
+    "runtime_contract_digest": "e83be4df2fb56e78abec6b272cc97672edade64b607d2d129c41907268b5b9c3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "26350732579060f2a19318c6ab0b5059007ba2cd",
+    "source_merge_commit": "33f92b74eb29c62d00db12c4b24ad1b5fd9cd208",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4921",
+    "validation_evidence": [
+      "rtk pytest -q backend/tests/quantevolver/test_correlation_scheduler.py -> 1 passed",
+      "rtk ruff check changed files -> passed",
+      "python -m py_compile changed files -> passed",
+      "git diff --check -> passed",
+      "python -m nox -s qe_read_backend -> 606 passed, 1 skipped",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "50254d7afca15355444b51e896ed20074b2aa13f7401f661c3a3936029ac8240"
+  },
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -115,6 +165,14 @@
     "fingerprint": "76c07f2300b1ee9325fb7ebe",
     "source_event_id": "FE-20260918-76c07f2300b1"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/quantevolver/test_correlation_scheduler.py -> 1 passed",
+    "rtk ruff check changed files -> passed",
+    "python -m py_compile changed files -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s qe_read_backend -> 606 passed, 1 skipped",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
