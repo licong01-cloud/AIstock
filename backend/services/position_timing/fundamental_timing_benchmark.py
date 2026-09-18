@@ -11,6 +11,7 @@ import json
 import multiprocessing
 from pathlib import Path
 import platform
+import subprocess
 from typing import Any, Iterable, Iterator, Mapping
 
 import numpy as np
@@ -18,7 +19,6 @@ import pandas as pd
 
 from .action_value import ActionValueError
 from .action_value_data import DailyCandidate, file_reference
-from .action_value_pipeline import _clean_repository_commit
 from .artifact_store import _exclusive_file_lock
 from .contracts import canonical_sha256
 from .fundamental_screen import (
@@ -104,6 +104,30 @@ CONTRACT = {
     "broker_account_clearing": False,
 }
 CONTRACT_SHA256 = canonical_sha256(CONTRACT)
+
+
+def _clean_repository_commit(repository: Path) -> str:
+    """Freeze source identity without importing unrelated online services."""
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if status:
+        raise ActionValueError("REPOSITORY_NOT_CLEAN")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip().lower()
+    if len(commit) != 40 or any(value not in "0123456789abcdef" for value in commit):
+        raise ActionValueError("FUNDAMENTAL_CODE_IDENTITY_INVALID")
+    return commit
 
 
 def _environment_identity() -> dict[str, str]:
