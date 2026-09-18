@@ -321,7 +321,11 @@ def _dataset_delta_audit(*, prior_candidate_root: Path, candidate_root: Path) ->
     identity = {
         "schema_version": "position_timing_r5_r7_strategy_input_delta_v1",
         "prior_candidate_manifest": prior_ref,
+        "prior_candidate_dataset_manifest_sha256": prior["dataset_manifest_sha256"],
         "current_candidate_manifest": current_ref,
+        "current_candidate_dataset_manifest_sha256": current["dataset_manifest_sha256"],
+        "current_deployment_content_sha256": current["deployment_content_sha256"],
+        "current_revision": current["revision"],
         "unchanged_components": component_audit,
         "pool_sidecars_sha256": canonical_sha256(current_sidecars),
         "prior_suspend": prior_suspend,
@@ -630,8 +634,11 @@ def prepare(
         "timing_root": root.as_posix(),
         "candidate_root": candidate.root.as_posix(),
         "candidate_manifest": pools.candidate_manifest_reference,
+        "candidate_dataset_manifest_sha256": pools.candidate_dataset_manifest_sha256,
         "parent_manifest": parent_ref,
+        "parent_manifest_sha256": EXPECTED_PARENT_MANIFEST_SHA256,
         "baseline_close_cash_manifest": baseline_ref,
+        "baseline_close_cash_manifest_sha256": BASELINE_CLOSE_CASH_MANIFEST_SHA256,
         "dataset_version_delta_audit": version_delta,
         "symbols": candidate.symbols,
         "pool_sidecars": pools.references,
@@ -704,6 +711,9 @@ def load_request(path: Path) -> dict[str, Any]:
             raise ActionValueError("STRATEGY_EVOLUTION_PREFLIGHT_DRIFT")
     if (
         request["candidate_manifest"]["sha256"] != EXPECTED_R7_CANDIDATE_MANIFEST_SHA256
+        or request.get("candidate_dataset_manifest_sha256") != EXPECTED_R7_CANDIDATE_DATASET_SHA256
+        or request.get("parent_manifest_sha256") != EXPECTED_PARENT_MANIFEST_SHA256
+        or request.get("baseline_close_cash_manifest_sha256") != BASELINE_CLOSE_CASH_MANIFEST_SHA256
         or request["index_source"]["sha256"] != INDEX_FILE_SHA
         or request["qlib_contract_sha256"] != QLIB_ADJUSTED_FACTOR_CONTRACT_SHA256
     ):
@@ -722,6 +732,9 @@ def load_request(path: Path) -> dict[str, Any]:
         != canonical_sha256({key: value for key, value in version_delta.items() if key != "audit_sha256"})
         or version_delta.get("affected_symbols") != ["688766.SH"]
         or version_delta.get("r5_evolution_chunks_reusable") is not False
+        or version_delta.get("current_candidate_dataset_manifest_sha256") != EXPECTED_R7_CANDIDATE_DATASET_SHA256
+        or version_delta.get("current_deployment_content_sha256") != EXPECTED_R7_DEPLOYMENT_CONTENT_SHA256
+        or version_delta.get("current_revision") != "20260918-r7"
     ):
         raise ActionValueError("STRATEGY_EVOLUTION_VERSION_DELTA_DRIFT")
     for group in ("source_code", "source_data", "pool_sidecars"):
