@@ -142,8 +142,8 @@
   },
   "first_seen_at": "2026-09-18T17:08:01.526521Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cb96a0b54648da85b2b32930428f5f6b04d9bfff",
+  "fixed_at": "2026-09-18T17:30:14Z",
   "github_issue_number": 4937,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4937",
   "last_seen_at": "2026-09-18T17:08:01.526521Z",
@@ -151,6 +151,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4938",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -177,6 +178,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -188,7 +190,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1581",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "372b68bf7cc9c1a6",
+    "recorded_at": "2026-09-18T17:31:03.946052Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "220eb1b6bde0ea245151cb2365764306108a61dd",
+    "source_merge_commit": "cb96a0b54648da85b2b32930428f5f6b04d9bfff",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4938",
+    "validation_evidence": [
+      "CI 35374377124 passed; local platform_api_backend 15 passed; qe_read_backend 619 passed 1 skipped; L0 and registry passed"
+    ],
+    "validation_evidence_digest": "9c8074826dc88bc0b60fca95afff715a8a525986daee7c9e1d02d86e3ddcb222"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -197,6 +220,9 @@
     "fingerprint": "66d44a4278b9ca572cf6d54c",
     "source_event_id": "FE-20260918-66d44a4278b9"
   },
+  "validation_evidence": [
+    "CI 35374377124 passed; local platform_api_backend 15 passed; qe_read_backend 619 passed 1 skipped; L0 and registry passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
