@@ -91,9 +91,36 @@ def test_official_evaluation_prefers_active_profile_paths(monkeypatch) -> None:
     assert result["success"] is True
     assert captured["factor_data_dir"] == "/releases/r8/components/factor_h5_static_candidate_v2"
     assert captured["qlib_bin_path"] == "/releases/r8/components/daily_bin_candidate"
+    assert captured["universe_key"] == "aistock_equity_pit_canonical_v2"
     assert captured["node_id"] == "wsl2-5080"
     assert result["active_profile_generation"] == "20260918-v11"
     assert result["active_profile_sha256"] == "r8-profile-sha"
+    assert result["universe_key"] == "aistock_equity_pit_canonical_v2"
+
+
+def test_official_full_compute_dispatch_preserves_explicit_universe_key() -> None:
+    from backend.services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
+
+    captured = {}
+
+    class _FakeDispatchService:
+        async def create_and_submit_task(self, payload):
+            captured.update(payload)
+            return {"task_id": "official-r8", "status": "queued"}
+
+    result = OfficialFactorFullComputeDispatchService(_FakeDispatchService()).submit(
+        factor_names=["factor_a"],
+        factor_data_dir="/releases/r8/components/factor_h5_static_candidate_v2",
+        qlib_bin_path="/releases/r8/components/daily_bin_candidate",
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
+
+    assert result["ok"] is True
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
 
 
 def test_cache_status_sort_keeps_numeric_scores_comparable():
