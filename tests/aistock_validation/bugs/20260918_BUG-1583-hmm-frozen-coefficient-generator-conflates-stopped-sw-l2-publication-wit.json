@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1583",
-  "closed_at": null,
+  "closed_at": "2026-09-18T20:56:03.964956Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -162,8 +162,8 @@
   },
   "first_seen_at": "2026-09-18T18:44:35.181933Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "aa6b3640c73610c6279a8d884730f8e361ac5762",
+  "fixed_at": "2026-09-18T19:03:18Z",
   "github_issue_number": 4941,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4941",
   "last_seen_at": "2026-09-18T18:44:35.181933Z",
@@ -171,6 +171,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4943",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -197,9 +198,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1583/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1583",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "aa6b3640c73610c6279a8d884730f8e361ac5762",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-18T20:54:09.489201Z",
+      "mode": "read_only",
+      "observed_identity": "892327cb1adc40e7f4b95a0603c271c432cf6210",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1891e2c29f2cdce7d1142a9a4313d834493f04a9d522c2b96d475eb2285d92e0",
+      "receipt_sha256": "912aef69bc7ba6e41d59094d00a6ff90a2fd378925d5e520585dc4d4ce77574d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "fa1e45ee0dbfaa199aa7e5710b5c9dcdb73f206dcece767987fd1236f8d7bae8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -209,7 +233,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -218,6 +242,10 @@
     "fingerprint": "b66dedc55794d7b507a3c7ff",
     "source_event_id": "FE-20260918-b66dedc55794"
   },
+  "validation_evidence": [
+    "GitHub PR #4943 CI verdict -> passed",
+    "post-restart-verify backend-main expected aa6b3640 observed 892327cb -> verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
