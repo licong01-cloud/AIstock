@@ -28,12 +28,18 @@
   ],
   "expected": "A controlled profile-derived binding audit and reconciliation must make controller, WSL, remote node and compute-node mappings resolve the active r7 candidate without rewriting immutable historical experiment inputs.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260918_BUG-1575-qe-runtime-bindings-remain-on-r6-after-r7-profile-activation.json",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "scripts/qe_active_dataset_profile.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/qe_active_dataset_profile.py",
-      "backend/tests/quantevolver/test_qe_active_dataset_profile.py"
+      "tests/aistock_validation/bugs/20260918_BUG-1575-qe-runtime-bindings-remain-on-r6-after-r7-profile-activation.json",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "scripts/qe_active_dataset_profile.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/qe_active_dataset_profile.py",
@@ -121,10 +127,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
