@@ -7,6 +7,15 @@ from backend.services.dispatch_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_active_dataset_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        dispatch_service,
+        "resolve_active_dataset_node_binding",
+        lambda *, node_id: None,
+    )
+
+
 def test_build_rdagent_env_overrides_maps_ui_config_to_rdagent_env() -> None:
     env = build_rdagent_env_overrides(
         data={"custom_env": {"EXISTING": "1"}},
