@@ -449,6 +449,19 @@ def _symbol_result_sha256(result: tuple[str, pd.DataFrame, pd.DataFrame, list[di
     )
 
 
+def _concat_frames_by_records(frames: Iterable[pd.DataFrame]) -> pd.DataFrame:
+    """Preserve frame/row/column order without pandas' all-NA concat inference."""
+
+    columns: list[str] = []
+    records: list[dict[str, Any]] = []
+    for frame in frames:
+        for column in frame.columns:
+            if column not in columns:
+                columns.append(str(column))
+        records.extend(frame.to_dict(orient="records"))
+    return pd.DataFrame.from_records(records, columns=columns)
+
+
 def _parallel_verification_symbols(symbols: Iterable[str], *, size: int = 32) -> list[str]:
     population = tuple(symbols)
     available = set(population)
@@ -1442,7 +1455,7 @@ def run(path: Path) -> dict[str, Any]:
                 publish_frame(chunk / "stocks.parquet", pd.DataFrame(stock_rows))
                 publish_frame(
                     chunk / "fills.parquet",
-                    pd.concat(fill_frames, ignore_index=True) if fill_frames else pd.DataFrame(),
+                    _concat_frames_by_records(fill_frames),
                 )
                 publish_json(chunk / "diagnostics.json", details)
                 _seal(
@@ -1478,7 +1491,7 @@ def run(path: Path) -> dict[str, Any]:
             diagnostics.extend(read_json(chunk / "diagnostics.json"))
         totals = _merge_partials(partial_frames, len(candidate.calendar))
         stocks = pd.concat(stock_frames, ignore_index=True)
-        fills = pd.concat(fill_frames, ignore_index=True) if fill_frames else pd.DataFrame()
+        fills = _concat_frames_by_records(fill_frames)
         check_ref(request["index_source"])
         index_frame = pd.read_hdf(request["index_source"]["path"], key="data")
         report, daily = _build_report(

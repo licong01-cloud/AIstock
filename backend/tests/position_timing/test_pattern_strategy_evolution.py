@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,7 @@ from backend.services.position_timing.pattern_strategy_evolution_benchmark impor
     WORKER_COUNT,
     _baseline_equivalence,
     _bootstrap_family,
+    _concat_frames_by_records,
     _environment_identity,
     _merge_partials,
     _normalized_suspend_rows,
@@ -297,9 +299,7 @@ def test_parallel_replay_is_ordered_and_exact_for_same_inputs():
 
 
 def test_parallel_worker_failure_writes_no_artifact(tmp_path: Path):
-    with pytest.raises(
-        ActionValueError, match="PATTERN_QLIB_ADJUSTED_SOURCE_SCHEMA_INVALID"
-    ):
+    with pytest.raises(ActionValueError, match="PATTERN_QLIB_ADJUSTED_SOURCE_SCHEMA_INVALID"):
         list(
             _ordered_replays(
                 [("000001.SZ", pd.DataFrame())],
@@ -308,6 +308,18 @@ def test_parallel_worker_failure_writes_no_artifact(tmp_path: Path):
             )
         )
     assert list(tmp_path.iterdir()) == []
+
+
+def test_fill_frames_merge_by_records_without_all_na_concat_inference():
+    first = pd.DataFrame({"sequence": [1], "optional": [None]})
+    second = pd.DataFrame({"sequence": [2], "optional": [3.0], "later": [None]})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        merged = _concat_frames_by_records([first, second])
+    assert list(merged.columns) == ["sequence", "optional", "later"]
+    assert merged.sequence.tolist() == [1, 2]
+    assert pd.isna(merged.loc[0, "optional"])
+    assert merged.loc[1, "optional"] == 3.0
 
 
 def test_parallel_verification_sample_is_fixed_and_board_complete():
