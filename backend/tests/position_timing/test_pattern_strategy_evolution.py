@@ -249,6 +249,7 @@ def test_chunk_partials_merge_exactly_and_family_keeps_all_54_hypotheses():
     encoded = _partial_frame(first)
     merged = _merge_partials([encoded, encoded], 3)
     actual = merged[("A1", "COMMON_START", "csi300", "dynamic", 0)]
+    assert all(type(value[4]) is int for value in merged)
     assert actual["timing_sum"].tolist() == pytest.approx([0.0, 0.2, 0.4])
     assert actual["paired"].tolist() == [0, 2, 2]
 

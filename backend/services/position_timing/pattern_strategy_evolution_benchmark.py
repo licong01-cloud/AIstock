@@ -906,7 +906,15 @@ def _merge_partials(
             ["strategy_id", "start_mode", "pool", "cohort_mode", "cohort_year"],
             sort=False,
         ):
-            aggregate = totals.setdefault(tuple(key), _empty_totals(calendar_size))
+            strategy, start_mode, pool, cohort_mode, cohort_year = key
+            normalized_key = (
+                str(strategy),
+                str(start_mode),
+                str(pool),
+                str(cohort_mode),
+                int(cohort_year),
+            )
+            aggregate = totals.setdefault(normalized_key, _empty_totals(calendar_size))
             ordinals = group.ordinal.to_numpy(int)
             for name in aggregate:
                 aggregate[name][ordinals] += group[name].to_numpy(aggregate[name].dtype)
