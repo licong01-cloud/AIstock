@@ -92,6 +92,8 @@ def test_partial_totals_round_trip_and_six_hypothesis_family_is_fixed():
     assert FAMILY_SIZE == 6
     result = _bootstrap(np.linspace(-.001, .001, 80))
     assert result["family_size"] == 6
+    assert result["economic_threshold_bps"] == 0.0
+    assert result["evidence_state"] in {"SUPPORTED", "NEGATIVE", "INCONCLUSIVE"}
 
 
 def test_single_and_spawn_workers_are_result_identical():

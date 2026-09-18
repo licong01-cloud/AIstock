@@ -151,14 +151,20 @@ def p1_mask_for_symbol(
     lagged = aligned.shift(1).to_numpy(float)
     known = np.isfinite(lagged)
     in_band = known & (lagged >= P1_MIN_TOTAL_MV_WANYUAN) & (lagged <= P1_MAX_TOTAL_MV_WANYUAN)
-    passed = in_band & np.asarray(pit_active, dtype=bool) & np.asarray(feature_ready, dtype=bool)
+    pit = np.asarray(pit_active, dtype=bool)
+    ready = np.asarray(feature_ready, dtype=bool)
+    screen_pass = in_band & pit
+    passed = screen_pass & ready
     counts = {
         "expected": int(len(dates)),
-        "market_cap_unknown": int((~known).sum()),
+        "unknown": int((~known).sum()),
+        "fail": int((known & ~screen_pass).sum()),
+        "not_applicable": 0,
+        "screen_pass": int(screen_pass.sum()),
         "market_cap_pass": int(in_band.sum()),
-        "pit_inactive": int((~np.asarray(pit_active, dtype=bool)).sum()),
-        "feature_unready": int((~np.asarray(feature_ready, dtype=bool)).sum()),
-        "pass": int(passed.sum()),
+        "pit_inactive": int((~pit).sum()),
+        "feature_unready": int((~ready).sum()),
+        "enrollment_eligible": int(passed.sum()),
     }
     return passed, counts
 

@@ -30,8 +30,9 @@ def test_p1_uses_previous_global_session_and_inclusive_boundaries():
         feature_ready=np.ones(5, dtype=bool),
     )
     assert mask.tolist() == [False, False, True, True, False]
-    assert counts["market_cap_unknown"] == 1
-    assert counts["pass"] == 2
+    assert counts["unknown"] == 1
+    assert counts["screen_pass"] == 2
+    assert counts["enrollment_eligible"] == 2
     assert first_enrollment_ordinal(mask, final_decision_ordinal=5) == 2
     assert len(SCREEN_CONTRACT_SHA256) == 64
 
@@ -46,7 +47,7 @@ def test_p1_does_not_fill_missing_market_cap_or_ignore_pit_and_features():
         feature_ready=np.array([True, True, False, True]),
     )
     assert mask.tolist() == [False, True, False, False]
-    assert counts["market_cap_unknown"] == 2
+    assert counts["unknown"] == 2
     assert first_enrollment_ordinal(mask, final_decision_ordinal=1) is None
 
 
@@ -95,4 +96,3 @@ def test_financial_reader_is_typed_hash_bound_and_has_no_fallback(tmp_path: Path
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ActionValueError, match="FUNDAMENTAL_FINANCIAL_CANDIDATE_DRIFT"):
         open_financial_pit_source(manifest, expected_candidate_sha256="c" * 64)
-

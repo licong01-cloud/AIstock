@@ -374,6 +374,21 @@ def _replay_symbol_task(
         pit_active=bars.pit_active.to_numpy(bool),
         feature_ready=ready,
     )
+    aligned_market_cap = pd.to_numeric(
+        market_cap.reindex(pd.DatetimeIndex(bars.index)), errors="coerce"
+    ).shift(1)
+    unknown = aligned_market_cap.isna().to_numpy(bool)
+    unknown_intervals: list[dict[str, str]] = []
+    interval_start: int | None = None
+    for ordinal, value in enumerate(np.r_[unknown, False]):
+        if value and interval_start is None:
+            interval_start = ordinal
+        elif not value and interval_start is not None:
+            unknown_intervals.append({
+                "start": str(pd.Timestamp(bars.index[interval_start]).date()),
+                "end": str(pd.Timestamp(bars.index[ordinal - 1]).date()),
+            })
+            interval_start = None
     enrollment = first_enrollment_ordinal(mask, final_decision_ordinal=len(bars) - 1)
     audit = {
         "symbol": symbol,
@@ -381,6 +396,7 @@ def _replay_symbol_task(
         "status": "ENROLLED" if enrollment is not None else "NOT_ENROLLED",
         "enrollment_ordinal": enrollment,
         "coverage": coverage,
+        "unknown_intervals": unknown_intervals,
     }
     if enrollment is None:
         details = [
@@ -524,6 +540,10 @@ def _add_path(
         "daily_path_complete": bool(valid[int(start) + 1:].all()),
         "invested_session_fraction": float((path.timing_exposure.to_numpy(float) > 0).mean()),
         "average_exposure": float(np.nanmean(path.timing_exposure.to_numpy(float))),
+        "conditional_exposure": (
+            float(np.nanmean(path.loc[path.timing_exposure > 0, "timing_exposure"]))
+            if (path.timing_exposure > 0).any() else 0.0
+        ),
     })
     metrics = comparison(
         returns[int(start) + 1:, 0],
@@ -618,14 +638,25 @@ def _bootstrap(values: np.ndarray) -> dict[str, Any]:
     indexes = ((starts[..., None] + np.arange(BOOTSTRAP_BLOCK)) % sessions).reshape(BOOTSTRAP_REPLICATES, -1)[:, :sessions]
     estimates = np.nanmean(values[indexes], axis=1) * 10_000.0
     alpha = 0.05 / FAMILY_SIZE
+    family_interval = [
+        float(np.nanquantile(estimates, alpha / 2)),
+        float(np.nanquantile(estimates, 1 - alpha / 2)),
+    ]
+    evidence = (
+        "SUPPORTED" if family_interval[0] > 0 else
+        "NEGATIVE" if family_interval[1] < 0 else
+        "INCONCLUSIVE"
+    )
     return {
         "status": "ESTIMATED",
         "estimand": "PAIRED_OBSERVED_POOL_DAILY_RETURN_DIFFERENCE_BPS",
         "observed_sessions": int(finite.sum()),
         "point_bps": float(np.nanmean(values) * 10_000.0),
         "nominal_95_interval_bps": [float(np.nanquantile(estimates, .025)), float(np.nanquantile(estimates, .975))],
-        "familywise_interval_bps": [float(np.nanquantile(estimates, alpha / 2)), float(np.nanquantile(estimates, 1 - alpha / 2))],
+        "familywise_interval_bps": family_interval,
         "family_size": FAMILY_SIZE,
+        "economic_threshold_bps": 0.0,
+        "evidence_state": evidence,
     }
 
 
@@ -699,6 +730,17 @@ def _build_report(
         summary = performance(csi300[begin:])
         stocks.at[row_index, "benchmark"] = "000300.SH"
         stocks.at[row_index, "index_total_return"] = summary["total_return"]
+        timing_total = row.get("timing_total_return")
+        hold_total = row.get("hold_total_return")
+        index_total = summary["total_return"]
+        stocks.at[row_index, "timing_minus_index"] = (
+            float(timing_total) - float(index_total)
+            if pd.notna(timing_total) and index_total is not None else np.nan
+        )
+        stocks.at[row_index, "hold_minus_index"] = (
+            float(hold_total) - float(index_total)
+            if pd.notna(hold_total) and index_total is not None else np.nan
+        )
     distribution: list[dict[str, Any]] = []
     annual: list[dict[str, Any]] = []
     for policy, group in stocks.groupby("policy_id", sort=True):
@@ -709,6 +751,14 @@ def _build_report(
             "win_fraction": float((delta > 0).mean()) if len(delta) else None,
             "mean": float(delta.mean()) if len(delta) else None,
             "quantiles": {str(q): float(delta.quantile(q)) for q in (.05, .25, .5, .75, .95)} if len(delta) else {},
+            "bottom_5pct_mean": (
+                float(delta.nsmallest(max(1, int(np.ceil(len(delta) * .05)))).mean())
+                if len(delta) else None
+            ),
+            "bottom_5pct_contribution_to_population_mean": (
+                float(delta.nsmallest(max(1, int(np.ceil(len(delta) * .05)))).sum() / len(delta))
+                if len(delta) else None
+            ),
         })
         for year, cohort in group.groupby("enrollment_year", dropna=True, sort=True):
             value = pd.to_numeric(cohort.terminal_liquidatable_excess_return, errors="coerce").dropna()
@@ -727,13 +777,34 @@ def _build_report(
                 "authority": key[3], "status": key[4], "count": int(count),
             })
     coverage = Counter(audit["status"] for audit in audits)
+    p1_state_counts = Counter()
+    unknown_interval_count = 0
+    for audit in audits:
+        values = audit["coverage"]
+        p1_state_counts.update({
+            "expected": int(values["expected"]),
+            "PASS": int(values["screen_pass"]),
+            "FAIL": int(values["fail"]),
+            "UNKNOWN": int(values["unknown"]),
+            "NOT_APPLICABLE": int(values["not_applicable"]),
+            "ENROLLMENT_ELIGIBLE": int(values["enrollment_eligible"]),
+        })
+        unknown_interval_count += len(audit["unknown_intervals"])
     return {
         "schema_version": REPORT_SCHEMA,
         "result_class": "EXPLORATORY_HYPOTHESIS_GENERATED",
         "selected_trial_count": 0,
         "family_size": FAMILY_SIZE,
         "financial_groups": unavailable_financial_groups(),
-        "screen_coverage": {"P1": dict(coverage), **unavailable_financial_groups()},
+        "screen_coverage": {
+            "P1": {
+                **dict(p1_state_counts),
+                "enrolled_symbols": int(coverage["ENROLLED"]),
+                "not_enrolled_symbols": int(coverage["NOT_ENROLLED"]),
+                "unknown_interval_count": unknown_interval_count,
+            },
+            **unavailable_financial_groups(),
+        },
         "pools": pool_rows,
         "familywise_daily_difference": family,
         "terminal_excess_distributions": distribution,
