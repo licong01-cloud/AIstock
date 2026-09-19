@@ -1,6 +1,6 @@
 # PT-NEXT-023：R8-only 核心仓／战术仓与代理筛选研究设计
 
-> 版本：v1.1；日期：2026-09-19；Feature tier：F1
+> 版本：v1.2；日期：2026-09-19；Feature tier：F1
 > 状态：FORMAL_R8_REPLAY_VERIFIED_NO_ALPHA；仅离线研究，不上线
 > 主蓝图：[F2 §9.26](position_timing_advice_f2_redesign_20260903.md)
 > 父研究：[PT-NEXT-022](position_timing_fundamental_screen_research_f1_20260919.md)
@@ -213,7 +213,7 @@ DESIGN-COMPLIANCE-001：
 
 三组正式人口分别为：U0 `ENROLLED=4,360/NOT_ENROLLED=784`；U1 `ENROLLED=3,164/UNKNOWN=800/NOT_ENROLLED=1,180`；U2 `ENROLLED=2,438/UNKNOWN=1,430/NOT_ENROLLED=1,276`。UNKNOWN 没有被填充或删股。严格 P2/P3 仍为 `FINANCIAL_PIT_INPUT_NOT_DELIVERED`；U2 仍只代表 `BAK_BASIC_DAILY_SNAPSHOT_PROXY_NOT_FINANCIAL_PIT`。
 
-全市场池正式结果如下；收益均为同一股票独立账户合成路径的区间总收益：
+全市场池正式结果如下；收益和最大回撤均来自逐日配对股票收益均值合成的曲线，不是逐股账户终值／最大回撤的均值，也不表示允许跨股调拨的可交易组合。逐股收益分布另列于下文，逐股回撤和被动股票现金基准尚未计算：
 
 | screen | policy | Timing | 同股 BH | Timing−BH | Timing/BH 最大回撤 |
 |---|---|---:|---:|---:|---:|
@@ -226,6 +226,8 @@ DESIGN-COMPLIANCE-001：
 
 六项 pooled daily `Timing−BH` 点估计均为负：S1 为 `-1.59/-1.48/-1.46 bps/日`，S2 为 `-2.24/-2.11/-2.08 bps/日`；nominal 95% 区间均低于 0，但 Bonferroni family-wise 区间仍跨 0，因此正式 `evidence_state=INCONCLUSIVE`，不是 `NEGATIVE`；未冻结 oracle 尺度，`power_status=NOT_COMPUTABLE`，`selected_trial_count=0`。逐股终值中位 Timing−BH：S1 约 `-4.66/-5.90/-5.01pp`，S2 约 `-7.50/-9.36/-7.77pp`，胜率约 33.8%～37.4%。
 
-机制结论明确：核心仓把平均有仓天数从父研究约 42% 提高到 99.8% 左右，并把平均暴露提高到 S1 约 80.6%～81.2%、S2 约 72.2%～72.9%，显著减少回撤；但 missed-upside 仍大于 avoided-downside，且平均卖出到恢复的中位间隔为 17 个交易日、均值约 57～61 日。S1 在全部三组都优于 S2，说明减少战术仓比增加分级减仓更接近目标，但两者都没有超过同股 BH。U1/U2 的 BH 相对 U0 只提高约 4.6／6.5 个百分点，属于不同人口和起点的描述性筛选差异，不是严格因果选股 alpha；科创50等诊断子池的局部正点估计不属于六项正式 family，也不授权回选股票池。
+机制观察：核心仓把平均有仓天数从父研究约42%提高到99.8%左右，平均暴露提高到S1约80.6%～81.2%、S2约72.2%～72.9%；相对BH的合成曲线回撤较低，但尚未与固定被动股票现金配置比较，不能认定信号本身具有独立避险能力。missed-upside仍大于avoided-downside，卖出到恢复的中位间隔17个交易日、均值约57～61日。S1在三组总收益均高于S2但均落后BH，这只评价当前冻结政策，不永久否定分步止盈。U1/U2的BH相对U0提高约4.6／6.5个百分点，属于不同人口和起点的描述性筛选差异，不是严格因果选股alpha；科创50等诊断子池的局部正点估计不属于六项正式family，不授权回选股票池。
 
-因此本轮完成的是“修复长期空仓结构并证明当前战术减仓仍无 alpha”，不是找到可发布策略。下一研发优先级不再扫描 70/80 核心比例、R0/R6阈值或 proxy 边界，而是先用本 bundle 做零新增假设的 episode 归因：按风险、趋势、R0、R6 authority 分解每次减仓至恢复相对持续持有的真实机会成本，确定负贡献来自信号选择还是恢复过慢；之后只预注册一个非对称动作价值候选，使减仓条件直接比较预期避跌、错失上涨与逐腿成本，并采用独立股票／时间评价。该候选仍属于 position_timing 离线研究，不依赖 QE/HMM/Agent，不阻塞 L1/L1a，也不得沿本轮结果调参。
+本轮完成了长期空仓结构改进，但没有取得成本后alpha支持，不能将`INCONCLUSIVE`写成“证明无alpha”。v1.2只修订解释和后续衔接，正式request、结果、源码身份及统计分类不变。
+
+后续以[F2蓝图](position_timing_advice_f2_redesign_20260903.md)§9.27为统一方向：先补逐股收益／回撤及固定股票现金基准、包含未完成事件的risk/trend/R0/R6归因、受约束Oracle与分钟执行敏感性，再冻结一个恢复规则或轻量动作价值候选；模型日频时间分段只读对齐实际QE冻结合同，分钟覆盖不足以支持2018起的分钟训练。旧S1/S2、形态及趋势等策略保留研究资格，按机会／执行／预测机制证据有限重访，不按本轮结果扫描比例或阈值，不强制全矩阵重跑。以上均为`PLANNED_NOT_IMPLEMENTED`，不修改本批不训练模型的历史合同、不接QE/HMM/Agent融合、不改在线L1/L1a。
