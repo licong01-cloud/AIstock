@@ -760,15 +760,18 @@ def load_frozen_coefficient_inputs(
         mapping_authority=sector_code_map_authority,
     )
 
-    sector_columns = [
-        "l2_code_id",
+    quote_columns = [
         "sw2_pct_change",
         "sw2_vol",
         "sw2_amount",
+    ]
+    moneyflow_columns = [
         "sw2_mf_net_amt",
         "sw2_mf_buy_elg_amt",
         "sw2_mf_sell_elg_amt",
     ]
+    metric_columns = [*quote_columns, *moneyflow_columns]
+    sector_columns = ["l2_code_id", *metric_columns]
     sector_frame = _select_factor_hdf_window(
         paths["sector_data_h5"],
         start=history_start,
@@ -784,7 +787,6 @@ def load_frozen_coefficient_inputs(
         raise ValueError(f"frozen sector_data contains unmapped l2_code_id values: {invalid_ids[:10]}")
     sector_frame["sector_code"] = sector_frame["l2_code_id"].map(sector_code_by_id)
 
-    metric_columns = sector_columns[1:]
     conflicts = sector_frame.groupby(["datetime", "sector_code"], sort=False)[metric_columns].nunique(dropna=True).gt(1)
     if bool(conflicts.to_numpy().any()):
         first = conflicts.stack().loc[lambda values: values].index[0]
@@ -804,9 +806,9 @@ def load_frozen_coefficient_inputs(
             row.sector_code,
             row.datetime,
         )
-        raw_metric_values = [getattr(row, field) for field in metric_columns]
+        raw_quote_values = [getattr(row, field) for field in quote_columns]
         if not quote_available:
-            if any(pd.notna(value) for value in raw_metric_values):
+            if any(pd.notna(value) for value in raw_quote_values):
                 raise ValueError(
                     "frozen sector_data contains quote values outside availability authority: "
                     f"trade_date={row.datetime} sector={row.sector_code}"
