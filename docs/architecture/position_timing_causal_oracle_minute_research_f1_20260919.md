@@ -108,6 +108,7 @@ PT-NEXT-023 的既有 R8 证据显示：U0 同股 BH 合成收益约 142.03%，S
 3. 成功卖出日 S 的第5个后续交易日是预定回补日；此计划在 S 收盘后即可确定，不需要等该日收盘生成信号。只用账户实际可用现金买入，不要求原趋势重新成立；费用导致恢复不到旧单位数时接受真实差额。
 4. 回补因涨停／停牌失败时，每个后续交易日前提交同一“可用现金恢复”政策，直到成交或终点；不得未来挑最低价、借钱补齐或删除失败 episode。待恢复期间不再卖出战术仓，保持单一在途 cycle；回补成功后重置 anchor 并至少等待下一决策日。
 5. 距普通执行终点不足5个交易日时不新开 cycle；已有未闭合 cycle 保留并按统一终点处理。未回补、未清算和数据不可用分别计数。
+6. 每个风险／趋势／R0边沿只产生一次模型判断：模型拒绝会消费该候选episode并清除相应pending状态；模型缺失单列 `MODEL_UNAVAILABLE`，也不降级成无过滤卖出。若模型已同意但市场未成交，则不消费边沿，后续合法交易日按同一episode重试。R0回落为false后才可形成新的上升边沿。
 
 模型只判断“是否执行同一固定动作”，不额外预测仓位比例、买回日期、分钟点位，也不同时搜索止盈阈值。三候选均有机会被证伪，不要求输出一个赢家。
 
@@ -140,7 +141,7 @@ PT-NEXT-023 的既有 R8 证据显示：U0 同股 BH 合成收益约 142.03%，S
 
 仅使用 `action_value.py::market_features(..., information_block=CORE_INFORMATION_BLOCK)` 的14个既有价量／沪深300相对特征，按其现行有序列表和计算 spec hash 冻结；不使用旧9项账户状态、bak增长、HMM、QE alpha或新的因子搜索。来源 availability 单独核验，函数本身不能创造 PIT。
 
-本轮feature adapter传入统一的adjusted OHLC、adjusted volume及factor=1，避免该函数内部再次乘factor；输入基准单独绑定新 `feature_input_basis_sha256`，不得声称与旧raw输入特征身份完全相同。原S1的 `build_research_features` 仍接收其声明的raw bars并在内部转换，不能将这一调用也盲目替换成已调整数据。执行reader始终还原raw价格／量，与模型输入使用不同类型标记。
+本轮feature adapter按现有 `action_value.py::market_features` 的真实接口传入raw CNY OHLC、raw volume及source factor，由该函数仅为收益距离内部乘factor；输入基准单独绑定新 `feature_input_basis_sha256`。原S1的 `build_research_features` 同样接收raw bars，但在自己的Qlib视图适配器内转换，两个接口不能互换。执行reader始终使用raw价格／量，且与模型特征输入分别标记身份。
 
 两模型同一标签、同一训练行、同一过滤阈值0 bps；每日决策，模型不滚动调参，不按验证收益挑一个再隐去另一个。
 
@@ -238,9 +239,9 @@ E2 不读取10:00的high/low/close生成本条订单；bar volume只在撮合结
 5. `causal_timing_model.py`：单头标签消费、Ridge／GBDT与模型身份。
 6. `causal_timing_benchmark.py`：单CLI、并行、检查、报告与不可变封存。
 
-仅新增三个行为测试文件 `test_causal_timing_contracts.py`、`test_causal_timing_replay.py`、`test_causal_timing_benchmark.py`。优先参数化公共case，不复制大fixture／快照、不测私有实现排版；直接覆盖因果、资金、交易限制和artifact/API合同。
+仅新增四个行为测试文件 `test_causal_timing_contracts.py`、`test_causal_timing_replay.py`、`test_causal_timing_model.py`、`test_causal_timing_benchmark.py`。优先参数化公共case，不复制大fixture／快照、不测私有实现排版；直接覆盖因果、资金、交易限制和artifact/API合同。
 
-本轮设计写集仅本F1文档。实现阶段先列出以上九个精确文件及必要文档／BUG登记文件，再编辑；若发现必须修改共享代码，交用户转其他窗口。本任务不需要前端、API、数据库或业务服务变化。
+本轮设计初始写集为本F1文档；实现获批后的精确写集为以上六个业务文件、四个直接测试文件、本F1及主F2进度条目。若发现必须修改其他共享代码，交用户转其他窗口。本任务不需要前端、API、数据库或业务服务变化。
 
 ### 11.2 产物与运行合同
 
