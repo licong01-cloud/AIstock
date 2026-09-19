@@ -1,9 +1,9 @@
 # PT-NEXT-023：R8-only 核心仓／战术仓与代理筛选研究设计
 
-> 版本：v1.0；日期：2026-09-19；Feature tier：F1  
-> 状态：DESIGN_FROZEN_IMPLEMENTATION_IN_PROGRESS；仅离线研究，不上线  
-> 主蓝图：[F2 §9.25](position_timing_advice_f2_redesign_20260903.md)  
-> 父研究：[PT-NEXT-022](position_timing_fundamental_screen_research_f1_20260919.md)  
+> 版本：v1.1；日期：2026-09-19；Feature tier：F1
+> 状态：FORMAL_R8_REPLAY_VERIFIED_NO_ALPHA；仅离线研究，不上线
+> 主蓝图：[F2 §9.26](position_timing_advice_f2_redesign_20260903.md)
+> 父研究：[PT-NEXT-022](position_timing_fundamental_screen_research_f1_20260919.md)
 > 唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
 `DESIGN_VERIFIED` 只表示设计闭合，不表示代码、正式回放或超额收益已经完成。本研究使用已经被观察过的 R8 历史，全部结果均为 exploratory；阴性结果不触发自动调参，正结果也不自动进入在线卡片。
@@ -197,12 +197,35 @@ DESIGN-COMPLIANCE-001：
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/research/fundamental_timing_v1/bundles/52218b6026c85073f5c0b11fa14dbaa8bb2c97f15a53ecb67c6186f5a7ba1bbd/report.json`；new `report.json` attribution | DESIGN_VERIFIED | none |
-| F-002 | §2；三个 `backend/services/position_timing/core_tactical_*.py`/`r8_proxy_screen.py` | test: `backend/tests/position_timing/test_core_tactical_timing.py::test_offline_side_effect_contract_is_false`；receipt flags | DESIGN_VERIFIED | none |
-| F-003 | §3；`backend/services/position_timing/r8_proxy_screen.py` | test: `backend/tests/position_timing/test_r8_proxy_screen.py`；artifact: `source_audit.json` | DESIGN_VERIFIED | none |
-| F-004 | §4；`backend/services/position_timing/core_tactical_timing.py` | test: `backend/tests/position_timing/test_core_tactical_timing.py`；artifact: `fills.parquet` floor audit | DESIGN_VERIFIED | none |
-| F-005 | §5；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `report.json`/`attribution.parquet` six-family evidence | DESIGN_VERIFIED | none |
-| F-006 | §6；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `request.json`/chunk manifests/`receipt.json`/`manifest.json` | DESIGN_VERIFIED | none |
-| F-007 | §7；三个实现模块 | test: `backend/tests/position_timing/test_core_tactical_timing.py::test_prepare_freezes_contract_before_outcomes`；F1 validation receipt | DESIGN_VERIFIED | none |
-| F-008 | §8 | test: `backend/tests/position_timing/test_r8_proxy_screen.py backend/tests/position_timing/test_core_tactical_timing.py`；artifact: 1-vs-8/inspect/exact retry | DESIGN_VERIFIED | none |
-| F-009 | §9 | artifact: `receipt.json` side-effect flags；validation receipt: final DESIGN-COMPLIANCE-001 review | DESIGN_VERIFIED | none |
+| F-001 | §1；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/report.json` | FORMAL_VERIFIED | none |
+| F-002 | §2；三个 `backend/services/position_timing/core_tactical_*.py`/`r8_proxy_screen.py` | test: `backend/tests/position_timing/test_core_tactical_timing.py::test_offline_side_effect_contract_is_false`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/receipt.json` | FORMAL_VERIFIED | none |
+| F-003 | §3；`backend/services/position_timing/r8_proxy_screen.py` | test: `backend/tests/position_timing/test_r8_proxy_screen.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/source_audit.json` | FORMAL_VERIFIED | none |
+| F-004 | §4；`backend/services/position_timing/core_tactical_timing.py` | test: `backend/tests/position_timing/test_core_tactical_timing.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/fills.parquet` | FORMAL_VERIFIED | none |
+| F-005 | §5；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/report.json`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/attribution.parquet` | FORMAL_VERIFIED | none |
+| F-006 | §6；`backend/services/position_timing/core_tactical_benchmark.py` | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/manifest.json`；41 chunk manifests | FORMAL_VERIFIED | none |
+| F-007 | §7；三个实现模块 | test: `backend/tests/position_timing/test_core_tactical_timing.py::test_prepare_freezes_contract_before_outcomes` | FORMAL_VERIFIED | none |
+| F-008 | §8 | test: `backend/tests/position_timing/test_r8_proxy_screen.py backend/tests/position_timing/test_core_tactical_timing.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/manifest.json` | FORMAL_VERIFIED | none |
+| F-009 | §9 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/core_tactical_proxy_v1/bundles/3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c/receipt.json`；§12最终DESIGN-COMPLIANCE-001复核 | FORMAL_VERIFIED | none |
+
+## 12. 正式 R8 结果、解释与下一方向
+
+最终 request 为 `3f8667817971ae7b10a867d28ac2b1a39d7b635ac49b2e82e0eee1e565c4462c`，绑定源码提交 `e0145f0f8df18dfe2151b6a5b729159c0fe4b318`、R8 manifest 文件／canonical SHA `07db01d8...ebe1b18`／`6bb6096a...c39283`、合同 SHA `188fa841...eec66`。WSL 原生 ext4 使用固定 8 个 `spawn` 进程完成 5,144 股、41 个 chunk；32 股单进程／8进程逐股哈希为 `EXACT`，审计 SHA `4a1430cf...0b86`。bundle manifest canonical SHA 为 `1b352b7f...d2794`，独立 inspect 为 `VERIFIED`，exact retry 为 `ALREADY_MATERIALIZED`。factor 7,970,157 行，invalid／insufficient 均为 0；floor violation 为 0；数据库、网络、运行态、服务控制和其他模块写入均为 false。
+
+三组正式人口分别为：U0 `ENROLLED=4,360/NOT_ENROLLED=784`；U1 `ENROLLED=3,164/UNKNOWN=800/NOT_ENROLLED=1,180`；U2 `ENROLLED=2,438/UNKNOWN=1,430/NOT_ENROLLED=1,276`。UNKNOWN 没有被填充或删股。严格 P2/P3 仍为 `FINANCIAL_PIT_INPUT_NOT_DELIVERED`；U2 仍只代表 `BAK_BASIC_DAILY_SNAPSHOT_PROXY_NOT_FINANCIAL_PIT`。
+
+全市场池正式结果如下；收益均为同一股票独立账户合成路径的区间总收益：
+
+| screen | policy | Timing | 同股 BH | Timing−BH | Timing/BH 最大回撤 |
+|---|---|---:|---:|---:|---:|
+| U0 | S1 80/20 | 92.85% | 142.03% | -49.18pp | -29.44% / -34.83% |
+| U0 | S2 70/15×2 | 74.96% | 142.03% | -67.08pp | -26.96% / -34.83% |
+| U1 | S1 80/20 | 99.17% | 146.62% | -47.46pp | -28.47% / -33.64% |
+| U1 | S2 70/15×2 | 81.15% | 146.62% | -65.47pp | -26.11% / -33.64% |
+| U2 | S1 80/20 | 101.63% | 148.54% | -46.91pp | -29.68% / -35.25% |
+| U2 | S2 70/15×2 | 83.91% | 148.54% | -64.63pp | -27.11% / -35.25% |
+
+六项 pooled daily `Timing−BH` 点估计均为负：S1 为 `-1.59/-1.48/-1.46 bps/日`，S2 为 `-2.24/-2.11/-2.08 bps/日`；nominal 95% 区间均低于 0，但 Bonferroni family-wise 区间仍跨 0，因此正式 `evidence_state=INCONCLUSIVE`，不是 `NEGATIVE`；未冻结 oracle 尺度，`power_status=NOT_COMPUTABLE`，`selected_trial_count=0`。逐股终值中位 Timing−BH：S1 约 `-4.66/-5.90/-5.01pp`，S2 约 `-7.50/-9.36/-7.77pp`，胜率约 33.8%～37.4%。
+
+机制结论明确：核心仓把平均有仓天数从父研究约 42% 提高到 99.8% 左右，并把平均暴露提高到 S1 约 80.6%～81.2%、S2 约 72.2%～72.9%，显著减少回撤；但 missed-upside 仍大于 avoided-downside，且平均卖出到恢复的中位间隔为 17 个交易日、均值约 57～61 日。S1 在全部三组都优于 S2，说明减少战术仓比增加分级减仓更接近目标，但两者都没有超过同股 BH。U1/U2 的 BH 相对 U0 只提高约 4.6／6.5 个百分点，属于不同人口和起点的描述性筛选差异，不是严格因果选股 alpha；科创50等诊断子池的局部正点估计不属于六项正式 family，也不授权回选股票池。
+
+因此本轮完成的是“修复长期空仓结构并证明当前战术减仓仍无 alpha”，不是找到可发布策略。下一研发优先级不再扫描 70/80 核心比例、R0/R6阈值或 proxy 边界，而是先用本 bundle 做零新增假设的 episode 归因：按风险、趋势、R0、R6 authority 分解每次减仓至恢复相对持续持有的真实机会成本，确定负贡献来自信号选择还是恢复过慢；之后只预注册一个非对称动作价值候选，使减仓条件直接比较预期避跌、错失上涨与逐腿成本，并采用独立股票／时间评价。该候选仍属于 position_timing 离线研究，不依赖 QE/HMM/Agent，不阻塞 L1/L1a，也不得沿本轮结果调参。

@@ -116,4 +116,3 @@ def test_reader_binds_both_hdf_files_without_financial_pit_fallback(tmp_path: Pa
     assert audit["bak_semantics"] == "BAK_BASIC_DAILY_SNAPSHOT_PROXY_NOT_FINANCIAL_PIT"
     assert audit["daily_basic"]["row_count"] == 2
     assert audit["bak_basic"]["row_count"] == 2
-
