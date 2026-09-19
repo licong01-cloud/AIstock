@@ -229,6 +229,9 @@ def _copy_ignore(baseline_root: Path):
     def ignore(directory: str, names: list[str]) -> set[str]:
         if Path(directory) == baseline_root:
             return {name for name in names if name in {"qe_dataset_manifest.json", "direct_monthly_state.json"}}
+        if Path(directory) == baseline_root / "components":
+            sector_name = Path(SECTOR_CONTEXT_COMPONENT_ROOT).name
+            return {sector_name} if sector_name in names else set()
         return set()
 
     return ignore

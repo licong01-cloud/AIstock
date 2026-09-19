@@ -4,6 +4,7 @@
     "tests/aistock_validation/bugs/20260919_BUG-1590-qe-active-dataset-pit.json",
     "scripts/build_industry_pit_candidates.py",
     "scripts/build_shared_sector_context_component.py",
+    "backend/services/dataset_release/release_successor.py",
     "backend/tests/scripts/test_build_industry_pit_candidates.py",
     "backend/tests/dataset_release/test_shared_sector_context.py",
     "backend/tests/dataset_release/test_release_successor.py"
@@ -36,6 +37,7 @@
     "changed_files": [
       "scripts/build_industry_pit_candidates.py",
       "scripts/build_shared_sector_context_component.py",
+      "backend/services/dataset_release/release_successor.py",
       "backend/tests/scripts/test_build_industry_pit_candidates.py",
       "backend/tests/dataset_release/test_shared_sector_context.py",
       "backend/tests/dataset_release/test_release_successor.py"
@@ -52,6 +54,7 @@
     "planned_files": [
       "scripts/build_industry_pit_candidates.py",
       "scripts/build_shared_sector_context_component.py",
+      "backend/services/dataset_release/release_successor.py",
       "backend/tests/scripts/test_build_industry_pit_candidates.py",
       "backend/tests/dataset_release/test_shared_sector_context.py",
       "backend/tests/dataset_release/test_release_successor.py"
@@ -60,6 +63,7 @@
     "scope_files": [
       "scripts/build_industry_pit_candidates.py",
       "scripts/build_shared_sector_context_component.py",
+      "backend/services/dataset_release/release_successor.py",
       "backend/tests/scripts/test_build_industry_pit_candidates.py",
       "backend/tests/dataset_release/test_shared_sector_context.py",
       "backend/tests/dataset_release/test_release_successor.py"
