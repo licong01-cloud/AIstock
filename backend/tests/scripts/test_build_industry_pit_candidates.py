@@ -34,6 +34,10 @@ def test_cli_always_includes_the_four_approved_mandatory_regressions(tmp_path: P
             str(tmp_path / "db.env"),
             "--artifact-root",
             str(tmp_path / "candidate"),
+            "--security-source-identity-manifest",
+            str(tmp_path / "security-identity.json"),
+            "--security-source-identity-sha256",
+            "a" * 64,
         ]
     )
     assert set(builder.MANDATORY_REGRESSION_SYMBOLS).issubset(args.mandatory_symbol)
@@ -124,6 +128,69 @@ def test_classification_history_is_bounded_by_release_cutoff() -> None:
         "source_url": builder.OFFICIAL_CLASSIFICATION_HISTORY_URL,
         "source_sha256": builder.EXPECTED_SOURCE_HASHES["classification_history"],
     }
+
+
+def test_security_identity_projects_source_history_without_current_backfill() -> None:
+    from backend.services.hmm_risk.security_identity import SecuritySourceIdentityManifest
+    from backend.services.hmm_risk.security_identity import SecuritySourceResolution
+
+    row = SecuritySourceResolution(
+        security_identity_id="szse_300114_302132",
+        canonical_ts_code="302132.SZ",
+        source_dataset=builder.SECURITY_IDENTITY_SOURCE_DATASET,
+        source_ts_code="300114.SZ",
+        effective_start=date(2010, 8, 27),
+        effective_end=date(2025, 2, 16),
+        authority_ref="https://example.invalid/official.pdf",
+        authority_hash="a" * 64,
+        row_hash="b" * 64,
+        resolution_kind="explicit_effective_alias",
+    )
+    manifest = SecuritySourceIdentityManifest(
+        manifest_version="security-v1",
+        default_resolution="canonical_same_code",
+        rows=(row,),
+        manifest_sha256="c" * 64,
+        rows_sha256="d" * 64,
+    )
+    history = [
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2010-08-10",
+            "industry_code": "260301",
+            "source_last_updated_at": "2015-10-27",
+        },
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2014-02-21",
+            "industry_code": "640301",
+            "source_last_updated_at": "2024-09-27",
+        },
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2021-07-30",
+            "industry_code": "650501",
+            "source_last_updated_at": "2025-01-24",
+        },
+        {
+            "stock_code": "302132",
+            "classification_valid_from": "2025-02-17",
+            "industry_code": "650501",
+            "source_last_updated_at": "2025-02-17",
+        },
+    ]
+
+    projected, receipt = builder._apply_security_identity_aliases(history, manifest=manifest)
+    canonical = [row for row in projected if str(row["stock_code"]) == "302132"]
+
+    assert [(str(row["classification_valid_from"]), row["industry_code"]) for row in canonical] == [
+        ("2025-02-17", "650501"),
+        ("2010-08-27", "260301"),
+        ("2014-02-21", "640301"),
+        ("2021-07-30", "650501"),
+    ]
+    assert receipt["projected_classification_row_count"] == 3
+    assert receipt["security_identity_ids"] == ["szse_300114_302132"]
 
 
 def test_approved_historical_conflict_inventory_is_frozen_independently() -> None:

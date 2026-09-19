@@ -52,6 +52,10 @@ from backend.services.industry_pit.contracts import (  # noqa: E402
     require_symbol,
 )
 from backend.services.industry_pit.resolver import IndustryPitResolver  # noqa: E402
+from backend.services.hmm_risk.security_identity import (  # noqa: E402
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 
 EXPECTED_SOURCE_HASHES = {
@@ -64,6 +68,7 @@ EXPECTED_CLASSIFICATION_HISTORY_SHAPE = (12_920, 4)
 OFFICIAL_CLASSIFICATION_HISTORY_URL = (
     "https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls"
 )
+SECURITY_IDENTITY_SOURCE_DATASET = "market.moneyflow_ts"
 APPROVED_LEGACY_CONFLICT_BASELINE = (
     ("000016.SZ", 402),
     ("000716.SZ", 887),
@@ -180,6 +185,118 @@ def _require_sources(args: argparse.Namespace) -> Mapping[str, str]:
                 f"source hash mismatch for {key}: expected={EXPECTED_SOURCE_HASHES[key]} observed={observed[key]}"
             )
     return observed
+
+
+def _load_security_identity(args: argparse.Namespace) -> tuple[SecuritySourceIdentityManifest, str]:
+    path = args.security_source_identity_manifest
+    if not path.is_file() or path.is_symlink():
+        raise IndustryPitContractError(f"security identity authority is missing or linked: {path}")
+    try:
+        manifest = load_security_source_identity_manifest(
+            path,
+            expected_sha256=args.security_source_identity_sha256,
+        )
+    except Exception as exc:
+        raise IndustryPitContractError(f"security identity authority is invalid: {exc}") from exc
+    return manifest, _sha256(path)
+
+
+def _apply_security_identity_aliases(
+    rows: list[dict[str, Any]],
+    *,
+    manifest: SecuritySourceIdentityManifest,
+) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
+    """Project source-code history onto canonical security identities.
+
+    The frozen manifest is security-code-change evidence. Its existing source
+    dataset dimension identifies the source code observed before the code
+    change; classification facts still come only from official SW history.
+    """
+
+    output = [dict(row) for row in rows]
+    existing: dict[tuple[str, str], str] = {}
+    for row in output:
+        symbol = str(row.get("stock_code") or "").strip().split(".")[0].zfill(6)
+        effective = pd.Timestamp(row.get("classification_valid_from")).date().isoformat()
+        key = (symbol, effective)
+        industry = str(row.get("industry_code") or "").zfill(6)
+        if key in existing and existing[key] != industry:
+            raise IndustryPitContractError(f"classification history conflicts at {key}")
+        existing[key] = industry
+
+    projected_rows = 0
+    alias_ids: list[str] = []
+    authority_refs: set[str] = set()
+    for alias in manifest.rows:
+        if alias.source_dataset != SECURITY_IDENTITY_SOURCE_DATASET:
+            continue
+        if alias.effective_start is None or alias.effective_end is None:
+            raise IndustryPitContractError("security identity alias interval is incomplete")
+        source_code = alias.source_ts_code.split(".")[0]
+        canonical_code = alias.canonical_ts_code.split(".")[0]
+        source_rows = sorted(
+            (
+                row
+                for row in rows
+                if str(row.get("stock_code") or "").strip().split(".")[0].zfill(6)
+                == source_code
+                and pd.Timestamp(row.get("classification_valid_from")).date()
+                <= alias.effective_end
+            ),
+            key=lambda row: pd.Timestamp(row["classification_valid_from"]),
+        )
+        if not source_rows:
+            raise IndustryPitContractError(
+                f"security identity alias has no classification source history: {alias.security_identity_id}"
+            )
+        active_before = [
+            row
+            for row in source_rows
+            if pd.Timestamp(row["classification_valid_from"]).date() <= alias.effective_start
+        ]
+        selected: list[tuple[dict[str, Any], Any]] = []
+        if active_before:
+            selected.append((active_before[-1], alias.effective_start))
+        selected.extend(
+            (row, pd.Timestamp(row["classification_valid_from"]).date())
+            for row in source_rows
+            if alias.effective_start
+            < pd.Timestamp(row["classification_valid_from"]).date()
+            <= alias.effective_end
+        )
+        if not selected:
+            raise IndustryPitContractError(
+                f"security identity alias cannot establish an initial classification: {alias.security_identity_id}"
+            )
+        for source_row, effective in selected:
+            projected = dict(source_row)
+            projected["stock_code"] = canonical_code
+            projected["classification_valid_from"] = effective.isoformat()
+            key = (canonical_code, effective.isoformat())
+            industry = str(projected.get("industry_code") or "").zfill(6)
+            if key in existing:
+                if existing[key] != industry:
+                    raise IndustryPitContractError(
+                        f"security identity projection conflicts with canonical classification at {key}"
+                    )
+                continue
+            output.append(projected)
+            existing[key] = industry
+            projected_rows += 1
+        alias_ids.append(alias.security_identity_id)
+        authority_refs.add(alias.authority_ref)
+
+    return output, {
+        "schema_version": manifest.evidence()["schema_version"],
+        "manifest_version": manifest.manifest_version,
+        "manifest_sha256": manifest.manifest_sha256,
+        "rows_sha256": manifest.rows_sha256,
+        "source_dataset_identity_dimension": SECURITY_IDENTITY_SOURCE_DATASET,
+        "alias_count": len(alias_ids),
+        "projected_classification_row_count": projected_rows,
+        "security_identity_ids": sorted(alias_ids),
+        "authority_refs": sorted(authority_refs),
+    }
 
 
 def _excel_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -495,6 +612,12 @@ def _read_frozen_inputs(
 def build(args: argparse.Namespace) -> Mapping[str, Any]:
     producer = _git_identity()
     source_hashes = _require_sources(args)
+    security_identity, security_identity_file_sha256 = _load_security_identity(args)
+    source_hashes = {
+        **source_hashes,
+        "security_identity_file": security_identity_file_sha256,
+        "security_identity_canonical": security_identity.manifest_sha256,
+    }
     catalog_rows, history_rows, snapshot_rows = _excel_rows(args)
     snapshot_check = _validate_snapshot_crosscheck(
         history_rows,
@@ -513,6 +636,10 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         history_rows,
         cutoff=denominator.window_end,
     )
+    history_rows, security_identity_diagnostics = _apply_security_identity_aliases(
+        history_rows,
+        manifest=security_identity,
+    )
     catalog = build_taxonomy_catalog(catalog_rows, source_sha256=source_hashes["catalog"])
     classification_receipt = AuthorityReceipt(
         authority_type=AuthorityType.CLASSIFICATION,
@@ -528,6 +655,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
             OFFICIAL_CLASSIFICATION_HISTORY_URL,
             "local:latest_stock_sw_classification_through_july.xlsx",
             "local:SwClassStd2021.pdf",
+            *tuple(row.authority_ref for row in security_identity.rows),
         ),
         source_hashes=tuple(source_hashes.values()),
         frozen_denominator=denominator.total_opportunities,
@@ -612,6 +740,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         "snapshot_crosscheck": dict(snapshot_check),
         "frozen_universe": dict(state_receipt),
         "source_hashes": dict(source_hashes),
+        "security_identity": dict(security_identity_diagnostics),
         "mandatory_source_regression": mandatory_source_regression,
         "production_database_writes": 0,
     }
@@ -672,6 +801,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--latest-snapshot", type=Path)
     parser.add_argument("--taxonomy-standard", type=Path)
     parser.add_argument("--index-membership-evidence", type=Path)
+    parser.add_argument("--security-source-identity-manifest", type=Path, required=True)
+    parser.add_argument("--security-source-identity-sha256", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--db-env-file", type=Path, default=os.environ.get("AISTOCK_DB_ENV_FILE"))
     parser.add_argument("--universe-key", default=DEFAULT_UNIVERSE_KEY)
