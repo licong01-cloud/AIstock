@@ -1,9 +1,9 @@
 # PT-NEXT-024：因果择时、受限 Oracle 与分钟执行验证详细设计
 
-> 版本：v1.0；日期：2026-09-20；Feature tier：F1；状态：APPROVED_FOR_IMPLEMENTATION。
-> 用户已于2026-09-20确认按本详细设计启动连续实施；设计批准不代表代码、训练、回放或收益结论已经完成。
-> 主蓝图：[F2 v2.50 §9.27、§10.23](position_timing_advice_f2_redesign_20260903.md)。唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`。
-> 设计核对基线：`21932927ef2e5b9c2cf7ea42f2440d08a88e6625`。`DESIGN_VERIFIED` 仅表示设计条目闭合，不表示实现、无泄漏证明或超额收益已完成。
+> 版本：v1.1；日期：2026-09-20；Feature tier：F1；状态：`IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE`。
+> 用户已于2026-09-20确认按本详细设计启动连续实施；源码、正式R8回放、inspect与exact retry已经完成，但没有获得可发布的成本后择时alpha支持。
+> 主蓝图：[F2 v2.51 §9.27、§10.23](position_timing_advice_f2_redesign_20260903.md)。唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`。
+> 设计核对基线：`21932927ef2e5b9c2cf7ea42f2440d08a88e6625`；实现提交：`7b8c4c219`。`IMPLEMENTATION_VERIFIED`只表示本文件冻结范围的代码、测试和不可变研究证据闭合，不表示实盘有效或未来盈利。
 
 ## 1. Background / 终极目标与本轮问题（F-001）
 
@@ -47,7 +47,7 @@ PT-NEXT-023 的既有 R8 证据显示：U0 同股 BH 合成收益约 142.03%，S
 
 父 bundle 位于 WSL timing root 的 `research/core_tactical_proxy_v1/bundles/<id>`。新 namespace 为 `research/causal_timing_v1`，不覆盖父产物。prepare 固定全部实际使用的日线、分钟字段、指数、PIT、代码及依赖身份，不能只记录上述顶层 hash。
 
-设计时已核对 R8 WSL manifest 身份及分钟日历端点；尚未执行本轮全股票分钟字段覆盖扫描。日线范围为 2018-08-01～2026-08-31，分钟日历范围为 2024-01-02～2026-08-31。不能用分钟日历存在推断每股每天每字段完整。meta 中保留 r3 来源路径属于沿袭元数据，不允许据此切回 r3。
+设计时已核对 R8 WSL manifest 身份及分钟日历端点；正式prepare随后完成本轮所需股票生命周期与公共分钟窗口的字段扫描。日线范围为 2018-08-01～2026-08-31，分钟日历范围为 2024-01-02～2026-08-31。24只仅存在于公共窗口前的退市代码仍保留在训练历史和5,144只源人口中，但不虚构公共窗口分钟要求。meta 中保留 r3 来源路径属于沿袭元数据，实际request只绑定R8。
 
 沿用纯 Qlib 信号研究：adjusted OHLC = raw × factor，adjusted volume = raw volume ÷ factor；下游调整后视图 factor=1，原始交易视图另存。单位为虚拟复权单位，不是券商股份。不重开现金分红、配股缴款、股份到账或公司行动公告清算。
 
@@ -245,7 +245,7 @@ E2 不读取10:00的high/low/close生成本条订单；bar volume只在撮合结
 
 ### 11.2 产物与运行合同
 
-单CLI计划：`python -m backend.services.position_timing.causal_timing_benchmark prepare|run|inspect`。prepare只读source/preflight及已存在父receipt身份，冻结spec后产生绝对request路径；run按request执行三个工作块；inspect读封存bundle；随后同输入重复prepare/run/inspect检验exact retry。接口尚未实现，当前不可执行。
+单CLI已经实现为`python -m backend.services.position_timing.causal_timing_benchmark prepare|run|inspect`。prepare只读source/preflight及已存在父receipt身份，冻结spec后产生绝对request路径；run按request执行三个工作块；inspect读封存bundle；随后同输入重复prepare/run/inspect检验exact retry。正式身份及结果见§18。
 
 request绑定candidate、父bundle、calendar/PIT/指数映射、实际源文件、全部contract、source commit、依赖和运行环境hash；source preflight通过并封存前不读取新的策略收益。旧已公开结果是设计背景，必须在trial背景登记，不能伪称此前未观察。
 
@@ -322,24 +322,24 @@ Production Gates 状态：DB DDL/DML=NOT_APPLICABLE；生产激活=NOT_REQUESTED
 
 ## 16. Design Acceptance Matrix
 
-以下为设计验收；`implementation_refs` 是章节及拟实现归属，不声称新代码已经存在；运行证据须在用户确认后逐项补齐。
+以下同时记录设计与实现验收；正式artifact身份、研究结果和限制见§18。`IMPLEMENTATION_VERIFIED`不表示alpha或运行发布获支持。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | §1、§10 | artifact: 本文§1父证据与§17审核记录 | DESIGN_VERIFIED | none |
-| F-002 | §2、§11 | artifact: 本文§17 scope审核 | DESIGN_VERIFIED | none |
-| F-003 | §3；拟contracts | artifact: 本文§3输入身份与§17核对记录 | DESIGN_VERIFIED | none |
-| F-004 | §4；拟replay | artifact: 本文§4账户／分母合同 | DESIGN_VERIFIED | none |
-| F-005 | §5；拟replay | artifact: 本文§5候选状态机 | DESIGN_VERIFIED | none |
-| F-006 | §6；拟oracle | artifact: 本文§6有限集合／label合同 | DESIGN_VERIFIED | none |
-| F-007 | §7；拟model | artifact: 本文§7冻结模型规格 | DESIGN_VERIFIED | none |
-| F-008 | §8；拟execution | artifact: 本文§8三视图合同 | DESIGN_VERIFIED | none |
-| F-009 | §9；拟contracts/tests | artifact: 本文§9及§13因果测试规格 | DESIGN_VERIFIED | none |
-| F-010 | §10；拟benchmark | artifact: 本文§10统计合同 | DESIGN_VERIFIED | none |
-| F-011 | §11；拟六模块 | artifact: 本文§11已核对源码接口 | DESIGN_VERIFIED | none |
-| F-012 | §12；拟benchmark CLI | artifact: 本文§12实施计划 | DESIGN_VERIFIED | none |
-| F-013 | §13 | artifact: 本文§17审核与validator记录 | DESIGN_VERIFIED | none |
-| F-014 | §14 | artifact: 本文§14确认边界 | DESIGN_VERIFIED | none |
+| F-001 | §1、§10；`causal_timing_benchmark.py` | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/receipt.json` | IMPLEMENTATION_VERIFIED_INCONCLUSIVE | none |
+| F-002 | §2、§11；六个`causal_timing_*`模块 | `backend/tests/position_timing/test_causal_timing_benchmark.py`及§18隔离审计 | IMPLEMENTATION_VERIFIED | none |
+| F-003 | §3；`causal_timing_contracts.py` | `backend/tests/position_timing/test_causal_timing_contracts.py`及artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/requests/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6.json` | IMPLEMENTATION_VERIFIED | none |
+| F-004 | §4；`causal_timing_replay.py` | `backend/tests/position_timing/test_causal_timing_replay.py`；独立账户、分母与UNKNOWN覆盖 | IMPLEMENTATION_VERIFIED | none |
+| F-005 | §5；`causal_timing_replay.py` | `backend/tests/position_timing/test_causal_timing_replay.py`；固定CYCLE5/Ridge/GBDT及失败状态 | IMPLEMENTATION_VERIFIED | none |
+| F-006 | §6；`causal_timing_oracle.py` | `backend/tests/position_timing/test_causal_timing_replay.py`及artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/restricted_oracle.json` | IMPLEMENTATION_VERIFIED_HINDSIGHT_ONLY | none |
+| F-007 | §7；`causal_timing_model.py` | `backend/tests/position_timing/test_causal_timing_model.py`及§18模型hash | IMPLEMENTATION_VERIFIED_NO_MODEL_ADVANTAGE | none |
+| F-008 | §8；`causal_timing_execution.py` | `backend/tests/position_timing/test_causal_timing_replay.py`及§18执行诊断 | IMPLEMENTATION_VERIFIED_NOT_FILL_PROOF | none |
+| F-009 | §9；contracts/model/tests | `backend/tests/position_timing/test_causal_timing_model.py`；future perturbation、Oracle列和future-shift负例 | IMPLEMENTATION_VERIFIED_BOUNDED_EVIDENCE | none |
+| F-010 | §10；`causal_timing_benchmark.py` | `backend/tests/position_timing/test_causal_timing_benchmark.py`及artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/report.json` | IMPLEMENTATION_VERIFIED_INCONCLUSIVE | none |
+| F-011 | §11；六个业务模块、四个测试文件 | `pytest backend/tests/position_timing/test_causal_timing_contracts.py backend/tests/position_timing/test_causal_timing_replay.py backend/tests/position_timing/test_causal_timing_model.py backend/tests/position_timing/test_causal_timing_benchmark.py -q` | IMPLEMENTATION_VERIFIED | none |
+| F-012 | §12；benchmark CLI | `backend/tests/position_timing/test_causal_timing_benchmark.py`及artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/manifest.json` | IMPLEMENTATION_VERIFIED | none |
+| F-013 | §13、§17～18 | `pytest backend/tests/position_timing/test_causal_timing_contracts.py backend/tests/position_timing/test_causal_timing_replay.py backend/tests/position_timing/test_causal_timing_model.py backend/tests/position_timing/test_causal_timing_benchmark.py -q`；F1/F2 validator及CI | IMPLEMENTATION_VERIFIED | none |
+| F-014 | §14、§18 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/receipt.json`；`selected_for_live=0` | IMPLEMENTATION_VERIFIED_NO_RUNTIME_RELEASE | none |
 
 ## 17. 设计审核记录
 
@@ -349,3 +349,40 @@ Production Gates 状态：DB DDL/DML=NOT_APPLICABLE；生产激活=NOT_REQUESTED
 - 文档结构验证：`python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_causal_oracle_minute_research_f1_20260919.md --tier F1`，14项／14行通过；未修改的主F2校验59项／59行通过。最终文本继续执行相同F1检查及staged diff检查。仅文档验证，不是因果测试／回放已通过。
 - 最终结构复查曾发现跨文档验收编号被validator误作本F1条目，已改为引用主蓝图章节，保留本F1独立编号；不通过给矩阵虚增条目掩盖引用错误。
 - 2026-09-20用户确认：授权按本长任务规划开始实现、研究、多轮审核修复、提交合入与任务清理；后端重启继续由用户执行。本条只改变实施授权状态，不提前填写实现证据。
+
+## 18. 实现、正式回放与研究结论
+
+### 18.1 不可变身份与完整性
+
+- 实现提交为`7b8c4c219`；六个业务文件和四个行为测试均位于`position_timing`边界，未修改QE、HMM、荐股、数据库、在线卡片或其他模块。
+- 正式request canonical SHA256为`dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6`；bundle同ID，manifest canonical SHA256为`2ad1f15097f617473ea0f2b620e30922913f76ba48c98ea445ea661854bf2ec0`，receipt canonical SHA256为`a9be136b09c0e23bfa9dd664483dcd50bef1f97ba171d39086ccbca84f562fd6`。对应物理文件SHA256分别为`f35b781a3d18dc50c60f6fbad4f35fdce8d766b1bc340382380fb51e508d66dc`、`b855fc6032a8b2853ff0fbb10b5ae9545a9f88e088f88a670adb43b6e82c2da0`、`494336634390b3210319350205e000413589c52c0b99d5d873a572b0282bdef1`，两类身份不得混称。
+- R8源人口5,144只、81个chunk、chunk人口合计5,144；U0入选3,638、`ENROLLMENT_UNKNOWN` 566、未入选940；标准成熟标签66,659条。32只固定样本的1进程与8进程canonical输出`EXACT`，audit SHA256为`21b61de48944a95960c8a99334378151c59119010a5e80cafb81eae3d01b7180`。inspect为`VERIFIED`，相同输入exact retry为`ALREADY_MATERIALIZED`且身份不变。
+- source preflight在读取新收益前完成。正式运行记录`database_read=false`、`database_write=false`、`market_network_accessed=false`、`runtime_action_performed=false`、服务进程控制=false；仅使用8个本地纯计算worker。`selected_for_live=0`，没有写入card、alert、registry/current或serving。
+
+### 18.2 正式比较
+
+四项E0比较的两个端点经八端点Bonferroni后均为`INCONCLUSIVE`：
+
+| 比较 | 全账户终值差 | 合成曲线MDD改善 | 校正后终值区间（bps） | 校正后MDD区间（bps） |
+| --- | ---: | ---: | ---: | ---: |
+| CYCLE5_UNFILTERED − BH | -1,703,025,401元 | +1.9888个百分点 | [-2976.32, +218.38] | [-31.33, +295.83] |
+| Ridge − BH | -107,975,486元 | +0.8319个百分点 | [-603.14, +227.44] | [-30.36, +135.22] |
+| GBDT − BH | +190,990,410元 | +1.3970个百分点 | [-751.77, +432.46] | [-21.65, +268.49] |
+| CYCLE5_UNFILTERED − LEGACY_S1 | +1,173,965,202元 | -1.0992个百分点 | [-139.98, +2020.98] | [-165.32, +49.17] |
+
+U0合成曲线中BH收益42.3406%、MDD -24.1642%；GBDT为42.8656%、-22.7672%，即窗口点估计同时改善，但校正区间均跨0，不能称SUPPORTED。Ridge为42.0438%、-23.3323%；无过滤CYCLE5为37.6594%、-22.1754%。逐股中位收益依次为BH 9.4802%、GBDT 9.9498%、Ridge 9.8228%、无过滤7.3840%；GBDT逐股联合成功率54.6454%。这些分布和点估计用于形成下一假设，不能覆盖正式family结论。
+
+指数分层存在明显异质性但均属diagnostic-only：GBDT相对BH在CSI1000约+0.526个百分点、CSI500约+0.248个百分点，在CSI300约-0.784个百分点、科创100约-3.448个百分点、科创50约-3.890个百分点；不能据此回选股票池。科创100指数背景因权威价格历史不足显式为不可用，没有用沪深300替代。
+
+### 18.3 Oracle、模型和执行诊断
+
+- 原触发事件54,196条，成熟53,909条。受限事后最佳延后1～20日动作的均值/中位数为+246.48/+148.54 bps，最佳延后中位数12日；固定5日动作均值/中位数为-9.18/-0.20 bps。主要问题更接近恢复期限和事件选择错配，而不是继续微调固定5日阈值。
+- 受限一卖一买完整账户Oracle相对BH的逐股差中位数+1309.66 bps、均值+1806.05 bps，但它明确`policy_access=false`且只能证明冻结有限集合中的事后机会。MDD损失不超过20%的可行账户仅72只、不超过30%的仅524只；单次循环通常不足以把深回撤压到固定预算。
+- Ridge模型SHA256为`aac2246286a863e02ecc985236c1ff6d52e22bf99277c996671cb5543ea4c450`，GBDT为`52b27c56494b4e72add859dbfd1555a72531aa96586ad2a8e5001280a9c2503a`。验证集标签均值仅+2.57 bps，而两者MAE约90.75/91.07 bps；GBDT没有验证误差优势。公共窗口GBDT点估计不可反向用于选择或调参。
+- 15:00分钟代理与日收盘在502,933条配对中价格差为0，符合数据构造，不能证明精确竞价成交。10:00与日收盘匹配458,891条，但因全现金可负担数量变化，等数量配对仅5,150条；其价差均值+3.99 bps、中位数0、5%/95%约-289.24/+274.92 bps，只是有限执行敏感性，`minute_fill_proven=false`。
+
+### 18.4 因果、审核与下一方向
+
+21项定向测试覆盖账户守恒、手数/T+1/方向涨跌停、raw价格与factor单位、成熟标签、未成交卖出零动作标签、Oracle格点、训练专属预处理、未来扰动、Oracle列隔离、future-shift拒绝、bootstrap确定性、不可变身份漂移、分钟preflight生命周期和执行诊断；ruff、compileall与F1/F2结构校验通过。它们提供的是冻结路径的直接反前视证据，不是对全部数据PIT或所有未来代码的绝对数学证明。
+
+本轮最终状态为`EXPLORATORY_HYPOTHESIS_GENERATED`：实现完成但alpha未获支持。下一项研究不继续扫描CYCLE5天数、模型阈值、股票池或分钟窗口；优先围绕“恢复时机/持续持有价值”冻结一个新的、可因果预测的单一目标，仍以Ridge作校准参照、GBDT作有限非线性参照，并改善标签信噪比。分钟执行暂不升级为盘中方向模型；先保持日频方向、把10:00数量变化与真实填单不可证边界留在诊断层。旧策略保留为研究库存，不因本轮结果删除，也不以Oracle收益或GBDT点估计进入运行建议。
