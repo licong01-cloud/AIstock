@@ -521,8 +521,10 @@ def test_load_frozen_coefficient_inputs_distinguishes_stopped_quote_from_missing
     sector_path = Path(bundle["dataset_root"]) / sector_spec["relative_path"]
     sector = pd.read_hdf(sector_path, key="data")
     stopped_mask = sector.index.get_level_values("datetime") > pd.Timestamp("2026-06-01")
-    metric_columns = [column for column in sector.columns if column != "l2_code_id"]
-    sector.loc[stopped_mask, metric_columns] = float("nan")
+    quote_columns = ["sw2_pct_change", "sw2_vol", "sw2_amount"]
+    moneyflow_columns = ["sw2_mf_net_amt", "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt"]
+    sector.loc[stopped_mask, quote_columns] = float("nan")
+    assert sector.loc[stopped_mask, moneyflow_columns].notna().all().all()
     sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
     sector_spec["sha256"] = _sha256(sector_path)
 
@@ -553,6 +555,15 @@ def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end
             "801783.SI": [{"start_date": "2020-01-01", "end_date": "2026-06-01"}],
         },
     )
+    sector_spec = bundle["files"]["sector_data_h5"]
+    sector_path = Path(bundle["dataset_root"]) / sector_spec["relative_path"]
+    sector = pd.read_hdf(sector_path, key="data")
+    stopped_mask = sector.index.get_level_values("datetime") > pd.Timestamp("2026-06-01")
+    quote_columns = ["sw2_pct_change", "sw2_vol", "sw2_amount"]
+    sector.loc[stopped_mask, quote_columns] = float("nan")
+    sector.loc[stopped_mask, "sw2_amount"] = 1.0
+    sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
+    sector_spec["sha256"] = _sha256(sector_path)
 
     with pytest.raises(ValueError, match="quote values outside availability authority"):
         load_frozen_coefficient_inputs(
@@ -563,7 +574,7 @@ def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end
         )
 
 
-def test_load_frozen_coefficient_inputs_rejects_non_finite_sector_value(tmp_path) -> None:
+def test_load_frozen_coefficient_inputs_rejects_missing_quote_inside_availability_span(tmp_path) -> None:
     with pytest.raises(ValueError, match="non-finite frozen sector value"):
         load_frozen_coefficient_inputs(
             _write_frozen_input_fixture(tmp_path, invalid_sector_value=True),
