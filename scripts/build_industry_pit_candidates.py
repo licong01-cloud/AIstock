@@ -31,7 +31,10 @@ if str(ROOT) not in sys.path:
 
 from backend.db.pg_pool import get_conn  # noqa: E402
 from backend.services.dataset_release.canonical import digest_named_fields  # noqa: E402
-from backend.services.industry_pit.artifact_store import write_candidate_bundle  # noqa: E402
+from backend.services.industry_pit.artifact_store import (  # noqa: E402
+    read_candidate_bundle,
+    write_candidate_bundle,
+)
 from backend.services.industry_pit.candidate_builder import (  # noqa: E402
     FrozenDenominator,
     UniverseSpan,
@@ -499,6 +502,28 @@ def _mandatory_source_regression(
     return output
 
 
+def _index_regression_rows_from_candidate(intervals: tuple[Any, ...]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for interval in intervals:
+        if interval.identity is None:
+            continue
+        rows.append(
+            {
+                "canonical_symbol": interval.canonical_symbol,
+                "industry_code": interval.identity.leaf_code,
+                "membership_enter_date": interval.valid_from.isoformat(),
+                "membership_exit_date_exclusive": (
+                    None
+                    if interval.valid_to_exclusive is None
+                    else interval.valid_to_exclusive.isoformat()
+                ),
+                "known_from": None if interval.known_from is None else interval.known_from.isoformat(),
+                "source_sha256": interval.lineage_hashes[0] if interval.lineage_hashes else "",
+            }
+        )
+    return rows
+
+
 def _read_frozen_inputs(
     *,
     universe_key: str,
@@ -624,7 +649,20 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         snapshot_rows,
         mandatory_symbols=tuple(args.mandatory_symbol),
     )
-    index_evidence, index_evidence_hashes = _load_index_evidence(args.index_membership_evidence)
+    if args.predecessor_index_authority_root is not None and args.index_membership_evidence is not None:
+        raise IndustryPitContractError(
+            "predecessor index authority and raw index evidence are mutually exclusive"
+        )
+    predecessor_index = None
+    if args.predecessor_index_authority_root is not None:
+        predecessor_index = read_candidate_bundle(
+            artifact_root=args.predecessor_index_authority_root,
+            forbidden_roots=(ROOT,),
+        )
+        index_evidence: list[dict[str, Any]] = []
+        index_evidence_hashes: tuple[str, ...] = ()
+    else:
+        index_evidence, index_evidence_hashes = _load_index_evidence(args.index_membership_evidence)
     load_dotenv(args.db_env_file, override=False)
     denominator, conflict_inventory, state_receipt = _read_frozen_inputs(
         universe_key=args.universe_key,
@@ -661,36 +699,6 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         frozen_denominator=denominator.total_opportunities,
         denominator_digest=denominator.digest,
     )
-    index_receipt = AuthorityReceipt(
-        authority_type=AuthorityType.INDEX_MEMBERSHIP,
-        authority_schema=INDEX_MEMBERSHIP_CANDIDATE_SCHEMA,
-        authority_version="c013_index_membership_candidate_v1",
-        taxonomy_contract_id=catalog.contract_id,
-        taxonomy_version=catalog.version,
-        knowledge_time_policy=KnowledgeTimePolicy.CAUSAL_DAILY_NEXT_TRADE,
-        research_basis=ResearchBasis.AS_PUBLISHED_PIT,
-        source_ids=tuple(
-            sorted(
-                ({
-                    "local:SwClassCode_2021.xls",
-                    "local:SwClassStd2021.pdf",
-                    *( ["task:index_membership_evidence_v1"] if index_evidence else [] ),
-                    *(str(row.get("source_url") or "") for row in index_evidence),
-                } - {""})
-            )
-        ),
-        source_hashes=tuple(
-            sorted(
-                {
-                    source_hashes["catalog"],
-                    source_hashes["taxonomy_standard"],
-                    *index_evidence_hashes,
-                }
-            )
-        ),
-        frozen_denominator=denominator.total_opportunities,
-        denominator_digest=denominator.digest,
-    )
     classification, classification_diagnostics = build_classification_intervals(
         history_rows,
         catalog=catalog,
@@ -702,12 +710,63 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         **classification_diagnostics,
         "source_window": classification_source_window,
     }
-    index_membership, index_diagnostics = build_index_membership_intervals(
-        index_evidence,
-        catalog=catalog,
-        receipt=index_receipt,
-        denominator=denominator,
-    )
+    if predecessor_index is not None:
+        index_receipt = predecessor_index.index_membership_receipt
+        index_membership = predecessor_index.index_membership_intervals
+        if (
+            index_receipt.taxonomy_contract_id != catalog.contract_id
+            or index_receipt.taxonomy_version != catalog.version
+            or index_receipt.frozen_denominator != denominator.total_opportunities
+            or index_receipt.denominator_digest != denominator.digest
+        ):
+            raise IndustryPitContractError("predecessor index authority identity differs")
+        index_evidence = _index_regression_rows_from_candidate(index_membership)
+        index_diagnostics = {
+            "reuse_policy": "immutable_predecessor_index_authority_v1",
+            "predecessor_root": str(predecessor_index.artifact_root),
+            "predecessor_bundle_hash": predecessor_index.manifest["bundle_hash"],
+            "predecessor_index_candidate_hash": predecessor_index.manifest[
+                "index_membership_candidate_hash"
+            ],
+            "candidate_interval_count": len(index_membership),
+        }
+    else:
+        index_receipt = AuthorityReceipt(
+            authority_type=AuthorityType.INDEX_MEMBERSHIP,
+            authority_schema=INDEX_MEMBERSHIP_CANDIDATE_SCHEMA,
+            authority_version="c013_index_membership_candidate_v1",
+            taxonomy_contract_id=catalog.contract_id,
+            taxonomy_version=catalog.version,
+            knowledge_time_policy=KnowledgeTimePolicy.CAUSAL_DAILY_NEXT_TRADE,
+            research_basis=ResearchBasis.AS_PUBLISHED_PIT,
+            source_ids=tuple(
+                sorted(
+                    ({
+                        "local:SwClassCode_2021.xls",
+                        "local:SwClassStd2021.pdf",
+                        *( ["task:index_membership_evidence_v1"] if index_evidence else [] ),
+                        *(str(row.get("source_url") or "") for row in index_evidence),
+                    } - {""})
+                )
+            ),
+            source_hashes=tuple(
+                sorted(
+                    {
+                        source_hashes["catalog"],
+                        source_hashes["taxonomy_standard"],
+                        *index_evidence_hashes,
+                    }
+                )
+            ),
+            frozen_denominator=denominator.total_opportunities,
+            denominator_digest=denominator.digest,
+        )
+        index_membership, index_diagnostics = build_index_membership_intervals(
+            index_evidence,
+            catalog=catalog,
+            receipt=index_receipt,
+            denominator=denominator,
+        )
     mandatory_source_regression = _mandatory_source_regression(
         mandatory_symbols=tuple(args.mandatory_symbol),
         classification_intervals=classification,
@@ -801,6 +860,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--latest-snapshot", type=Path)
     parser.add_argument("--taxonomy-standard", type=Path)
     parser.add_argument("--index-membership-evidence", type=Path)
+    parser.add_argument("--predecessor-index-authority-root", type=Path)
     parser.add_argument("--security-source-identity-manifest", type=Path, required=True)
     parser.add_argument("--security-source-identity-sha256", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)

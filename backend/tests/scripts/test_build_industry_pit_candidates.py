@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -91,6 +92,46 @@ def test_index_evidence_requires_explicit_schema_and_contributes_source_hash(tmp
     path.write_text(json.dumps({"schema_version": "wrong", "rows": []}), encoding="utf-8")
     with pytest.raises(IndustryPitContractError, match="schema"):
         builder._load_index_evidence(path)
+
+
+def test_predecessor_index_candidate_rows_preserve_regression_boundaries() -> None:
+    old = SimpleNamespace(
+        canonical_symbol="300741.SZ",
+        identity=SimpleNamespace(leaf_code="340404"),
+        valid_from=date(2018, 3, 8),
+        valid_to_exclusive=date(2021, 12, 13),
+        known_from=date(2018, 3, 8),
+        lineage_hashes=("a" * 64,),
+    )
+    new = SimpleNamespace(
+        canonical_symbol="300741.SZ",
+        identity=SimpleNamespace(leaf_code="220315"),
+        valid_from=date(2021, 12, 13),
+        valid_to_exclusive=None,
+        known_from=date(2021, 12, 13),
+        lineage_hashes=("b" * 64,),
+    )
+
+    rows = builder._index_regression_rows_from_candidate((old, new))
+
+    assert rows == [
+        {
+            "canonical_symbol": "300741.SZ",
+            "industry_code": "340404",
+            "membership_enter_date": "2018-03-08",
+            "membership_exit_date_exclusive": "2021-12-13",
+            "known_from": "2018-03-08",
+            "source_sha256": "a" * 64,
+        },
+        {
+            "canonical_symbol": "300741.SZ",
+            "industry_code": "220315",
+            "membership_enter_date": "2021-12-13",
+            "membership_exit_date_exclusive": None,
+            "known_from": "2021-12-13",
+            "source_sha256": "b" * 64,
+        },
+    ]
 
 
 def test_exact_source_hash_contract_is_frozen() -> None:
