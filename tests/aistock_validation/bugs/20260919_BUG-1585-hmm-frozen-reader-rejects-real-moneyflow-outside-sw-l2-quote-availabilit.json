@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1585",
-  "closed_at": null,
+  "closed_at": "2026-09-19T07:34:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-09-19T07:17:36.486455Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3f0441f35a762f8260385772032e33ba6f2542f9",
+  "fixed_at": "2026-09-19T07:34:22Z",
   "github_issue_number": 4948,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4948",
   "last_seen_at": "2026-09-19T07:17:36.486455Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4951",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -124,6 +125,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -133,7 +135,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -142,6 +144,14 @@
     "fingerprint": "7a7260d150ee38f2017848bc",
     "source_event_id": "FE-20260919-7a7260d150ee"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f2d59599e6ae8836 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=pytest plan=direct status=passed command=`pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q` result=`26 passed`",
+    "validation-receipt: id=6ea0e6cd0770dec5 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_precompute_hmm_coefficients.py -q` result=`3 passed`",
+    "validation-receipt: id=cd0a554baeba3cb8 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=hmm_data_source_backend status=passed command=`nox -s hmm_data_source_backend` result=`122 passed, 1 skipped, 5 deselected, coverage 76.40%`",
+    "validation-receipt: id=a1d7326e972d200c commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`",
+    "validation-receipt: id=cec59ff3beb58c20 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=ed75169a59d6fd0c commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
