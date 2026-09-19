@@ -34,6 +34,10 @@ from backend.services.dataset_release.shared_sector_context import (  # noqa: E4
 from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
     HMMIndustryPitAdapter,
 )
+from backend.services.hmm_risk.security_identity import (  # noqa: E402
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 
 COMPONENT_RECEIPT_SCHEMA = "aistock_sector_context_receipt_v1"
@@ -41,6 +45,7 @@ DERIVED_MAPPING_AUTHORITY_SCHEMA = "aistock_release_sw_l2_derived_authority_v1"
 PRODUCER_ORDER_ALGORITHM = "sorted_market_sw_index_classify_index_code_zero_based_v1"
 REQUIRED_INDEX_POOL_IDS = ("csi300", "csi500", "csi1000", "star50", "star100")
 MEMBERSHIP_DENOMINATOR = "pit_stock_universe_intersection_policy_window_calendar_v1"
+SECURITY_IDENTITY_SOURCE_DATASET = "market.moneyflow_ts"
 
 
 def _sha256(path: Path) -> str:
@@ -356,6 +361,7 @@ def _build_authority_membership_spans(
     code_to_id: dict[str, int],
     start: dt.date,
     end: dt.date,
+    security_identity: SecuritySourceIdentityManifest | None = None,
 ):
     import pandas as pd
 
@@ -368,15 +374,38 @@ def _build_authority_membership_spans(
         if not dates:
             continue
         boundaries = {0, len(dates)}
-        for transition in adapter.classification_resolver.transition_dates(symbol):
-            position = bisect_left(dates, transition)
-            if 0 < position < len(dates):
-                boundaries.add(position)
+        authority_symbols = {symbol}
+        if security_identity is not None:
+            for alias in security_identity.rows:
+                if (
+                    alias.source_dataset == SECURITY_IDENTITY_SOURCE_DATASET
+                    and alias.canonical_ts_code == symbol
+                    and alias.effective_start is not None
+                    and alias.effective_end is not None
+                ):
+                    authority_symbols.add(alias.source_ts_code)
+                    for transition in (alias.effective_start, alias.effective_end + dt.timedelta(days=1)):
+                        position = bisect_left(dates, transition)
+                        if 0 < position < len(dates):
+                            boundaries.add(position)
+        for authority_symbol in authority_symbols:
+            transitions = adapter.classification_resolver.transition_dates(authority_symbol)
+            for transition in transitions:
+                position = bisect_left(dates, transition)
+                if 0 < position < len(dates):
+                    boundaries.add(position)
         ordered = sorted(boundaries)
         for left, right in zip(ordered, ordered[1:]):
             first = dates[left]
             last = dates[right - 1]
-            resolved = adapter.resolve(symbol, first)
+            authority_symbol = symbol
+            if security_identity is not None:
+                authority_symbol = security_identity.resolve(
+                    symbol,
+                    first,
+                    SECURITY_IDENTITY_SOURCE_DATASET,
+                ).source_ts_code
+            resolved = adapter.resolve(authority_symbol, first)
             if resolved.status != "resolved" or not resolved.l2_code:
                 raise ValueError(
                     "industry PIT authority cannot resolve an active stock-date: "
@@ -443,6 +472,8 @@ def build_component(
     source_dataset_manifest_sha256: str,
     membership_start: dt.date,
     membership_end: dt.date,
+    security_source_identity_manifest: Path | None = None,
+    security_source_identity_sha256: str | None = None,
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"create-exclusive output already exists: {output_root}")
@@ -454,6 +485,18 @@ def build_component(
     )
     if any(not path.is_file() for path in inputs) or (code_map_json is not None and not code_map_json.is_file()):
         raise FileNotFoundError("one or more frozen sector-context inputs are absent")
+    if (security_source_identity_manifest is None) != (security_source_identity_sha256 is None):
+        raise ValueError("security identity manifest and canonical SHA256 must be supplied together")
+    security_identity = None
+    security_identity_file_sha256 = None
+    if security_source_identity_manifest is not None:
+        if not security_source_identity_manifest.is_file() or security_source_identity_manifest.is_symlink():
+            raise ValueError("security identity manifest is missing or linked")
+        security_identity = load_security_source_identity_manifest(
+            security_source_identity_manifest,
+            expected_sha256=str(security_source_identity_sha256),
+        )
+        security_identity_file_sha256 = _sha256(security_source_identity_manifest)
     source_dataset_manifest_sha256 = ensure_sha256(
         source_dataset_manifest_sha256,
         field="source_dataset_manifest_sha256",
@@ -496,6 +539,7 @@ def build_component(
         code_to_id=dict(code_map.code_to_id),
         start=membership_start,
         end=membership_end,
+        security_identity=security_identity,
     )
     _validate_h5_membership_alignment(
         frame,
@@ -598,6 +642,15 @@ def build_component(
             "industry_pit_identity": authority_envelope["identity"],
             "stock_universe_sha256": _sha256(stock_universe_sidecar),
             "calendar_sha256": _sha256(calendar_path),
+            "security_identity": (
+                None
+                if security_identity is None
+                else {
+                    **security_identity.evidence(),
+                    "file_sha256": security_identity_file_sha256,
+                    "source_dataset_identity_dimension": SECURITY_IDENTITY_SOURCE_DATASET,
+                }
+            ),
             "coverage": coverage,
         },
         "database_read": False,
@@ -618,6 +671,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sector-data-h5", type=Path, required=True)
     parser.add_argument("--code-map-json", type=Path)
     parser.add_argument("--industry-pit-authority-envelope", type=Path, required=True)
+    parser.add_argument("--security-source-identity-manifest", type=Path, required=True)
+    parser.add_argument("--security-source-identity-sha256", required=True)
     parser.add_argument("--stock-universe-sidecar", type=Path, required=True)
     parser.add_argument(
         "--pool-sidecar",
@@ -650,6 +705,8 @@ def main() -> None:
         sector_data_h5=args.sector_data_h5,
         code_map_json=args.code_map_json,
         industry_pit_authority_envelope=args.industry_pit_authority_envelope,
+        security_source_identity_manifest=args.security_source_identity_manifest,
+        security_source_identity_sha256=args.security_source_identity_sha256,
         stock_universe_sidecar=args.stock_universe_sidecar,
         pool_sidecars=_parse_pool_sidecar_args(args.pool_sidecar),
         calendar_path=args.calendar_path,

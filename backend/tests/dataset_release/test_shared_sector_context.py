@@ -17,6 +17,7 @@ from backend.services.dataset_release.shared_sector_context import (
     validate_release_sw_l2_code_map,
 )
 from scripts.build_shared_sector_context_component import (
+    _build_authority_membership_spans,
     _derive_release_code_map,
     build_component,
 )
@@ -223,6 +224,69 @@ def test_membership_accepts_sparse_ids_and_rejects_overlap() -> None:
     frame.loc[1, "start_date"] = dt.date(2024, 7, 2)
     with pytest.raises(ValueError, match="overlap"):
         validate_membership_frame(frame, id_to_code={1: "801000.SI", 261: "801130.SI"})
+
+
+def test_membership_resolves_historical_security_code_alias() -> None:
+    from backend.services.hmm_risk.security_identity import SecuritySourceIdentityManifest
+    from backend.services.hmm_risk.security_identity import SecuritySourceResolution
+
+    adapter = SimpleNamespace(
+        classification_resolver=SimpleNamespace(
+            transition_dates=lambda symbol: (
+                (dt.date(2021, 7, 30),) if symbol == "300114.SZ" else (dt.date(2025, 2, 17),)
+            )
+        ),
+        resolve=lambda symbol, _day: SimpleNamespace(
+            status="resolved",
+            l2_code="801000.SI" if symbol == "300114.SZ" else "801001.SI",
+            reason_code=None,
+        ),
+    )
+    manifest = SecuritySourceIdentityManifest(
+        manifest_version="security-v1",
+        default_resolution="canonical_same_code",
+        rows=(
+            SecuritySourceResolution(
+                security_identity_id="szse_300114_302132",
+                canonical_ts_code="302132.SZ",
+                source_dataset="market.moneyflow_ts",
+                source_ts_code="300114.SZ",
+                effective_start=dt.date(2010, 8, 27),
+                effective_end=dt.date(2025, 2, 16),
+                authority_ref="official",
+                authority_hash="a" * 64,
+                row_hash="b" * 64,
+                resolution_kind="explicit_effective_alias",
+            ),
+        ),
+        manifest_sha256="c" * 64,
+        rows_sha256="d" * 64,
+    )
+
+    frame = _build_authority_membership_spans(
+        adapter=adapter,
+        universe_spans=[("302132.SZ", dt.date(2024, 7, 1), dt.date(2025, 2, 18))],
+        calendar=[dt.date(2024, 7, 1), dt.date(2025, 2, 14), dt.date(2025, 2, 17), dt.date(2025, 2, 18)],
+        code_to_id={"801000.SI": 1, "801001.SI": 3},
+        start=dt.date(2024, 7, 1),
+        end=dt.date(2025, 2, 18),
+        security_identity=manifest,
+    )
+
+    assert frame.to_dict("records") == [
+        {
+            "instrument": "302132.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2025, 2, 14),
+            "l2_code_id": 1,
+        },
+        {
+            "instrument": "302132.SZ",
+            "start_date": dt.date(2025, 2, 17),
+            "end_date": dt.date(2025, 2, 18),
+            "l2_code_id": 3,
+        },
+    ]
 
 
 def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_path, monkeypatch) -> None:
