@@ -23,19 +23,39 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260919-5ba1bea38ca4",
       "timestamp": "2026-09-19T17:49:25.261590Z"
+    },
+    {
+      "action": "root_cause_and_fix_validated",
+      "actor": "codex",
+      "note": "The approved P11 contract applies the blacklist only to the executable prediction/portfolio interval, but the resolver demanded sector membership from train_start and would truncate pre-test instruments if only its start were changed. The fix preserves pre-test intervals, applies membership from test_start, and retains fail-closed gap/hash/unknown/empty-executable checks.",
+      "timestamp": "2026-09-19T19:10:00Z"
+    },
+    {
+      "action": "residual_dataset_blocker_observed",
+      "actor": "codex",
+      "note": "Read-only v11/R8 evidence after the code fix found 5108 stock-universe symbols overlapping 2024-07-01..2026-08-31 but only 2678 symbols in the frozen membership asset; 2430 remain missing, and every configured index pool also has gaps. This remains a fail-closed immutable data-authority blocker and is not bypassed by BUG-1589.",
+      "timestamp": "2026-09-19T19:10:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "P11 preserves the complete train/validation universe, applies the frozen PIT sector blacklist only over test_start..test_end, retains exact HMM binding, and passes without requiring pre-test sector membership.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260919_BUG-1589-qe-p11-sector-blacklist-incorrectly-requires-pit-membership-during-train.json",
       "backend/services/quantevolver/qe_active_dataset_profile.py",
       "backend/services/quantevolver/qe_sector_blacklist_policy.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260919_BUG-1589-qe-p11-sector-blacklist-incorrectly-requires-pit-membership-during-train.json",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_dataset_profile.py",
@@ -160,11 +180,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile.py::test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

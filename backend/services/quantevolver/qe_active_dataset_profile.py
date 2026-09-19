@@ -1108,6 +1108,7 @@ def resolve_active_qe_dataset(
                 base_intervals=_parse_intervals(stock_pool_content, source=instruments_file),
                 calendar=calendar,
                 window_start=window_start,
+                policy_start=_date(split["test_start"], field="test_start"),
                 window_end=_date(split["test_end"], field="test_end"),
                 factor_root=factor_root,
                 pins=sector_policy_pins,
