@@ -636,6 +636,58 @@ def test_v3_profile_uses_shared_sparse_sector_context(
     assert filtered.sector_blacklist_policy["blacklist_excluded_count"] == 1
 
 
+def test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pandas as pd
+
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    sector_pins = raw["components"]["sector_context_pins"]
+    membership_path = (
+        Path(raw["controller_paths"]["candidate_root"])
+        / sector_pins["component_root"]
+        / sector_pins["membership_file"]
+    )
+    membership = pd.read_parquet(membership_path)
+    membership["start_date"] = "2024-07-01"
+    membership.to_parquet(membership_path, index=False)
+    sector_pins["membership_start"] = "2024-07-01"
+    sector_pins["membership_sha256"] = _sha(membership_path.read_bytes())
+    path.write_bytes(_canonical(raw))
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+    hmm_identity = {
+        "enable_sector_hmm": True,
+        "hmm_model_version_id": "ecee7c40-6764-49ad-bc0f-1c6c6b390504",
+        "hmm_signal_preset": "preset_A",
+        "hmm_signal_presets": {"preset_A": {"coefficient_sha256": "b" * 64}},
+    }
+
+    p10 = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        custom_params=hmm_identity,
+        profile=profile,
+    )
+    p11 = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        custom_params={**hmm_identity, "sector_blacklist": ["801020.SI"]},
+        profile=profile,
+    )
+
+    assert p10 is not None and p11 is not None
+    assert p10.stock_pool_content is None
+    assert p11.data_split == p10.data_split
+    assert p11.stock_pool_content == "000001.SZ\t2018-08-01\t2026-08-31\n"
+    assert p11.sector_blacklist_policy is not None
+    assert p11.sector_blacklist_policy["policy_start"] == "2024-07-01"
+    applied = p11.apply({**hmm_identity, "sector_blacklist": ["801020.SI"]})
+    for key, value in hmm_identity.items():
+        assert applied[key] == value
+
+
 def test_active_profile_derives_shared_node_runtime_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

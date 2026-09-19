@@ -230,6 +230,7 @@ def materialize_sector_blacklist_universe(
     base_intervals: Sequence[tuple[str, dt.date, dt.date]],
     calendar: Sequence[dt.date],
     window_start: dt.date,
+    policy_start: dt.date | None = None,
     window_end: dt.date,
     factor_root: Path,
     pins: Mapping[str, Any] | None,
@@ -243,10 +244,20 @@ def materialize_sector_blacklist_universe(
             "qe_sector_blacklist_frozen_mapping_missing",
             "active dataset profile does not pin sector membership and code-map files",
         )
-    normalized_pins = validate_sector_policy_pins(pins)
-    if normalized_pins["start"] > window_start.isoformat() or normalized_pins["end"] < window_end.isoformat():
+    effective_policy_start = policy_start or window_start
+    if effective_policy_start < window_start or effective_policy_start > window_end:
         raise _fail(
-            "qe_sector_blacklist_membership_incomplete", "sector policy files do not cover the experiment window"
+            "qe_sector_blacklist_request_invalid",
+            "policy start must be inside the experiment window",
+        )
+    normalized_pins = validate_sector_policy_pins(pins)
+    if (
+        normalized_pins["start"] > effective_policy_start.isoformat()
+        or normalized_pins["end"] < window_end.isoformat()
+    ):
+        raise _fail(
+            "qe_sector_blacklist_membership_incomplete",
+            "sector policy files do not cover the effective policy window",
         )
     membership_path, code_map_path = require_pinned_sector_policy_files(factor_root, normalized_pins)
     id_to_code, code_to_id, code_map_digest = _load_code_map(code_map_path)
@@ -263,13 +274,15 @@ def materialize_sector_blacklist_universe(
     calendar_index = {day: index for index, day in enumerate(ordered_calendar)}
     memberships = _load_membership_spans(membership_path, calendar_index=calendar_index)
     left_bound = bisect_left(ordered_calendar, window_start)
+    policy_left_bound = bisect_left(ordered_calendar, effective_policy_start)
     right_bound = bisect_right(ordered_calendar, window_end) - 1
-    if left_bound > right_bound:
+    if left_bound > right_bound or policy_left_bound > right_bound:
         raise _fail("qe_sector_blacklist_membership_incomplete", "experiment window has no trading dates")
 
     retained: list[tuple[str, int, int]] = []
     base_symbols: set[str] = set()
     retained_symbols: set[str] = set()
+    policy_retained_symbols: set[str] = set()
     excluded_symbols: set[str] = set()
     excluded_days = 0
     for symbol, base_start, base_end in base_intervals:
@@ -278,17 +291,24 @@ def materialize_sector_blacklist_universe(
         if start_index > end_index:
             continue
         base_symbols.add(symbol)
+        symbol_retained: list[tuple[int, int]] = []
+        policy_start_index = max(start_index, policy_left_bound)
+        if start_index < policy_start_index:
+            symbol_retained.append((start_index, min(end_index, policy_start_index - 1)))
+        if policy_start_index > end_index:
+            retained_symbols.add(symbol)
+            retained.extend((symbol, start, end) for start, end in symbol_retained)
+            continue
         spans = memberships.get(symbol)
         if not spans:
             raise _fail("qe_sector_blacklist_membership_incomplete", f"no PIT sector membership for {symbol}")
-        cursor = start_index
-        symbol_retained: list[tuple[int, int]] = []
+        cursor = policy_start_index
         for sector_start, sector_end, sector_id in spans:
-            if sector_end < start_index:
+            if sector_end < policy_start_index:
                 continue
             if sector_start > end_index:
                 break
-            current_start = max(start_index, sector_start)
+            current_start = max(policy_start_index, sector_start)
             current_end = min(end_index, sector_end)
             if current_start > cursor:
                 raise _fail(
@@ -310,8 +330,10 @@ def materialize_sector_blacklist_universe(
                 excluded_days += current_end - current_start + 1
             elif symbol_retained and current_start == symbol_retained[-1][1] + 1:
                 symbol_retained[-1] = (symbol_retained[-1][0], current_end)
+                policy_retained_symbols.add(symbol)
             else:
                 symbol_retained.append((current_start, current_end))
+                policy_retained_symbols.add(symbol)
             cursor = current_end + 1
             if cursor > end_index:
                 break
@@ -326,7 +348,7 @@ def materialize_sector_blacklist_universe(
             retained.extend((symbol, start, end) for start, end in symbol_retained)
     if not base_symbols:
         raise _fail("qe_sector_blacklist_membership_incomplete", "base universe has no rows in the experiment window")
-    if not retained:
+    if not policy_retained_symbols:
         raise _fail("qe_sector_blacklist_universe_empty", "sector blacklist removed the entire executable universe")
 
     content = "".join(
@@ -348,6 +370,7 @@ def materialize_sector_blacklist_universe(
         "code_map_sha256": normalized_pins["code_map_sha256"],
         "code_map_digest": code_map_digest,
         "window_start": window_start.isoformat(),
+        "policy_start": effective_policy_start.isoformat(),
         "window_end": window_end.isoformat(),
     }
     return SectorBlacklistPolicyResult(instruments_content=content, diagnostics=diagnostics)
